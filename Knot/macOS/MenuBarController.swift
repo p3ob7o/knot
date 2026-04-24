@@ -8,11 +8,13 @@ import KnotKit
 @MainActor
 final class MenuBarController {
     private let model: EditorModel
+    private let openSettings: () -> Void
     private let statusItem: NSStatusItem
     private let popover: NSPopover
 
-    init(model: EditorModel) {
+    init(model: EditorModel, openSettings: @escaping () -> Void) {
         self.model = model
+        self.openSettings = openSettings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.popover = NSPopover()
         self.popover.behavior = .transient
@@ -39,9 +41,9 @@ final class MenuBarController {
     }
 
     private func configurePopover() {
-        let root = PopoverRoot(model: model) { [weak self] in
-            self?.openSettings()
-        }
+        let root = PopoverRoot(model: model, onOpenSettings: { [weak self] in
+            self?.openSettingsTapped()
+        })
         let host = NSHostingController(rootView: root)
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
         popover.contentViewController = host
@@ -70,10 +72,11 @@ final class MenuBarController {
 
     private func open() {
         guard let button = statusItem.button else { return }
+        // Make sure we're in accessory mode in case the user just closed
+        // the Settings window.
+        NSApp.setActivationPolicy(.accessory)
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // Make the popover's window key so the textarea takes focus
-        // immediately without an extra click.
         popover.contentViewController?.view.window?.makeKey()
     }
 
@@ -81,25 +84,22 @@ final class MenuBarController {
         popover.performClose(nil)
     }
 
-    private func openSettings() {
-        // Briefly switch to a regular activation policy so the Settings
-        // window can appear and take focus, then return to accessory mode
-        // when it closes.
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        if #available(macOS 14, *) {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+    private func openSettingsTapped() {
         close()
+        // Defer so the popover finishes its dismiss animation before the
+        // window comes forward.
+        DispatchQueue.main.async { [weak self] in
+            self?.openSettings()
+        }
     }
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
+        let settingsItem = menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",")
+        settingsItem.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Knot", action: #selector(quit), keyEquivalent: "q").target = self
+        let quitItem = menu.addItem(withTitle: "Quit Knot", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
@@ -117,31 +117,29 @@ final class MenuBarController {
 // MARK: - Popover content
 
 /// Switches between onboarding and editor based on whether a vault is
-/// configured. Provides a small "settings" affordance in the corner.
+/// configured. Shows a settings affordance only after onboarding so the
+/// onboarding pane can use the full popover width.
 private struct PopoverRoot: View {
     @Bindable var model: EditorModel
     var onOpenSettings: () -> Void
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Group {
-                if model.hasVault {
-                    EditorView(model: model)
-                } else {
-                    OnboardingView(model: model, onDone: {})
-                        .padding(.trailing, 24)
+            if model.hasVault {
+                EditorView(model: model)
+                Button {
+                    onOpenSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .padding(8)
+                .help("Settings")
+            } else {
+                OnboardingView(model: model, onDone: {})
             }
-            Button {
-                onOpenSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .padding(8)
-            .help("Settings")
         }
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
     }

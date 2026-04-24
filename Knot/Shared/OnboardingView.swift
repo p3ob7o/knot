@@ -15,44 +15,45 @@ struct OnboardingView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Knot")
-                    .font(.system(size: 28, weight: .bold))
-                Text("A faster way to get notes into your Obsidian vault.")
-                    .font(.title3)
+                    .font(.title.bold())
+                Text("Quick capture into your Obsidian vault.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                bullet("Pick your Obsidian vault folder once.")
-                bullet("Short notes append to today's daily file under \"## Quick notes\".")
-                bullet("Longer notes become new files in your inbox.")
-                bullet("No servers. No accounts. Files land in your vault on this device.")
+            VStack(alignment: .leading, spacing: 6) {
+                bullet("Pick your vault folder once.")
+                bullet("Short notes append to today's daily file.")
+                bullet("Longer notes go to your inbox.")
+                bullet("Local-only — no servers, no accounts.")
             }
-            .font(.body)
-
-            Spacer(minLength: 12)
+            .font(.callout)
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 4)
 
             Button {
                 pickerPresented = true
             } label: {
                 Label("Pick vault folder…", systemImage: "folder")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
         }
-        .padding(24)
-        .frame(maxWidth: 520)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .folderPicker(isPresented: $pickerPresented) { url in
             do {
                 try model.setVault(url: url)
@@ -67,6 +68,7 @@ struct OnboardingView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("•").foregroundStyle(.secondary)
             Text(text)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -94,7 +96,13 @@ private struct FolderPickerModifier: ViewModifier {
         content.onChange(of: isPresented) { _, newValue in
             guard newValue else { return }
             isPresented = false
-            presentMacPanel()
+            // Defer to the next runloop tick so the popover (or any other
+            // transient UI) finishes its dismiss before we present the
+            // panel — otherwise the two fight for focus and the panel
+            // never comes forward on an LSUIElement app.
+            DispatchQueue.main.async {
+                presentMacPanel(onPick: onPick)
+            }
         }
         #else
         content.sheet(isPresented: $isPresented) {
@@ -108,22 +116,38 @@ private struct FolderPickerModifier: ViewModifier {
         }
         #endif
     }
-
-    #if os(macOS)
-    private func presentMacPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Choose Vault"
-        panel.message = "Pick the root folder of your Obsidian vault."
-        if panel.runModal() == .OK, let url = panel.url {
-            onPick(url)
-        }
-    }
-    #endif
 }
+
+#if os(macOS)
+@MainActor
+private func presentMacPanel(onPick: @escaping (URL) -> Void) {
+    // Temporarily switch to a regular activation policy so the panel can
+    // become key and front. We restore the previous policy when the panel
+    // closes.
+    let previousPolicy = NSApp.activationPolicy()
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.canCreateDirectories = true
+    panel.prompt = "Choose Vault"
+    panel.title = "Pick your Obsidian vault"
+    panel.message = "Pick the root folder of your Obsidian vault."
+    panel.level = .modalPanel
+
+    let response = panel.runModal()
+
+    // Restore the prior policy so the app fades back into the menu bar.
+    NSApp.setActivationPolicy(previousPolicy)
+
+    if response == .OK, let url = panel.url {
+        onPick(url)
+    }
+}
+#endif
 
 #if os(iOS)
 private struct DocumentFolderPicker: UIViewControllerRepresentable {

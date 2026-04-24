@@ -8,10 +8,19 @@ struct KnotMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Settings {
-            SettingsView(model: appDelegate.model)
-                .frame(minWidth: 480, minHeight: 520)
-        }
+        // No SwiftUI Scenes — this is a pure accessory app. The menubar
+        // controller owns the popover; the AppDelegate owns the Settings
+        // window. Returning an empty scene tree keeps SwiftUI happy without
+        // installing a main menu we'd never show.
+        _EmptyScene()
+    }
+}
+
+private struct _EmptyScene: Scene {
+    var body: some Scene {
+        // A WindowGroup that the user can never trigger; we close it
+        // immediately on launch so it never becomes visible.
+        Settings { EmptyView() }
     }
 }
 
@@ -19,10 +28,13 @@ struct KnotMacApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = EditorModel()
     var menubar: MenuBarController!
+    private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        menubar = MenuBarController(model: model)
+        menubar = MenuBarController(model: model, openSettings: { [weak self] in
+            self?.openSettings()
+        })
         HotkeyManager.shared.register { [weak self] in
             self?.menubar.toggle()
         }
@@ -31,6 +43,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         menubar.toggle()
         return false
+    }
+
+    // MARK: - Settings window
+
+    func openSettings() {
+        if settingsWindow == nil {
+            let host = NSHostingController(rootView: SettingsView(model: model))
+            host.preferredContentSize = NSSize(width: 520, height: 560)
+
+            let window = NSWindow(contentViewController: host)
+            window.title = "Knot Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.setContentSize(NSSize(width: 520, height: 560))
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindow = window
+
+            // Re-hide the dock icon when the user closes the settings window.
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+        }
+
+        // Switch to a regular activation policy while the window is on
+        // screen so it can come to the front. We restore .accessory when
+        // the window closes (see observer above).
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 }
 
