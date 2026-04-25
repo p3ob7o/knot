@@ -22,9 +22,6 @@ settings:
 packages:
   KnotKit:
     path: Packages/KnotKit
-  KeyboardShortcuts:
-    url: https://github.com/sindresorhus/KeyboardShortcuts
-    from: "2.0.0"
 
 targets:
 
@@ -70,8 +67,6 @@ targets:
     dependencies:
       - package: KnotKit
         product: KnotKit
-      - package: KeyboardShortcuts
-        product: KeyboardShortcuts
 
   Knot-iOS:
     type: application

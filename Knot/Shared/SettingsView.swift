@@ -1,8 +1,5 @@
 import SwiftUI
 import KnotKit
-#if os(macOS)
-import KeyboardShortcuts
-#endif
 
 /// Reveals the configurable knobs: vault folder, paths, daily-note format,
 /// and routing thresholds. Live-binds to the model's settings so changes
@@ -11,6 +8,9 @@ struct SettingsView: View {
     @Bindable var model: EditorModel
     @State private var pickerPresented = false
     @State private var pickerError: String?
+    #if os(macOS)
+    @State private var shortcut: Shortcut = ShortcutStore.load()
+    #endif
 
     var body: some View {
         Form {
@@ -38,12 +38,17 @@ struct SettingsView: View {
             #if os(macOS)
             Section {
                 LabeledContent("Toggle Knot") {
-                    KeyboardShortcuts.Recorder(for: .toggleKnot)
+                    ShortcutRecorderView(shortcut: $shortcut)
+                        .frame(width: 160, height: 24)
+                        .onChange(of: shortcut) { _, newValue in
+                            ShortcutStore.save(newValue)
+                            NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
+                        }
                 }
             } header: {
                 Text("Shortcut")
             } footer: {
-                Text("Press the shortcut anywhere on macOS to open or dismiss the Knot popover. Click the recorder, press the keys you want, then release. Click the × to clear.")
+                Text("Click the recorder, press any combination of ⌃⌥⇧⌘ plus a key, then release. Press ⌫ while recording to clear. Esc cancels. All four modifiers work — useful for Hyperkey users.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

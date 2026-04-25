@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import KeyboardShortcuts
 import KnotKit
 
 @main
@@ -35,8 +34,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar = MenuBarController(model: model, openSettings: { [weak self] in
             self?.openSettings()
         })
-        HotkeyManager.shared.register { [weak self] in
+        HotkeyManager.shared.setHandler { [weak self] in
             self?.menubar.toggle()
+        }
+        HotkeyManager.shared.update(to: ShortcutStore.load())
+
+        // React to live edits from the Settings recorder.
+        NotificationCenter.default.addObserver(
+            forName: .knotShortcutChanged,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                HotkeyManager.shared.update(to: ShortcutStore.load())
+            }
         }
     }
 
@@ -81,9 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-extension KeyboardShortcuts.Name {
-    static let toggleKnot = Self(
-        "toggleKnot",
-        default: .init(.space, modifiers: [.control, .option])
-    )
+extension Notification.Name {
+    static let knotShortcutChanged = Notification.Name("knot.toggleShortcutChanged")
 }
