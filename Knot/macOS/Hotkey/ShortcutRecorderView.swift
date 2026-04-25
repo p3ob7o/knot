@@ -42,6 +42,15 @@ final class ShortcutRecorderField: NSControl {
     }
     private var current: Shortcut = .empty
 
+    /// The most recent `flagsChanged` modifier state we've seen during the
+    /// current recording session. We merge this into the modifier flags of
+    /// any subsequent `keyDown`, because some virtual-modifier injectors
+    /// (e.g. Hyperkey) raise `flagsChanged` for ⌃⌥⇧⌘ but don't propagate
+    /// that state onto the physical key event that follows.
+    private var trackedModifiers: NSEvent.ModifierFlags = []
+
+    private static let modifierMask: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupSubviews()
@@ -128,6 +137,7 @@ final class ShortcutRecorderField: NSControl {
     private func startRecording() {
         guard monitor == nil else { return }
         isRecording = true
+        trackedModifiers = []
 
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
@@ -145,10 +155,15 @@ final class ShortcutRecorderField: NSControl {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+        let mask = Self.modifierMask
+        let eventMods = event.modifierFlags.intersection(mask)
+
         if event.type == .flagsChanged {
-            // While the user is still holding modifiers down, show them
-            // live in the field as they press them.
-            let preview = previewShortcut(for: event)
+            // Track the live modifier state so we can merge it into a
+            // subsequent `keyDown` whose own `modifierFlags` may not carry
+            // virtually-injected modifiers.
+            trackedModifiers = eventMods
+            let preview = previewShortcut(modifiers: eventMods)
             label.stringValue = preview.displayString.isEmpty
                 ? "Press shortcut…"
                 : preview.displayString
@@ -157,21 +172,28 @@ final class ShortcutRecorderField: NSControl {
 
         guard event.type == .keyDown else { return event }
 
-        // Esc cancels.
-        if Int(event.keyCode) == kVK_Escape, !event.modifierFlags.contains(.command) {
+        let combinedMods = eventMods.union(trackedModifiers)
+
+        // Esc with no modifiers cancels.
+        if Int(event.keyCode) == kVK_Escape, combinedMods.isEmpty {
             stopRecording(restoreText: true)
             return nil
         }
 
         // Delete / Backspace with no modifiers clears the shortcut.
-        let modOnlyMask: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
         if (Int(event.keyCode) == kVK_Delete || Int(event.keyCode) == kVK_ForwardDelete),
-           event.modifierFlags.intersection(modOnlyMask).isEmpty {
+           combinedMods.isEmpty {
             commit(.empty)
             return nil
         }
 
-        guard let candidate = Shortcut(event: event) else { return nil }
+        let candidate = Shortcut(
+            keyCode: UInt32(event.keyCode),
+            cmd: combinedMods.contains(.command),
+            opt: combinedMods.contains(.option),
+            ctrl: combinedMods.contains(.control),
+            shift: combinedMods.contains(.shift)
+        )
         guard candidate.isValid else {
             NSSound.beep()
             return nil
@@ -181,14 +203,13 @@ final class ShortcutRecorderField: NSControl {
         return nil
     }
 
-    private func previewShortcut(for event: NSEvent) -> Shortcut {
-        let flags = event.modifierFlags
-        return Shortcut(
+    private func previewShortcut(modifiers: NSEvent.ModifierFlags) -> Shortcut {
+        Shortcut(
             keyCode: 0,
-            cmd: flags.contains(.command),
-            opt: flags.contains(.option),
-            ctrl: flags.contains(.control),
-            shift: flags.contains(.shift)
+            cmd: modifiers.contains(.command),
+            opt: modifiers.contains(.option),
+            ctrl: modifiers.contains(.control),
+            shift: modifiers.contains(.shift)
         )
     }
 
