@@ -1,7 +1,8 @@
 import Foundation
 
 /// Creates a new file in the inbox folder for a longer note. Filename is
-/// `<datePrefix> - <slug>.md`; collisions are resolved by appending a counter.
+/// the Moment-formatted string from `inboxFilenameFormat` plus `.md`.
+/// Collisions are resolved by appending ` (N)` before the extension.
 public struct InboxWriter: Sendable {
     public let vault: URL
     public let settings: AppSettings
@@ -15,19 +16,18 @@ public struct InboxWriter: Sendable {
     public func write(_ note: Note) throws -> URL {
         let inboxRoot = vault.appending(path: settings.inboxFolder, directoryHint: .isDirectory)
 
-        // The Moment-formatted prefix may contain `/` to nest into subfolders;
-        // we let the path-collision loop work on the base file URL while we
-        // create whatever intermediate directories the prefix demands.
-        let prefix = MomentFormat.string(
+        // The Moment-formatted filename may contain `/` to nest into
+        // subfolders; we resolve the full URL first, then create whatever
+        // intermediate directories the format demands.
+        let baseName = MomentFormat.string(
             from: note.createdAt,
             format: settings.inboxFilenameFormat
         )
-        let slug = Slug.from(note.content)
 
-        var fileURL = inboxRoot.appending(path: filename(prefix: prefix, slug: slug, counter: 0))
+        var fileURL = inboxRoot.appending(path: filename(base: baseName, counter: 0))
         var counter = 1
         while FileManager.default.fileExists(atPath: fileURL.path) {
-            fileURL = inboxRoot.appending(path: filename(prefix: prefix, slug: slug, counter: counter))
+            fileURL = inboxRoot.appending(path: filename(base: baseName, counter: counter))
             counter += 1
         }
         let parent = fileURL.deletingLastPathComponent()
@@ -59,9 +59,9 @@ public struct InboxWriter: Sendable {
         return resultURL
     }
 
-    private func filename(prefix: String, slug: String, counter: Int) -> String {
-        let base = slug.isEmpty ? prefix : "\(prefix) - \(slug)"
+    private func filename(base: String, counter: Int) -> String {
+        let safeBase = base.isEmpty ? "Untitled" : base
         let suffix = counter == 0 ? "" : " (\(counter))"
-        return base + suffix + ".md"
+        return safeBase + suffix + ".md"
     }
 }

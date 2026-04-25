@@ -41,7 +41,7 @@ final class VaultIntegrationTests: XCTestCase {
         XCTAssertEqual(after, "## Quick notes\n\n- 14:32 first thought\n- 16:00 second thought\n")
     }
 
-    func test_inboxWrite_createsNewFile() throws {
+    func test_inboxWrite_createsNewFileNamedFromFormat() throws {
         let settings = AppSettings()
         let vault = Vault(url: tempRoot, settings: settings)
         let date = makeDate(2026, 4, 25, 14, 32)
@@ -54,7 +54,7 @@ final class VaultIntegrationTests: XCTestCase {
         let url = try vault.write(note: note)
         let contents = try String(contentsOf: url, encoding: .utf8)
 
-        XCTAssertEqual(url.lastPathComponent, "2026-04-25 1432 - project-planning-notes.md")
+        XCTAssertEqual(url.lastPathComponent, "2026-04-25 1432.md")
         XCTAssertTrue(url.path.contains("Inbox/"))
         XCTAssertEqual(contents, "Project planning notes\n\nWith multiple lines")
     }
@@ -63,15 +63,31 @@ final class VaultIntegrationTests: XCTestCase {
         let settings = AppSettings()
         let vault = Vault(url: tempRoot, settings: settings)
         let date = makeDate(2026, 4, 25, 14, 32)
-        let note = Note(content: "same title", mode: .inbox, createdAt: date)
-        let note2 = Note(content: "same title", mode: .inbox, createdAt: date)
+        let note = Note(content: "first", mode: .inbox, createdAt: date)
+        let note2 = Note(content: "second", mode: .inbox, createdAt: date)
 
         let first = try vault.write(note: note)
         let second = try vault.write(note: note2)
 
         XCTAssertNotEqual(first, second)
-        XCTAssertEqual(first.lastPathComponent, "2026-04-25 1432 - same-title.md")
-        XCTAssertEqual(second.lastPathComponent, "2026-04-25 1432 - same-title (1).md")
+        XCTAssertEqual(first.lastPathComponent, "2026-04-25 1432.md")
+        XCTAssertEqual(second.lastPathComponent, "2026-04-25 1432 (1).md")
+    }
+
+    func test_inboxLiteralFolderInFilenamePattern_requiresBracketEscape() throws {
+        // Without [brackets], a literal-looking string gets mangled because
+        // moment treats individual characters as tokens. With brackets, it's
+        // preserved verbatim. This documents the behaviour the user hit.
+        var settings = AppSettings()
+        settings.inboxFilenameFormat = "[Notes]/YYYY-MM-DD HH:mm:ss"
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(content: "with brackets", mode: .inbox, createdAt: date)
+        let url = try vault.write(note: note)
+        XCTAssertTrue(
+            url.path.contains("Inbox/Notes/2026-04-25 14:32:"),
+            "got \(url.path)"
+        )
     }
 
     func test_emptyContent_throws() throws {
@@ -111,7 +127,7 @@ final class VaultIntegrationTests: XCTestCase {
 
         let url = try vault.write(note: note)
         XCTAssertTrue(
-            url.path.contains("Inbox/2026/04/2026-04-25 1432 - long-form-thought.md"),
+            url.path.contains("Inbox/2026/04/2026-04-25 1432.md"),
             "got \(url.path)"
         )
     }

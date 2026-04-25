@@ -1,5 +1,8 @@
 import SwiftUI
 import KnotKit
+#if os(macOS)
+import KeyboardShortcuts
+#endif
 
 /// Reveals the configurable knobs: vault folder, paths, daily-note format,
 /// and routing thresholds. Live-binds to the model's settings so changes
@@ -31,6 +34,20 @@ struct SettingsView: View {
                 }
                 .disabled(!model.hasVault)
             }
+
+            #if os(macOS)
+            Section {
+                LabeledContent("Toggle Knot") {
+                    KeyboardShortcuts.Recorder(for: .toggleKnot)
+                }
+            } header: {
+                Text("Shortcut")
+            } footer: {
+                Text("Press the shortcut anywhere on macOS to open or dismiss the Knot popover. Click the recorder, press the keys you want, then release. Click the × to clear.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            #endif
 
             Section("Folders") {
                 LabeledContent("Daily folder") {
@@ -68,7 +85,7 @@ struct SettingsView: View {
             }
 
             Section {
-                LabeledContent("Filename prefix") {
+                LabeledContent("Filename") {
                     TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
                         .textFieldStyle(.roundedBorder)
                         .frame(minWidth: 200)
@@ -76,7 +93,7 @@ struct SettingsView: View {
             } header: {
                 Text("Inbox")
             } footer: {
-                Text("Slashes in the prefix create subfolders, e.g. YYYY/MM/YYYY-MM-DD HHmm.")
+                Text("Slashes create subfolders. Wrap literal text in [brackets] — e.g. [Notes]/YYYY-MM-DD produces Notes/2026-04-25. The Inbox folder above is already literal, so prefer putting fixed parent names there.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -112,7 +129,7 @@ struct SettingsView: View {
             Text("Filename and bullet patterns use Moment.js display format — the same conventions as Obsidian's Daily Notes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Slashes in the filename pattern create subfolders. Use {{...}} in the bullet for date placeholders, plus {{content}} for the note text.")
+            Text("Slashes in the filename pattern create subfolders. Wrap literal text in [brackets] (otherwise letters like Q, k, and s are interpreted as date tokens). In the bullet, use {{...}} for date placeholders plus {{content}} for the note text.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Link(
