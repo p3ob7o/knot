@@ -38,17 +38,23 @@ struct SettingsView: View {
             #if os(macOS)
             Section {
                 LabeledContent("Toggle Knot") {
-                    ShortcutRecorderView(shortcut: $shortcut)
-                        .frame(width: 160, height: 24)
+                    ShortcutPickerView(shortcut: $shortcut)
                         .onChange(of: shortcut) { _, newValue in
                             ShortcutStore.save(newValue)
                             NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
                         }
                 }
+                if shortcut.isValid {
+                    LabeledContent("Preview") {
+                        Text(shortcut.displayString)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Shortcut")
             } footer: {
-                Text("Click the recorder, press any combination of ⌃⌥⇧⌘ plus a key, then release. Press ⌫ while recording to clear. Esc cancels. All four modifiers work — useful for Hyperkey users.")
+                Text("Click the modifier chips and pick a key to set the global hotkey. All four modifiers can be combined — useful when you trigger Knot via Hyperkey or Karabiner. The shortcut is registered globally as soon as it's valid (one or more modifiers plus a key).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
