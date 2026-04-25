@@ -13,22 +13,25 @@ public struct InboxWriter: Sendable {
 
     @discardableResult
     public func write(_ note: Note) throws -> URL {
-        let folder = vault.appending(path: settings.inboxFolder, directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let inboxRoot = vault.appending(path: settings.inboxFolder, directoryHint: .isDirectory)
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = settings.inboxFilenameFormat
-        let prefix = formatter.string(from: note.createdAt)
+        // The Moment-formatted prefix may contain `/` to nest into subfolders;
+        // we let the path-collision loop work on the base file URL while we
+        // create whatever intermediate directories the prefix demands.
+        let prefix = MomentFormat.string(
+            from: note.createdAt,
+            format: settings.inboxFilenameFormat
+        )
         let slug = Slug.from(note.content)
 
-        var fileURL = folder.appending(path: filename(prefix: prefix, slug: slug, counter: 0))
+        var fileURL = inboxRoot.appending(path: filename(prefix: prefix, slug: slug, counter: 0))
         var counter = 1
         while FileManager.default.fileExists(atPath: fileURL.path) {
-            fileURL = folder.appending(path: filename(prefix: prefix, slug: slug, counter: counter))
+            fileURL = inboxRoot.appending(path: filename(prefix: prefix, slug: slug, counter: counter))
             counter += 1
         }
+        let parent = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
         var coordError: NSError?
         var thrown: Error?

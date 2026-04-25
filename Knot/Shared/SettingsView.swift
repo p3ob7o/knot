@@ -45,11 +45,11 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Daily note") {
+            Section {
                 LabeledContent("Filename pattern") {
-                    TextField("yyyy-MM-dd", text: settingsBinding(\.dailyFilenameFormat))
+                    TextField("YYYY-MM-DD", text: settingsBinding(\.dailyFilenameFormat))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 140)
+                        .frame(minWidth: 200)
                 }
                 LabeledContent("Heading") {
                     TextField("## Quick notes", text: settingsBinding(\.dailyHeading))
@@ -61,17 +61,24 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(minWidth: 240)
                 }
-                Text("Placeholders: {{HH:mm}}, {{content}}")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Daily note")
+            } footer: {
+                formatHelp
             }
 
-            Section("Inbox") {
+            Section {
                 LabeledContent("Filename prefix") {
-                    TextField("yyyy-MM-dd HHmm", text: settingsBinding(\.inboxFilenameFormat))
+                    TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 140)
+                        .frame(minWidth: 200)
                 }
+            } header: {
+                Text("Inbox")
+            } footer: {
+                Text("Slashes in the prefix create subfolders, e.g. YYYY/MM/YYYY-MM-DD HHmm.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Routing") {
@@ -97,6 +104,22 @@ struct SettingsView: View {
             } catch {
                 pickerError = error.localizedDescription
             }
+        }
+    }
+
+    private var formatHelp: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Filename and bullet patterns use Moment.js display format — the same conventions as Obsidian's Daily Notes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Slashes in the filename pattern create subfolders. Use {{...}} in the bullet for date placeholders, plus {{content}} for the note text.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Link(
+                "Open the Moment.js format reference",
+                destination: URL(string: "https://momentjs.com/docs/#/displaying/format/")!
+            )
+            .font(.caption)
         }
     }
 

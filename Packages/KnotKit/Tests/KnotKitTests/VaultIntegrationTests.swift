@@ -81,6 +81,53 @@ final class VaultIntegrationTests: XCTestCase {
         XCTAssertThrowsError(try vault.write(note: note))
     }
 
+    func test_dailyFilenameFormatWithSlashes_createsSubfolders() throws {
+        var settings = AppSettings()
+        settings.dailyFilenameFormat = "YYYY/MM/YYYY-MM-DD"
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(content: "nested daily", mode: .daily, createdAt: date)
+
+        let url = try vault.write(note: note)
+        XCTAssertTrue(
+            url.path.contains("Daily/2026/04/2026-04-25.md"),
+            "got \(url.path)"
+        )
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(contents, "## Quick notes\n\n- 14:32 nested daily\n")
+    }
+
+    func test_inboxFilenameFormatWithSlashes_createsSubfolders() throws {
+        var settings = AppSettings()
+        settings.inboxFolder = "Inbox"
+        settings.inboxFilenameFormat = "YYYY/MM/YYYY-MM-DD HHmm"
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(
+            content: "Long form thought\n\nWith body",
+            mode: .inbox,
+            createdAt: date
+        )
+
+        let url = try vault.write(note: note)
+        XCTAssertTrue(
+            url.path.contains("Inbox/2026/04/2026-04-25 1432 - long-form-thought.md"),
+            "got \(url.path)"
+        )
+    }
+
+    func test_settingsMigratesLegacyDateFormatterPatterns() {
+        let suite = UserDefaults(suiteName: "knot.tests-\(UUID().uuidString)")!
+        var legacy = AppSettings()
+        legacy.dailyFilenameFormat = "yyyy-MM-dd"
+        legacy.inboxFilenameFormat = "yyyy-MM-dd HHmm"
+        legacy.save(to: suite)
+
+        let loaded = AppSettings.load(from: suite)
+        XCTAssertEqual(loaded.dailyFilenameFormat, "YYYY-MM-DD")
+        XCTAssertEqual(loaded.inboxFilenameFormat, "YYYY-MM-DD HHmm")
+    }
+
     // MARK: - Helpers
 
     private func makeDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {

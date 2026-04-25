@@ -11,12 +11,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Folder, relative to the vault root, where inbox notes are created.
     public var inboxFolder: String = "Inbox"
 
-    /// `DateFormatter` pattern for the daily filename, without extension.
-    /// `.md` is appended automatically.
-    public var dailyFilenameFormat: String = "yyyy-MM-dd"
+    /// [Moment.js](https://momentjs.com/docs/#/displaying/format/) pattern for
+    /// the daily filename — without the `.md` extension. May contain `/` to
+    /// produce subfolders (e.g. `YYYY/MM/YYYY-MM-DD`).
+    public var dailyFilenameFormat: String = "YYYY-MM-DD"
 
-    /// `DateFormatter` pattern for the inbox filename prefix, before the slug.
-    public var inboxFilenameFormat: String = "yyyy-MM-dd HHmm"
+    /// Moment.js pattern for the inbox filename prefix, before the slug.
+    /// May contain `/` to produce subfolders.
+    public var inboxFilenameFormat: String = "YYYY-MM-DD HHmm"
 
     // MARK: Daily-note formatting
 
@@ -44,17 +46,39 @@ extension AppSettings {
     public static let userDefaultsKey = "knot.settings"
 
     public static func load(from defaults: UserDefaults = .standard) -> AppSettings {
-        guard
-            let data = defaults.data(forKey: userDefaultsKey),
-            let decoded = try? JSONDecoder().decode(AppSettings.self, from: data)
-        else {
-            return AppSettings()
+        var settings: AppSettings
+        if let data = defaults.data(forKey: userDefaultsKey),
+           let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
+            settings = decoded
+        } else {
+            settings = AppSettings()
         }
-        return decoded
+        if settings.migrateFromDateFormatterPatterns() {
+            settings.save(to: defaults)
+        }
+        return settings
     }
 
     public func save(to defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: AppSettings.userDefaultsKey)
+    }
+
+    /// Earlier builds stored Apple `DateFormatter` patterns. We now use
+    /// Moment.js patterns instead. This rewrites the well-known former
+    /// defaults to their Moment equivalents so users who upgrade don't see
+    /// broken filenames. Returns `true` if anything changed.
+    @discardableResult
+    mutating func migrateFromDateFormatterPatterns() -> Bool {
+        var didMigrate = false
+        if dailyFilenameFormat == "yyyy-MM-dd" {
+            dailyFilenameFormat = "YYYY-MM-DD"
+            didMigrate = true
+        }
+        if inboxFilenameFormat == "yyyy-MM-dd HHmm" {
+            inboxFilenameFormat = "YYYY-MM-DD HHmm"
+            didMigrate = true
+        }
+        return didMigrate
     }
 }

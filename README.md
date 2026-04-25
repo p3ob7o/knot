@@ -82,6 +82,26 @@ are resolved by appending a counter.
 All paths, the daily filename pattern, the heading text, the bullet format,
 and the routing thresholds are configurable in Settings.
 
+### Date format strings
+
+Filename patterns use the [Moment.js display format
+spec](https://momentjs.com/docs/#/displaying/format/) — the same conventions
+Obsidian's Daily Notes / Periodic Notes plugins use, so existing format
+strings (`YYYY-MM-DD`, `YYYY/MM/YYYY-MM-DD dddd`, etc.) work as-is.
+
+Slashes are honoured as path separators, so a daily filename pattern of
+`YYYY/MM/YYYY-MM-DD` will produce `Daily/2026/04/2026-04-25.md`. Subfolders
+are created automatically.
+
+In the daily-note **bullet** template, anything inside `{{...}}` is a Moment
+pattern; `{{content}}` is the note text. Default:
+
+```
+- {{HH:mm}} {{content}}
+```
+
+You can use any Moment tokens, e.g. `- [[{{YYYY-MM-DD}}]] {{HH:mm}} {{content}}`.
+
 ## Concurrency safety
 
 Knot uses `NSFileCoordinator` for every read and write so that Obsidian and

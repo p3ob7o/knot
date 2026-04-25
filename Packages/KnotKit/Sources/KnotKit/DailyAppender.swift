@@ -17,23 +17,24 @@ public struct DailyAppender: Sendable {
     /// resolved file URL.
     @discardableResult
     public func append(_ note: Note) throws -> URL {
-        let folder = vault.appending(path: settings.dailyFolder, directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let dailyRoot = vault.appending(path: settings.dailyFolder, directoryHint: .isDirectory)
 
-        let filenameFormatter = DateFormatter()
-        filenameFormatter.locale = Locale(identifier: "en_US_POSIX")
-        filenameFormatter.timeZone = .current
-        filenameFormatter.dateFormat = settings.dailyFilenameFormat
-        let filename = filenameFormatter.string(from: note.createdAt) + ".md"
-        let fileURL = folder.appending(path: filename)
+        // The filename pattern may itself contain `/` (e.g. `YYYY/MM/YYYY-MM-DD`)
+        // which means we need to make sure the file's parent directory exists,
+        // not just `dailyFolder`.
+        let relativePath = MomentFormat.string(
+            from: note.createdAt,
+            format: settings.dailyFilenameFormat
+        ) + ".md"
+        let fileURL = dailyRoot.appending(path: relativePath)
+        let parent = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        timeFormatter.timeZone = .current
-        timeFormatter.dateFormat = "HH:mm"
-        let bullet = settings.dailyBulletFormat
-            .replacingOccurrences(of: "{{HH:mm}}", with: timeFormatter.string(from: note.createdAt))
-            .replacingOccurrences(of: "{{content}}", with: note.content)
+        let bullet = BulletTemplate.render(
+            template: settings.dailyBulletFormat,
+            content: note.content,
+            date: note.createdAt
+        )
 
         var coordError: NSError?
         var resultURL: URL?
