@@ -54,7 +54,7 @@ struct SettingsView: View {
             } header: {
                 Text("Shortcut")
             } footer: {
-                Text("Click the modifier chips and pick a key to set the global hotkey. All four modifiers can be combined — useful when you trigger Knot via Hyperkey or Karabiner. The shortcut is registered globally as soon as it's valid (one or more modifiers plus a key).")
+                Text("Click the chips to toggle modifiers, then click the field and press a key to record it. Modifiers held while recording are also added to the chips, so the fast path \"⌃Space\" still works. To bind a four-modifier combo (Hyperkey users), toggle the chips first and then just press the bare key. Backspace clears the key while recording; Esc cancels.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
