@@ -94,4 +94,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let knotShortcutChanged = Notification.Name("knot.toggleShortcutChanged")
+    static let knotHotkeyStatusChanged = Notification.Name("knot.hotkeyStatusChanged")
 }

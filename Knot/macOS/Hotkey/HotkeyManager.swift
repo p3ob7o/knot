@@ -13,6 +13,12 @@ final class HotkeyManager {
 
     static let shared = HotkeyManager()
 
+    /// `nil` when registration succeeded; otherwise a human-readable
+    /// description of the OSStatus value `RegisterEventHotKey` returned.
+    /// SettingsView observes `Notification.Name.knotHotkeyStatusChanged`
+    /// to surface this to the user.
+    private(set) var lastRegistrationError: String?
+
     private var handler: (() -> Void)?
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
@@ -34,6 +40,9 @@ final class HotkeyManager {
     /// registration, which is how users disable the hotkey.
     func update(to shortcut: Shortcut) {
         unregister()
+        lastRegistrationError = nil
+        defer { NotificationCenter.default.post(name: .knotHotkeyStatusChanged, object: nil) }
+
         guard shortcut.isValid else { return }
 
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.id)
@@ -50,7 +59,17 @@ final class HotkeyManager {
         if status == noErr {
             hotKeyRef = ref
         } else {
-            NSLog("Knot: RegisterEventHotKey failed with status \(status)")
+            let message: String
+            switch status {
+            case OSStatus(eventHotKeyExistsErr):
+                message = "Another app already owns that shortcut. Pick a different combination."
+            case OSStatus(eventHotKeyInvalidErr):
+                message = "macOS rejected that shortcut (system reserved). Pick a different combination."
+            default:
+                message = "Couldn't register hotkey (OSStatus \(status))."
+            }
+            lastRegistrationError = message
+            NSLog("Knot: RegisterEventHotKey failed with status \(status) for shortcut \(shortcut.displayString)")
         }
     }
 

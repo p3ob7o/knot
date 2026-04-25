@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var pickerError: String?
     #if os(macOS)
     @State private var shortcut: Shortcut = ShortcutStore.load()
+    @State private var hotkeyError: String?
     #endif
 
     var body: some View {
@@ -37,26 +38,35 @@ struct SettingsView: View {
 
             #if os(macOS)
             Section {
-                LabeledContent("Toggle Knot") {
-                    ShortcutPickerView(shortcut: $shortcut)
-                        .onChange(of: shortcut) { _, newValue in
-                            ShortcutStore.save(newValue)
-                            NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
-                        }
-                }
+                ShortcutPickerView(shortcut: $shortcut)
+                    .onChange(of: shortcut) { _, newValue in
+                        ShortcutStore.save(newValue)
+                        NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
+                    }
                 if shortcut.isValid {
                     LabeledContent("Preview") {
                         Text(shortcut.displayString)
                             .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary)
                     }
                 }
+                if let hotkeyError {
+                    Label(hotkeyError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
             } header: {
-                Text("Shortcut")
+                Text("Toggle Knot")
             } footer: {
-                Text("Click the chips to toggle modifiers, then click the field and press a key to record it. Modifiers held while recording are also added to the chips, so the fast path \"⌃Space\" still works. To bind a four-modifier combo (Hyperkey users), toggle the chips first and then just press the bare key. Backspace clears the key while recording; Esc cancels.")
+                Text("Click the modifier chips to add or remove ⌃⌥⇧⌘. Click the key field and press any key to capture it (modifiers held while recording also light up the chips). For a four-modifier shortcut, click all four chips first, then press just the bare key — that avoids keyboards that can't physically transmit five keys at once.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .knotHotkeyStatusChanged)) { _ in
+                hotkeyError = HotkeyManager.shared.lastRegistrationError
+            }
+            .task {
+                hotkeyError = HotkeyManager.shared.lastRegistrationError
             }
             #endif
 

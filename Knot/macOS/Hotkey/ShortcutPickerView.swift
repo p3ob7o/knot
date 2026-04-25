@@ -17,33 +17,43 @@ struct ShortcutPickerView: View {
     @Binding var shortcut: Shortcut
 
     var body: some View {
-        HStack(spacing: 6) {
-            ModifierChip(symbol: "⌃", isOn: bind(\.ctrl))
-            ModifierChip(symbol: "⌥", isOn: bind(\.opt))
-            ModifierChip(symbol: "⇧", isOn: bind(\.shift))
-            ModifierChip(symbol: "⌘", isOn: bind(\.cmd))
+        VStack(alignment: .leading, spacing: 8) {
+            // Row 1 — modifiers. Click to toggle. This is how you build a
+            // four-modifier combo without your keyboard having to transmit
+            // five simultaneous keys.
+            HStack(spacing: 6) {
+                Text("Modifiers")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 64, alignment: .leading)
 
-            ShortcutKeyRecorder(shortcut: $shortcut)
-                .frame(minWidth: 110, idealHeight: 24, maxHeight: 24)
+                ModifierChip(symbol: "⌃", isOn: $shortcut.ctrl)
+                ModifierChip(symbol: "⌥", isOn: $shortcut.opt)
+                ModifierChip(symbol: "⇧", isOn: $shortcut.shift)
+                ModifierChip(symbol: "⌘", isOn: $shortcut.cmd)
+            }
 
-            if shortcut.keyCode != 0 || shortcut.hasModifiers {
-                Button {
-                    shortcut = .empty
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
+            // Row 2 — the key. Click and press whatever physical key you
+            // want; display goes through UCKeyTranslate so non-QWERTY
+            // layouts show what their key actually produces.
+            HStack(spacing: 6) {
+                Text("Key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 64, alignment: .leading)
+
+                ShortcutKeyRecorder(shortcut: $shortcut)
+                    .frame(minWidth: 130, idealHeight: 24, maxHeight: 24)
+
+                if shortcut.keyCode != 0 || shortcut.hasModifiers {
+                    Button("Clear") {
+                        shortcut = .empty
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.plain)
-                .help("Clear shortcut")
             }
         }
-    }
-
-    private func bind<T>(_ keyPath: WritableKeyPath<Shortcut, T>) -> Binding<T> {
-        Binding(
-            get: { shortcut[keyPath: keyPath] },
-            set: { shortcut[keyPath: keyPath] = $0 }
-        )
     }
 }
 
