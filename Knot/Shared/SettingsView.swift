@@ -51,7 +51,7 @@ struct SettingsView: View {
             } header: {
                 Text("Toggle Knot")
             } footer: {
-                Text("Click the field, then press one letter or digit with any combination of ⌃⌥⇧⌘. Backspace clears; Esc cancels.")
+                Text("Click the field, then press any single character with any combination of ⌃⌥⇧⌘. Backspace clears; Esc cancels.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

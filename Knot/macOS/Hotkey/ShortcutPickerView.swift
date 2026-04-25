@@ -4,7 +4,7 @@ import SwiftUI
 
 /// A single-field recorder for the shortcut that toggles Knot.
 ///
-/// Click the field, press one letter or digit with any combination of
+/// Click the field, press one printable character with any combination of
 /// modifiers (⌃ ⌥ ⇧ ⌘), and the complete shortcut is saved atomically.
 /// Display uses `UCKeyTranslate`, so non-QWERTY layouts show the character
 /// produced by the user's current keyboard layout.
@@ -154,8 +154,8 @@ final class ShortcutRecorderField: NSControl {
             return nil
         }
 
-        guard KeyName.isLetterOrDigit(UInt32(event.keyCode)) else {
-            validationMessage = "Press a letter or digit"
+        guard KeyName.isSingleCharacter(UInt32(event.keyCode)) else {
+            validationMessage = "Press a single character"
             refreshRecordingPreview(modifiers: combinedMods)
             NSSound.beep()
             return nil

@@ -23,24 +23,31 @@ enum KeyName {
         return "?"
     }
 
-    static func letterOrDigitSymbol(for keyCode: UInt32) -> String? {
+    static func singleCharacterSymbol(for keyCode: UInt32) -> String? {
         if let keypadDigit = keypadDigit(for: Int(keyCode)) {
             return keypadDigit
         }
 
         guard let layoutChar = layoutCharacter(for: keyCode),
               layoutChar.count == 1,
-              let scalar = layoutChar.unicodeScalars.first,
-              CharacterSet.alphanumerics.contains(scalar)
+              let scalar = layoutChar.unicodeScalars.first
         else {
             return nil
+        }
+
+        if CharacterSet.controlCharacters.contains(scalar) {
+            return nil
+        }
+
+        if scalar == " " {
+            return "Space"
         }
 
         return layoutChar.uppercased()
     }
 
-    static func isLetterOrDigit(_ keyCode: UInt32) -> Bool {
-        letterOrDigitSymbol(for: keyCode) != nil
+    static func isSingleCharacter(_ keyCode: UInt32) -> Bool {
+        singleCharacterSymbol(for: keyCode) != nil
     }
 
     private static func keypadDigit(for keyCode: Int) -> String? {

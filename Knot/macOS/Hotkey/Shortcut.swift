@@ -46,10 +46,10 @@ struct Shortcut: Codable, Equatable, Sendable {
         )
     }
 
-    /// `true` if this is a recordable shortcut: one letter or digit with
+    /// `true` if this is a recordable shortcut: one printable character with
     /// anywhere from zero to four modifiers.
     var isValid: Bool {
-        keyCode != 0 && KeyName.isLetterOrDigit(keyCode)
+        keyCode != 0 && KeyName.isSingleCharacter(keyCode)
     }
 
     var hasModifiers: Bool {
@@ -73,7 +73,7 @@ struct Shortcut: Codable, Equatable, Sendable {
         if opt   { s.append("⌥") }
         if shift { s.append("⇧") }
         if cmd   { s.append("⌘") }
-        s.append(KeyName.letterOrDigitSymbol(for: keyCode) ?? KeyName.symbol(for: keyCode))
+        s.append(KeyName.singleCharacterSymbol(for: keyCode) ?? KeyName.symbol(for: keyCode))
         return s
     }
 
