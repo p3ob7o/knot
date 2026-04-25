@@ -132,6 +132,64 @@ final class VaultIntegrationTests: XCTestCase {
         )
     }
 
+    func test_inboxNoteWithLeadingH1_usesHeadingAsFilename() throws {
+        let settings = AppSettings()
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(
+            content: "# Project plan\n\nFirst task: scope it.",
+            mode: .inbox,
+            createdAt: date
+        )
+
+        let url = try vault.write(note: note)
+        let contents = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertEqual(url.lastPathComponent, "Project plan.md")
+        XCTAssertTrue(url.path.contains("Inbox/"))
+        XCTAssertEqual(contents, "First task: scope it.")
+    }
+
+    func test_inboxNoteWithLeadingH1_keepsDateSubfoldersFromFormat() throws {
+        var settings = AppSettings()
+        settings.inboxFolder = "Inbox"
+        settings.inboxFilenameFormat = "YYYY/MM/YYYY-MM-DD HHmm"
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(
+            content: "# Quarterly review\nbullet body",
+            mode: .inbox,
+            createdAt: date
+        )
+
+        let url = try vault.write(note: note)
+        XCTAssertTrue(
+            url.path.contains("Inbox/2026/04/Quarterly review.md"),
+            "got \(url.path)"
+        )
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(contents, "bullet body")
+    }
+
+    func test_inboxNoteWithLongFirstLine_fallsBackToFormat() throws {
+        let settings = AppSettings()
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(
+            content: "# this heading runs to nine words and so should not match\nbody",
+            mode: .inbox,
+            createdAt: date
+        )
+
+        let url = try vault.write(note: note)
+        XCTAssertEqual(url.lastPathComponent, "2026-04-25 1432.md")
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(
+            contents,
+            "# this heading runs to nine words and so should not match\nbody"
+        )
+    }
+
     func test_settingsMigratesLegacyDateFormatterPatterns() {
         let suite = UserDefaults(suiteName: "knot.tests-\(UUID().uuidString)")!
         var legacy = AppSettings()
