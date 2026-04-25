@@ -43,13 +43,6 @@ struct SettingsView: View {
                         ShortcutStore.save(newValue)
                         NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
                     }
-                if shortcut.isValid {
-                    LabeledContent("Preview") {
-                        Text(shortcut.displayString)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.primary)
-                    }
-                }
                 if let hotkeyError {
                     Label(hotkeyError, systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)
@@ -58,7 +51,7 @@ struct SettingsView: View {
             } header: {
                 Text("Toggle Knot")
             } footer: {
-                Text("Click the modifier chips to add or remove ⌃⌥⇧⌘. Click the key field and press any key to capture it (modifiers held while recording also light up the chips). For a four-modifier shortcut, click all four chips first, then press just the bare key — that avoids keyboards that can't physically transmit five keys at once.")
+                Text("Click the field, then press one letter or digit with any combination of ⌃⌥⇧⌘. Backspace clears; Esc cancels.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

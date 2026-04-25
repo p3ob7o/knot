@@ -12,6 +12,9 @@ enum ShortcutStore {
         else {
             return .default
         }
+        if decoded.keyCode != 0, !decoded.isValid {
+            return .default
+        }
         return decoded
     }
 

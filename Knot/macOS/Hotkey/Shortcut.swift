@@ -46,11 +46,10 @@ struct Shortcut: Codable, Equatable, Sendable {
         )
     }
 
-    /// `true` if this is a recordable shortcut: a non-modifier key plus at
-    /// least one modifier. Single keys (no modifiers) are rejected because
-    /// they would intercept normal typing globally.
+    /// `true` if this is a recordable shortcut: one letter or digit with
+    /// anywhere from zero to four modifiers.
     var isValid: Bool {
-        keyCode != 0 && hasModifiers
+        keyCode != 0 && KeyName.isLetterOrDigit(keyCode)
     }
 
     var hasModifiers: Bool {
@@ -74,14 +73,13 @@ struct Shortcut: Codable, Equatable, Sendable {
         if opt   { s.append("⌥") }
         if shift { s.append("⇧") }
         if cmd   { s.append("⌘") }
-        s.append(KeyName.symbol(for: keyCode))
+        s.append(KeyName.letterOrDigitSymbol(for: keyCode) ?? KeyName.symbol(for: keyCode))
         return s
     }
 
-    /// Default: ⌃⌥Space (matches what we shipped before — users don't lose
-    /// their muscle memory).
+    /// Default: ⌃⌥K.
     static let `default` = Shortcut(
-        keyCode: UInt32(kVK_Space),
+        keyCode: UInt32(kVK_ANSI_K),
         cmd: false,
         opt: true,
         ctrl: true,

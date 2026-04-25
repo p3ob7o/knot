@@ -23,6 +23,42 @@ enum KeyName {
         return "?"
     }
 
+    static func letterOrDigitSymbol(for keyCode: UInt32) -> String? {
+        if let keypadDigit = keypadDigit(for: Int(keyCode)) {
+            return keypadDigit
+        }
+
+        guard let layoutChar = layoutCharacter(for: keyCode),
+              layoutChar.count == 1,
+              let scalar = layoutChar.unicodeScalars.first,
+              CharacterSet.alphanumerics.contains(scalar)
+        else {
+            return nil
+        }
+
+        return layoutChar.uppercased()
+    }
+
+    static func isLetterOrDigit(_ keyCode: UInt32) -> Bool {
+        letterOrDigitSymbol(for: keyCode) != nil
+    }
+
+    private static func keypadDigit(for keyCode: Int) -> String? {
+        switch keyCode {
+        case kVK_ANSI_Keypad0: return "0"
+        case kVK_ANSI_Keypad1: return "1"
+        case kVK_ANSI_Keypad2: return "2"
+        case kVK_ANSI_Keypad3: return "3"
+        case kVK_ANSI_Keypad4: return "4"
+        case kVK_ANSI_Keypad5: return "5"
+        case kVK_ANSI_Keypad6: return "6"
+        case kVK_ANSI_Keypad7: return "7"
+        case kVK_ANSI_Keypad8: return "8"
+        case kVK_ANSI_Keypad9: return "9"
+        default: return nil
+        }
+    }
+
     private static func special(for keyCode: Int) -> String? {
         switch keyCode {
         case kVK_Return:           return "↩"
@@ -65,7 +101,7 @@ enum KeyName {
         }
     }
 
-    private static func layoutCharacter(for keyCode: UInt32) -> String? {
+    static func layoutCharacter(for keyCode: UInt32) -> String? {
         guard
             let inputSource = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
             let layoutPtr = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData)

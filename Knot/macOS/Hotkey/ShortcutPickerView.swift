@@ -2,135 +2,50 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-/// Composes the global shortcut from two complementary parts:
+/// A single-field recorder for the shortcut that toggles Knot.
 ///
-/// 1. Four toggleable modifier chips (⌃ ⌥ ⇧ ⌘). Click a chip to add or
-///    remove that modifier. This sidesteps keyboard rollover ceilings —
-///    you never need to physically hold five keys to configure a
-///    four-modifier shortcut.
-/// 2. A key recorder that captures whichever physical key you press.
-///    Display goes through `UCKeyTranslate`, so on Dvorak the key
-///    positioned where Q lives on QWERTY is shown as `'`. Modifiers
-///    pressed during recording also flow into the chip state, so the
-///    fast path "click recorder, press ⌃Space" still works.
+/// Click the field, press one letter or digit with any combination of
+/// modifiers (⌃ ⌥ ⇧ ⌘), and the complete shortcut is saved atomically.
+/// Display uses `UCKeyTranslate`, so non-QWERTY layouts show the character
+/// produced by the user's current keyboard layout.
 struct ShortcutPickerView: View {
     @Binding var shortcut: Shortcut
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Row 1 — modifiers. Click to toggle. This is how you build a
-            // four-modifier combo without your keyboard having to transmit
-            // five simultaneous keys.
-            HStack(spacing: 6) {
-                Text("Modifiers")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .leading)
-
-                ModifierChip(symbol: "⌃", isOn: $shortcut.ctrl)
-                ModifierChip(symbol: "⌥", isOn: $shortcut.opt)
-                ModifierChip(symbol: "⇧", isOn: $shortcut.shift)
-                ModifierChip(symbol: "⌘", isOn: $shortcut.cmd)
-            }
-
-            // Row 2 — the key. Click and press whatever physical key you
-            // want; display goes through UCKeyTranslate so non-QWERTY
-            // layouts show what their key actually produces.
-            HStack(spacing: 6) {
-                Text("Key")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .leading)
-
-                ShortcutKeyRecorder(shortcut: $shortcut)
-                    .frame(minWidth: 130, idealHeight: 24, maxHeight: 24)
-
-                if shortcut.keyCode != 0 || shortcut.hasModifiers {
-                    Button("Clear") {
-                        shortcut = .empty
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                }
-            }
-        }
+        ShortcutRecorderView(shortcut: $shortcut)
+            .frame(minWidth: 220, idealHeight: 28, maxHeight: 28)
     }
 }
 
-private struct ModifierChip: View {
-    let symbol: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            Text(symbol)
-                .font(.system(size: 13, weight: .medium))
-                .frame(width: 26, height: 22)
-                .background {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isOn
-                              ? Color.accentColor.opacity(0.85)
-                              : Color(NSColor.controlBackgroundColor))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(isOn
-                                ? Color.accentColor
-                                : Color(NSColor.separatorColor),
-                                lineWidth: 1)
-                }
-                .foregroundStyle(isOn ? Color.white : Color.primary)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Key recorder
-
-/// SwiftUI wrapper around an NSView that records the key portion of the
-/// shortcut. Modifiers held during recording also flow back into the
-/// shortcut binding so the chips light up automatically.
-struct ShortcutKeyRecorder: NSViewRepresentable {
+private struct ShortcutRecorderView: NSViewRepresentable {
     @Binding var shortcut: Shortcut
 
-    func makeNSView(context: Context) -> ShortcutKeyRecorderField {
-        let view = ShortcutKeyRecorderField()
-        view.onCapture = { capturedKey, capturedMods in
-            var updated = self.shortcut
-            updated.keyCode = capturedKey
-            // Modifiers pressed during recording supplement (don't replace)
-            // any chips the user may have already toggled, so it's easy
-            // to compose ⌃⌥⇧⌘N by toggling chips first then pressing N.
-            if capturedMods.contains(.command) { updated.cmd = true }
-            if capturedMods.contains(.option)  { updated.opt = true }
-            if capturedMods.contains(.control) { updated.ctrl = true }
-            if capturedMods.contains(.shift)   { updated.shift = true }
-            self.shortcut = updated
-        }
-        view.onClearKey = {
-            self.shortcut.keyCode = 0
+    func makeNSView(context: Context) -> ShortcutRecorderField {
+        let view = ShortcutRecorderField()
+        view.onChange = { newValue in
+            if newValue != self.shortcut {
+                self.shortcut = newValue
+            }
         }
         view.update(with: shortcut)
         return view
     }
 
-    func updateNSView(_ nsView: ShortcutKeyRecorderField, context: Context) {
+    func updateNSView(_ nsView: ShortcutRecorderField, context: Context) {
         nsView.update(with: shortcut)
     }
 }
 
-final class ShortcutKeyRecorderField: NSControl {
+final class ShortcutRecorderField: NSControl {
 
-    var onCapture: ((UInt32, NSEvent.ModifierFlags) -> Void)?
-    var onClearKey: (() -> Void)?
+    var onChange: ((Shortcut) -> Void)?
 
     private let label = NSTextField(labelWithString: "")
     nonisolated(unsafe) private var monitor: Any?
     private var isRecording = false { didSet { refreshAppearance() } }
     private var current: Shortcut = .empty
     private var trackedModifiers: NSEvent.ModifierFlags = []
+    private var validationMessage: String?
 
     private static let modifierMask: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
 
@@ -151,26 +66,24 @@ final class ShortcutKeyRecorderField: NSControl {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 110, height: 22)
+        NSSize(width: 220, height: 28)
     }
 
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        if !isRecording {
-            window?.makeFirstResponder(self)
-            startRecording()
-        }
+        window?.makeFirstResponder(self)
+        startRecording()
     }
 
     override func resignFirstResponder() -> Bool {
-        if isRecording { stopRecording() }
+        if isRecording { stopRecording(restoreText: true) }
         return super.resignFirstResponder()
     }
 
     private func setupSubviews() {
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = 6
         layer?.borderWidth = 1
 
         label.alignment = .center
@@ -182,8 +95,8 @@ final class ShortcutKeyRecorderField: NSControl {
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6)
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8)
         ])
 
         refreshAppearance()
@@ -197,6 +110,7 @@ final class ShortcutKeyRecorderField: NSControl {
     private func startRecording() {
         guard monitor == nil else { return }
         isRecording = true
+        validationMessage = nil
         trackedModifiers = []
 
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
@@ -205,54 +119,74 @@ final class ShortcutKeyRecorderField: NSControl {
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(restoreText: Bool) {
         if let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
         isRecording = false
-        refreshAppearance()
+        if restoreText { refreshAppearance() }
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
-        let mask = Self.modifierMask
-        let eventMods = event.modifierFlags.intersection(mask)
+        let eventMods = event.modifierFlags.intersection(Self.modifierMask)
 
         if event.type == .flagsChanged {
-            // Track the live modifier state so we can fold it into the
-            // subsequent keyDown — useful for virtual-modifier injectors
-            // (e.g. Hyperkey) that don't propagate ⌃⌥⇧⌘ onto the regular
-            // keyDown that follows.
             trackedModifiers = eventMods
-            label.stringValue = "Press a key…"
+            refreshRecordingPreview(modifiers: eventMods)
             return nil
         }
 
         guard event.type == .keyDown else { return event }
 
-        // Esc with no modifiers cancels recording; the existing key is
-        // preserved.
-        if Int(event.keyCode) == kVK_Escape, eventMods.isEmpty, trackedModifiers.isEmpty {
-            stopRecording()
-            window?.makeFirstResponder(nil)
-            return nil
-        }
-
-        // Bare Backspace clears the captured key (modifiers stay where the
-        // user put them via the chips).
-        if (Int(event.keyCode) == kVK_Delete || Int(event.keyCode) == kVK_ForwardDelete),
-           eventMods.union(trackedModifiers).isEmpty {
-            onClearKey?()
-            stopRecording()
-            window?.makeFirstResponder(nil)
-            return nil
-        }
-
         let combinedMods = eventMods.union(trackedModifiers)
-        onCapture?(UInt32(event.keyCode), combinedMods)
-        stopRecording()
-        window?.makeFirstResponder(nil)
+
+        if Int(event.keyCode) == kVK_Escape, combinedMods.isEmpty {
+            validationMessage = nil
+            stopRecording(restoreText: true)
+            window?.makeFirstResponder(nil)
+            return nil
+        }
+
+        if (Int(event.keyCode) == kVK_Delete || Int(event.keyCode) == kVK_ForwardDelete),
+           combinedMods.isEmpty {
+            commit(.empty)
+            return nil
+        }
+
+        guard KeyName.isLetterOrDigit(UInt32(event.keyCode)) else {
+            validationMessage = "Press a letter or digit"
+            refreshRecordingPreview(modifiers: combinedMods)
+            NSSound.beep()
+            return nil
+        }
+
+        commit(Shortcut(
+            keyCode: UInt32(event.keyCode),
+            cmd: combinedMods.contains(.command),
+            opt: combinedMods.contains(.option),
+            ctrl: combinedMods.contains(.control),
+            shift: combinedMods.contains(.shift)
+        ))
         return nil
+    }
+
+    private func commit(_ shortcut: Shortcut) {
+        current = shortcut
+        validationMessage = nil
+        onChange?(shortcut)
+        stopRecording(restoreText: false)
+        refreshAppearance()
+        window?.makeFirstResponder(nil)
+    }
+
+    private func refreshRecordingPreview(modifiers: NSEvent.ModifierFlags) {
+        var text = ""
+        if modifiers.contains(.control) { text.append("⌃") }
+        if modifiers.contains(.option) { text.append("⌥") }
+        if modifiers.contains(.shift) { text.append("⇧") }
+        if modifiers.contains(.command) { text.append("⌘") }
+        label.stringValue = validationMessage ?? (text.isEmpty ? "Press shortcut…" : text + "…")
     }
 
     private func refreshAppearance() {
@@ -264,10 +198,10 @@ final class ShortcutKeyRecorderField: NSControl {
             : NSColor.separatorColor).cgColor
 
         if isRecording {
-            label.stringValue = "Press a key…"
+            label.stringValue = validationMessage ?? "Press shortcut…"
             label.textColor = .secondaryLabelColor
-        } else if current.keyCode != 0 {
-            label.stringValue = KeyName.symbol(for: current.keyCode)
+        } else if current.isValid {
+            label.stringValue = current.displayString
             label.textColor = .labelColor
         } else {
             label.stringValue = "Click to record"
