@@ -300,8 +300,14 @@ private struct PopoverRoot: View {
             if model.hasVault {
                 EditorView(model: model)
                 pipButton
-                    .padding(.top, 8)
-                    .padding(.trailing, 12)
+                    // Detached: the window's title bar overlays the
+                    // content (fullSizeContentView). Pulling the pip
+                    // up to y≈0 puts its visual centre on the same
+                    // line as the close traffic light at y≈14.
+                    // Popover: no chrome above us, so a softer 8pt
+                    // inset reads more naturally.
+                    .padding(.top, isDetached ? 0 : 8)
+                    .padding(.trailing, isDetached ? 8 : 12)
             } else {
                 OnboardingView(model: model, onDone: {})
             }

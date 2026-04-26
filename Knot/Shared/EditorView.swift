@@ -95,23 +95,34 @@ struct EditorView: View {
     }
 
     private var sendButton: some View {
-        Button(action: model.send) {
+        // Two visible states. The arrow stays the same shape across both
+        // so the affordance is recognisable at a glance — only the fill
+        // and the arrow colour soften when there's nothing to send.
+        let enabled = model.canSend
+        return Button(action: model.send) {
             ZStack {
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(
+                        enabled
+                            ? AnyShapeStyle(Color.accentColor)
+                            : AnyShapeStyle(Color.primary.opacity(0.16))
+                    )
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.114, green: 0.114, blue: 0.122))
+                    .foregroundStyle(
+                        enabled
+                            ? Color(red: 0.114, green: 0.114, blue: 0.122)
+                            : Color.secondary
+                    )
             }
             .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
-        .disabled(!model.canSend)
+        .disabled(!enabled)
         .keyboardShortcut(.defaultAction)
-        .opacity(model.canSend ? 1.0 : 0.32)
         .scaleEffect(sendPressed ? 0.94 : 1.0)
         .animation(.easeOut(duration: 0.08), value: sendPressed)
-        .animation(.easeOut(duration: 0.18), value: model.canSend)
+        .animation(.easeOut(duration: 0.18), value: enabled)
         .accessibilityLabel("Send")
     }
 }
