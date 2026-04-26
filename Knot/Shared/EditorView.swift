@@ -6,7 +6,14 @@ import KnotKit
 /// differs.
 struct EditorView: View {
     @Bindable var model: EditorModel
+    #if os(macOS)
+    // ChromelessTextEditor reports focus back via a Binding<Bool>, so
+    // we use plain @State here. iOS keeps SwiftUI's @FocusState because
+    // it drives keyboard avoidance and other UIKit niceties.
+    @State private var editorFocused: Bool = false
+    #else
     @FocusState private var editorFocused: Bool
+    #endif
 
     var body: some View {
         VStack(spacing: 12) {
@@ -21,9 +28,11 @@ struct EditorView: View {
         }
         .padding(Theme.editorPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        #if !os(macOS)
         .onAppear {
             editorFocused = true
         }
+        #endif
         // Cmd/Ctrl+Enter to send. Esc clears.
         .onSubmit { model.send() }
         .background {
@@ -46,29 +55,40 @@ struct EditorView: View {
 
     // MARK: - Subviews
 
+    @ViewBuilder
     private var editor: some View {
         // Locked-in design: minimal empty voice — no placeholder copy. The
         // textarea sits on a soft surface, picks up an accent ring on focus.
-        TextEditor(text: $model.content)
-            .focused($editorFocused)
-            .font(.system(size: 16))
-            .scrollContentBackground(.hidden)
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                    .fill(.background.secondary)
+        Group {
+            #if os(macOS)
+            ChromelessTextEditor(
+                text: $model.content,
+                isFocused: $editorFocused,
+                font: .systemFont(ofSize: 16)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                    .stroke(
-                        editorFocused
-                            ? Color.accentColor.opacity(0.55)
-                            : Color.primary.opacity(0.08),
-                        lineWidth: editorFocused ? 1.5 : 0.5
-                    )
-            )
-            .frame(minHeight: Theme.editorMinHeight)
-            .animation(.easeOut(duration: 0.18), value: editorFocused)
+            #else
+            TextEditor(text: $model.content)
+                .focused($editorFocused)
+                .font(.system(size: 16))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+            #endif
+        }
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                .fill(.background.secondary)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                .stroke(
+                    editorFocused
+                        ? Color.accentColor.opacity(0.55)
+                        : Color.primary.opacity(0.08),
+                    lineWidth: editorFocused ? 1.5 : 0.5
+                )
+        )
+        .frame(minHeight: Theme.editorMinHeight)
+        .animation(.easeOut(duration: 0.18), value: editorFocused)
     }
 
     @ViewBuilder
