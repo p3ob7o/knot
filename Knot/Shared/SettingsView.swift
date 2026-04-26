@@ -67,12 +67,12 @@ struct SettingsView: View {
                 LabeledContent("Daily folder") {
                     TextField("Daily", text: settingsBinding(\.dailyFolder))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 140)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
                 LabeledContent("Inbox folder") {
                     TextField("Inbox", text: settingsBinding(\.inboxFolder))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 140)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
             }
 
@@ -80,17 +80,17 @@ struct SettingsView: View {
                 LabeledContent("Filename pattern") {
                     TextField("YYYY-MM-DD", text: settingsBinding(\.dailyFilenameFormat))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 200)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
                 LabeledContent("Heading") {
                     TextField("## Quick notes", text: settingsBinding(\.dailyHeading))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 200)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
                 LabeledContent("Bullet format") {
                     TextField("- {{HH:mm}} {{content}}", text: settingsBinding(\.dailyBulletFormat))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 240)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
             } header: {
                 Text("Daily note")
@@ -102,7 +102,7 @@ struct SettingsView: View {
                 LabeledContent("Filename") {
                     TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
                         .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 200)
+                        .frame(maxWidth: Self.fieldMaxWidth)
                 }
             } header: {
                 Text("Inbox")
@@ -153,6 +153,11 @@ struct SettingsView: View {
             .font(.caption)
         }
     }
+
+    /// Cap on the editable column so text fields don't crowd the scroller
+    /// on the right. Combined with the locked window width (520pt), this
+    /// leaves consistent breathing room across every section.
+    private static let fieldMaxWidth: CGFloat = 240
 
     private func settingsBinding<T>(_ keyPath: WritableKeyPath<AppSettings, T>) -> Binding<T> {
         Binding(

@@ -65,8 +65,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let window = NSWindow(contentViewController: host)
             window.title = "Knot Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 520, height: 560))
+            // Lock the width so the form's column layout stays stable;
+            // height is free to grow up to a large bound so the user
+            // can reveal more sections without scrolling.
+            window.minSize = NSSize(width: 520, height: 360)
+            window.maxSize = NSSize(width: 520, height: 4000)
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window
