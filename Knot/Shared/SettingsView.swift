@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Bindable var model: EditorModel
     @State private var pickerPresented = false
     @State private var pickerError: String?
+    @State private var resetConfirmation = false
     #if os(macOS)
     @State private var shortcut: Shortcut = ShortcutStore.load()
     @State private var hotkeyError: String?
@@ -126,6 +127,19 @@ struct SettingsView: View {
                     isOn: settingsBinding(\.routingRequiresSingleLine)
                 )
             }
+
+            Section {
+                Button(role: .destructive) {
+                    resetConfirmation = true
+                } label: {
+                    Label("Reset settings to defaults", systemImage: "arrow.counterclockwise")
+                        .frame(maxWidth: .infinity)
+                }
+            } footer: {
+                Text("Clears your vault, shortcut, and every preference on this page. The next time you open Knot you'll start from the onboarding screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
@@ -136,6 +150,21 @@ struct SettingsView: View {
                 pickerError = error.localizedDescription
             }
         }
+        .alert("Reset all settings?", isPresented: $resetConfirmation) {
+            Button("Reset", role: .destructive) {
+                model.resetAllSettings()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This forgets your vault, the global shortcut, and every preference on this page. You'll need to pick the vault folder again.")
+        }
+        #if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: .knotSettingsReset)) { _ in
+            // The hotkey field reads from @State, so reload it explicitly
+            // when the platform layer has cleared the persisted shortcut.
+            shortcut = ShortcutStore.load()
+        }
+        #endif
     }
 
     private var formatHelp: some View {

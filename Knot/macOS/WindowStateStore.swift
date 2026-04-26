@@ -38,4 +38,10 @@ enum WindowStateStore {
         ]
         defaults.set(dict, forKey: frameKey)
     }
+
+    /// Forget both the detached flag and the saved frame.
+    static func clear(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: detachedKey)
+        defaults.removeObject(forKey: frameKey)
+    }
 }

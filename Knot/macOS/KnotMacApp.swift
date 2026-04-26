@@ -49,6 +49,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 HotkeyManager.shared.update(to: ShortcutStore.load())
             }
         }
+
+        // The model handles cross-platform reset (settings + vault). We
+        // wipe macOS-only state (shortcut, detached window) and republish
+        // the shortcut change so the recorder field + hotkey re-register.
+        NotificationCenter.default.addObserver(
+            forName: .knotSettingsReset,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSettingsReset()
+            }
+        }
+    }
+
+    @MainActor
+    private func handleSettingsReset() {
+        ShortcutStore.clear()
+        WindowStateStore.clear()
+        NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
+        menubar.handleSettingsReset()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

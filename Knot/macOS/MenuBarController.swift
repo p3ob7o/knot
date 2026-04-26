@@ -210,6 +210,22 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Wipe any in-flight UI state after a settings reset: dismiss the
+    /// detached window without persisting its frame, close any open
+    /// popover, and rebuild the popover's hosting view so the next
+    /// reveal renders the onboarding flow with the now-empty model.
+    func handleSettingsReset() {
+        if let window = detachedWindow {
+            window.delegate = nil
+            window.orderOut(nil)
+        }
+        detachedWindow = nil
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        configurePopover()
+    }
+
     // MARK: - Status item context menu
 
     private func showContextMenu() {

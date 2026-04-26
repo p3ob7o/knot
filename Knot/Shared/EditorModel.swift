@@ -138,4 +138,26 @@ final class EditorModel {
         newValue.save()
     }
 
+    /// Wipes everything the model knows how to persist and resets in-memory
+    /// state to factory defaults: clears the vault bookmark, drops the saved
+    /// AppSettings JSON, and broadcasts `.knotSettingsReset` so platform code
+    /// can clean up the bits the model doesn't own (the global shortcut and
+    /// the detached-window state on macOS). Useful for re-running the
+    /// onboarding flow without manually editing UserDefaults.
+    func resetAllSettings() {
+        UserDefaults.standard.removeObject(forKey: AppSettings.userDefaultsKey)
+        vaultStore.clear()
+        settings = AppSettings()
+        manualMode = nil
+        content = ""
+        status = .idle
+        refreshVaultStatus()
+        NotificationCenter.default.post(name: .knotSettingsReset, object: nil)
+    }
+}
+
+extension Notification.Name {
+    /// Broadcast by `EditorModel.resetAllSettings()`. Platforms observe it
+    /// to clear their own UserDefaults keys.
+    static let knotSettingsReset = Notification.Name("knot.settingsReset")
 }

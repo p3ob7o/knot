@@ -22,4 +22,9 @@ enum ShortcutStore {
         guard let data = try? JSONEncoder().encode(shortcut) else { return }
         defaults.set(data, forKey: key)
     }
+
+    /// Forget the persisted shortcut so subsequent loads return `.default`.
+    static func clear(from defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key)
+    }
 }
