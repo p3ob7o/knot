@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.contentMinSize = NSSize(width: 520, height: 360)
             window.contentMaxSize = NSSize(width: 520, height: 4000)
-            window.setContentSize(NSSize(width: 520, height: 560))
+            window.setContentSize(NSSize(width: 520, height: 1080))
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window
