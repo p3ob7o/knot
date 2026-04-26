@@ -140,6 +140,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private func createDetachedWindow() -> NSWindow {
         let host = NSHostingController(rootView: makeRootView(isDetached: true))
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
+        // Without this, the SwiftUI tree gets a top safe-area inset for
+        // the (transparent) title bar and the pip drops 28pt below the
+        // close traffic light.
+        host.safeAreaRegions = []
 
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .fullSizeContentView]
@@ -296,18 +300,12 @@ private struct PopoverRoot: View {
     @State private var pipHovered = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        Group {
             if model.hasVault {
-                EditorView(model: model)
-                pipButton
-                    // Detached: the window's title bar overlays the
-                    // content (fullSizeContentView). Pulling the pip
-                    // up to y≈0 puts its visual centre on the same
-                    // line as the close traffic light at y≈14.
-                    // Popover: no chrome above us, so a softer 8pt
-                    // inset reads more naturally.
-                    .padding(.top, isDetached ? 0 : 8)
-                    .padding(.trailing, isDetached ? 8 : 12)
+                VStack(spacing: 0) {
+                    chromeRow
+                    EditorView(model: model)
+                }
             } else {
                 OnboardingView(model: model, onDone: {})
             }
@@ -315,14 +313,28 @@ private struct PopoverRoot: View {
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
     }
 
+    /// 28pt chrome strip above the editor — matches the standard macOS
+    /// title-bar height. With `host.safeAreaRegions = []` on the
+    /// detached window, this strip lines up exactly with the title-bar
+    /// overlay, so the pip button sits on the same visual line as the
+    /// close traffic light at y=14.
+    private var chromeRow: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            pipButton
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+    }
+
     private var pipButton: some View {
         Button {
             onToggleDetached()
         } label: {
             Image(systemName: isDetached ? "pip.enter" : "pip.exit")
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(pipHovered ? Color.primary : Color.secondary)
-                .frame(width: 30, height: 30)
+                .frame(width: 22, height: 22)
                 .background(
                     Circle()
                         .fill(pipHovered ? Color.primary.opacity(0.10) : Color.clear)
