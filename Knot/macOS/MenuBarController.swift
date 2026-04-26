@@ -314,12 +314,12 @@ private struct PopoverRoot: View {
             onToggleDetached()
         } label: {
             Image(systemName: isDetached ? "pip.enter" : "pip.exit")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(pipHovered ? Color.primary : Color.secondary.opacity(0.65))
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(pipHovered ? Color.primary : Color.secondary)
                 .frame(width: 30, height: 30)
                 .background(
                     Circle()
-                        .fill(pipHovered ? Color.primary.opacity(0.08) : Color.clear)
+                        .fill(pipHovered ? Color.primary.opacity(0.10) : Color.clear)
                 )
                 .contentShape(Circle())
         }

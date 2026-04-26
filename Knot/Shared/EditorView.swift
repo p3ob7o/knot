@@ -96,10 +96,14 @@ struct EditorView: View {
 
     private var sendButton: some View {
         Button(action: model.send) {
-            Image(systemName: "arrow.up.circle.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.background, Color.accentColor)
-                .font(.system(size: 28, weight: .regular))
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.114, green: 0.114, blue: 0.122))
+            }
+            .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
         .disabled(!model.canSend)
@@ -107,10 +111,11 @@ struct EditorView: View {
         .opacity(model.canSend ? 1.0 : 0.32)
         .scaleEffect(sendPressed ? 0.94 : 1.0)
         .animation(.easeOut(duration: 0.08), value: sendPressed)
+        .animation(.easeOut(duration: 0.18), value: model.canSend)
         .accessibilityLabel("Send")
     }
 }
 
 extension EditorView {
-    private var sendPressed: Bool { model.status == .sending }
+    fileprivate var sendPressed: Bool { model.status == .sending }
 }
