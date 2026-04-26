@@ -33,11 +33,15 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
     private func configureStatusItem() {
         if let button = statusItem.button {
-            button.image = NSImage(
+            // Use the Knot brand mark, sized to fit the menu bar's
+            // 14pt template-image guideline.
+            let mark = NSImage(named: "KnotMark") ?? NSImage(
                 systemSymbolName: "scribble.variable",
                 accessibilityDescription: "Knot"
             )
-            button.image?.isTemplate = true
+            mark?.isTemplate = true
+            mark?.size = NSSize(width: 16, height: 16)
+            button.image = mark
             button.target = self
             button.action = #selector(buttonClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -146,6 +150,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: Theme.popoverWidth, height: Theme.popoverHeight))
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // Locked-in "minimal" chrome — only the close traffic light is
+        // visible; min/max are hidden.
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
         window.delegate = self
         return window
     }
@@ -276,44 +284,48 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 // MARK: - Popover content
 
 /// Switches between onboarding and editor based on whether a vault is
-/// configured. Once the vault is set, exposes settings and a detach /
-/// reattach toggle in the top-right corner.
+/// configured. Locked-in design: the only chrome action is a single
+/// 30×30 circular `pip.exit` / `pip.enter` button in the top-right.
+/// Settings live behind a right-click on the menu-bar status item.
 private struct PopoverRoot: View {
     @Bindable var model: EditorModel
     let isDetached: Bool
     var onOpenSettings: () -> Void
     var onToggleDetached: () -> Void
 
+    @State private var pipHovered = false
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if model.hasVault {
                 EditorView(model: model)
-                HStack(spacing: 6) {
-                    Button {
-                        onToggleDetached()
-                    } label: {
-                        Image(systemName: isDetached ? "pip.enter" : "pip.exit")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(isDetached ? "Reattach to menu bar" : "Detach window")
-
-                    Button {
-                        onOpenSettings()
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Settings")
-                }
-                .padding(8)
+                pipButton
+                    .padding(.top, 8)
+                    .padding(.trailing, 12)
             } else {
                 OnboardingView(model: model, onDone: {})
             }
         }
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
+    }
+
+    private var pipButton: some View {
+        Button {
+            onToggleDetached()
+        } label: {
+            Image(systemName: isDetached ? "pip.enter" : "pip.exit")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(pipHovered ? Color.primary : Color.secondary.opacity(0.65))
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle()
+                        .fill(pipHovered ? Color.primary.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(isDetached ? "Reattach to menu bar" : "Detach window")
+        .onHover { pipHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: pipHovered)
     }
 }

@@ -47,6 +47,8 @@ struct EditorView: View {
     // MARK: - Subviews
 
     private var editor: some View {
+        // Locked-in design: minimal empty voice — no placeholder copy. The
+        // textarea sits on a soft surface, picks up an accent ring on focus.
         TextEditor(text: $model.content)
             .focused($editorFocused)
             .font(.system(size: 16))
@@ -56,16 +58,17 @@ struct EditorView: View {
                 RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
                     .fill(.background.secondary)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+                    .stroke(
+                        editorFocused
+                            ? Color.accentColor.opacity(0.55)
+                            : Color.primary.opacity(0.08),
+                        lineWidth: editorFocused ? 1.5 : 0.5
+                    )
+            )
             .frame(minHeight: Theme.editorMinHeight)
-            .overlay(alignment: .topLeading) {
-                if model.content.isEmpty {
-                    Text("What's on your mind?")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 14)
-                        .allowsHitTesting(false)
-                }
-            }
+            .animation(.easeOut(duration: 0.18), value: editorFocused)
     }
 
     @ViewBuilder
@@ -76,13 +79,16 @@ struct EditorView: View {
         case .sending:
             ProgressView().controlSize(.small)
         case .sent:
-            Label("Sent", systemImage: "checkmark.circle.fill")
-                .labelStyle(.iconOnly)
-                .foregroundStyle(.green)
+            // Locked-in feedback: green check + "Saved" label, fades in
+            // and out alongside the sent state in the editor model.
+            Label("Saved", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color(red: 0.396, green: 0.690, blue: 0.478))
                 .transition(.opacity)
         case .error(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color(red: 0.851, green: 0.416, blue: 0.416))
                 .lineLimit(1)
                 .help(message)
         }
@@ -90,13 +96,21 @@ struct EditorView: View {
 
     private var sendButton: some View {
         Button(action: model.send) {
-            Label("Send", systemImage: "arrow.up.circle.fill")
-                .labelStyle(.iconOnly)
-                .font(.title2)
+            Image(systemName: "arrow.up.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.background, Color.accentColor)
+                .font(.system(size: 28, weight: .regular))
         }
         .buttonStyle(.plain)
         .disabled(!model.canSend)
         .keyboardShortcut(.defaultAction)
-        .opacity(model.canSend ? 1.0 : 0.4)
+        .opacity(model.canSend ? 1.0 : 0.32)
+        .scaleEffect(sendPressed ? 0.94 : 1.0)
+        .animation(.easeOut(duration: 0.08), value: sendPressed)
+        .accessibilityLabel("Send")
     }
+}
+
+extension EditorView {
+    private var sendPressed: Bool { model.status == .sending }
 }

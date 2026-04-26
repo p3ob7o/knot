@@ -4,9 +4,10 @@ import KnotKit
 import UIKit
 #endif
 
-/// First-launch flow. Single screen: explain what Knot does, then ask the
-/// user to pick their vault folder. Once a folder is picked, we show a
-/// confirmation and dismiss to the editor.
+/// First-launch flow. Single screen: a centered serif wordmark hero,
+/// the four-line value prop, and a bottom-anchored CTA to pick the
+/// vault folder. The wordmark replaces a logo mark — the typography
+/// is the brand moment.
 struct OnboardingView: View {
     @Bindable var model: EditorModel
     var onDone: () -> Void
@@ -15,44 +16,20 @@ struct OnboardingView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Knot")
-                    .font(.title.bold())
-                Text("Quick capture into your Obsidian vault.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            hero
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
 
-            VStack(alignment: .leading, spacing: 6) {
-                bullet("Pick your vault folder once.")
-                bullet("Short notes append to today's daily file.")
-                bullet("Longer notes go to your inbox.")
-                bullet("Local-only — no servers, no accounts.")
-            }
-            .font(.callout)
+            bullets
+                .padding(.top, 6)
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Spacer(minLength: 0)
 
-            Spacer(minLength: 4)
-
-            Button {
-                pickerPresented = true
-            } label: {
-                Label("Pick vault folder…", systemImage: "folder")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            cta
         }
-        .padding(20)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .folderPicker(isPresented: $pickerPresented) { url in
             do {
@@ -64,10 +41,75 @@ struct OnboardingView: View {
         }
     }
 
+    // MARK: - Subviews
+
+    private var hero: some View {
+        VStack(spacing: 4) {
+            // Display-serif wordmark. "Fraunces" isn't shipped on system
+            // installs, so we lean on SwiftUI's `.serif` design which
+            // resolves to New York on macOS / iOS — the closest in spirit.
+            Text("Knot")
+                .font(.system(size: 30, weight: .bold, design: .serif))
+                .tracking(-0.6)
+                .foregroundStyle(.primary)
+
+            Text("Quick capture into your Obsidian vault.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var bullets: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            bullet("Pick your vault folder once.")
+            bullet("Short notes append to today's daily file.")
+            bullet("Longer notes go to your inbox.")
+            bullet("Local-only — no servers, no accounts.")
+        }
+    }
+
+    @ViewBuilder
+    private var cta: some View {
+        VStack(spacing: 10) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(red: 0.851, green: 0.416, blue: 0.416))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                pickerPresented = true
+            } label: {
+                Label("Pick vault folder…", systemImage: "folder")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 22)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            #if os(macOS)
+            Text("Right-click the menu bar icon for settings.")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+            #endif
+        }
+    }
+
     private func bullet(_ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("•").foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 4, height: 4)
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
             Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
