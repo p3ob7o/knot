@@ -49,18 +49,13 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func configurePopover() {
-        let host = NSHostingController(rootView: makeRootView(isDetached: false))
+        let host = NSHostingController(rootView: makeRootView())
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
         popover.contentViewController = host
     }
 
-    private func makeRootView(isDetached: Bool) -> PopoverRoot {
-        PopoverRoot(
-            model: model,
-            isDetached: isDetached,
-            onOpenSettings: { [weak self] in self?.openSettingsTapped() },
-            onToggleDetached: { [weak self] in self?.toggleDetached() }
-        )
+    private func makeRootView() -> PopoverRoot {
+        PopoverRoot(model: model)
     }
 
     // MARK: - Public
@@ -138,12 +133,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func createDetachedWindow() -> NSWindow {
-        let host = NSHostingController(rootView: makeRootView(isDetached: true))
+        let host = NSHostingController(rootView: makeRootView())
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
-        // Without this, the SwiftUI tree gets a top safe-area inset for
-        // the (transparent) title bar and the pip drops 28pt below the
-        // close traffic light.
-        host.safeAreaRegions = []
 
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .fullSizeContentView]
@@ -288,62 +279,20 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 // MARK: - Popover content
 
 /// Switches between onboarding and editor based on whether a vault is
-/// configured. Locked-in design: the only chrome action is a single
-/// 30×30 circular `pip.exit` / `pip.enter` button in the top-right.
-/// Settings live behind a right-click on the menu-bar status item.
+/// configured. Detach/reattach lives on the status-item right-click
+/// menu — the popover and detached window share the same chromeless
+/// editor surface.
 private struct PopoverRoot: View {
     @Bindable var model: EditorModel
-    let isDetached: Bool
-    var onOpenSettings: () -> Void
-    var onToggleDetached: () -> Void
-
-    @State private var pipHovered = false
 
     var body: some View {
         Group {
             if model.hasVault {
-                VStack(spacing: 0) {
-                    chromeRow
-                    EditorView(model: model)
-                }
+                EditorView(model: model)
             } else {
                 OnboardingView(model: model, onDone: {})
             }
         }
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
-    }
-
-    /// 28pt chrome strip above the editor — matches the standard macOS
-    /// title-bar height. With `host.safeAreaRegions = []` on the
-    /// detached window, this strip lines up exactly with the title-bar
-    /// overlay, so the pip button sits on the same visual line as the
-    /// close traffic light at y=14.
-    private var chromeRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            pipButton
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-    }
-
-    private var pipButton: some View {
-        Button {
-            onToggleDetached()
-        } label: {
-            Image(systemName: isDetached ? "pip.enter" : "pip.exit")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(pipHovered ? Color.primary : Color.secondary)
-                .frame(width: 22, height: 22)
-                .background(
-                    Circle()
-                        .fill(pipHovered ? Color.primary.opacity(0.10) : Color.clear)
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .help(isDetached ? "Reattach to menu bar" : "Detach window")
-        .onHover { pipHovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: pipHovered)
     }
 }
