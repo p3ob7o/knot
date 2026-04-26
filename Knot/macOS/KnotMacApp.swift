@@ -61,17 +61,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func openSettings() {
         if settingsWindow == nil {
             let host = NSHostingController(rootView: SettingsView(model: model))
-            host.preferredContentSize = NSSize(width: 520, height: 560)
+            // Don't let the hosting controller drive the window size from
+            // SwiftUI's intrinsic content size — it would otherwise pin
+                            // the window to that size and ignore .resizable. We manage
+            // the size ourselves below.
+            host.sizingOptions = []
 
             let window = NSWindow(contentViewController: host)
             window.title = "Knot Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.contentMinSize = NSSize(width: 520, height: 360)
+            window.contentMaxSize = NSSize(width: 520, height: 4000)
             window.setContentSize(NSSize(width: 520, height: 560))
-            // Lock the width so the form's column layout stays stable;
-            // height is free to grow up to a large bound so the user
-            // can reveal more sections without scrolling.
-            window.minSize = NSSize(width: 520, height: 360)
-            window.maxSize = NSSize(width: 520, height: 4000)
             window.isReleasedWhenClosed = false
             window.center()
             settingsWindow = window

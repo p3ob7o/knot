@@ -65,32 +65,32 @@ struct SettingsView: View {
 
             Section("Folders") {
                 LabeledContent("Daily folder") {
-                    TextField("Daily", text: settingsBinding(\.dailyFolder))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("Daily", text: settingsBinding(\.dailyFolder))
+                    )
                 }
                 LabeledContent("Inbox folder") {
-                    TextField("Inbox", text: settingsBinding(\.inboxFolder))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("Inbox", text: settingsBinding(\.inboxFolder))
+                    )
                 }
             }
 
             Section {
                 LabeledContent("Filename pattern") {
-                    TextField("YYYY-MM-DD", text: settingsBinding(\.dailyFilenameFormat))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("YYYY-MM-DD", text: settingsBinding(\.dailyFilenameFormat))
+                    )
                 }
                 LabeledContent("Heading") {
-                    TextField("## Quick notes", text: settingsBinding(\.dailyHeading))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("## Quick notes", text: settingsBinding(\.dailyHeading))
+                    )
                 }
                 LabeledContent("Bullet format") {
-                    TextField("- {{HH:mm}} {{content}}", text: settingsBinding(\.dailyBulletFormat))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("- {{HH:mm}} {{content}}", text: settingsBinding(\.dailyBulletFormat))
+                    )
                 }
             } header: {
                 Text("Daily note")
@@ -100,9 +100,9 @@ struct SettingsView: View {
 
             Section {
                 LabeledContent("Filename") {
-                    TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: Self.fieldMaxWidth)
+                    settingsField(
+                        TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
+                    )
                 }
             } header: {
                 Text("Inbox")
@@ -154,10 +154,22 @@ struct SettingsView: View {
         }
     }
 
-    /// Cap on the editable column so text fields don't crowd the scroller
-    /// on the right. Combined with the locked window width (520pt), this
-    /// leaves consistent breathing room across every section.
-    private static let fieldMaxWidth: CGFloat = 240
+    /// Fixed width for the editable column. `LabeledContent` inside a
+    /// grouped Form silently expands flexible content (like a bare
+    /// `TextField`) back to fill the row, so we use a hard
+    /// `.frame(width:)` plus a leading `Spacer()` to right-align the
+    /// field and leave breathing room before the scroller.
+    private static let fieldWidth: CGFloat = 240
+
+    @ViewBuilder
+    private func settingsField<Field: View>(_ field: Field) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            field
+                .textFieldStyle(.roundedBorder)
+                .frame(width: Self.fieldWidth)
+        }
+    }
 
     private func settingsBinding<T>(_ keyPath: WritableKeyPath<AppSettings, T>) -> Binding<T> {
         Binding(
