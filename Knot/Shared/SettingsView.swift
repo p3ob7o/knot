@@ -16,6 +16,13 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            if case .imported = model.lastImport {
+                Section {
+                    VaultImportBanner(model: model)
+                }
+                .listRowBackground(Color.clear)
+            }
+
             Section("Vault") {
                 HStack {
                     Image(systemName: "folder")
@@ -205,6 +212,7 @@ struct SettingsView: View {
                 var updated = model.settings
                 updated[keyPath: keyPath] = newValue
                 model.updateSettings(updated)
+                model.lastImport = nil
             }
         )
     }

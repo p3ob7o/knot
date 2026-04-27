@@ -15,12 +15,18 @@ final class EditorModel {
     var settings: AppSettings = AppSettings.load()
     var vaultName: String? = nil
     private(set) var hasVault: Bool = false
+    var lastImport: VaultImportResult? = nil
 
     enum Status: Equatable {
         case idle
         case sending
         case sent
         case error(String)
+    }
+
+    enum VaultImportResult: Equatable {
+        case imported(ImportedDailyConfig, previous: AppSettings)
+        case noConfigFound
     }
 
     // MARK: - Dependencies
@@ -63,13 +69,46 @@ final class EditorModel {
         vaultName = vaultStore.vaultName
     }
 
-    func setVault(url: URL) throws {
+    @discardableResult
+    func setVault(url: URL) throws -> VaultImportResult {
         try vaultStore.saveBookmark(from: url)
+
+        guard let imported = ObsidianConfigImporter.read(vaultURL: url) else {
+            refreshVaultStatus()
+            return .noConfigFound
+        }
+
+        let previous = settings
+        var merged = settings
+        merged.dailyFolder = imported.folder
+        merged.dailyFilenameFormat = imported.filenameFormat
+
+        guard merged != previous else {
+            refreshVaultStatus()
+            return .noConfigFound
+        }
+
+        updateSettings(merged)
+        let result: VaultImportResult = .imported(imported, previous: previous)
+        lastImport = result
         refreshVaultStatus()
+        return result
+    }
+
+    func undoLastImport() {
+        if case .imported(_, let previous) = lastImport {
+            updateSettings(previous)
+        }
+        lastImport = nil
+    }
+
+    func dismissLastImport() {
+        lastImport = nil
     }
 
     func clearVault() {
         vaultStore.clear()
+        lastImport = nil
         refreshVaultStatus()
     }
 
@@ -118,6 +157,7 @@ final class EditorModel {
         content = ""
         manualMode = nil
         status = .sent
+        lastImport = nil
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(1200))
             if case .sent = self.status {
@@ -151,6 +191,7 @@ final class EditorModel {
         manualMode = nil
         content = ""
         status = .idle
+        lastImport = nil
         refreshVaultStatus()
         NotificationCenter.default.post(name: .knotSettingsReset, object: nil)
     }

@@ -17,6 +17,9 @@ struct EditorView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            VaultImportBanner(model: model)
+                .animation(.easeInOut(duration: 0.18), value: model.lastImport)
+
             editor
 
             HStack(spacing: 12) {
