@@ -106,8 +106,8 @@ Resolution rule (in order):
    `daily.enabled == true` and `daily.format` is a non-empty string,
    return `.periodicNotes` with `daily.folder ?? ""` and `daily.format`.
 2. Otherwise attempt to read `.obsidian/daily-notes.json`. If it parses,
-   return `.coreDailyNotes` with `folder ?? ""` and
-   `format ?? "YYYY-MM-DD"`.
+   return `.coreDailyNotes` with `folder ?? ""` and `format` — where a
+   missing **or empty** `format` falls back to `"YYYY-MM-DD"`.
 3. Otherwise return `nil`.
 
 All reads:
