@@ -135,10 +135,6 @@ struct SettingsView: View {
                     Label("Reset settings to defaults", systemImage: "arrow.counterclockwise")
                         .frame(maxWidth: .infinity)
                 }
-            } footer: {
-                Text("Clears your vault, shortcut, and every preference on this page. The next time you open Knot you'll start from the onboarding screen.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
