@@ -112,4 +112,4 @@ atomic file creation. If a true conflict ever occurs, Obsidian's own
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL-2.0 — see [LICENSE](LICENSE).
