@@ -116,6 +116,7 @@ struct SettingsView: View {
             Section("Routing") {
                 LabeledContent("Max characters for daily") {
                     TextField("280", value: settingsBinding(\.routingMaxChars), format: .number)
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 80)
                         #if os(iOS)
@@ -195,6 +196,7 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
             field
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .frame(width: Self.fieldWidth)
         }
