@@ -135,20 +135,19 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// Called after AppKit has torn the popover off into the window we
-    /// returned from `detachableWindow(for:)`. Brings our state in line
-    /// with the menu-driven detach path.
-    private func adoptDetachedWindow() {
-        guard let window = popover.contentViewController?.view.window else {
-            return
-        }
+    /// Bring AppKit's drag-detach path in line with the menu-driven detach
+    /// path. Custom detachable windows do not get a later `popoverDidDetach`
+    /// callback, so we adopt the window as soon as we hand it to AppKit.
+    private func adoptDraggedDetachedWindow(_ window: NSWindow) {
         detachedWindow = window
         WindowStateStore.setDetached(true)
-        WindowStateStore.saveFrame(window.frame)
-        // Rebuild the popover's hosting controller so the next
-        // `showPopover()` call has fresh content — AppKit moved the old
-        // hosting view into the detached window.
-        configurePopover()
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self,
+                  let window,
+                  window === self.detachedWindow
+            else { return }
+            WindowStateStore.saveFrame(window.frame)
+        }
     }
 
     private func createDetachedWindow() -> NSWindow {
@@ -162,16 +161,14 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         return window
     }
 
-    /// Builds an empty, fully-styled window that AppKit can re-parent the
-    /// popover's content view into during a drag-to-detach gesture.
+    /// Builds a fully-styled window with its own hosted content. AppKit does
+    /// not move the popover's content into custom detachable windows.
     private func makeDetachableWindow() -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight),
-            styleMask: [.titled, .closable, .fullSizeContentView],
-            backing: .buffered,
-            defer: true
-        )
-        applyDetachedChrome(to: window)
+        let window = createDetachedWindow()
+        if let popoverWindow = popover.contentViewController?.view.window {
+            window.setFrame(popoverWindow.frame, display: false)
+        }
+        adoptDraggedDetachedWindow(window)
         return window
     }
 
@@ -335,10 +332,6 @@ extension MenuBarController: NSPopoverDelegate {
 
     func detachableWindow(for popover: NSPopover) -> NSWindow? {
         makeDetachableWindow()
-    }
-
-    func popoverDidDetach(_ popover: NSPopover) {
-        adoptDetachedWindow()
     }
 }
 
