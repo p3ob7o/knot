@@ -1,6 +1,6 @@
 name: Knot
 options:
-  bundleIdPrefix: com.twf
+  bundleIdPrefix: com.p3ob7o
   deploymentTarget:
     macOS: "26.0"
     iOS: "26.0"
@@ -55,7 +55,7 @@ targets:
         com.apple.security.files.bookmarks.app-scope: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.twf.knot
+        PRODUCT_BUNDLE_IDENTIFIER: com.p3ob7o.knot
         PRODUCT_NAME: Knot
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -101,7 +101,7 @@ targets:
       properties: {}
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.twf.knot
+        PRODUCT_BUNDLE_IDENTIFIER: com.p3ob7o.knot
         PRODUCT_NAME: Knot
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

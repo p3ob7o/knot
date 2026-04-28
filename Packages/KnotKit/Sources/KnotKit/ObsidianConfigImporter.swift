@@ -36,7 +36,7 @@ public struct ImportedDailyConfig: Equatable, Sendable {
 public enum ObsidianConfigImporter {
 
     private static let logger = Logger(
-        subsystem: "com.twf.knot",
+        subsystem: "com.p3ob7o.knot",
         category: "ObsidianConfigImporter"
     )
     private static let defaultFormat = "YYYY-MM-DD"
