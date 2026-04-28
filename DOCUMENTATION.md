@@ -204,6 +204,39 @@ Deployment targets: macOS 26 / iOS 26 (Xcode 26). Swift 6, minimal
 strict concurrency. App version comes from `MARKETING_VERSION` and
 `CURRENT_PROJECT_VERSION` in `project.yml`.
 
+## Releases
+
+macOS releases ship as a signed and notarized DMG via Direct
+Distribution (Apple's `developer-id` channel — no App Store, no
+TestFlight). The whole pipeline is one command:
+
+```sh
+./scripts/release.sh           # uses MARKETING_VERSION from project.yml
+./scripts/release.sh 0.2.0     # explicit version override
+```
+
+It archives `Knot-macOS`, signs with the Developer ID Application
+certificate, exports a signed `.app`, builds the DMG, signs the DMG,
+submits it to Apple for notarization, staples the ticket, and
+gatekeeper-checks the result. Output:
+`build/release/Knot-<version>.dmg`.
+
+Release notes per version live at `release-notes/vX.Y.Z.md` and
+feed the GitHub release body:
+
+```sh
+git tag -a v0.2.0 -m "v0.2"
+git push origin v0.2.0
+gh release create v0.2.0 --title "v0.2" \
+  --notes-file release-notes/v0.2.0.md \
+  build/release/Knot-0.2.0.dmg
+```
+
+`scripts/release.sh` documents the one-time setup (Developer ID
+Application certificate + `notarytool` keychain profile +
+`create-dmg`) at the top of the file. `main` is protected against
+force-push and deletion via a GitHub branch ruleset.
+
 ## Current status
 
 **v0.1** — first public release. The capture loop ships end-to-end
