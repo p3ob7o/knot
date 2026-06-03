@@ -59,6 +59,19 @@ final class VaultIntegrationTests: XCTestCase {
         XCTAssertEqual(contents, "Project planning notes\n\nWith multiple lines")
     }
 
+    func test_inboxWrite_supportsVaultRootAsInbox() throws {
+        var settings = AppSettings()
+        settings.inboxFolder = ""
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(content: "Root inbox", mode: .inbox, createdAt: date)
+
+        let url = try vault.write(note: note)
+
+        XCTAssertEqual(url.deletingLastPathComponent().path, tempRoot.path)
+        XCTAssertEqual(url.lastPathComponent, "2026-04-25 1432.md")
+    }
+
     func test_inboxCollision_appendsCounter() throws {
         let settings = AppSettings()
         let vault = Vault(url: tempRoot, settings: settings)
@@ -111,6 +124,19 @@ final class VaultIntegrationTests: XCTestCase {
         )
         let contents = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(contents, "## Quick notes\n\n- 14:32 nested daily\n")
+    }
+
+    func test_dailyAppend_supportsVaultRootAsDailyFolder() throws {
+        var settings = AppSettings()
+        settings.dailyFolder = ""
+        let vault = Vault(url: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(content: "root daily", mode: .daily, createdAt: date)
+
+        let url = try vault.write(note: note)
+
+        XCTAssertEqual(url.deletingLastPathComponent().path, tempRoot.path)
+        XCTAssertEqual(url.lastPathComponent, "2026-04-25.md")
     }
 
     func test_inboxFilenameFormatWithSlashes_createsSubfolders() throws {

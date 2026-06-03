@@ -14,6 +14,8 @@ final class EditorModel {
     var status: Status = .idle
     var settings: AppSettings = AppSettings.load()
     var vaultName: String? = nil
+    var vaultUnavailableName: String? = nil
+    var onboardingRequired: Bool = false
     private(set) var hasVault: Bool = false
     var lastImport: VaultImportResult? = nil
 
@@ -33,11 +35,14 @@ final class EditorModel {
 
     private let vaultStore: VaultStore
     private let queue: Queue?
+    private let defaults: UserDefaults
+    private let onboardingCompletedKey = "knot.onboarding.completed"
 
     // MARK: - Init
 
-    init(vaultStore: VaultStore = VaultStore()) {
+    init(vaultStore: VaultStore = VaultStore(), defaults: UserDefaults = .standard) {
         self.vaultStore = vaultStore
+        self.defaults = defaults
         // Persist any failed writes inside the app's Application Support
         // folder so they survive relaunches.
         let queueDir = (try? FileManager.default.url(
@@ -48,6 +53,7 @@ final class EditorModel {
         ).appending(path: "Knot", directoryHint: .isDirectory)) ?? FileManager.default.temporaryDirectory
         self.queue = try? Queue(directory: queueDir)
         refreshVaultStatus()
+        seedOnboardingState()
     }
 
     // MARK: - Derived
@@ -62,11 +68,26 @@ final class EditorModel {
         (status != .sending)
     }
 
+    var shouldShowOnboarding: Bool {
+        onboardingRequired || !hasVault
+    }
+
     // MARK: - Vault
 
     func refreshVaultStatus() {
-        hasVault = vaultStore.hasVault
+        let hadBookmark = vaultStore.hasBookmark
+        do {
+            let resolved = try vaultStore.resolveAccessibleVault()
+            hasVault = resolved != nil
+            vaultUnavailableName = resolved == nil && hadBookmark ? vaultStore.vaultName : nil
+        } catch {
+            hasVault = false
+            vaultUnavailableName = hadBookmark ? vaultStore.vaultName : nil
+        }
         vaultName = vaultStore.vaultName
+        if vaultUnavailableName != nil {
+            onboardingRequired = true
+        }
     }
 
     @discardableResult
@@ -95,6 +116,10 @@ final class EditorModel {
         return result
     }
 
+    func resolveVaultURL() throws -> URL? {
+        try vaultStore.resolveAccessibleVault()
+    }
+
     func undoLastImport() {
         if case .imported(_, let previous) = lastImport {
             updateSettings(previous)
@@ -109,6 +134,8 @@ final class EditorModel {
     func clearVault() {
         vaultStore.clear()
         lastImport = nil
+        defaults.removeObject(forKey: onboardingCompletedKey)
+        onboardingRequired = true
         refreshVaultStatus()
     }
 
@@ -127,7 +154,8 @@ final class EditorModel {
         // happens off the main thread so file coordination doesn't block UI.
         let url: URL
         do {
-            guard let resolved = try vaultStore.resolveBookmark() else {
+            guard let resolved = try vaultStore.resolveAccessibleVault() else {
+                refreshVaultStatus()
                 status = .error(VaultError.noVaultConfigured.localizedDescription)
                 return
             }
@@ -178,6 +206,13 @@ final class EditorModel {
         newValue.save()
     }
 
+    func completeOnboarding() {
+        defaults.set(true, forKey: onboardingCompletedKey)
+        onboardingRequired = false
+        vaultUnavailableName = nil
+        refreshVaultStatus()
+    }
+
     /// Wipes everything the model knows how to persist and resets in-memory
     /// state to factory defaults: clears the vault bookmark, drops the saved
     /// AppSettings JSON, and broadcasts `.knotSettingsReset` so platform code
@@ -186,14 +221,29 @@ final class EditorModel {
     /// onboarding flow without manually editing UserDefaults.
     func resetAllSettings() {
         UserDefaults.standard.removeObject(forKey: AppSettings.userDefaultsKey)
+        defaults.removeObject(forKey: onboardingCompletedKey)
         vaultStore.clear()
         settings = AppSettings()
         manualMode = nil
         content = ""
         status = .idle
         lastImport = nil
+        onboardingRequired = true
         refreshVaultStatus()
         NotificationCenter.default.post(name: .knotSettingsReset, object: nil)
+    }
+
+    private func seedOnboardingState() {
+        if let completed = defaults.object(forKey: onboardingCompletedKey) as? Bool {
+            onboardingRequired = !completed || !hasVault
+        } else {
+            // Existing users upgrading with a reachable vault should keep the
+            // editor-first behavior they already had.
+            onboardingRequired = !hasVault
+        }
+        if vaultUnavailableName != nil {
+            onboardingRequired = true
+        }
     }
 }
 

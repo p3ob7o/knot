@@ -14,7 +14,7 @@ public struct InboxWriter: Sendable {
 
     @discardableResult
     public func write(_ note: Note) throws -> URL {
-        let inboxRoot = vault.appending(path: settings.inboxFolder, directoryHint: .isDirectory)
+        let inboxRoot = VaultStructure.folderURL(in: vault, path: settings.inboxFolder)
 
         // The Moment-formatted filename may contain `/` to nest into
         // subfolders; we resolve the full URL first, then create whatever

@@ -7,5 +7,5 @@ enum Theme {
     static let editorPadding: CGFloat = 16
     static let editorMinHeight: CGFloat = 140
     static let popoverWidth: CGFloat = 440
-    static let popoverHeight: CGFloat = 320
+    static let popoverHeight: CGFloat = 460
 }

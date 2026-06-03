@@ -10,10 +10,10 @@ struct ContentScreen: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.hasVault {
-                    EditorView(model: model)
-                } else {
+                if model.shouldShowOnboarding {
                     OnboardingView(model: model, onDone: {})
+                } else {
+                    EditorView(model: model)
                 }
             }
             .toolbar {

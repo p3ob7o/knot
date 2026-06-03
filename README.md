@@ -22,6 +22,22 @@ iCloud, Git, Syncthing) carries the file to your other devices.
 
 See [USAGE.md](USAGE.md) for the full feature walkthrough.
 
+## Onboarding and vault setup
+
+On first launch, after a settings reset, or when Knot can no longer
+locate the saved vault bookmark, Knot walks through setup one step at
+a time:
+
+1. Pick the Obsidian vault root.
+2. Choose the Inbox folder for standalone notes. The vault root is
+   allowed, and the folder picker browses one folder level at a time.
+3. Choose the Daily Notes folder for short quick notes.
+4. If today's daily note already has markdown headings, choose the
+   heading where quick notes should be appended.
+
+The setup flow updates the same settings exposed later in Settings,
+so existing behavior remains editable after onboarding.
+
 ## How notes are routed
 
 Two destinations, auto-decided and always overridable via a Today /
