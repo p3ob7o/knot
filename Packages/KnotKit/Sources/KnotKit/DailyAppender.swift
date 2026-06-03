@@ -17,7 +17,7 @@ public struct DailyAppender: Sendable {
     /// resolved file URL.
     @discardableResult
     public func append(_ note: Note) throws -> URL {
-        let dailyRoot = vault.appending(path: settings.dailyFolder, directoryHint: .isDirectory)
+        let dailyRoot = VaultStructure.folderURL(in: vault, path: settings.dailyFolder)
 
         // The filename pattern may itself contain `/` (e.g. `YYYY/MM/YYYY-MM-DD`)
         // which means we need to make sure the file's parent directory exists,

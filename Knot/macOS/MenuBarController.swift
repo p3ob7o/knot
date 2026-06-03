@@ -346,10 +346,10 @@ private struct PopoverRoot: View {
 
     var body: some View {
         Group {
-            if model.hasVault {
-                EditorView(model: model)
-            } else {
+            if model.shouldShowOnboarding {
                 OnboardingView(model: model, onDone: {})
+            } else {
+                EditorView(model: model)
             }
         }
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)

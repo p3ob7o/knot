@@ -17,9 +17,15 @@ public final class VaultStore: @unchecked Sendable {
         self.defaults = defaults
     }
 
+    /// Whether a vault bookmark has been saved, regardless of whether the
+    /// folder still exists at the bookmarked location.
+    public var hasBookmark: Bool {
+        defaults.data(forKey: bookmarkKey) != nil
+    }
+
     /// Whether a vault has been chosen.
     public var hasVault: Bool {
-        defaults.data(forKey: bookmarkKey) != nil
+        hasBookmark
     }
 
     /// Display name of the vault folder, derived from its last path component.
@@ -76,6 +82,25 @@ public final class VaultStore: @unchecked Sendable {
         #endif
         if stale {
             try? saveBookmark(from: url)
+        }
+        return url
+    }
+
+    /// Resolves the bookmark and verifies that it still points at an existing
+    /// directory. Returns `nil` when no bookmark exists or the folder can no
+    /// longer be found.
+    public func resolveAccessibleVault() throws -> URL? {
+        guard let url = try resolveBookmark() else { return nil }
+
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStart { url.stopAccessingSecurityScopedResource() }
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
         }
         return url
     }
