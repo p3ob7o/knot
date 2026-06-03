@@ -173,7 +173,9 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     /// Locked-in "minimal" chrome shared by both detach paths — only the
-    /// close traffic light is visible; min/max are hidden.
+    /// close traffic light is visible; min/max are hidden. A small
+    /// title-bar accessory on the right offers one-click reattach so
+    /// the user doesn't have to right-click the menu-bar icon.
     private func applyDetachedChrome(to window: NSWindow) {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -184,6 +186,44 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.delegate = self
+        installReattachAccessory(on: window)
+    }
+
+    private func installReattachAccessory(on window: NSWindow) {
+        let button = NSButton()
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        button.image = NSImage(
+            systemSymbolName: "pin.slash",
+            accessibilityDescription: "Reattach to Menu Bar"
+        )
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = .secondaryLabelColor
+        button.target = self
+        button.action = #selector(reattachFromAccessory)
+        button.toolTip = "Reattach to Menu Bar"
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 22),
+            button.heightAnchor.constraint(equalToConstant: 22),
+            button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+        ])
+        container.frame = NSRect(x: 0, y: 0, width: 34, height: 28)
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = container
+        accessory.layoutAttribute = .right
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    @objc private func reattachFromAccessory() {
+        reattach()
     }
 
     /// Clamp a saved frame to a screen that is currently connected. If
