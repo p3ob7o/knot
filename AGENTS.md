@@ -1,6 +1,7 @@
 # AGENTS.md
 
-Guidance for Codex working in this repository.
+Guidance for AI coding agents (Claude Code, Codex, …) working in
+this repository.
 
 ## What Knot is
 
