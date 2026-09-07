@@ -1,5 +1,15 @@
 import Foundation
 
+public struct InboxWritePlan: Sendable, Equatable {
+    public let fileURL: URL
+    public let body: String
+
+    public init(fileURL: URL, body: String) {
+        self.fileURL = fileURL
+        self.body = body
+    }
+}
+
 /// Creates a new file in the inbox folder for a longer note. Filename is
 /// the Moment-formatted string from `inboxFilenameFormat` plus `.md`.
 /// Collisions are resolved by appending ` (N)` before the extension.
@@ -14,6 +24,11 @@ public struct InboxWriter: Sendable {
 
     @discardableResult
     public func write(_ note: Note) throws -> URL {
+        let plan = try makePlan(for: note)
+        return try write(plan)
+    }
+
+    public func makePlan(for note: Note) throws -> InboxWritePlan {
         let inboxRoot = VaultStructure.folderURL(in: vault, path: settings.inboxFolder)
 
         // The Moment-formatted filename may contain `/` to nest into
@@ -43,7 +58,12 @@ public struct InboxWriter: Sendable {
             fileURL = inboxRoot.appending(path: filename(base: baseName, counter: counter))
             counter += 1
         }
-        let parent = fileURL.deletingLastPathComponent()
+        return InboxWritePlan(fileURL: fileURL, body: bodyToWrite)
+    }
+
+    @discardableResult
+    public func write(_ plan: InboxWritePlan) throws -> URL {
+        let parent = plan.fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
         var coordError: NSError?
@@ -52,12 +72,12 @@ public struct InboxWriter: Sendable {
 
         let coordinator = NSFileCoordinator(filePresenter: nil)
         coordinator.coordinate(
-            writingItemAt: fileURL,
+            writingItemAt: plan.fileURL,
             options: .forReplacing,
             error: &coordError
         ) { url in
             do {
-                try bodyToWrite.write(to: url, atomically: true, encoding: .utf8)
+                try plan.body.write(to: url, atomically: true, encoding: .utf8)
                 resultURL = url
             } catch {
                 thrown = error

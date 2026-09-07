@@ -14,6 +14,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
     private var detachedWindow: NSWindow?
+    private var blockEditorWindowController: GutenbergEditorWindowController?
 
     init(model: EditorModel, openSettings: @escaping () -> Void) {
         self.model = model
@@ -28,6 +29,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         super.init()
 
         self.popover.delegate = self
+        self.blockEditorWindowController = GutenbergEditorWindowController(model: model)
         configureStatusItem()
         configurePopover()
     }
@@ -52,13 +54,19 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func configurePopover() {
-        let host = NSHostingController(rootView: makeRootView())
+        let host = NSHostingController(rootView: makeRootView(isDetached: false))
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
         popover.contentViewController = host
     }
 
-    private func makeRootView() -> PopoverRoot {
-        PopoverRoot(model: model)
+    private func makeRootView(isDetached: Bool) -> PopoverRoot {
+        PopoverRoot(
+            model: model,
+            isDetached: isDetached,
+            openBlockEditor: { [weak self] in
+                self?.openBlockEditor()
+            }
+        )
     }
 
     // MARK: - Public
@@ -113,6 +121,14 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func openBlockEditor() {
+        let initialContent = model.content
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        blockEditorWindowController?.show(initialContent: initialContent)
+    }
+
     // MARK: - Detached window
 
     private func toggleDetachedWindow() {
@@ -135,40 +151,32 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// Bring AppKit's drag-detach path in line with the menu-driven detach
-    /// path. Custom detachable windows do not get a later `popoverDidDetach`
-    /// callback, so we adopt the window as soon as we hand it to AppKit.
-    private func adoptDraggedDetachedWindow(_ window: NSWindow) {
+    /// Use AppKit's implicit detached window only as the drag target, then
+    /// replace it with Knot's normal detached window so we do not inherit
+    /// popover chrome such as the arrow-shaped frame.
+    private func replaceDraggedDetachedWindow(_ appKitWindow: NSWindow) {
+        let window = createDetachedWindow()
+        window.setFrame(constrainedFrame(appKitWindow.frame), display: false)
         detachedWindow = window
         WindowStateStore.setDetached(true)
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard let self,
-                  let window,
-                  window === self.detachedWindow
-            else { return }
-            WindowStateStore.saveFrame(window.frame)
-        }
+        WindowStateStore.saveFrame(window.frame)
+
+        appKitWindow.orderOut(nil)
+        configurePopover()
+
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func createDetachedWindow() -> NSWindow {
-        let host = NSHostingController(rootView: makeRootView())
+        let host = NSHostingController(rootView: makeRootView(isDetached: true))
         host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
 
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.setContentSize(NSSize(width: Theme.popoverWidth, height: Theme.popoverHeight))
         applyDetachedChrome(to: window)
-        return window
-    }
-
-    /// Builds a fully-styled window with its own hosted content. AppKit does
-    /// not move the popover's content into custom detachable windows.
-    private func makeDetachableWindow() -> NSWindow {
-        let window = createDetachedWindow()
-        if let popoverWindow = popover.contentViewController?.view.window {
-            window.setFrame(popoverWindow.frame, display: false)
-        }
-        adoptDraggedDetachedWindow(window)
         return window
     }
 
@@ -190,6 +198,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func installReattachAccessory(on window: NSWindow) {
+        guard window.titlebarAccessoryViewControllers.isEmpty else { return }
+
         let button = NSButton()
         button.bezelStyle = .accessoryBarAction
         button.isBordered = false
@@ -370,8 +380,9 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 extension MenuBarController: NSPopoverDelegate {
     func popoverShouldDetach(_ popover: NSPopover) -> Bool { true }
 
-    func detachableWindow(for popover: NSPopover) -> NSWindow? {
-        makeDetachableWindow()
+    func popoverDidDetach(_ popover: NSPopover) {
+        guard let window = popover.contentViewController?.view.window else { return }
+        replaceDraggedDetachedWindow(window)
     }
 }
 
@@ -383,15 +394,18 @@ extension MenuBarController: NSPopoverDelegate {
 /// editor surface.
 private struct PopoverRoot: View {
     @Bindable var model: EditorModel
+    let isDetached: Bool
+    let openBlockEditor: () -> Void
 
     var body: some View {
         Group {
             if model.shouldShowOnboarding {
                 OnboardingView(model: model, onDone: {})
             } else {
-                EditorView(model: model)
+                EditorView(model: model, openBlockEditor: openBlockEditor)
             }
         }
+        .padding(.top, isDetached ? 24 : 0)
         .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
     }
 }

@@ -32,6 +32,10 @@ targets:
     sources:
       - path: Knot/Shared
       - path: Knot/macOS
+        excludes:
+          - GutenbergWeb
+      - path: Knot/macOS/GutenbergWeb/dist
+        type: folder
     info:
       path: Knot/macOS/Generated-Info.plist
       properties:

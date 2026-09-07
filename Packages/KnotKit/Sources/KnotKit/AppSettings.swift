@@ -38,7 +38,54 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// it is below the character threshold.
     public var routingRequiresSingleLine: Bool = true
 
+    // MARK: Attachments
+
+    /// Obsidian-compatible attachment destination. Empty string and `/` mean
+    /// the vault root; `.` means beside the note; `./name` means a subfolder
+    /// beside the note; any other value is vault-relative.
+    public var attachmentFolderPath: String = ""
+
     public init() {}
+}
+
+extension AppSettings {
+    private enum CodingKeys: String, CodingKey {
+        case dailyFolder
+        case inboxFolder
+        case dailyFilenameFormat
+        case inboxFilenameFormat
+        case dailyHeading
+        case dailyBulletFormat
+        case routingMaxChars
+        case routingRequiresSingleLine
+        case attachmentFolderPath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dailyFolder = try container.decodeIfPresent(String.self, forKey: .dailyFolder) ?? "Daily"
+        inboxFolder = try container.decodeIfPresent(String.self, forKey: .inboxFolder) ?? "Inbox"
+        dailyFilenameFormat = try container.decodeIfPresent(String.self, forKey: .dailyFilenameFormat) ?? "YYYY-MM-DD"
+        inboxFilenameFormat = try container.decodeIfPresent(String.self, forKey: .inboxFilenameFormat) ?? "YYYY-MM-DD HHmm"
+        dailyHeading = try container.decodeIfPresent(String.self, forKey: .dailyHeading) ?? "## Quick notes"
+        dailyBulletFormat = try container.decodeIfPresent(String.self, forKey: .dailyBulletFormat) ?? "- {{HH:mm}} {{content}}"
+        routingMaxChars = try container.decodeIfPresent(Int.self, forKey: .routingMaxChars) ?? 280
+        routingRequiresSingleLine = try container.decodeIfPresent(Bool.self, forKey: .routingRequiresSingleLine) ?? true
+        attachmentFolderPath = try container.decodeIfPresent(String.self, forKey: .attachmentFolderPath) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(dailyFolder, forKey: .dailyFolder)
+        try container.encode(inboxFolder, forKey: .inboxFolder)
+        try container.encode(dailyFilenameFormat, forKey: .dailyFilenameFormat)
+        try container.encode(inboxFilenameFormat, forKey: .inboxFilenameFormat)
+        try container.encode(dailyHeading, forKey: .dailyHeading)
+        try container.encode(dailyBulletFormat, forKey: .dailyBulletFormat)
+        try container.encode(routingMaxChars, forKey: .routingMaxChars)
+        try container.encode(routingRequiresSingleLine, forKey: .routingRequiresSingleLine)
+        try container.encode(attachmentFolderPath, forKey: .attachmentFolderPath)
+    }
 }
 
 extension AppSettings {

@@ -20,6 +20,7 @@ Packages/*/Package.resolved
 Packages/*/.build/
 .build/
 Package.resolved
+.vite/
 
 # Logs / coverage
 *.log
@@ -49,6 +50,8 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots
 fastlane/test_output
+Knot/macOS/GutenbergWeb/dist/
+Knot/macOS/GutenbergWeb/node_modules/
 
 # Local docs / scratch
 docs/

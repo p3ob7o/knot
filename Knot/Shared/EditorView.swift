@@ -6,6 +6,7 @@ import KnotKit
 /// differs.
 struct EditorView: View {
     @Bindable var model: EditorModel
+    var openBlockEditor: (() -> Void)? = nil
     #if os(macOS)
     // ChromelessTextEditor reports focus back via a Binding<Bool>, so
     // we use plain @State here. iOS keeps SwiftUI's @FocusState because
@@ -26,6 +27,11 @@ struct EditorView: View {
                 ModeToggle(manualMode: $model.manualMode, resolvedMode: model.resolvedMode)
                 Spacer()
                 statusPill
+                #if os(macOS)
+                if let openBlockEditor {
+                    blockEditorButton(openBlockEditor)
+                }
+                #endif
                 sendButton
             }
         }
@@ -148,6 +154,21 @@ struct EditorView: View {
         .animation(.easeOut(duration: 0.18), value: enabled)
         .accessibilityLabel("Send")
     }
+
+    #if os(macOS)
+    private func blockEditorButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Open block editor")
+        .accessibilityLabel("Open block editor")
+    }
+    #endif
 }
 
 extension EditorView {

@@ -120,6 +120,20 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                LabeledContent("Path") {
+                    settingsField(
+                        TextField("Vault root", text: settingsBinding(\.attachmentFolderPath))
+                    )
+                }
+            } header: {
+                Text("Attachments")
+            } footer: {
+                Text("Uses Obsidian's attachment path semantics. Empty or / saves at the vault root; . saves beside the note; ./assets saves in a subfolder beside the note; any other path is vault-relative.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Routing") {
                 LabeledContent("Max characters for daily") {
                     TextField("280", value: settingsBinding(\.routingMaxChars), format: .number)

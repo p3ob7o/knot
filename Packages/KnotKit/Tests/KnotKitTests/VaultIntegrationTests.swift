@@ -87,6 +87,24 @@ final class VaultIntegrationTests: XCTestCase {
         XCTAssertEqual(second.lastPathComponent, "2026-04-25 1432 (1).md")
     }
 
+    func test_inboxWriterMakePlan_resolvesFinalURLAndBodyWithoutWriting() throws {
+        let settings = AppSettings()
+        let writer = InboxWriter(vault: tempRoot, settings: settings)
+        let date = makeDate(2026, 4, 25, 14, 32)
+        let note = Note(
+            content: "# Project plan\n\n- next step",
+            mode: .inbox,
+            createdAt: date
+        )
+
+        let plan = try writer.makePlan(for: note)
+
+        XCTAssertEqual(plan.fileURL.lastPathComponent, "Project plan.md")
+        XCTAssertTrue(plan.fileURL.path.contains("Inbox/"))
+        XCTAssertEqual(plan.body, "- next step")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: plan.fileURL.path))
+    }
+
     func test_inboxLiteralFolderInFilenamePattern_requiresBracketEscape() throws {
         // Without [brackets], a literal-looking string gets mangled because
         // moment treats individual characters as tokens. With brackets, it's

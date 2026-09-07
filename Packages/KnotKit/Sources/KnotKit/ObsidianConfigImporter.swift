@@ -21,6 +21,27 @@ public struct ImportedDailyConfig: Equatable, Sendable {
     }
 }
 
+/// The attachment destination discovered inside Obsidian's app settings.
+public struct ImportedAttachmentConfig: Equatable, Sendable {
+    /// Obsidian-compatible attachment path. Empty string means vault root.
+    public let attachmentFolderPath: String
+
+    public init(attachmentFolderPath: String) {
+        self.attachmentFolderPath = attachmentFolderPath
+    }
+}
+
+/// All importable Obsidian settings Knot currently understands.
+public struct ImportedVaultConfig: Equatable, Sendable {
+    public let daily: ImportedDailyConfig?
+    public let attachment: ImportedAttachmentConfig?
+
+    public init(daily: ImportedDailyConfig?, attachment: ImportedAttachmentConfig?) {
+        self.daily = daily
+        self.attachment = attachment
+    }
+}
+
 /// Reads the active daily-note configuration out of an Obsidian vault.
 ///
 /// Resolution chain:
@@ -51,6 +72,17 @@ public enum ObsidianConfigImporter {
             return periodic
         }
         return readCoreDailyNotes(vaultURL: vaultURL)
+    }
+
+    public static func readVaultConfig(vaultURL: URL) -> ImportedVaultConfig {
+        let didStart = vaultURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStart { vaultURL.stopAccessingSecurityScopedResource() }
+        }
+
+        let daily = readPeriodicNotes(vaultURL: vaultURL) ?? readCoreDailyNotes(vaultURL: vaultURL)
+        let attachment = readAttachmentConfig(vaultURL: vaultURL)
+        return ImportedVaultConfig(daily: daily, attachment: attachment)
     }
 
     // MARK: - Periodic Notes
@@ -128,6 +160,36 @@ public enum ObsidianConfigImporter {
             )
             return nil
         }
+    }
+
+    // MARK: - Attachments
+
+    private struct AppConfigFile: Decodable {
+        let attachmentFolderPath: String?
+    }
+
+    private static func readAttachmentConfig(vaultURL: URL) -> ImportedAttachmentConfig? {
+        let url = vaultURL.appending(path: ".obsidian/app.json")
+        guard let data = readData(at: url) else { return nil }
+
+        do {
+            let parsed = try JSONDecoder().decode(AppConfigFile.self, from: data)
+            guard let raw = parsed.attachmentFolderPath else { return nil }
+            return ImportedAttachmentConfig(
+                attachmentFolderPath: normalizeAttachmentFolderPath(raw)
+            )
+        } catch {
+            logger.debug(
+                "app.json present but unparseable: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private static func normalizeAttachmentFolderPath(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "/" { return "" }
+        return trimmed
     }
 
     // MARK: - File coordination

@@ -1,8 +1,8 @@
 import SwiftUI
 import KnotKit
 
-/// Confirmation strip that appears after `EditorModel.setVault` imports a
-/// daily-note configuration from an Obsidian vault. Renders nothing when
+/// Confirmation strip that appears after `EditorModel.setVault` imports
+/// Obsidian configuration from a vault. Renders nothing when
 /// `model.lastImport` is `nil` or `.noConfigFound`.
 struct VaultImportBanner: View {
     @Bindable var model: EditorModel
@@ -15,7 +15,7 @@ struct VaultImportBanner: View {
                     .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Imported daily-note settings from your vault")
+                    Text("Imported Obsidian settings from your vault")
                         .font(.system(size: 12, weight: .semibold))
                     Text(detailLine(for: config))
                         .font(.system(size: 11, design: .monospaced))
@@ -53,9 +53,19 @@ struct VaultImportBanner: View {
         }
     }
 
-    private func detailLine(for config: ImportedDailyConfig) -> String {
-        let folder = config.folder.isEmpty ? "<vault root>" : config.folder
-        return "Folder: \(folder)  ·  Filename: \(config.filenameFormat)  ·  \(sourceLabel(config.source))"
+    private func detailLine(for config: ImportedVaultConfig) -> String {
+        var parts: [String] = []
+        if let daily = config.daily {
+            let folder = daily.folder.isEmpty ? "<vault root>" : daily.folder
+            parts.append("Daily: \(folder) / \(daily.filenameFormat) (\(sourceLabel(daily.source)))")
+        }
+        if let attachment = config.attachment {
+            let folder = attachment.attachmentFolderPath.isEmpty
+                ? "<vault root>"
+                : attachment.attachmentFolderPath
+            parts.append("Attachments: \(folder)")
+        }
+        return parts.joined(separator: "  ·  ")
     }
 
     private func sourceLabel(_ source: ImportedDailyConfig.Source) -> String {

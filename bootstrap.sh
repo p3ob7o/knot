@@ -16,6 +16,26 @@ if ! command -v xcodegen >/dev/null 2>&1; then
     brew install xcodegen
 fi
 
+if ! command -v npm >/dev/null 2>&1; then
+    echo "error: npm is required to build the bundled macOS block editor." >&2
+    exit 1
+fi
+
+echo "==> Building bundled Gutenberg editor"
+pushd Knot/macOS/GutenbergWeb >/dev/null
+NPM_CACHE="${TMPDIR:-/tmp}/knot-npm-cache"
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+    if [ -f package-lock.json ]; then
+        npm ci --cache "$NPM_CACHE"
+    else
+        npm install --cache "$NPM_CACHE"
+    fi
+else
+    echo "==> Using existing npm dependencies"
+fi
+npm run build
+popd >/dev/null
+
 echo "==> Generating Knot.xcodeproj"
 xcodegen generate
 

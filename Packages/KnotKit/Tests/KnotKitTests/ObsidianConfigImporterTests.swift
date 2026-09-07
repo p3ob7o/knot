@@ -169,6 +169,34 @@ final class ObsidianConfigImporterTests: XCTestCase {
         XCTAssertEqual(result?.folder, "")
     }
 
+    // MARK: - Attachment settings
+
+    func test_vaultConfig_readsAttachmentFolderPathFromAppJson() throws {
+        try writeAppConfig(["attachmentFolderPath": "./assets"])
+
+        let result = ObsidianConfigImporter.readVaultConfig(vaultURL: vaultURL)
+
+        XCTAssertEqual(result.attachment?.attachmentFolderPath, "./assets")
+    }
+
+    func test_vaultConfig_normalizesVaultRootAttachmentPathToEmptyString() throws {
+        try writeAppConfig(["attachmentFolderPath": "/"])
+
+        let result = ObsidianConfigImporter.readVaultConfig(vaultURL: vaultURL)
+
+        XCTAssertEqual(result.attachment?.attachmentFolderPath, "")
+    }
+
+    func test_vaultConfig_preservesDailyConfigWhenAppJsonIsMalformed() throws {
+        try writeCoreDailyNotes(["folder": "Daily", "format": "YYYY-MM-DD"])
+        try writeAppConfigRaw("{ not json")
+
+        let result = ObsidianConfigImporter.readVaultConfig(vaultURL: vaultURL)
+
+        XCTAssertEqual(result.daily?.source, .coreDailyNotes)
+        XCTAssertNil(result.attachment)
+    }
+
     func test_coreDailyNotes_malformedJson_returnsNil() throws {
         try writeCoreDailyNotesRaw("{ this is not json")
 
@@ -240,6 +268,23 @@ final class ObsidianConfigImporterTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try raw.write(
             to: dir.appending(path: "daily-notes.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func writeAppConfig(_ payload: [String: Any]) throws {
+        let dir = vaultURL.appending(path: ".obsidian", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+        try data.write(to: dir.appending(path: "app.json"))
+    }
+
+    private func writeAppConfigRaw(_ raw: String) throws {
+        let dir = vaultURL.appending(path: ".obsidian", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try raw.write(
+            to: dir.appending(path: "app.json"),
             atomically: true,
             encoding: .utf8
         )

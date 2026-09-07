@@ -55,10 +55,17 @@ The detached window is created lazily on first show. Its delegate is
 ## Design
 
 AppKit already supports tear-off popovers. We adopt
-`NSPopoverDelegate.popoverShouldDetach(_:)` and supply a custom window
-via `detachableWindow(for:)`, then react in
-`popoverDidDetach(_:)` to converge on the same internal state today's
-menu-driven path produces.
+`NSPopoverDelegate.popoverShouldDetach(_:)`, let AppKit create the
+implicit detached window long enough for the drag gesture to complete,
+then replace that popover-shaped window in `popoverDidDetach(_:)` with
+Knot's normal detached window. This converges on the same internal state
+today's menu-driven path produces without inheriting AppKit's popover
+arrow chrome.
+
+Do not implement `detachableWindow(for:)` for this path. AppKit's SDK
+documents that method for cases where the detached window needs
+different content, and recommends the implicit window when the same
+content should detach.
 
 ### Delegate methods
 
@@ -70,18 +77,16 @@ menu-driven path produces.
 extension MenuBarController: NSPopoverDelegate {
     func popoverShouldDetach(_ popover: NSPopover) -> Bool { true }
 
-    func detachableWindow(for popover: NSPopover) -> NSWindow? {
-        makeDetachableWindow()
-    }
-
     func popoverDidDetach(_ popover: NSPopover) {
-        adoptDetachedWindow()
+        guard let window = popover.contentViewController?.view.window else { return }
+        replaceDraggedDetachedWindow(window)
     }
 }
 ```
 
-`makeDetachableWindow()` and `adoptDetachedWindow()` are new private
-helpers introduced below.
+`replaceDraggedDetachedWindow(_:)` is the helper that records the
+implicit window's frame, hides it, shows a clean Knot detached window,
+and refreshes the popover host.
 
 ### Popover behavior change
 
@@ -98,31 +103,17 @@ item again) still does. For a menu-bar utility this is acceptable — the
 popover's primary dismissal gesture is "click the menu-bar icon again",
 which still works.
 
-### Window construction split
+### Window construction
 
-`createDetachedWindow()` is split into two helpers so both detach paths
-share styling:
+The menu-driven detach path still needs to build a separate hosted
+window, because it is not moving the current popover content through
+AppKit's drag lifecycle. The drag path first lets AppKit create an
+implicit window, then swaps it for the same clean window type. Both
+paths share `createDetachedWindow()` and `applyDetachedChrome(to:)`.
 
 ```swift
-/// Builds an empty, fully-styled window suitable for AppKit's
-/// drag-detach. AppKit moves the popover's content view into it.
-private func makeDetachableWindow() -> NSWindow {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0,
-                            width: Theme.popoverWidth,
-                            height: Theme.popoverHeight),
-        styleMask: [.titled, .closable, .fullSizeContentView],
-        backing: .buffered,
-        defer: true
-    )
-    applyDetachedChrome(to: window)
-    return window
-}
-
-/// Builds a window with its own hosting controller, used by the
-/// menu-driven detach path that doesn't transfer the popover's view.
 private func createDetachedWindow() -> NSWindow {
-    let host = NSHostingController(rootView: makeRootView())
+    let host = NSHostingController(rootView: makeRootView(isDetached: true))
     host.view.frame = NSRect(x: 0, y: 0,
                              width: Theme.popoverWidth,
                              height: Theme.popoverHeight)
@@ -149,31 +140,33 @@ private func applyDetachedChrome(to window: NSWindow) {
 }
 ```
 
-### Adoption after drag-detach
+### Replacement after drag-detach
 
 `popoverDidDetach(_:)` runs after AppKit has moved the popover's
-content into the new window and animated the transition:
+content into its implicit detached window:
 
 ```swift
-private func adoptDetachedWindow() {
-    guard let window = popover.contentViewController?.view.window else {
-        // Defensive: AppKit should always have re-parented by now.
-        return
-    }
+private func replaceDraggedDetachedWindow(_ appKitWindow: NSWindow) {
+    let window = createDetachedWindow()
+    window.setFrame(constrainedFrame(appKitWindow.frame), display: false)
     detachedWindow = window
     WindowStateStore.setDetached(true)
     WindowStateStore.saveFrame(window.frame)
-    // Rebuild the popover's hosting controller so the next showPopover()
-    // call has fresh content (AppKit emptied this one).
+
+    appKitWindow.orderOut(nil)
     configurePopover()
+
+    NSApp.setActivationPolicy(.accessory)
+    NSApp.activate(ignoringOtherApps: true)
+    window.makeKeyAndOrderFront(nil)
 }
 ```
 
 Note: `configurePopover()` already builds a new `NSHostingController`
 and assigns it to `popover.contentViewController`. After drag-detach,
-the previous hosting controller's view is now living inside
-`detachedWindow`. Rebuilding the popover guarantees the next
-`showPopover()` produces a fresh editor surface.
+the previous hosting controller's view is inside AppKit's implicit
+window, which is immediately ordered out. Rebuilding the popover
+guarantees the next `showPopover()` produces a fresh editor surface.
 
 ### Status-item click while detached
 
@@ -194,7 +187,7 @@ menu remains the only reattach affordance.
 |---|---|---|---|
 | Initial / fresh launch | `false` | `nil` | no |
 | User opens popover | `false` | `nil` | yes |
-| User drags popover off (new) | `true` | the AppKit-supplied window | no |
+| User drags popover off (new) | `true` | a clean Knot window made from the AppKit-supplied frame | no |
 | User picks "Detach Window" from menu | `true` | a window made by `createDetachedWindow()` | no |
 | User picks "Reattach to Menu Bar" | `false` | `nil` | yes |
 | User closes detached window via close button | `true` (unchanged today; out of scope) | window kept, ordered out | no |
@@ -257,9 +250,10 @@ interaction.
   - Conform to `NSPopoverDelegate`.
   - Set `popover.delegate = self` in `configurePopover()`.
   - Change `popover.behavior` from `.transient` to `.semitransient`.
-  - Split `createDetachedWindow()` into `makeDetachableWindow()`,
-    `createDetachedWindow()`, and `applyDetachedChrome(to:)`.
-  - Add `adoptDetachedWindow()` and the three delegate methods.
+  - Keep `createDetachedWindow()` for the menu-driven detach path.
+  - Add `applyDetachedChrome(to:)` and `replaceDraggedDetachedWindow(_:)`.
+  - Add `popoverShouldDetach(_:)` and `popoverDidDetach(_:)`; do not add
+    `detachableWindow(for:)` for the drag path.
 
 No other files change. No `project.yml` edits. No changes to KnotKit.
 No changes to entitlements.

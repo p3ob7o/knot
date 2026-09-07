@@ -3,6 +3,12 @@ import Observation
 import SwiftUI
 import KnotKit
 
+struct EditorAttachment: Sendable, Equatable {
+    let token: String
+    let filename: String
+    let data: Data
+}
+
 @MainActor
 @Observable
 final class EditorModel {
@@ -27,7 +33,7 @@ final class EditorModel {
     }
 
     enum VaultImportResult: Equatable {
-        case imported(ImportedDailyConfig, previous: AppSettings)
+        case imported(ImportedVaultConfig, previous: AppSettings)
         case noConfigFound
     }
 
@@ -94,15 +100,21 @@ final class EditorModel {
     func setVault(url: URL) throws -> VaultImportResult {
         try vaultStore.saveBookmark(from: url)
 
-        guard let imported = ObsidianConfigImporter.read(vaultURL: url) else {
+        let imported = ObsidianConfigImporter.readVaultConfig(vaultURL: url)
+        guard imported.daily != nil || imported.attachment != nil else {
             refreshVaultStatus()
             return .noConfigFound
         }
 
         let previous = settings
         var merged = settings
-        merged.dailyFolder = imported.folder
-        merged.dailyFilenameFormat = imported.filenameFormat
+        if let daily = imported.daily {
+            merged.dailyFolder = daily.folder
+            merged.dailyFilenameFormat = daily.filenameFormat
+        }
+        if let attachment = imported.attachment {
+            merged.attachmentFolderPath = attachment.attachmentFolderPath
+        }
 
         guard merged != previous else {
             refreshVaultStatus()
@@ -180,6 +192,84 @@ final class EditorModel {
         }
     }
 
+    func sendInboxMarkdown(
+        _ markdown: String,
+        attachments: [EditorAttachment],
+        promotedContent: String?,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, hasVault, status != .sending else {
+            completion(false)
+            return
+        }
+
+        let note = Note(
+            content: trimmed,
+            mode: .inbox,
+            createdAt: Date()
+        )
+        let savedSettings = settings
+
+        let url: URL
+        do {
+            guard let resolved = try vaultStore.resolveAccessibleVault() else {
+                refreshVaultStatus()
+                status = .error(VaultError.noVaultConfigured.localizedDescription)
+                completion(false)
+                return
+            }
+            url = resolved
+        } catch {
+            status = .error(error.localizedDescription)
+            completion(false)
+            return
+        }
+
+        status = .sending
+        let savedQueue = queue
+
+        Task.detached { [weak self] in
+            var queueNote = note
+            do {
+                let inbox = InboxWriter(vault: url, settings: savedSettings)
+                let planned = try inbox.makePlan(for: note)
+                let attachmentWriter = AttachmentWriter(vault: url, settings: savedSettings)
+                var body = planned.body
+
+                for attachment in attachments {
+                    let result = try attachmentWriter.write(AttachmentWriteRequest(
+                        filename: attachment.filename,
+                        data: attachment.data,
+                        noteURL: planned.fileURL
+                    ))
+                    body = body.replacingOccurrences(
+                        of: attachment.token,
+                        with: result.markdownEmbed
+                    )
+                }
+
+                queueNote = Note(
+                    id: note.id,
+                    content: body,
+                    mode: .inbox,
+                    createdAt: note.createdAt
+                )
+                try inbox.write(InboxWritePlan(fileURL: planned.fileURL, body: body))
+                await self?.handleInboxWriteSucceeded(
+                    promotedContent: promotedContent,
+                    completion: completion
+                )
+            } catch {
+                try? savedQueue?.enqueue(queueNote)
+                await self?.handleWriteFailed(
+                    message: error.localizedDescription,
+                    completion: completion
+                )
+            }
+        }
+    }
+
     @MainActor
     private func handleWriteSucceeded() {
         content = ""
@@ -197,6 +287,39 @@ final class EditorModel {
     @MainActor
     private func handleWriteFailed(message: String) {
         status = .error(message)
+    }
+
+    @MainActor
+    private func handleInboxWriteSucceeded(
+        promotedContent: String?,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        if let promotedContent {
+            if content == promotedContent {
+                content = ""
+            }
+        } else {
+            content = ""
+        }
+        manualMode = nil
+        status = .sent
+        lastImport = nil
+        completion(true)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1200))
+            if case .sent = self.status {
+                self.status = .idle
+            }
+        }
+    }
+
+    @MainActor
+    private func handleWriteFailed(
+        message: String,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        status = .error(message)
+        completion(false)
     }
 
     // MARK: - Settings
