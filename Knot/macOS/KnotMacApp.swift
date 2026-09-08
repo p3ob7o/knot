@@ -1,70 +1,62 @@
-import SwiftUI
 import AppKit
 import KnotKit
+import SwiftUI
 
 @main
 struct KnotMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
-    var body: some Scene {
-        // No SwiftUI Scenes — this is a pure accessory app. The menubar
-        // controller owns the popover; the AppDelegate owns the Settings
-        // window. Returning an empty scene tree keeps SwiftUI happy without
-        // installing a main menu we'd never show.
-        _EmptyScene()
-    }
-}
-
-private struct _EmptyScene: Scene {
-    var body: some Scene {
-        // A WindowGroup that the user can never trigger; we close it
-        // immediately on launch so it never becomes visible.
-        Settings { EmptyView() }
-    }
+    var body: some Scene { Settings { EmptyView() } }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let model = EditorModel()
+    private static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    private static let isRuntimeProbe = ProcessInfo.processInfo.environment["KNOT_RUNTIME_PROBE_TOKEN"] != nil
+    let model = AppDelegate.makeModel()
+    let surfaces = SurfaceCoordinator()
     var menubar: MenuBarController!
     private var settingsWindow: NSWindow?
+    private var recoveryWindow: NSWindow?
+    private var observers: [NSObjectProtocol] = []
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-        menubar = MenuBarController(model: model, openSettings: { [weak self] in
-            self?.openSettings()
-        })
-        HotkeyManager.shared.setHandler { [weak self] in
-            self?.menubar.toggle()
-        }
-        HotkeyManager.shared.update(to: ShortcutStore.load())
-
-        // React to live edits from the Settings recorder.
-        NotificationCenter.default.addObserver(
-            forName: .knotShortcutChanged,
-            object: nil,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in
-                HotkeyManager.shared.update(to: ShortcutStore.load())
-            }
-        }
-
-        // The model handles cross-platform reset (settings + vault). We
-        // wipe macOS-only state (shortcut, detached window) and republish
-        // the shortcut change so the recorder field + hotkey re-register.
-        NotificationCenter.default.addObserver(
-            forName: .knotSettingsReset,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleSettingsReset()
-            }
-        }
+    private static func makeModel() -> EditorModel {
+        guard isTesting || isRuntimeProbe else { return EditorModel() }
+        let name = "Knot-XCTest-\(ProcessInfo.processInfo.processIdentifier)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        let support = FileManager.default.temporaryDirectory.appending(path: name, directoryHint: .isDirectory)
+        return EditorModel(vaultStore: VaultStore(defaults: defaults), defaults: defaults, supportDirectory: support)
     }
 
-    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+#if DEBUG
+        if RichEditorRuntimeProbe.launchIfRequested() { return }
+#endif
+        guard !Self.isTesting else { return }
+        surfaces.applicationDidLaunch()
+        menubar = MenuBarController(model: model, surfaces: surfaces, openSettings: { [weak self] in
+            self?.openSettings()
+        })
+        HotkeyManager.shared.setHandler { [weak self] in self?.menubar.toggle() }
+        HotkeyManager.shared.update(to: ShortcutStore.loadEnabled())
+
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .knotShortcutChanged, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in HotkeyManager.shared.update(to: ShortcutStore.loadEnabled()) }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .knotSettingsReset, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleSettingsReset() }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .knotOpenRecovery, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.openRecovery() }
+        })
+    }
+
     private func handleSettingsReset() {
         ShortcutStore.clear()
         WindowStateStore.clear()
@@ -72,50 +64,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.handleSettingsReset()
     }
 
+    func applicationWillResignActive(_ notification: Notification) {
+        Task { await model.flushDraft() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task {
+            await model.flushDraft()
+            HotkeyManager.shared.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        HotkeyManager.shared.shutdown()
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        menubar.toggle()
+        menubar?.toggle()
         return false
     }
 
-    // MARK: - Settings window
+    func openRecovery() {
+        if recoveryWindow == nil {
+            let window = makeWindow(
+                title: "Knot Recovery",
+                rootView: AnyView(RecoveryView(model: model)),
+                size: NSSize(width: 680, height: 480),
+                minimum: NSSize(width: 560, height: 360)
+            )
+            recoveryWindow = window
+            observeClose(of: window)
+        }
+        if let recoveryWindow { surfaces.showRegular(recoveryWindow) }
+    }
 
     func openSettings() {
         if settingsWindow == nil {
-            let host = NSHostingController(rootView: SettingsView(model: model))
-            // Don't let the hosting controller drive the window size from
-            // SwiftUI's intrinsic content size — it would otherwise pin
-                            // the window to that size and ignore .resizable. We manage
-            // the size ourselves below.
-            host.sizingOptions = []
-
-            let window = NSWindow(contentViewController: host)
-            window.title = "Knot Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.contentMinSize = NSSize(width: 520, height: 360)
-            window.contentMaxSize = NSSize(width: 520, height: 4000)
-            window.setContentSize(NSSize(width: 520, height: 1080))
-            window.isReleasedWhenClosed = false
-            window.center()
+            let window = makeWindow(
+                title: "Knot Settings",
+                rootView: AnyView(SettingsView(model: model)),
+                size: NSSize(width: 560, height: 700),
+                minimum: NSSize(width: 460, height: 420)
+            )
+            window.contentMaxSize = NSSize(width: 1_200, height: 1_200)
             settingsWindow = window
-
-            // Re-hide the dock icon when the user closes the settings window.
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification,
-                object: window,
-                queue: .main
-            ) { _ in
-                Task { @MainActor in
-                    NSApp.setActivationPolicy(.accessory)
-                }
-            }
+            observeClose(of: window)
         }
+        if let settingsWindow { surfaces.showRegular(settingsWindow) }
+    }
 
-        // Switch to a regular activation policy while the window is on
-        // screen so it can come to the front. We restore .accessory when
-        // the window closes (see observer above).
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+    private func makeWindow(title: String, rootView: AnyView, size: NSSize, minimum: NSSize) -> NSWindow {
+        let host = NSHostingController(rootView: rootView)
+        host.sizingOptions = []
+        let window = NSWindow(contentViewController: host)
+        window.title = title
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.contentMinSize = minimum
+        window.setContentSize(size)
+        window.isReleasedWhenClosed = false
+        window.center()
+        return window
+    }
+
+    private func observeClose(of window: NSWindow) {
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self, weak window] _ in
+            Task { @MainActor in
+                guard let self, let window else { return }
+                self.surfaces.regularWindowDidClose(window)
+            }
+        })
     }
 }
 

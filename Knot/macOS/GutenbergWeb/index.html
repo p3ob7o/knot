@@ -4,13 +4,14 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' blob: data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; font-src 'self' data:;"
+      content="default-src 'none'; script-src 'nonce-__KNOT_CSP_NONCE__'; style-src knot-editor: 'unsafe-inline'; img-src knot-editor: knot-asset: blob:; connect-src 'none'; font-src knot-editor:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Knot Block Editor</title>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <div id="root" role="application" aria-label="Knot rich editor"></div>
+    <script vite-ignore nonce="__KNOT_CSP_NONCE__" src="knot-editor://bundle/session-bootstrap.js"></script>
+    <script nonce="__KNOT_CSP_NONCE__" type="module" src="/src/main.tsx"></script>
   </body>
 </html>

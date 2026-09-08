@@ -1,215 +1,180 @@
 # Using Knot
 
-A short guide to capturing thoughts into your Obsidian vault with Knot.
+Knot 0.2.0 captures Markdown into an authorized vault. The macOS app is the supported product; the iOS target is experimental compatibility work.
 
-## First run
+## First Run
 
-1. Launch Knot.
-2. The first screen asks you to **pick your vault folder**. Choose the
-   root of your Obsidian vault (the folder that contains `.obsidian/`).
-   On iOS, the folder must be visible in the Files app — iCloud Drive
-   vaults work out of the box; local Obsidian vaults need the *Show in
-   Files* toggle in Obsidian's vault settings.
-3. **macOS only:** Knot installs itself as a menu-bar app. There is no
-   Dock icon. Look for the small pen-stroke icon in the menu bar.
+Setup has five resumable steps. Closing Knot during setup does not mark partial settings complete.
 
-If your vault uses Obsidian's **Periodic Notes** community plugin or
-the **Core Daily Notes** plugin, Knot reads the configured daily-note
-folder and filename pattern from `.obsidian/` and adopts them
-automatically. A small banner above the editor confirms what was
-imported and offers an *Undo*.
+1. **Connect Vault:** choose the folder that should be the vault root. A folder without `.obsidian` is valid.
+2. **Choose Inbox:** browse to the destination for standalone notes.
+3. **Choose Daily Notes:** browse to the daily-note folder and review the filename pattern.
+4. **Choose Daily Target:** select a discovered heading, enter a manual heading, or choose end of note. Decide whether a missing heading may be created.
+5. **Review Destinations:** confirm the vault, Inbox, Daily path, and target.
 
-## Capturing a note
+Folder browsing deliberately separates navigation from selection:
 
-1. Open Knot.
-   - **macOS:** press the global hotkey (default **⌃⌥K**) or click the
-     menu-bar icon.
-   - **iOS:** tap the home-screen icon, the Action Button (if you've
-     mapped it), or run a Shortcut.
-2. The textarea is already focused. Start typing.
-3. When you're done, **press ⌘↩** (or ⌃↩, or click the send arrow).
-4. **Press Esc** to clear the textarea without sending.
+- Clicking a child opens that child; it does not select it.
+- `Use Vault Root` or `Use <folder>` selects the folder currently displayed.
+- Back and breadcrumb controls navigate the hierarchy.
+- Typing a vault-relative path filters immediate matches. A valid nonexistent path offers an explicit create confirmation.
+- An empty path means the vault root.
 
-That's it — the note is now a real `.md` file inside your vault, and
-your existing sync (Obsidian Sync, iCloud, Git, Syncthing) carries it
-to your other devices.
+If today's daily note is absent, Knot may inspect a configured template. You can also choose a sample Markdown file. Large daily notes require explicit `Analyze up to 64 MiB` permission before heading discovery.
 
-## Where notes go
+Knot proposes valid enabled Obsidian configuration when available. Periodic Notes takes precedence over Core Daily Notes. Imported fields are shown as a diff and can later be undone without reverting unrelated settings changes.
 
-Knot picks one of two destinations automatically based on what you
-typed.
+## Quick Capture
 
-| Note shape                              | Destination                                         |
-| --------------------------------------- | --------------------------------------------------- |
-| ≤ 280 characters and a single line      | Bullet under `## Quick notes` in today's daily file |
-| > 280 characters **or** multi-line      | New `.md` file in your Inbox folder                 |
+1. Press Control-Option-K by default or click the Knot menu-bar item.
+2. Type Markdown. Ordinary Return inserts a line break.
+3. Leave automatic routing in place, or choose `Today` or `Inbox` for this draft.
+4. Press Command-Return, Control-Return, or the arrow button to send.
 
-You can override the destination at any time using the **Today /
-Inbox** segmented toggle in the editor — the override applies to that
-note only.
+Escape hides the quick surface and preserves the draft. The eraser button clears through the native text system, so normal Undo can restore the text.
 
-### Daily-note bullet shape
+The mode control shows the resolved destination. After a successful send, the next draft returns to automatic routing.
 
-```
+### Automatic Routing
+
+With default settings:
+
+| Input | Destination |
+| --- | --- |
+| 280 characters or fewer and one line | Today |
+| More than 280 characters or any recognized line break | Inbox |
+
+Routing counts trimmed Swift extended grapheme clusters only for the decision. Knot preserves the original nonblank Markdown body, including indentation and trailing spaces. LF, CRLF, lone CR, and Unicode line and paragraph separators count as multiline input.
+
+Manual `Today` remains available for multiline content. Continuation lines are indented under the one bullet instead of becoming independent captures.
+
+### Today
+
+Today appends one formatted capture to the configured daily file. A target can be:
+
+- a heading with a level and title;
+- a heading that Knot creates at the end when missing;
+- a heading that stops for user review when missing;
+- the end of the note.
+
+Knot preserves UTF-8 BOM and CRLF style when present. It does not treat fenced code, indented code, Setext headings, or heading-like text as the selected ATX heading.
+
+Default result:
+
+```markdown
 ## Quick notes
 
-- 14:32 your note here
+- 14:32 captured text
 ```
-
-Knot creates the daily file and the `## Quick notes` heading on
-demand, then appends a new bullet on subsequent captures. The time
-prefix and bullet shape are fully configurable.
-
-### Inbox file shape
-
-By default, a long note becomes
-`Inbox/2026-04-25 1432.md` containing exactly what you typed.
-
-#### Pro tip — name a note from its first line
-
-If your note starts with a markdown H1 followed by **1 to 7 words** on
-the same line, Knot uses that heading as the filename and strips it
-from the body.
-
-For example, this input:
-
-```
-# Project plan
-
-- scope is roughly 4 weeks
-- next: brief Anna
-```
-
-…lands at `Inbox/Project plan.md` with body:
-
-```
-- scope is roughly 4 weeks
-- next: brief Anna
-```
-
-Eight or more words on the heading line, indented hashes, or `## H2`
-headings all fall back to the timestamp filename, so you only get the
-title behaviour when you're explicitly using it.
-
-If your Inbox filename pattern includes date subfolders (e.g.
-`YYYY/MM/YYYY-MM-DD HHmm`), they are preserved — your titled note
-becomes `Inbox/2026/04/Project plan.md`.
-
-## Settings reference
-
-Open Settings via the **gear icon** in the editor's top-right corner,
-or right-click the menu-bar icon (macOS).
-
-### Vault
-
-- **Change…** — pick a different vault folder. Your current capture
-  in progress is preserved.
-- **Disconnect vault** — clear the saved security-scoped bookmark.
-  Knot returns to the onboarding screen.
-
-### Toggle Knot (macOS only)
-
-The hotkey that summons Knot. Click the field and press your desired
-combination — any single printable character with any mix of ⌃ ⌥ ⇧ ⌘
-modifiers works (including the four-modifier "Hyperkey" pattern).
-*Backspace* clears the recorded value; *Esc* cancels recording. If
-macOS refuses the combination (system reserved, already taken by
-another app), Knot will tell you.
-
-### Folders
-
-- **Daily folder** — relative path from your vault root where daily
-  notes live. Default `Daily`.
-- **Inbox folder** — relative path for new Inbox files. Default
-  `Inbox`.
-
-### Daily note
-
-- **Filename pattern** — Moment.js format string for the daily file
-  name (no extension). Default `YYYY-MM-DD`. Slashes create
-  subfolders, so `YYYY/MM/YYYY-MM-DD` produces
-  `Daily/2026/04/2026-04-25.md`.
-- **Heading** — the markdown heading bullets are appended under.
-  Default `## Quick notes`. Must start with at least one `#`.
-- **Bullet format** — template for each bullet. `{{HH:mm}}` and any
-  Moment token inside `{{ }}` is formatted against the note's
-  timestamp; `{{content}}` is replaced with your text.
-
-  Examples:
-
-  ```
-  - {{HH:mm}} {{content}}
-  - [[{{YYYY-MM-DD}}]] {{HH:mm}} {{content}}
-  - **{{ddd}}** {{content}}
-  ```
 
 ### Inbox
 
-- **Filename** — Moment.js pattern for new Inbox files. Default
-  `YYYY-MM-DD HHmm`. Slashes create subfolders. Wrap literal text in
-  `[brackets]` so individual letters aren't interpreted as date tokens
-  (e.g. `[Notes]/YYYY-MM-DD` → `Notes/2026-04-25`).
+Inbox creates a new `.md` file and never overwrites an existing note. Same-name collisions receive a counter.
 
-### Routing
+A first line that is exactly an H1 with 1 to 7 whitespace-delimited words supplies a sanitized, Unicode-preserving basename. Knot removes that H1 from the body. Other heading shapes use the configured timestamp filename. Date-generated parent folders are retained in either case.
 
-- **Max characters for daily** — anything longer auto-routes to the
-  Inbox.
-- **Force inbox when note has multiple lines** — when on, any newline
-  pushes the note to Inbox even if it's under the character limit.
+## Rich Inbox Editor
 
-## Date format reference
+Choose the square-and-pencil button from the quick surface to promote its current draft into the optional rich editor. The rich editor is an Inbox composer, not an existing-vault-note editor.
 
-Filename and bullet patterns use the
-[Moment.js display format spec](https://momentjs.com/docs/#/displaying/format/),
-the same conventions Obsidian's Daily Notes / Periodic Notes plugins
-use. Common tokens:
+It supports paragraphs, headings, ordered and unordered lists, quotes, code, separators, links, formatting, and images. Images can come from paste, drop, or the native picker. Supported input types are PNG, JPEG, GIF, WebP, and HEIC, subject to per-file, per-draft, dimension, and decoded-pixel limits.
 
-| Token   | Output            |
-| ------- | ----------------- |
-| `YYYY`  | 2026              |
-| `MM`    | 04                |
-| `DD`    | 25                |
-| `HH`    | 14                |
-| `mm`    | 32                |
-| `dddd`  | Saturday          |
-| `ddd`   | Sat               |
-| `[…]`   | literal text      |
+The editor writes acknowledged checkpoints to Knot's local store. `Save` first durably enqueues the exact checkpoint and its attachments, then publishes it to Inbox. Closing asks the web editor for a final local checkpoint; if that acknowledgement fails, Knot offers Keep Open, Export, or explicit Discard.
 
-## macOS extras
+External links open only from a direct link activation in the editor. Scripted bridge requests and file, data, blob, and custom-scheme navigation cannot gain native privileges.
 
-- **Detach the popover into a window.** Two ways:
-  - **Drag** the popover by its top chrome — it tears off into a
-    free-floating window you can place anywhere.
-  - **Right-click** the menu-bar icon → *Detach Window*.
-  The window remembers its position. To switch back, right-click the
-  menu-bar icon → *Reattach to Menu Bar*.
-- **Right-click menu bar icon.** Quick access to *Detach / Reattach*,
-  *Settings…*, and *Quit Knot*.
+## Status And Recovery
 
-## Troubleshooting
+Status language is intentional:
 
-- **Hotkey did nothing.** Open Settings → Toggle Knot. If macOS
-  rejected your combination, an error row appears under the field.
-  Pick another combination — combinations including ⌘⇧Q are reserved
-  by macOS for log out.
-- **"Vault permission lost" or writes fail.** macOS sometimes
-  invalidates the security-scoped bookmark (e.g. after a major OS
-  update). Disconnect and re-pick the same folder in Settings.
-- **Two devices wrote at the same time.** Knot uses
-  `NSFileCoordinator` so concurrent writes from Knot itself are safe.
-  If a true conflict still happens (typically: another device wrote
-  the daily file while offline), Obsidian's own `*.conflict-*.md`
-  convention takes over.
-- **My captured note never appeared.** Knot writes inside your vault.
-  Check the configured **Daily folder** / **Inbox folder** — both are
-  relative to your vault root. If they're empty, double-check
-  Settings.
-- **The vault-import banner showed the wrong daily folder.** Click
-  *Undo* in the banner to revert to your previous settings. You can
-  re-pick the vault later if you change your Obsidian config.
+- **Saving draft:** the native draft checkpoint is being updated.
+- **Pending:** the immutable capture and required assets are durable locally, but vault publication is not complete.
+- **Saved to vault:** the note and attachments were published and a receipt was recorded.
+- **Retryable:** publication did not begin or is known safe to retry with the original snapshot.
+- **Needs review:** an interrupted or externally changed operation has an uncertain outcome. Knot will not duplicate it automatically.
 
-## Privacy
+Right-click the menu-bar item and choose `Recovery...`. The recovery window can:
 
-Knot is local-only. No accounts, no servers, no telemetry. Settings
-live in `UserDefaults`; the path to your vault is stored as a
-security-scoped bookmark scoped to this app.
+- reopen a local draft;
+- export a draft or capture as Markdown;
+- retry or cancel a pending capture;
+- mark a needs-review capture already saved after checking the target;
+- retry a needs-review capture as new, after an explicit duplicate-content warning.
+
+Retry uses the capture's original vault identity, destination, timestamp, timezone, locale, settings revision, and asset IDs. Changing settings later does not reinterpret pending work.
+
+## Settings
+
+Right-click the menu-bar item and choose `Settings...`. Settings use a working copy: `Apply` validates and commits changes; `Cancel` restores the last committed values.
+
+### Vault
+
+- **Change:** authorize another vault. Current drafts and pending captures remain associated with their stored profile.
+- **Reimport:** inspect Obsidian configuration again.
+- **Undo Import:** restore only fields changed by the relevant import.
+
+### Global Shortcut
+
+Click the recorder and press one character key with Command, Control, or Option; Shift can be included. Delete disables the shortcut and Escape cancels recording. Knot reports registration conflicts and preserves the previous working binding when replacement fails.
+
+Imported legacy bare-key shortcuts remain disabled until separately approved because they can intercept normal typing. Key code zero is a valid `A` key, not the disabled sentinel.
+
+### Daily And Inbox
+
+- Daily folder and Inbox folder are validated vault-relative paths. Empty means root.
+- Daily and Inbox filename values use the supported date grammar below and omit `.md`.
+- The Daily heading is an ATX heading such as `## Quick notes`.
+- The Daily bullet template must contain exact `{{content}}`.
+- Settings shows the generated Daily path before Apply.
+
+### Attachments
+
+The destination follows Obsidian-compatible path meanings:
+
+- empty or `/`: vault root;
+- `.`: beside the note;
+- `./assets`: an `assets` folder beside the note;
+- another relative path: that folder under the vault root.
+
+### Local Data And Reset
+
+`Erase Local Drafts` deletes active and parked drafts only. It does not delete pending captures or any vault file.
+
+`Reset Configuration` clears the current vault configuration, global shortcut, and saved detached-window state, then restarts setup. Drafts and pending captures remain in Recovery, and vault files are not deleted.
+
+## Format Reference
+
+Knot implements this validated Moment-compatible date-token subset:
+
+```text
+YYYY GGGG MMMM DDDo DDDD SSS MMM DDD dddd
+YY GG MM Mo DD Do ddd dd ww wo WW Wo HH hh kk mm ss SS ZZ
+Qo Q M D do d E w W H h k m s S A a Z X x
+```
+
+Literal text goes in brackets. Slashes create subfolders:
+
+```text
+[Notes]/YYYY/MM/YYYY-MM-DD
+```
+
+Unknown letter tokens, unmatched brackets, unsafe generated paths, and patterns over the size limit are rejected.
+
+Bullet templates use double braces. `{{content}}` is required; every other placeholder is one supported date pattern:
+
+```text
+- {{HH:mm}} {{content}}
+- [[{{YYYY-MM-DD}}]] {{HH:mm}} {{content}}
+```
+
+## Window Behavior
+
+The quick editor normally appears as a menu-bar popover. Use the context menu to detach or reattach it, or drag the popover using the system detach gesture. The detached window remembers a constrained on-screen frame. Settings, Recovery, and the rich editor are regular windows and can coexist without changing the quick draft's ownership.
+
+## Privacy And Sync Limits
+
+Knot's application runtime is local-only: no account, server, telemetry, remote font, runtime CDN, or network API. Build tooling downloads pinned dependencies when they are not already cached.
+
+The vault bookmark, durable drafts, pending captures, journals, receipts, and staged assets live in Knot's app container. The app requests access only to the selected vault and files explicitly chosen for import.
+
+Knot coordinates local file access and detects changed identities and hashes. It does not provide distributed locking, control an external sync provider, prescribe provider conflict filenames, or guarantee that another device cannot create an independent conflict.

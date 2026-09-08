@@ -1,20 +1,15 @@
 import AppKit
+import KnotKit
 import SwiftUI
 
-/// macOS-only drop-in replacement for `TextEditor` that keeps the
-/// scroll bar hidden until the user actually scrolls — regardless of
-/// the system-wide "Show scroll bars" preference.
-///
-/// SwiftUI's `TextEditor` doesn't expose its underlying `NSScrollView`,
-/// so the user's "Always show scroll bars" setting bleeds through. By
-/// owning the `NSTextView` + `NSScrollView` here we can force the modern
-/// `.overlay` scroller style and `autohidesScrollers = true`, matching
-/// what most native macOS notes apps do.
 struct ChromelessTextEditor: NSViewRepresentable {
     @Binding var text: String
+    let revision: Revision
+    let onSend: () -> Void
+    let onEscape: () -> Void
     @Binding var isFocused: Bool
     var font: NSFont = .systemFont(ofSize: 16)
-    var textInset: NSSize = NSSize(width: 6, height: 8)
+    var textInset = NSSize(width: 6, height: 8)
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -22,20 +17,15 @@ struct ChromelessTextEditor: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
-        scroll.autohidesScrollers = true
-        // Force the overlay style even when the user's macOS pref is
-        // "Always show scroll bars" — that's the whole point of this view.
-        scroll.scrollerStyle = .overlay
+        scroll.autohidesScrollers = NSScroller.preferredScrollerStyle == .overlay
         scroll.verticalScrollElasticity = .allowed
 
         let textView = FocusTrackingTextView()
         textView.delegate = context.coordinator
+        textView.sendHandler = onSend
+        textView.escapeHandler = onEscape
         textView.focusHandler = { focused in
-            // Defer to the next runloop to avoid mutating SwiftUI state
-            // mid-render.
-            DispatchQueue.main.async {
-                context.coordinator.parent.isFocused = focused
-            }
+            DispatchQueue.main.async { context.coordinator.parent.isFocused = focused }
         }
         textView.string = text
         textView.font = font
@@ -45,6 +35,7 @@ struct ChromelessTextEditor: NSViewRepresentable {
         textView.isSelectable = true
         textView.isRichText = false
         textView.allowsUndo = true
+        textView.usesFindBar = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -54,68 +45,77 @@ struct ChromelessTextEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.minSize = NSSize(width: 0, height: 0)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
-                                  height: CGFloat.greatestFiniteMagnitude)
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(
-            width: scroll.contentSize.width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-
+        textView.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         scroll.documentView = textView
-
-        // Auto-focus once we're attached to a window — mirrors the
-        // .onAppear { editorFocused = true } from the SwiftUI side.
-        DispatchQueue.main.async {
-            textView.window?.makeFirstResponder(textView)
-        }
-
+        context.coordinator.appliedRevision = revision
+        DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        if textView.string != text {
-            textView.string = text
+        context.coordinator.parent = self
+        if context.coordinator.appliedRevision != revision,
+           textView.string != text,
+           !textView.hasMarkedText() {
+            let oldSelection = textView.selectedRange()
+            textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: textView.string.utf16.count), with: text)
+            let length = text.utf16.count
+            textView.setSelectedRange(NSRange(
+                location: min(oldSelection.location, length),
+                length: min(oldSelection.length, max(0, length - min(oldSelection.location, length)))
+            ))
+            context.coordinator.appliedRevision = revision
         }
-        if textView.font != font {
-            textView.font = font
-        }
+        if textView.font != font { textView.font = font }
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChromelessTextEditor
-
+        var appliedRevision: Revision
         init(_ parent: ChromelessTextEditor) {
             self.parent = parent
+            appliedRevision = parent.revision
         }
-
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard let textView = notification.object as? NSTextView,
+                  parent.text != textView.string else { return }
             parent.text = textView.string
+            appliedRevision = parent.revision
+        }
+        func textDidEndEditing(_ notification: Notification) {
+            NotificationCenter.default.post(name: .knotEditorDidBlur, object: nil)
         }
     }
 }
 
-/// `NSTextView` subclass that forwards firstResponder transitions so
-/// the SwiftUI side can drive the focused-border styling.
 private final class FocusTrackingTextView: NSTextView {
     var focusHandler: ((Bool) -> Void)?
-
+    var sendHandler: (() -> Void)?
+    var escapeHandler: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.keyCode == 36, !modifiers.intersection([.command, .control]).isEmpty { sendHandler?(); return }
+        if event.keyCode == 53 { escapeHandler?(); return }
+        super.keyDown(with: event)
+    }
     override func becomeFirstResponder() -> Bool {
-        let became = super.becomeFirstResponder()
-        if became { focusHandler?(true) }
-        return became
+        let value = super.becomeFirstResponder()
+        if value { focusHandler?(true) }
+        return value
     }
-
     override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned { focusHandler?(false) }
-        return resigned
+        let value = super.resignFirstResponder()
+        if value { focusHandler?(false) }
+        return value
     }
+}
+
+extension Notification.Name {
+    static let knotEditorDidBlur = Notification.Name("knot.editorDidBlur")
 }

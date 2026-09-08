@@ -10,14 +10,16 @@ import KnotKit
 @MainActor
 final class MenuBarController: NSObject, NSWindowDelegate {
     private let model: EditorModel
+    private let surfaces: SurfaceCoordinator
     private let openSettings: () -> Void
     private let statusItem: NSStatusItem
     private let popover: NSPopover
     private var detachedWindow: NSWindow?
     private var blockEditorWindowController: GutenbergEditorWindowController?
 
-    init(model: EditorModel, openSettings: @escaping () -> Void) {
+    init(model: EditorModel, surfaces: SurfaceCoordinator, openSettings: @escaping () -> Void) {
         self.model = model
+        self.surfaces = surfaces
         self.openSettings = openSettings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.popover = NSPopover()
@@ -29,9 +31,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         super.init()
 
         self.popover.delegate = self
-        self.blockEditorWindowController = GutenbergEditorWindowController(model: model)
+        self.blockEditorWindowController = GutenbergEditorWindowController(model: model, surfaces: surfaces)
         configureStatusItem()
         configurePopover()
+        NotificationCenter.default.addObserver(self, selector: #selector(hideQuickSurface), name: .knotHideQuickSurface, object: nil)
     }
 
     // MARK: - Configuration
@@ -54,18 +57,26 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func configurePopover() {
+        let size = preferredRootSize
         let host = NSHostingController(rootView: makeRootView(isDetached: false))
-        host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
+        host.view.frame = NSRect(origin: .zero, size: size)
+        popover.contentSize = size
         popover.contentViewController = host
+    }
+
+    private var preferredRootSize: NSSize {
+        model.shouldShowOnboarding
+            ? NSSize(width: Theme.onboardingWidth, height: Theme.onboardingHeight)
+            : NSSize(width: Theme.popoverWidth, height: Theme.popoverHeight)
     }
 
     private func makeRootView(isDetached: Bool) -> PopoverRoot {
         PopoverRoot(
             model: model,
             isDetached: isDetached,
-            openBlockEditor: { [weak self] in
-                self?.openBlockEditor()
-            }
+            openBlockEditor: { [weak self] in self?.openBlockEditor() },
+            detachQuickSurface: { [weak self] in self?.detach() },
+            onboardingDone: { [weak self] in self?.configurePopover() }
         )
     }
 
@@ -80,6 +91,14 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     // MARK: - Private
+
+    @objc private func hideQuickSurface() {
+        if popover.isShown { popover.performClose(nil) }
+        if let window = detachedWindow, window.isVisible {
+            WindowStateStore.saveFrame(window.frame)
+            window.orderOut(nil)
+        }
+    }
 
     @objc private func buttonClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
@@ -104,8 +123,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         guard let button = statusItem.button else { return }
         // Make sure we're in accessory mode in case the user just closed
         // the Settings window.
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
+        surfaces.showAccessory {}
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -122,11 +140,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func openBlockEditor() {
-        let initialContent = model.content
         if popover.isShown {
             popover.performClose(nil)
         }
-        blockEditorWindowController?.show(initialContent: initialContent)
+        blockEditorWindowController?.show()
     }
 
     // MARK: - Detached window
@@ -146,8 +163,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         if let saved = WindowStateStore.savedFrame() {
             window.setFrame(constrainedFrame(saved), display: false)
         }
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
+        surfaces.showAccessory {}
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -164,18 +180,21 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         appKitWindow.orderOut(nil)
         configurePopover()
 
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
+        surfaces.showAccessory {}
         window.makeKeyAndOrderFront(nil)
     }
 
     private func createDetachedWindow() -> NSWindow {
+        let size = preferredRootSize
         let host = NSHostingController(rootView: makeRootView(isDetached: true))
-        host.view.frame = NSRect(x: 0, y: 0, width: Theme.popoverWidth, height: Theme.popoverHeight)
+        host.view.frame = NSRect(origin: .zero, size: size)
 
         let window = NSWindow(contentViewController: host)
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
-        window.setContentSize(NSSize(width: Theme.popoverWidth, height: Theme.popoverHeight))
+        window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        window.contentMinSize = model.shouldShowOnboarding
+            ? NSSize(width: 460, height: 560)
+            : NSSize(width: 360, height: 300)
+        window.setContentSize(size)
         applyDetachedChrome(to: window)
         return window
     }
@@ -187,7 +206,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private func applyDetachedChrome(to window: NSWindow) {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.title = "Knot"
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
@@ -240,16 +259,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     /// the monitor the window used to live on is gone, fall back to
     /// centering on the main screen so the user can find it again.
     private func constrainedFrame(_ frame: NSRect) -> NSRect {
-        let intersects = NSScreen.screens.contains { $0.visibleFrame.intersects(frame) }
-        if intersects { return frame }
-        guard let main = NSScreen.main else { return frame }
-        let visible = main.visibleFrame
-        return NSRect(
-            x: visible.midX - frame.width / 2,
-            y: visible.midY - frame.height / 2,
-            width: frame.width,
-            height: frame.height
-        )
+        WindowStateStore.constrainedFrame(frame)
     }
 
     // MARK: - Detach / reattach
@@ -328,6 +338,13 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         )
         settingsItem.target = self
 
+        let recoveryItem = menu.addItem(
+            withTitle: model.pendingCount > 0 ? "Recovery (\(model.pendingCount))..." : "Recovery...",
+            action: #selector(openRecoveryAction),
+            keyEquivalent: ""
+        )
+        recoveryItem.target = self
+
         menu.addItem(.separator())
 
         let quitItem = menu.addItem(
@@ -344,6 +361,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
     @objc private func openSettingsAction() {
         openSettings()
+    }
+
+    @objc private func openRecoveryAction() {
+        NotificationCenter.default.post(name: .knotOpenRecovery, object: nil)
     }
 
     @objc private func toggleDetachedFromMenu() {
@@ -375,6 +396,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 }
 
+extension Notification.Name {
+    static let knotOpenRecovery = Notification.Name("knot.openRecovery")
+}
+
 // MARK: - NSPopoverDelegate
 
 extension MenuBarController: NSPopoverDelegate {
@@ -396,16 +421,26 @@ private struct PopoverRoot: View {
     @Bindable var model: EditorModel
     let isDetached: Bool
     let openBlockEditor: () -> Void
+    let detachQuickSurface: () -> Void
+    let onboardingDone: () -> Void
 
     var body: some View {
         Group {
             if model.shouldShowOnboarding {
-                OnboardingView(model: model, onDone: {})
+                OnboardingView(model: model, onDone: onboardingDone)
             } else {
-                EditorView(model: model, openBlockEditor: openBlockEditor)
+                EditorView(
+                    model: model,
+                    openBlockEditor: openBlockEditor,
+                    detachQuickSurface: isDetached ? nil : detachQuickSurface
+                )
             }
         }
         .padding(.top, isDetached ? 24 : 0)
-        .frame(width: Theme.popoverWidth, height: Theme.popoverHeight)
+        .frame(
+            width: model.shouldShowOnboarding ? Theme.onboardingWidth : Theme.popoverWidth,
+            height: model.shouldShowOnboarding ? Theme.onboardingHeight : Theme.popoverHeight
+        )
+        .onChange(of: model.shouldShowOnboarding) { _, _ in onboardingDone() }
     }
 }

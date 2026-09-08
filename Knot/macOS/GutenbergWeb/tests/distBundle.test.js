@@ -18,6 +18,6 @@ describe("macOS WKWebView bundle", () => {
     expect(scriptPath).toBeTruthy();
 
     const stats = statSync(resolve("dist", scriptPath));
-    expect(stats.size).toBeLessThan(10 * 1024 * 1024);
+    expect(stats.size).toBeLessThanOrEqual(4_000_000);
   });
 });

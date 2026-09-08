@@ -1,0 +1,9 @@
+{
+  "name": "showdown",
+  "version": "2.1.1-knot.0",
+  "description": "Knot plain-text adapter for WordPress raw paste handling",
+  "license": "GPL-2.0-only",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js"
+}

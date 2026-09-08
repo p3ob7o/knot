@@ -8,9 +8,7 @@ import Carbon.HIToolbox
 /// cleanly to Carbon's `RegisterEventHotKey` API.
 struct Shortcut: Codable, Equatable, Sendable {
 
-    /// Virtual key code (the same value `NSEvent.keyCode` returns). 0 means
-    /// "no key bound" — when paired with no modifiers, the shortcut is
-    /// considered empty.
+    /// Physical virtual key code from `NSEvent.keyCode`; zero is ANSI A.
     var keyCode: UInt32
 
     var cmd: Bool
@@ -46,10 +44,13 @@ struct Shortcut: Codable, Equatable, Sendable {
         )
     }
 
-    /// `true` if this is a recordable shortcut: one printable character with
-    /// anywhere from zero to four modifiers.
+    /// New recordings require Command, Control or Option; bare legacy values are separate.
     var isValid: Bool {
-        keyCode != 0 && KeyName.isSingleCharacter(keyCode)
+        KeyName.isSingleCharacter(keyCode) && (cmd || opt || ctrl)
+    }
+
+    var isLegacyBare: Bool {
+        KeyName.isSingleCharacter(keyCode) && !hasModifiers
     }
 
     var hasModifiers: Bool {
@@ -86,5 +87,4 @@ struct Shortcut: Codable, Equatable, Sendable {
         shift: false
     )
 
-    static let empty = Shortcut(keyCode: 0)
 }

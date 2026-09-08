@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# Bootstrap script for Knot — installs XcodeGen if missing, then generates
-# the Xcode project from project.yml.
+# Reproducibly build generated resources and generate the Xcode project.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 if ! command -v xcodegen >/dev/null 2>&1; then
-    if ! command -v brew >/dev/null 2>&1; then
-        echo "error: Homebrew is required to install XcodeGen automatically." >&2
-        echo "       Install Homebrew (https://brew.sh/) or install XcodeGen manually:" >&2
-        echo "         https://github.com/yonaskolb/XcodeGen#installing" >&2
-        exit 1
-    fi
-    echo "==> Installing XcodeGen via Homebrew"
-    brew install xcodegen
+    echo "error: xcodegen is required; install it explicitly before bootstrap." >&2
+    exit 1
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -24,15 +17,8 @@ fi
 echo "==> Building bundled Gutenberg editor"
 pushd Knot/macOS/GutenbergWeb >/dev/null
 NPM_CACHE="${TMPDIR:-/tmp}/knot-npm-cache"
-if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
-    if [ -f package-lock.json ]; then
-        npm ci --cache "$NPM_CACHE"
-    else
-        npm install --cache "$NPM_CACHE"
-    fi
-else
-    echo "==> Using existing npm dependencies"
-fi
+npm ci --cache "$NPM_CACHE" --prefer-offline
+npm run typecheck
 npm run build
 popd >/dev/null
 

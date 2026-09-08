@@ -1,559 +1,714 @@
-import SwiftUI
 import KnotKit
+import SwiftUI
+import UniformTypeIdentifiers
 #if os(iOS)
 import UIKit
 #endif
 
-/// First-launch flow. The user first picks a vault, then answers the folder
-/// questions that depend on that vault's structure.
 struct OnboardingView: View {
     @Bindable var model: EditorModel
     var onDone: () -> Void
 
-    @State private var step: OnboardingStep = .vault
+    @State private var session: OnboardingSession?
+    @State private var browser: VaultBrowser?
+    @State private var listing: FolderListing?
+    @State private var loadState: LoadState = .idle
     @State private var pickerPresented = false
+    @State private var browserPath = VaultRelativePath.root
+    @State private var selectedPath: VaultRelativePath?
+    @State private var typedPath = ""
+    @State private var highlightedPath: VaultRelativePath?
+    @State private var createCandidate: VaultRelativePath?
+    @State private var confirmCreate = false
+    @State private var dailyFormat = "YYYY-MM-DD"
+    @State private var headings: [DiscoveredHeading] = []
+    @State private var selectedHeading: HeadingSelector?
+    @State private var endOfNote = false
+    @State private var createMissingHeading = true
+    @State private var dailySource = "Today's note"
+    @State private var dailyRecoveryMessage: String?
+    @State private var canAnalyzeLargeDaily = false
+    @State private var analysisUsesTemplate = false
+    @State private var samplePickerPresented = false
+    @State private var manualHeadingTitle = "Quick notes"
+    @State private var manualHeadingLevel = 2
     @State private var errorMessage: String?
-    @State private var selectedVaultURL: URL?
-    @State private var folderChildren: [String: [VaultFolder]] = [:]
-    @State private var loadingFolderPaths: Set<String> = []
-    @State private var inboxFolder = ""
-    @State private var inboxBrowserPath = ""
-    @State private var dailyFolder = ""
-    @State private var dailyBrowserPath = ""
-    @State private var dailyHeading = ""
-    @State private var headings: [MarkdownHeading] = []
-    @FocusState private var fieldFocused: Bool
+    @State private var working = false
+
+    private enum LoadState: Equatable { case idle, loading, empty, noMatches, loaded, denied, unavailable }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             header
-
-            stepContent
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer(minLength: 0)
-
-            footer
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear(perform: seedFromModel)
-        .onChange(of: step) { _, newStep in
-            guard newStep != .vault else { return }
-            DispatchQueue.main.async {
-                fieldFocused = true
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+            Divider()
+            ScrollView {
+                stepContent
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            Divider()
+            footer
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
         }
+        .frame(minWidth: 460, idealWidth: 520, minHeight: 560, idealHeight: 640)
+        .onAppear { adopt(model.onboardingSession) }
+        .onChange(of: model.onboardingSession) { _, value in adopt(value) }
         .folderPicker(isPresented: $pickerPresented) { url in
-            handlePickedVault(url)
+            Task { await chooseVault(url) }
+        }
+        .fileImporter(
+            isPresented: $samplePickerPresented,
+            allowedContentTypes: [.plainText],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task { await loadSample(url) }
+        }
+        .alert("Create folder?", isPresented: $confirmCreate) {
+            Button("Create") { confirmFolderCreation() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The folder will be created inside the vault when setup finishes or on the first capture.")
         }
     }
 
-    // MARK: - Subviews
+    private var currentStep: OnboardingStep { session?.step ?? .vault }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Knot")
-                .font(.system(size: 30, weight: .bold, design: .serif))
-                .foregroundStyle(.primary)
-
-            Text(headerSubtitle)
-                .font(.system(size: 13))
+        HStack(spacing: 12) {
+            Image(systemName: "scribble.variable")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Knot").font(.title2.bold())
+                Text(stepTitle).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(stepIndex) of 5")
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Step \(stepIndex) of 5")
         }
     }
 
-    @ViewBuilder
-    private var stepContent: some View {
-        switch step {
+    @ViewBuilder private var stepContent: some View {
+        switch currentStep {
         case .vault:
-            VStack(alignment: .leading, spacing: 10) {
-                question(
-                    "Locate your Obsidian vault",
-                    "Pick the vault root folder. Knot will inspect it before asking where notes should land."
-                )
-
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Choose the folder that contains your notes.")
                 if let name = model.vaultUnavailableName {
-                    Label("Could not find \(name). Pick the vault again to reconnect it.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color(red: 0.851, green: 0.416, blue: 0.416))
-                        .fixedSize(horizontal: false, vertical: true)
+                    Label("Reconnect \(name)", systemImage: "externaldrive.badge.exclamationmark")
+                        .foregroundStyle(.orange)
                 }
-            }
-
-        case .inbox:
-            folderQuestion(
-                title: "Choose the Inbox folder",
-                detail: "New standalone notes are saved here. Leave it empty to use the vault root.",
-                text: $inboxFolder,
-                browserPath: $inboxBrowserPath
-            )
-
-        case .dailyFolder:
-            folderQuestion(
-                title: "Choose the Daily Notes folder",
-                detail: "Short quick notes append to today's daily file in this folder.",
-                text: $dailyFolder,
-                browserPath: $dailyBrowserPath
-            )
-
-        case .dailyHeading:
-            VStack(alignment: .leading, spacing: 10) {
-                question(
-                    "Choose the Daily Note heading",
-                    "Today's daily note already has headings. Pick the section for quick notes, or type a new heading."
-                )
-
-                TextField("## Quick notes", text: $dailyHeading)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($fieldFocused)
-                    .onSubmit(continueTapped)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(headings) { heading in
-                            folderRow(
-                                title: heading.raw,
-                                systemImage: heading.raw == dailyHeading ? "checkmark.circle.fill" : "number",
-                                isSelected: heading.raw == dailyHeading,
-                                showsDisclosure: false
-                            ) {
-                                dailyHeading = heading.raw
-                                fieldFocused = true
-                            }
-                        }
-                    }
-                }
-                .frame(height: Self.folderListHeight)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var footer: some View {
-        VStack(spacing: 10) {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color(red: 0.851, green: 0.416, blue: 0.416))
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if step == .vault {
-                Button {
-                    pickerPresented = true
-                } label: {
-                    Label("Pick vault folder...", systemImage: "folder")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 22)
+                Button { pickerPresented = true } label: {
+                    Label(model.vaultName ?? "Choose Vault", systemImage: "folder")
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            } else {
-                HStack(spacing: 10) {
-                    Button {
-                        goBack()
-                    } label: {
-                        Label("Back", systemImage: "chevron.left")
-                            .frame(minHeight: 22)
-                    }
-                    .controlSize(.large)
-
-                    Spacer(minLength: 0)
-
-                    Button {
-                        continueTapped()
-                    } label: {
-                        Label(step == .dailyHeading ? "Done" : "Continue", systemImage: step == .dailyHeading ? "checkmark" : "arrow.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(minWidth: 128, minHeight: 22)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                if working { ProgressView("Inspecting configuration") }
+            }
+        case .inbox:
+            folderStep(title: "Inbox folder", detail: "Standalone notes are created in this folder.")
+        case .dailyFolder:
+            VStack(alignment: .leading, spacing: 16) {
+                folderStep(title: "Daily folder", detail: "Short captures append to today's note.")
+                DisclosureGroup("Filename format") {
+                    TextField("YYYY-MM-DD", text: $dailyFormat)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { Task { await persistDailyFormat() } }
+                    Text(dailyPreview)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
             }
-
-            #if os(macOS)
-            if step == .vault {
-                Text("Right-click the menu bar icon for settings.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-            }
-            #endif
+        case .heading:
+            headingStep
+        case .summary:
+            summaryStep
         }
     }
 
-    private func question(_ title: String, _ detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
-            Text(detail)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func folderQuestion(
-        title: String,
-        detail: String,
-        text: Binding<String>,
-        browserPath: Binding<String>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            question(title, detail)
-
-            TextField("Vault root", text: text)
+    private func folderStep(title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(detail).foregroundStyle(.secondary)
+            TextField("Vault-relative path", text: $typedPath)
                 .textFieldStyle(.roundedBorder)
-                .focused($fieldFocused)
-                .onSubmit(continueTapped)
-                .onChange(of: text.wrappedValue) { _, newValue in
-                    browserPath.wrappedValue = closestKnownFolder(
-                        to: VaultStructure.normalizeFolderPath(newValue)
-                    )
+                .onChange(of: typedPath) { _, value in Task { await updateSuggestions(value) } }
+                .onSubmit { commitTypedPath() }
+                .accessibilityLabel("\(title) path")
+            if let createCandidate {
+                Button { confirmCreate = true } label: {
+                    Label("Create \(createCandidate.string)", systemImage: "folder.badge.plus")
                 }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    folderRow(
-                        title: currentFolderTitle(browserPath.wrappedValue),
-                        systemImage: browserPath.wrappedValue.isEmpty ? "house" : "checkmark.circle.fill",
-                        isSelected: browserPath.wrappedValue == VaultStructure.normalizeFolderPath(text.wrappedValue),
-                        showsDisclosure: false
-                    ) {
-                        text.wrappedValue = browserPath.wrappedValue
-                        fieldFocused = true
-                    }
-
-                    if !browserPath.wrappedValue.isEmpty {
-                        folderRow(
-                            title: "Back to \(currentFolderTitle(parentFolderPath(of: browserPath.wrappedValue)))",
-                            systemImage: "chevron.left",
-                        isSelected: false,
-                        showsDisclosure: false
-                    ) {
-                        let parent = parentFolderPath(of: browserPath.wrappedValue)
-                        browserPath.wrappedValue = parent
-                        loadFolderLevel(parent)
-                        fieldFocused = true
-                    }
+                .accessibilityHint("Records explicit permission to create this folder inside the vault")
+            }
+            HStack {
+                Button { navigate(to: browserPath.parent) } label: {
+                    Image(systemName: "chevron.left")
                 }
+                .disabled(browserPath.isRoot)
+                .help("Back")
+                breadcrumb
+                Spacer()
+                Button(useCurrentTitle) { selectCurrentFolder() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .accessibilityElement(children: .contain)
+            folderListing
+                .frame(minHeight: 240)
+            if let selectedPath {
+                Label(selectedPath.isRoot ? "Vault root selected" : "Selected: \(selectedPath.string)", systemImage: "checkmark.circle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .help(selectedPath.string)
+            } else {
+                Text("Choose the current folder before continuing.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
 
-                    ForEach(childFolders(of: browserPath.wrappedValue)) { folder in
-                        folderRow(
-                            title: folderName(for: folder.path),
-                            systemImage: "folder",
-                            isSelected: folder.path == VaultStructure.normalizeFolderPath(text.wrappedValue),
-                            showsDisclosure: true
-                        ) {
-                            text.wrappedValue = folder.path
-                            browserPath.wrappedValue = folder.path
-                            loadFolderLevel(folder.path)
-                            fieldFocused = true
+    private var breadcrumb: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                Button("Vault") { navigate(to: .root) }.buttonStyle(.plain)
+                ForEach(Array(browserPath.components.enumerated()), id: \.offset) { index, component in
+                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                    Button(component) {
+                        let parts = Array(browserPath.components.prefix(index + 1))
+                        if let path = try? VaultRelativePath(components: parts) { navigate(to: path) }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .accessibilityLabel(browserPath.isRoot ? "Vault root" : browserPath.string)
+        .help(browserPath.string)
+    }
+
+    @ViewBuilder private var folderListing: some View {
+        switch loadState {
+        case .idle, .loading:
+            ProgressView("Loading folders").frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .empty:
+            ContentUnavailableView("Empty Folder", systemImage: "folder")
+        case .noMatches:
+            ContentUnavailableView("No Matching Folders", systemImage: "magnifyingglass")
+        case .denied:
+            recoveryState("Permission Required", image: "lock.trianglebadge.exclamationmark")
+        case .unavailable:
+            recoveryState("Folder Unavailable", image: "externaldrive.badge.exclamationmark")
+        case .loaded:
+            List(listing?.children ?? [], selection: $highlightedPath) { entry in
+                Button { navigate(to: entry.path) } label: {
+                    HStack {
+                        Image(systemName: "folder")
+                        Text(entry.name).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .tag(entry.path)
+                .help(entry.path.string)
+                .accessibilityLabel("Open \(entry.path.string)")
+                .accessibilityHint("Browses this folder without selecting it")
+            }
+            .listStyle(.inset)
+        }
+    }
+
+    private func recoveryState(_ title: String, image: String) -> some View {
+        ContentUnavailableView {
+            Label(title, systemImage: image)
+        } actions: {
+            Button("Retry") { load(path: browserPath) }
+        }
+    }
+
+    private var headingStep: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Destination in \(dailySource)").foregroundStyle(.secondary)
+            if let dailyRecoveryMessage {
+                Label(dailyRecoveryMessage, systemImage: "doc.badge.ellipsis")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    if canAnalyzeLargeDaily {
+                        Button("Analyze up to 64 MiB", systemImage: "doc.text.magnifyingglass") {
+                            Task { await analyzeLargeDaily() }
                         }
                     }
-
-                    if loadingFolderPaths.contains(browserPath.wrappedValue) {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 8)
+                    Button("Choose Sample", systemImage: "doc") { samplePickerPresented = true }
+                }
+            }
+            Toggle("Append at end of note", isOn: $endOfNote)
+            if !endOfNote {
+                Picker("Heading", selection: $selectedHeading) {
+                    Text("Quick notes").tag(Optional(try! HeadingSelector(title: "Quick notes", level: 2)))
+                    ForEach(headings) { heading in
+                        Text(headingLabel(heading)).tag(Optional(heading.selector))
                     }
                 }
-            }
-            .frame(height: Self.folderListHeight)
-        }
-    }
-
-    private func folderRow(
-        title: String,
-        systemImage: String,
-        isSelected: Bool,
-        showsDisclosure: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .frame(width: 16)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                Text(title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if showsDisclosure {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                Toggle("Create the heading when missing", isOn: $createMissingHeading)
+                DisclosureGroup("Manual target") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Heading", text: $manualHeadingTitle)
+                            .textFieldStyle(.roundedBorder)
+                        Stepper("Level \(manualHeadingLevel)", value: $manualHeadingLevel, in: 1...6)
+                        Button("Use Manual Heading") { useManualHeading() }
+                            .disabled(manualHeadingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .padding(.top, 6)
                 }
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Flow
-
-    private static let folderListHeight: CGFloat = 170
-
-    private var headerSubtitle: String {
-        if model.vaultUnavailableName != nil {
-            return "Reconnect your Obsidian vault and confirm where notes should go."
-        }
-        return "Quick capture into your Obsidian vault."
-    }
-
-    private func seedFromModel() {
-        inboxFolder = model.settings.inboxFolder
-        dailyFolder = model.settings.dailyFolder
-        dailyHeading = model.settings.dailyHeading
-        inboxBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(inboxFolder))
-        dailyBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(dailyFolder))
-
-        guard model.hasVault,
-              let url = try? model.resolveVaultURL() else {
-            step = .vault
-            return
-        }
-
-        selectedVaultURL = url
-        resetFolderBrowser()
-        inboxBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(inboxFolder))
-        dailyBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(dailyFolder))
-        if step == .vault {
-            step = .inbox
+            if headings.isEmpty {
+                Label("No headings discovered. Quick notes is selected unless you choose another target.", systemImage: "text.badge.plus")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
-    private func handlePickedVault(_ url: URL) {
+    private var summaryStep: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            summaryRow("Vault", value: model.vaultName ?? "Selected vault", image: "externaldrive")
+            summaryRow("Inbox", value: session?.workingSettings.inboxFolder.string ?? "", image: "tray")
+            summaryRow("Daily", value: dailyPreview, image: "calendar")
+            summaryRow("Target", value: targetSummary, image: "number")
+            if let count = session?.importDiff?.entries.count, count > 0 {
+                Label("\(count) setting values imported from Obsidian", systemImage: "arrow.down.doc")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func summaryRow(_ name: String, value: String, image: String) -> some View {
+        LabeledContent(name) { Label(value, systemImage: image).lineLimit(2) }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 8) {
+            if let errorMessage {
+                Text(errorMessage).font(.callout).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                if currentStep != .vault {
+                    Button("Back", systemImage: "chevron.left") { Task { await back() } }
+                }
+                Spacer()
+                if currentStep != .vault {
+                    Button(currentStep == .summary ? "Finish" : "Continue") {
+                        Task { await advance() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canAdvance || working)
+                }
+            }
+        }
+    }
+
+    private var stepTitle: String {
+        switch currentStep {
+        case .vault: "Connect Vault"
+        case .inbox: "Choose Inbox"
+        case .dailyFolder: "Choose Daily Notes"
+        case .heading: "Choose Daily Target"
+        case .summary: "Review Destinations"
+        }
+    }
+    private var stepIndex: Int { (OnboardingStep.allCases.firstIndex(of: currentStep) ?? 0) + 1 }
+    private var useCurrentTitle: String { browserPath.isRoot ? "Use Vault Root" : "Use \(browserPath.lastComponent ?? "Folder")" }
+    private var canAdvance: Bool {
+        switch currentStep {
+        case .vault: false
+        case .inbox, .dailyFolder: selectedPath != nil
+        case .heading, .summary: true
+        }
+    }
+    private var dailyPreview: String {
+        guard let settings = session?.workingSettings,
+              let pattern = try? CompiledDatePattern(dailyFormat) else { return "Invalid filename format" }
+        let value = pattern.render(date: Date(), timeZone: .current) + ".md"
+        return ([settings.dailyFolder.string, value].filter { !$0.isEmpty }).joined(separator: "/")
+    }
+    private var targetSummary: String {
+        guard let settings = session?.workingSettings else { return "" }
+        switch settings.dailyTarget {
+        case .endOfNote: return "End of note"
+        case .heading(let selector, let policy):
+            return String(repeating: "#", count: selector.level) + " " + selector.title + (policy == .ask ? " (ask if missing)" : "")
+        }
+    }
+
+    private func adopt(_ value: OnboardingSession?) {
+        guard let value else { return }
+        session = value
+        dailyFormat = value.workingSettings.dailyFilenameFormat
+        let path = value.browserState.browserPath
+        browserPath = path
+        selectedPath = value.browserState.selectedPath
+        typedPath = value.browserState.query
+        browser = model.makeFolderBrowser()
+        if value.step == .inbox || value.step == .dailyFolder { load(path: path) }
+    }
+
+    private func chooseVault(_ url: URL) async {
+        working = true
+        errorMessage = nil
         do {
-            try model.setVault(url: url)
-            selectedVaultURL = url
-            resetFolderBrowser()
-            inboxFolder = model.settings.inboxFolder
-            dailyFolder = model.settings.dailyFolder
-            dailyHeading = model.settings.dailyHeading
-            inboxBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(inboxFolder))
-            dailyBrowserPath = closestKnownFolder(to: VaultStructure.normalizeFolderPath(dailyFolder))
-            errorMessage = nil
-            step = .inbox
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+            try await model.selectVault(url)
+            adopt(model.onboardingSession)
+        } catch { errorMessage = error.localizedDescription }
+        working = false
     }
 
-    private func continueTapped() {
-        errorMessage = nil
-
-        switch step {
-        case .vault:
-            pickerPresented = true
-
-        case .inbox:
-            var updated = model.settings
-            updated.inboxFolder = VaultStructure.normalizeFolderPath(inboxFolder)
-            inboxFolder = updated.inboxFolder
-            inboxBrowserPath = closestKnownFolder(to: updated.inboxFolder)
-            model.updateSettings(updated)
-            step = .dailyFolder
-
-        case .dailyFolder:
-            var updated = model.settings
-            updated.dailyFolder = VaultStructure.normalizeFolderPath(dailyFolder)
-            if updated.dailyFolder != model.settings.dailyFolder {
-                model.lastImport = nil
-            }
-            dailyFolder = updated.dailyFolder
-            dailyBrowserPath = closestKnownFolder(to: updated.dailyFolder)
-            model.updateSettings(updated)
-            advanceAfterDailyFolder()
-
-        case .dailyHeading:
-            var updated = model.settings
-            updated.dailyHeading = normalizedHeading(dailyHeading)
-            dailyHeading = updated.dailyHeading
-            model.updateSettings(updated)
-            finishOnboarding()
-        }
+    private func navigate(to path: VaultRelativePath) {
+        createCandidate = nil
+        browserPath = path
+        typedPath = ""
+        highlightedPath = nil
+        load(path: path)
+        Task { await saveBrowserState() }
     }
 
-    private func goBack() {
-        errorMessage = nil
-        switch step {
-        case .vault:
-            break
-        case .inbox:
-            step = .vault
-        case .dailyFolder:
-            step = .inbox
-        case .dailyHeading:
-            step = .dailyFolder
-        }
-    }
-
-    private func advanceAfterDailyFolder() {
-        guard let vaultURL = selectedVaultURL ?? (try? model.resolveVaultURL()) else {
-            finishOnboarding()
-            return
-        }
-
-        headings = VaultStructure.dailyNoteHeadings(in: vaultURL, settings: model.settings)
-
-        guard !headings.isEmpty else {
-            finishOnboarding()
-            return
-        }
-
-        if headings.contains(where: { $0.raw == model.settings.dailyHeading }) {
-            dailyHeading = model.settings.dailyHeading
-        } else if let first = headings.first {
-            dailyHeading = first.raw
-        }
-        step = .dailyHeading
-    }
-
-    private func finishOnboarding() {
-        guard model.hasVault else {
-            step = .vault
-            return
-        }
-        model.completeOnboarding()
-        onDone()
-    }
-
-    private func childFolders(of parentPath: String) -> [VaultFolder] {
-        let parent = VaultStructure.normalizeFolderPath(parentPath)
-        return folderChildren[parent] ?? []
-    }
-
-    private func closestKnownFolder(to path: String) -> String {
-        var candidate = VaultStructure.normalizeFolderPath(path)
-        while !candidate.isEmpty {
-            if knownFolderPaths.contains(candidate) {
-                return candidate
-            }
-            candidate = parentFolderPath(of: candidate)
-        }
-        return ""
-    }
-
-    private var knownFolderPaths: Set<String> {
-        var paths = Set([""])
-        for children in folderChildren.values {
-            for child in children {
-                paths.insert(child.path)
-            }
-        }
-        return paths
-    }
-
-    private func resetFolderBrowser() {
-        folderChildren = [:]
-        loadingFolderPaths = []
-        inboxBrowserPath = ""
-        dailyBrowserPath = ""
-        loadFolderLevel("")
-    }
-
-    private func loadFolderLevel(_ path: String) {
-        let normalized = VaultStructure.normalizeFolderPath(path)
-        guard folderChildren[normalized] == nil,
-              !loadingFolderPaths.contains(normalized),
-              let vaultURL = selectedVaultURL else {
-            return
-        }
-
-        loadingFolderPaths.insert(normalized)
+    private func load(path: VaultRelativePath) {
+        guard let browser, let session else { return }
+        loadState = .loading
+        let requestID = UUID()
         Task {
-            let children = await Task.detached(priority: .userInitiated) {
-                VaultStructure.childFolders(in: vaultURL, parentPath: normalized)
-            }.value
+            do {
+                let result = try await browser.load(
+                    path: path,
+                    generation: session.generation,
+                    requestID: requestID
+                )
+                guard self.browserPath == result.path else { return }
+                listing = result
+                loadState = result.children.isEmpty ? .empty : .loaded
+            } catch FolderListingFailure.denied { loadState = .denied }
+            catch ConfigurationError.staleResult { }
+            catch { loadState = .unavailable }
+        }
+    }
 
-            await MainActor.run {
-                folderChildren[normalized] = children
-                loadingFolderPaths.remove(normalized)
+    private func updateSuggestions(_ value: String) async {
+        guard let browser, let session else { return }
+        guard !value.isEmpty else {
+            createCandidate = nil
+            load(path: browserPath)
+            return
+        }
+        createCandidate = try? VaultRelativePath(value, kind: .folder)
+        do {
+            let result = try await browser.suggestions(
+                typedPath: value, generation: session.generation, requestID: UUID()
+            )
+            browserPath = result.parent
+            listing = FolderListing(
+                path: result.parent, identity: DirectoryIdentity(device: 0, inode: 0),
+                children: result.matches
+            )
+            highlightedPath = result.exactMatch?.path ?? result.matches.first?.path
+            if result.exactMatch != nil { createCandidate = nil }
+            loadState = result.matches.isEmpty ? .noMatches : .loaded
+        } catch FolderListingFailure.denied {
+            loadState = .denied
+        } catch FolderListingFailure.missing {
+            listing = nil
+            loadState = .noMatches
+        } catch ConfigurationError.staleResult {
+        } catch {
+            loadState = .unavailable
+        }
+    }
+
+    private func commitTypedPath() {
+        if selectExactTypedPath() { return }
+        if createCandidate != nil { confirmCreate = true }
+    }
+
+
+    private func selectExactTypedPath() -> Bool {
+        guard let exact = listing?.children.first(where: {
+            $0.path.string.compare(typedPath, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) else { return false }
+        selectedPath = exact.path
+        createCandidate = nil
+        Task { await saveSelection() }
+        return true
+    }
+
+    private func confirmFolderCreation() {
+        guard let path = createCandidate else { return }
+        selectedPath = path
+        browserPath = path.parent
+        typedPath = path.string
+        createCandidate = nil
+        Task { await saveSelection(creationIntent: path) }
+    }
+
+    private func selectCurrentFolder() {
+        selectedPath = browserPath
+        typedPath = browserPath.string
+        createCandidate = nil
+        Task { await saveSelection() }
+    }
+
+    private func saveBrowserState() async {
+        guard var session else { return }
+        session.browserState = FolderBrowserState(
+            browserPath: browserPath, selectedPath: selectedPath, query: typedPath,
+            highlightedPath: highlightedPath
+        )
+        session.updatedAt = Date()
+        do { try await model.persistOnboarding(session); self.session = session }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    private func saveSelection(creationIntent: VaultRelativePath? = nil) async {
+        guard var session, let selectedPath else { return }
+        do {
+            let old = session.workingSettings
+            session.workingSettings = try ValidatedSettings(
+                dailyFolder: currentStep == .dailyFolder ? selectedPath.string : old.dailyFolder.string,
+                inboxFolder: currentStep == .inbox ? selectedPath.string : old.inboxFolder.string,
+                dailyFilenameFormat: dailyFormat,
+                inboxFilenameFormat: old.inboxFilenameFormat,
+                dailyTarget: old.dailyTarget, dailyBulletFormat: old.dailyBulletFormat,
+                routingMaxChars: old.routingMaxChars,
+                routingRequiresSingleLine: old.routingRequiresSingleLine,
+                attachmentFolderPath: old.attachmentFolderPath
+            )
+            if let creationIntent, !session.folderCreationIntents.contains(creationIntent) {
+                session.folderCreationIntents.append(creationIntent)
             }
+            session.browserState = FolderBrowserState(
+                browserPath: browserPath, selectedPath: selectedPath, query: typedPath,
+                highlightedPath: highlightedPath
+            )
+            session.updatedAt = Date()
+            try await model.persistOnboarding(session)
+            self.session = session
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func persistDailyFormat() async {
+        guard var session else { return }
+        do {
+            let old = session.workingSettings
+            session.workingSettings = try ValidatedSettings(
+                dailyFolder: old.dailyFolder.string, inboxFolder: old.inboxFolder.string,
+                dailyFilenameFormat: dailyFormat, inboxFilenameFormat: old.inboxFilenameFormat,
+                dailyTarget: old.dailyTarget, dailyBulletFormat: old.dailyBulletFormat,
+                routingMaxChars: old.routingMaxChars,
+                routingRequiresSingleLine: old.routingRequiresSingleLine,
+                attachmentFolderPath: old.attachmentFolderPath
+            )
+            try await model.persistOnboarding(session)
+            self.session = session
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func advance() async {
+        guard var session else { return }
+        working = true
+        errorMessage = nil
+        do {
+            switch session.step {
+            case .vault: break
+            case .inbox:
+                session.step = .dailyFolder
+                selectedPath = session.workingSettings.dailyFolder
+                browserPath = .root
+                typedPath = session.workingSettings.dailyFolder.string
+            case .dailyFolder:
+                await persistDailyFormat()
+                guard let latest = self.session else { throw ConfigurationError.sessionMissing }
+                session = latest
+                await loadDailySources(settings: session.workingSettings)
+                let defaultHeading = try HeadingSelector(title: "Quick notes", level: 2)
+                selectedHeading = resolvedConfiguredHeading(in: headings, settings: session.workingSettings)
+                    ?? defaultHeading
+                session.step = .heading
+            case .heading:
+                let old = session.workingSettings
+                let defaultHeading = try HeadingSelector(title: "Quick notes", level: 2)
+                let target: DailyTarget = endOfNote ? .endOfNote : .heading(
+                    selectedHeading ?? defaultHeading,
+                    missing: createMissingHeading ? .createAtEnd : .ask
+                )
+                session.workingSettings = try ValidatedSettings(
+                    dailyFolder: old.dailyFolder.string, inboxFolder: old.inboxFolder.string,
+                    dailyFilenameFormat: old.dailyFilenameFormat, inboxFilenameFormat: old.inboxFilenameFormat,
+                    dailyTarget: target, dailyBulletFormat: old.dailyBulletFormat,
+                    routingMaxChars: old.routingMaxChars,
+                    routingRequiresSingleLine: old.routingRequiresSingleLine,
+                    attachmentFolderPath: old.attachmentFolderPath
+                )
+                session.step = .summary
+            case .summary:
+                try await model.completeOnboarding(session: session)
+                onDone()
+                working = false
+                return
+            }
+            session.updatedAt = Date()
+            session.browserState = FolderBrowserState()
+            try await model.persistOnboarding(session)
+            self.session = session
+            if session.step == .dailyFolder {
+                selectedPath = session.workingSettings.dailyFolder
+                load(path: .root)
+            }
+        } catch { errorMessage = error.localizedDescription }
+        working = false
+    }
+
+    private func back() async {
+        guard var session else { return }
+        switch session.step {
+        case .vault: return
+        case .inbox: session.step = .vault
+        case .dailyFolder: session.step = .inbox
+        case .heading: session.step = .dailyFolder
+        case .summary: session.step = .heading
         }
+        session.updatedAt = Date()
+        do {
+            try await model.persistOnboarding(session)
+            self.session = session
+            if session.step == .inbox || session.step == .dailyFolder {
+                selectedPath = session.step == .inbox ? session.workingSettings.inboxFolder : session.workingSettings.dailyFolder
+                load(path: browserPath)
+            }
+        } catch { errorMessage = error.localizedDescription }
     }
 
-    private func parentFolderPath(of path: String) -> String {
-        let parts = VaultStructure.normalizeFolderPath(path)
-            .split(separator: "/", omittingEmptySubsequences: true)
-        guard parts.count > 1 else { return "" }
-        return parts.dropLast().joined(separator: "/")
-    }
-
-    private func folderName(for path: String) -> String {
-        let normalized = VaultStructure.normalizeFolderPath(path)
-        return normalized.split(separator: "/").last.map(String.init) ?? "Vault root"
-    }
-
-    private func currentFolderTitle(_ path: String) -> String {
-        let normalized = VaultStructure.normalizeFolderPath(path)
-        return normalized.isEmpty ? "Vault root" : normalized
-    }
-
-    private func normalizedHeading(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if markdownHeadingLevel(of: trimmed) != nil {
-            return trimmed
+    private func loadDailySources(settings: ValidatedSettings) async {
+        headings = []
+        dailyRecoveryMessage = nil
+        canAnalyzeLargeDaily = false
+        analysisUsesTemplate = false
+        guard let discovery = await model.discoverDaily(settings: settings) else {
+            dailyRecoveryMessage = "The daily note could not be inspected."
+            return
         }
-        if trimmed.isEmpty {
-            return AppSettings().dailyHeading
-        }
-        return "## \(trimmed)"
-    }
-
-    private func markdownHeadingLevel(of line: String) -> Int? {
-        guard line.first == "#" else { return nil }
-        var hashes = 0
-        for character in line {
-            if character == "#" {
-                hashes += 1
+        switch discovery {
+        case .found(let path, let found):
+            dailySource = path.string
+            headings = found
+        case .absent(let path):
+            dailySource = path.string
+            if let template = await model.discoverDailyTemplate() {
+                switch template {
+                case .found(let templatePath, let found):
+                    dailySource = "Template: \(templatePath.string)"
+                    headings = found
+                case .tooLarge(let templatePath):
+                    dailySource = "Template: \(templatePath.string)"
+                    dailyRecoveryMessage = "The configured template is larger than the automatic analysis limit."
+                    canAnalyzeLargeDaily = true
+                    analysisUsesTemplate = true
+                case .unreadable(let templatePath, let message):
+                    dailySource = "Template: \(templatePath.string)"
+                    dailyRecoveryMessage = "The configured template could not be read: \(message)"
+                case .absent:
+                    dailyRecoveryMessage = "Today's note and the configured template do not exist. Choose a sample or set a manual target."
+                }
             } else {
-                break
+                dailyRecoveryMessage = "Today's note does not exist. Choose a sample or set a manual target."
             }
+        case .tooLarge(let path):
+            dailySource = path.string
+            dailyRecoveryMessage = "Today's note is larger than the automatic 8 MiB analysis limit."
+            canAnalyzeLargeDaily = true
+        case .unreadable(let path, let message):
+            dailySource = path.string
+            dailyRecoveryMessage = "The daily note could not be read: \(message)"
         }
-        guard hashes >= 1, hashes <= 6 else { return nil }
-        let remainder = line.dropFirst(hashes)
-        guard remainder.first == " ",
-              !remainder.dropFirst().trimmingCharacters(in: .whitespaces).isEmpty else {
-            return nil
+    }
+
+    private func analyzeLargeDaily() async {
+        working = true
+        let result: DailyDiscoveryResult?
+        if analysisUsesTemplate {
+            result = await model.discoverDailyTemplate(explicitLargeFileAnalysis: true)
+        } else if let settings = session?.workingSettings {
+            result = await model.discoverDaily(settings: settings, explicitLargeFileAnalysis: true)
+        } else {
+            result = nil
         }
-        return hashes
+        if let result { applyExplicitDiscovery(result) }
+        working = false
+    }
+
+    private func applyExplicitDiscovery(_ result: DailyDiscoveryResult) {
+        switch result {
+        case .found(let path, let found):
+            dailySource = analysisUsesTemplate ? "Template: \(path.string)" : path.string
+            headings = found
+            dailyRecoveryMessage = nil
+            canAnalyzeLargeDaily = false
+        case .tooLarge:
+            dailyRecoveryMessage = "This file is larger than the explicit 64 MiB analysis limit. Choose a sample or set a manual target."
+            canAnalyzeLargeDaily = false
+        case .absent:
+            dailyRecoveryMessage = "The selected source no longer exists. Choose a sample or set a manual target."
+            canAnalyzeLargeDaily = false
+        case .unreadable(_, let message):
+            dailyRecoveryMessage = "The selected source could not be read: \(message)"
+            canAnalyzeLargeDaily = false
+        }
+    }
+
+    private func loadSample(_ url: URL) async {
+        working = true
+        do {
+            headings = try await model.discoverSampleDaily(url)
+            dailySource = "Sample: \(url.lastPathComponent)"
+            dailyRecoveryMessage = nil
+            canAnalyzeLargeDaily = false
+            if let configured = session?.workingSettings {
+                selectedHeading = resolvedConfiguredHeading(in: headings, settings: configured)
+                    ?? selectedHeading
+            }
+        } catch {
+            dailyRecoveryMessage = "The sample could not be analyzed: \(error.localizedDescription)"
+        }
+        working = false
+    }
+
+    private func useManualHeading() {
+        let title = manualHeadingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let selector = try? HeadingSelector(title: title, level: manualHeadingLevel) else { return }
+        selectedHeading = selector
+        endOfNote = false
+        dailySource = "Manual target"
+    }
+
+    private func resolvedConfiguredHeading(in values: [DiscoveredHeading], settings: ValidatedSettings) -> HeadingSelector? {
+        guard case .heading(let target, _) = settings.dailyTarget else { endOfNote = true; return nil }
+        let matches = values.filter {
+            $0.selector.title.localizedCaseInsensitiveCompare(target.title) == .orderedSame &&
+                $0.selector.level == target.level && $0.selector.ancestorPath == target.ancestorPath
+        }
+        return matches.count == 1 ? matches[0].selector : nil
+    }
+
+    private func headingLabel(_ heading: DiscoveredHeading) -> String {
+        (heading.selector.ancestorPath + [heading.selector.title]).joined(separator: " / ")
     }
 }
-
-private enum OnboardingStep {
-    case vault
-    case inbox
-    case dailyFolder
-    case dailyHeading
-}
-
-// MARK: - Folder picker, platform-conditional
 
 extension View {
-    /// Presents a native folder picker. On macOS this uses `NSOpenPanel`; on
-    /// iOS it presents `UIDocumentPickerViewController` configured to pick a
-    /// folder.
-    func folderPicker(
-        isPresented: Binding<Bool>,
-        onPick: @escaping (URL) -> Void
-    ) -> some View {
+    func folderPicker(isPresented: Binding<Bool>, onPick: @escaping (URL) -> Void) -> some View {
         modifier(FolderPickerModifier(isPresented: isPresented, onPick: onPick))
     }
 }
@@ -561,61 +716,37 @@ extension View {
 private struct FolderPickerModifier: ViewModifier {
     @Binding var isPresented: Bool
     let onPick: (URL) -> Void
-
     func body(content: Content) -> some View {
         #if os(macOS)
-        content.onChange(of: isPresented) { _, newValue in
-            guard newValue else { return }
+        content.onChange(of: isPresented) { _, value in
+            guard value else { return }
             isPresented = false
-            // Defer to the next runloop tick so the popover (or any other
-            // transient UI) finishes its dismiss before we present the
-            // panel — otherwise the two fight for focus and the panel
-            // never comes forward on an LSUIElement app.
-            DispatchQueue.main.async {
-                presentMacPanel(onPick: onPick)
-            }
+            presentMacPanel(onPick: onPick)
         }
         #else
         content.sheet(isPresented: $isPresented) {
-            DocumentFolderPicker { url in
-                isPresented = false
-                onPick(url)
-            } onCancel: {
-                isPresented = false
-            }
-            .ignoresSafeArea()
+            DocumentFolderPicker(onPick: { url in isPresented = false; onPick(url) }, onCancel: { isPresented = false })
+                .ignoresSafeArea()
         }
         #endif
     }
 }
 
 #if os(macOS)
-@MainActor
-private func presentMacPanel(onPick: @escaping (URL) -> Void) {
-    // Temporarily switch to a regular activation policy so the panel can
-    // become key and front. We restore the previous policy when the panel
-    // closes.
+@MainActor private func presentMacPanel(onPick: @escaping (URL) -> Void) {
     let previousPolicy = NSApp.activationPolicy()
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
-
     let panel = NSOpenPanel()
     panel.canChooseDirectories = true
     panel.canChooseFiles = false
     panel.allowsMultipleSelection = false
     panel.canCreateDirectories = true
     panel.prompt = "Choose Vault"
-    panel.title = "Pick your Obsidian vault"
-    panel.message = "Pick the root folder of your Obsidian vault."
-    panel.level = .modalPanel
-
-    let response = panel.runModal()
-
-    // Restore the prior policy so the app fades back into the menu bar.
-    NSApp.setActivationPolicy(previousPolicy)
-
-    if response == .OK, let url = panel.url {
-        onPick(url)
+    panel.title = "Choose Vault"
+    panel.begin { response in
+        NSApp.setActivationPolicy(previousPolicy)
+        if response == .OK, let url = panel.url { onPick(url) }
     }
 }
 #endif
@@ -624,39 +755,27 @@ private func presentMacPanel(onPick: @escaping (URL) -> Void) {
 private struct DocumentFolderPicker: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
     let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
-    }
-
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
         picker.allowsMultipleSelection = false
-        picker.shouldShowFileExtensions = false
         picker.delegate = context.coordinator
         return picker
     }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: (URL) -> Void
         let onCancel: () -> Void
         init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
-            self.onPick = onPick
-            self.onCancel = onCancel
+            self.onPick = onPick; self.onCancel = onCancel
         }
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             guard let url = urls.first else { onCancel(); return }
-            // Persisting access requires startAccessing while we read it for
-            // bookmarking; the EditorModel's setVault() will do the bookmark.
-            _ = url.startAccessingSecurityScopedResource()
+            let accessed = url.startAccessingSecurityScopedResource()
             onPick(url)
-            url.stopAccessingSecurityScopedResource()
+            if accessed { url.stopAccessingSecurityScopedResource() }
         }
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
-        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { onCancel() }
     }
 }
 #endif

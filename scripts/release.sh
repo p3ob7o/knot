@@ -1,208 +1,211 @@
 #!/usr/bin/env bash
-# release.sh — build, sign, notarize, and package Knot-macOS into a DMG.
-#
-# One-time setup:
-#   1. Create a "Developer ID Application" certificate at
-#      https://developer.apple.com/account/resources/certificates
-#      Download the .cer and double-click to install it in your login keychain.
-#   2. Generate an app-specific password at https://appleid.apple.com
-#      (Sign-In and Security → App-Specific Passwords) and store it for
-#      notarytool — the keychain profile name defaults to AC_PASSWORD:
-#        xcrun notarytool store-credentials AC_PASSWORD \
-#          --apple-id YOU@EXAMPLE.COM --team-id MPZ3RJ4REN \
-#          --password YOUR_APP_SPECIFIC_PASSWORD
-#   3. Install create-dmg:
-#        brew install create-dmg
-#
-# Usage:
-#   ./scripts/release.sh                # uses MARKETING_VERSION from project.yml
-#   ./scripts/release.sh 0.1.0          # explicit version override
-#
-# Override the keychain profile name with KEYCHAIN_PROFILE if you used
-# something other than AC_PASSWORD in step 2.
-#
-# Output: build/release/Knot-<version>.dmg, signed and notarized.
-
+# Build, sign, notarize, validate, and package an immutable Knot macOS release.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+export DEVELOPER_DIR
 
-# ---- Config ----
 SCHEME="Knot-macOS"
-PRODUCT_NAME="Knot"
+PRODUCT="Knot"
+PROJECT_VERSION="$(awk -F'"' '/MARKETING_VERSION:/{print $2; exit}' project.yml)"
+BUILD_NUMBER="$(awk -F'"' '/CURRENT_PROJECT_VERSION:/{print $2; exit}' project.yml)"
+VERSION="${1:-$PROJECT_VERSION}"
+TAG="v${VERSION}"
+SOURCE_SHA="$(git rev-parse HEAD)"
+IDENTITY="${SIGNING_IDENTITY:-}"
+TEAM_ID="${DEVELOPMENT_TEAM:-}"
 KEYCHAIN_PROFILE="${KEYCHAIN_PROFILE:-AC_PASSWORD}"
-BUILD_DIR="build/release"
-ARCHIVE_PATH="$BUILD_DIR/${PRODUCT_NAME}.xcarchive"
-EXPORT_PATH="$BUILD_DIR/export"
-LOG_DIR="$BUILD_DIR/logs"
+BUILD_ROOT="$ROOT/build/release"
+ARCHIVE="$BUILD_ROOT/${PRODUCT}.xcarchive"
+EXPORT="$BUILD_ROOT/export"
+STAGE="$BUILD_ROOT/stage"
+LOGS="$BUILD_ROOT/logs"
+DMG="$BUILD_ROOT/${PRODUCT}-${VERSION}.dmg"
+EXPORT_OPTIONS="$BUILD_ROOT/ExportOptions.plist"
+PERF_ROOT=""
 
-# ---- Version ----
-VERSION="${1:-}"
-if [[ -z "$VERSION" ]]; then
-    VERSION=$(awk -F'"' '/MARKETING_VERSION:/{print $2; exit}' project.yml)
-fi
-if [[ -z "$VERSION" ]]; then
-    echo "error: could not read MARKETING_VERSION from project.yml; pass version as first arg." >&2
-    exit 64
-fi
+fail() {
+    echo "error: $*" >&2
+    exit 1
+}
 
-APP_PATH="$EXPORT_PATH/${PRODUCT_NAME}.app"
-DMG_PATH="$BUILD_DIR/${PRODUCT_NAME}-${VERSION}.dmg"
-EXPORT_OPTIONS="$BUILD_DIR/ExportOptions.plist"
-
-echo "==> Releasing ${PRODUCT_NAME} ${VERSION}"
-
-# ---- Tool checks ----
 need() {
-    if ! command -v "$1" >/dev/null 2>&1; then
-        echo "error: '$1' not found in PATH." >&2
-        [[ -n "${2:-}" ]] && echo "       $2" >&2
-        exit 70
+    command -v "$1" >/dev/null 2>&1 || fail "required tool is missing: $1"
+}
+
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must be semantic x.y.z"
+[[ "$VERSION" == "$PROJECT_VERSION" ]] || fail "requested version $VERSION does not match project.yml $PROJECT_VERSION"
+[[ -n "$BUILD_NUMBER" ]] || fail "CURRENT_PROJECT_VERSION is missing"
+[[ -z "$(git status --porcelain)" ]] || fail "release requires a clean source tree"
+[[ "$(git describe --tags --exact-match HEAD 2>/dev/null)" == "$TAG" ]] || fail "HEAD must have the exact release tag $TAG"
+[[ "$(git rev-list -n 1 "$TAG")" == "$SOURCE_SHA" ]] || fail "release tag does not resolve to HEAD"
+[[ -n "$IDENTITY" ]] || fail "set SIGNING_IDENTITY to an exact Developer ID Application identity"
+[[ -n "$TEAM_ID" ]] || fail "set DEVELOPMENT_TEAM to the signing team identifier"
+[[ -f RELEASE_NOTES.md ]] || fail "RELEASE_NOTES.md is required"
+[[ -f THIRD_PARTY_NOTICES.md ]] || fail "THIRD_PARTY_NOTICES.md is required"
+
+for tool in xcodebuild xcrun xcodegen codesign create-dmg security spctl hdiutil shasum node; do
+    need "$tool"
+done
+security find-identity -p codesigning -v | grep -Fq "$IDENTITY" || fail "signing identity is not present in the selected keychain"
+xcrun notarytool history --keychain-profile "$KEYCHAIN_PROFILE" >/dev/null || fail "notary profile $KEYCHAIN_PROFILE is unavailable"
+
+echo "==> Full release verification"
+./scripts/verify.sh
+
+echo "==> Preparing release workspace"
+rm -rf "$BUILD_ROOT"
+mkdir -p "$EXPORT" "$STAGE" "$LOGS"
+node scripts/dependency-report.mjs \
+    --json "$BUILD_ROOT/dependencies.json" \
+    --notices "$BUILD_ROOT/THIRD_PARTY_NOTICES.generated.md"
+cmp THIRD_PARTY_NOTICES.md "$BUILD_ROOT/THIRD_PARTY_NOTICES.generated.md" \
+    || fail "THIRD_PARTY_NOTICES.md does not match the lockfiles"
+xcodegen generate
+
+echo "==> Running release performance gates"
+PERF_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/knot-release-perf.XXXXXX")"
+cleanup_perf() {
+    if [[ -n "$PERF_ROOT" ]]; then
+        rm -rf "$PERF_ROOT"
     fi
 }
-need xcodebuild
-need xcrun
-need codesign
-need create-dmg "Install with: brew install create-dmg"
-need xcodegen "Run ./bootstrap.sh once to install"
+trap cleanup_perf EXIT
+scripts/perf-fixtures.sh --output "$PERF_ROOT"
+scripts/benchmark.sh \
+    --fixtures "$PERF_ROOT" \
+    --output "$BUILD_ROOT/performance.json" \
+    --runs 30 \
+    --cache warm
+scripts/rich-ready-benchmark.sh \
+    --app /private/tmp/knot-verify-debug/Build/Products/Debug/Knot.app \
+    --output "$BUILD_ROOT/rich-ready-performance.json" \
+    --runs 30 \
+    --cache cold
+cleanup_perf
+PERF_ROOT=""
+trap - EXIT
 
-# ---- Find Developer ID Application certificate ----
-IDENTITY_LINE=$(security find-identity -p codesigning -v 2>/dev/null \
-    | grep "Developer ID Application" \
-    | head -1 || true)
-if [[ -z "$IDENTITY_LINE" ]]; then
-    echo "error: no 'Developer ID Application' certificate found in your keychain." >&2
-    echo "       Create one at https://developer.apple.com/account/resources/certificates" >&2
-    echo "       (the 'Apple Development' cert is for local testing only — it can't notarize)." >&2
-    exit 71
-fi
-IDENTITY=$(echo "$IDENTITY_LINE" | sed -nE 's/.*"(.+)"/\1/p')
-TEAM_ID=$(echo "$IDENTITY" | sed -nE 's/.*\(([A-Z0-9]{10})\).*/\1/p')
-echo "==> Signing identity: $IDENTITY"
-echo "==> Team ID: $TEAM_ID"
-
-# ---- Notarization profile check ----
-if ! xcrun notarytool history --keychain-profile "$KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-    echo "error: notarytool keychain profile '$KEYCHAIN_PROFILE' not configured." >&2
-    echo "       Set up with:" >&2
-    echo "         xcrun notarytool store-credentials $KEYCHAIN_PROFILE \\" >&2
-    echo "           --apple-id YOU@EXAMPLE.COM --team-id $TEAM_ID \\" >&2
-    echo "           --password APP_SPECIFIC_PASSWORD" >&2
-    exit 72
-fi
-
-# ---- Regenerate Xcode project so any project.yml changes flow through ----
-echo "==> Regenerating Knot.xcodeproj from project.yml"
-xcodegen generate >/dev/null
-
-# ---- Clean output ----
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR" "$EXPORT_PATH" "$LOG_DIR"
-
-# ---- Archive ----
-# We override the project's CODE_SIGN_STYLE to Manual at the command line so
-# Xcode signs the archive directly with the Developer ID Application cert
-# (the project keeps Automatic signing so day-to-day Xcode builds still work).
-# An empty PROVISIONING_PROFILE_SPECIFIER tells Xcode "no profile needed",
-# which is correct for a sandboxed Mac app distributed via Developer ID
-# whose entitlements don't require one (sandbox + user-selected files +
-# bookmarks all qualify).
-echo "==> Archiving (a few minutes; full log: $LOG_DIR/archive.log)"
-if ! xcodebuild archive \
-        -project Knot.xcodeproj \
-        -scheme "$SCHEME" \
-        -configuration Release \
-        -archivePath "$ARCHIVE_PATH" \
-        -destination "generic/platform=macOS" \
-        CODE_SIGN_STYLE=Manual \
-        CODE_SIGN_IDENTITY="$IDENTITY" \
-        DEVELOPMENT_TEAM="$TEAM_ID" \
-        PROVISIONING_PROFILE_SPECIFIER="" \
-        > "$LOG_DIR/archive.log" 2>&1; then
-    echo "error: archive failed. Tail of log:" >&2
-    tail -40 "$LOG_DIR/archive.log" >&2
-    exit 73
-fi
-
-# ---- ExportOptions.plist (signingStyle=manual matches the Manual archive) ----
-cat > "$EXPORT_OPTIONS" <<EOF
+cat > "$EXPORT_OPTIONS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key>
-    <string>developer-id</string>
-    <key>teamID</key>
-    <string>$TEAM_ID</string>
-    <key>signingStyle</key>
-    <string>manual</string>
-</dict>
-</plist>
-EOF
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>method</key><string>developer-id</string>
+<key>teamID</key><string>${TEAM_ID}</string>
+<key>signingStyle</key><string>manual</string>
+</dict></plist>
+PLIST
 
-# ---- Export the signed .app ----
-echo "==> Exporting signed .app (full log: $LOG_DIR/export.log)"
-if ! xcodebuild -exportArchive \
-        -archivePath "$ARCHIVE_PATH" \
-        -exportPath "$EXPORT_PATH" \
-        -exportOptionsPlist "$EXPORT_OPTIONS" \
-        > "$LOG_DIR/export.log" 2>&1; then
-    echo "error: export failed. Tail of log:" >&2
-    tail -40 "$LOG_DIR/export.log" >&2
-    exit 74
-fi
+echo "==> Archiving universal macOS app"
+xcodebuild archive \
+    -project Knot.xcodeproj \
+    -scheme "$SCHEME" \
+    -configuration Release \
+    -archivePath "$ARCHIVE" \
+    -destination 'generic/platform=macOS' \
+    ARCHS='arm64 x86_64' \
+    ONLY_ACTIVE_ARCH=NO \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="$IDENTITY" \
+    DEVELOPMENT_TEAM="$TEAM_ID" \
+    PROVISIONING_PROFILE_SPECIFIER='' \
+    MARKETING_VERSION="$VERSION" \
+    CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+    > "$LOGS/archive.log" 2>&1
 
-if [[ ! -d "$APP_PATH" ]]; then
-    echo "error: export did not produce $APP_PATH" >&2
-    exit 75
-fi
+echo "==> Exporting signed app"
+xcodebuild -exportArchive \
+    -archivePath "$ARCHIVE" \
+    -exportPath "$EXPORT" \
+    -exportOptionsPlist "$EXPORT_OPTIONS" \
+    > "$LOGS/export.log" 2>&1
+APP="$EXPORT/${PRODUCT}.app"
+[[ -d "$APP" ]] || fail "archive export did not produce $APP"
 
-# ---- Verify app signature ----
-echo "==> Verifying app signature"
-codesign --verify --deep --strict --verbose=2 "$APP_PATH" 2>&1 \
-    | grep -E "valid on disk|satisfies its Designated Requirement" || true
-codesign --display --verbose=2 "$APP_PATH" 2>&1 \
-    | grep -E "Authority|TeamIdentifier|Identifier"
+verify_app() {
+    local app="$1"
+    local plist="$app/Contents/Info.plist"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" == "$VERSION" ]] \
+        || fail "binary marketing version mismatch"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" == "$BUILD_NUMBER" ]] \
+        || fail "binary build number mismatch"
+    codesign --verify --deep --strict --verbose=4 "$app"
+    [[ "$(codesign -dv --verbose=4 "$app" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2}')" == "$TEAM_ID" ]] \
+        || fail "signed app team identifier mismatch"
+}
 
-# ---- Build the DMG ----
-echo "==> Building DMG"
-rm -f "$DMG_PATH"
+echo "==> Verifying exported app"
+verify_app "$APP"
+cp -R "$APP" "$STAGE/"
+cp LICENSE THIRD_PARTY_NOTICES.md RELEASE_NOTES.md "$STAGE/"
+
+echo "==> Building and signing disk image"
 create-dmg \
-    --volname "${PRODUCT_NAME} ${VERSION}" \
-    --window-size 540 380 \
+    --volname "${PRODUCT} ${VERSION}" \
+    --window-size 600 420 \
     --icon-size 96 \
-    --icon "${PRODUCT_NAME}.app" 130 200 \
-    --app-drop-link 410 200 \
+    --icon "${PRODUCT}.app" 150 220 \
+    --app-drop-link 450 220 \
     --no-internet-enable \
-    "$DMG_PATH" \
-    "$APP_PATH" \
-    > "$LOG_DIR/create-dmg.log" 2>&1
+    "$DMG" "$STAGE" \
+    > "$LOGS/create-dmg.log" 2>&1
+codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+codesign --verify --strict --verbose=4 "$DMG"
 
-# ---- Sign the DMG ----
-echo "==> Signing DMG"
-codesign --sign "$IDENTITY" --timestamp "$DMG_PATH"
-
-# ---- Notarize ----
-echo "==> Submitting DMG for notarization (typically 2–10 minutes)"
-xcrun notarytool submit "$DMG_PATH" \
+echo "==> Notarizing disk image"
+xcrun notarytool submit "$DMG" \
     --keychain-profile "$KEYCHAIN_PROFILE" \
-    --wait
+    --wait --output-format json > "$LOGS/notary.json"
+node - "$LOGS/notary.json" <<'NODE'
+const fs = require("node:fs");
+const result = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (result.status !== "Accepted") {
+  console.error(result);
+  process.exit(1);
+}
+NODE
+xcrun stapler staple "$DMG"
+xcrun stapler validate "$DMG"
+spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
 
-# ---- Staple ----
-echo "==> Stapling notarization ticket"
-xcrun stapler staple "$DMG_PATH"
-xcrun stapler validate "$DMG_PATH"
+echo "==> Verifying installed artifact"
+MOUNT="$BUILD_ROOT/mount"
+mkdir -p "$MOUNT"
+hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$DMG" > "$LOGS/hdiutil-attach.log"
+cleanup_mount() {
+    hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+}
+trap cleanup_mount EXIT
+verify_app "$MOUNT/${PRODUCT}.app"
+cmp LICENSE "$MOUNT/LICENSE"
+cmp THIRD_PARTY_NOTICES.md "$MOUNT/THIRD_PARTY_NOTICES.md"
+cmp RELEASE_NOTES.md "$MOUNT/RELEASE_NOTES.md"
+hdiutil detach "$MOUNT" > "$LOGS/hdiutil-detach.log"
+trap - EXIT
 
-# ---- Final assessment ----
-echo "==> Gatekeeper assessment"
-if spctl --assess --type install --verbose=2 "$DMG_PATH" 2>&1; then
-    echo "(passed)"
-else
-    echo "(spctl assessment failed — the stapler validate above is the authoritative check.)"
-fi
+echo "==> Writing immutable release metadata"
+shasum -a 256 "$DMG" > "$DMG.sha256"
+node - "$BUILD_ROOT/release-metadata.json" "$VERSION" "$BUILD_NUMBER" "$SOURCE_SHA" "$DMG" <<'NODE'
+const fs = require("node:fs");
+const crypto = require("node:crypto");
+const [output, version, build, sourceSHA, artifact] = process.argv.slice(2);
+const bytes = fs.readFileSync(artifact);
+fs.writeFileSync(output, JSON.stringify({
+  schemaVersion: 1,
+  version,
+  build,
+  sourceSHA,
+  artifact: artifact.split("/").at(-1),
+  artifactSHA256: crypto.createHash("sha256").update(bytes).digest("hex"),
+}, null, 2) + "\n");
+NODE
+cp RELEASE_NOTES.md "$BUILD_ROOT/RELEASE_NOTES.md"
+chmod 0444 "$DMG" "$DMG.sha256" "$BUILD_ROOT/release-metadata.json" \
+    "$BUILD_ROOT/dependencies.json" "$BUILD_ROOT/RELEASE_NOTES.md" \
+    "$BUILD_ROOT/performance.json" "$BUILD_ROOT/rich-ready-performance.json" \
+    "$BUILD_ROOT/THIRD_PARTY_NOTICES.generated.md"
 
-echo
-echo "Done. Signed, notarized, stapled DMG:"
-echo "    $DMG_PATH"
-echo
-echo "Next: gh release create v${VERSION} --generate-notes --title \"v${VERSION}\" \"$DMG_PATH\""
+echo "PASS release: signed, notarized, stapled, Gatekeeper-assessed artifact"
+echo "$DMG"

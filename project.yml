@@ -11,7 +11,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    SWIFT_STRICT_CONCURRENCY: minimal
+    SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "0.2.0"
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -115,6 +115,20 @@ targets:
       - package: KnotKit
         product: KnotKit
 
+  KnotMacOSTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests/KnotMacOSTests
+    dependencies:
+      - target: Knot-macOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.p3ob7o.knot.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Knot.app/Contents/MacOS/Knot"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
 schemes:
   Knot-macOS:
     build:
@@ -124,6 +138,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - KnotMacOSTests
     profile:
       config: Release
     analyze:

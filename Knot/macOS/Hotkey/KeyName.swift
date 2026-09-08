@@ -10,8 +10,6 @@ import Carbon.HIToolbox
 enum KeyName {
 
     static func symbol(for keyCode: UInt32) -> String {
-        if keyCode == 0 { return "" }
-
         if let special = special(for: Int(keyCode)) {
             return special
         }

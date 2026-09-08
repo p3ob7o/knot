@@ -1,170 +1,122 @@
 # Knot
 
-Ultra-focused quick capture for Obsidian. macOS + iOS, native,
-local-only.
+Knot is a local-first capture app for writing Markdown into an Obsidian vault. Version 0.2.0 focuses on macOS 26: a native menu-bar capture surface handles the fast path, and an optional bundled Gutenberg window handles richer Inbox notes with images.
 
-Knot is a single textarea: type a thought, press send, and the text
-becomes a real `.md` file inside your Obsidian vault. There is no
-list view, no editor, no sync. Your existing setup (Obsidian Sync,
-iCloud, Git, Syncthing) carries the file to your other devices.
+Knot has no account, server, telemetry, runtime CDN, or built-in sync. It writes files inside a folder you authorize. Obsidian Sync, iCloud, Git, Syncthing, and other providers remain separate systems; file coordination helps cooperating local processes but cannot guarantee distributed conflict behavior.
 
-- **macOS** — menu-bar popover with a configurable global hotkey
-  (default `⌃⌥K`). Tear the popover off into a free-floating window
-  if you'd rather keep it on screen.
-- **iOS** — single-screen app, designed for the home-screen icon, the
-  Action Button, and Shortcuts.
-- **Vault** — pick a folder once. Knot writes `.md` files into it. If
-  your vault uses the Periodic Notes or Core Daily Notes plugins,
-  Knot adopts their daily-note folder and filename pattern on first
-  pick.
-- **Privacy** — local-only by design. No accounts, no servers, no
-  telemetry, no third parties.
+## Capture Modes
 
-See [USAGE.md](USAGE.md) for the full feature walkthrough.
+The native quick surface opens without constructing WebKit. Type Markdown, choose `Today` or `Inbox` when needed, and use Command-Return, Control-Return, or the send button. The default Control-Option-K global shortcut is configurable or can be disabled.
 
-## Onboarding and vault setup
+Automatic routing uses the preserved defaults:
 
-On first launch, after a settings reset, or when Knot can no longer
-locate the saved vault bookmark, Knot walks through setup one step at
-a time:
+| Input | Destination |
+| --- | --- |
+| At most 280 extended grapheme clusters and one line | A formatted bullet in today's daily note |
+| Longer or multiline | A new Markdown file in Inbox |
 
-1. Pick the Obsidian vault root.
-2. Choose the Inbox folder for standalone notes. The vault root is
-   allowed, and the folder picker browses one folder level at a time.
-3. Choose the Daily Notes folder for short quick notes.
-4. If today's daily note already has markdown headings, choose the
-   heading where quick notes should be appended.
+The explicit `Today` and `Inbox` controls override that decision for the current draft. The mode returns to automatic after a successful send. A first-line H1 containing 1 to 7 words can provide an Inbox filename while the remaining body is preserved.
 
-The setup flow updates the same settings exposed later in Settings,
-so existing behavior remains editable after onboarding.
+The rich editor is an optional Inbox composer. It supports paragraphs, headings, lists, quotes, code, separators, links, formatting, and images from paste, drop, or the native picker. It promotes the current quick draft into a durable rich draft and does not edit arbitrary existing vault files.
 
-## How notes are routed
+## Reliability
 
-Two destinations, auto-decided and always overridable via a Today /
-Inbox toggle in the editor.
+Knot distinguishes local durability from vault publication:
 
-| Note shape                              | Destination                                                  |
-| --------------------------------------- | ------------------------------------------------------------ |
-| ≤ 280 characters and a single line      | Bullet appended under `## Quick notes` in today's daily file |
-| > 280 characters **or** multi-line      | New `.md` file in the Inbox folder                           |
+- `Pending` means an immutable capture snapshot and required assets were stored in Knot's private Application Support directory.
+- `Saved to vault` means the coordinated file mutation completed and a receipt was recorded.
+- `Retryable` means the same immutable capture can be retried without reinterpreting its destination, date, locale, or settings.
+- `Needs review` means the outcome may be uncertain. Knot stops instead of blindly appending again.
 
-If an Inbox note's first line is `# Title` (1–7 words), Knot uses
-that heading as the filename and strips it from the body. Otherwise
-the filename is a timestamp.
+Draft checkpoints, pending captures, staged assets, mutation journals, and receipts are stored in a versioned SQLite database. Vault publication validates relative paths, rejects symlinks and hardlinks, verifies the selected root identity, uses exclusive creation for new files, and records enough state to reconcile interrupted writes.
 
-All paths, the daily filename pattern, the heading text, the bullet
-template, and the routing thresholds are configurable in Settings.
+The macOS menu-bar `Recovery...` window can reopen or export drafts, retry or cancel pending captures, and explicitly resolve uncertain captures after the user checks the target.
 
-## Status
+## Setup
 
-**v0.1** — first public release. Capture loop is end-to-end on both
-platforms; macOS has a configurable global hotkey, a tear-off
-detached window, and an importer for Obsidian's daily-note settings
-on first vault pick.
+On first launch, reset, or lost vault access, Knot resumes a five-step setup transaction:
 
-Tracked for v0.2+: iOS widgets, App Intents and Shortcuts surface,
-share-sheet extension.
+1. Authorize the vault folder.
+2. Browse to and explicitly select the Inbox folder.
+3. Browse to and explicitly select the Daily folder and review its filename format.
+4. Choose a discovered or manual heading, create it when missing, or append at end of note.
+5. Review and finish the configuration.
+
+The vault root is a valid destination. Opening a child folder only navigates; `Use Vault Root` or `Use <folder>` selects the current folder. A typed nonexistent relative path requires confirmation before Knot records permission to create it.
+
+Periodic Notes settings take precedence over Core Daily Notes settings when an enabled, valid configuration is found. Imported changes remain field-scoped and undoable. A vault without `.obsidian` is also supported.
+
+See [USAGE.md](USAGE.md) for the complete workflow and recovery semantics.
+
+## Supported Formats
+
+Date patterns intentionally implement a validated Moment-compatible subset, not every Moment or Obsidian token:
+
+```text
+YYYY GGGG MMMM DDDo DDDD SSS MMM DDD dddd
+YY GG MM Mo DD Do ddd dd ww wo WW Wo HH hh kk mm ss SS ZZ
+Qo Q M D do d E w W H h k m s S A a Z X x
+```
+
+Wrap literal text in brackets, for example `[Notes]/YYYY-MM-DD`. Slashes generate validated subfolders. Unknown letter tokens fail validation.
+
+The daily bullet template must contain the exact `{{content}}` placeholder. Other placeholders contain one supported date pattern, for example `- {{HH:mm}} {{content}}`.
 
 ## Requirements
 
-- Xcode 26 or later
-- macOS 26 / iOS 26 (deployment targets)
-- A paid Apple Developer account if you want to install on a real
-  iPhone for longer than 7 days
-- An Obsidian vault accessible to the OS:
-  - **macOS:** any folder you can navigate to.
-  - **iOS:** the vault must be visible in the Files app — either
-    iCloud Drive, or a local Obsidian vault with "Show in Files"
-    enabled in Obsidian's vault settings.
+- macOS 26 for the supported app
+- Xcode 26 or later with the macOS 26 and iOS 26 SDKs
+- XcodeGen 2.45.4 or a compatible newer release
+- Node 24.20.0 and npm 12.0.2 for the reproducible rich-editor build
+- A vault folder visible to the system folder picker
+
+The iOS 26 target is an experimental compatibility shell. It is built in verification but is not claimed as a released or fully acceptance-tested product.
 
 ## Build
 
-The Xcode project is generated from `project.yml` via
-[XcodeGen](https://github.com/yonaskolb/XcodeGen):
+`project.yml` is the Xcode project and version source of truth. `bootstrap.sh` performs a locked npm install, type-checks and builds the bundled editor, then generates `Knot.xcodeproj`. It does not install tools automatically.
 
 ```sh
 ./bootstrap.sh
-open Knot.xcodeproj
+xcodebuild -project Knot.xcodeproj -scheme Knot-macOS \
+  -configuration Debug -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO build
 ```
 
-`bootstrap.sh` installs XcodeGen via Homebrew if needed and runs
-`xcodegen generate`. After that, build the `Knot-macOS` or `Knot-iOS`
-scheme like any other project.
+For the audited beta toolchain used by the rewrite:
 
-KnotKit (the logic core) has its own SwiftPM tests:
+```sh
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer ./scripts/verify.sh
+```
+
+Useful focused commands:
 
 ```sh
 swift test --package-path Packages/KnotKit
+./scripts/build-web.sh
+./scripts/verify.sh --quick
+./scripts/perf-fixtures.sh --output /tmp/knot-perf-fixtures
+./scripts/benchmark.sh --fixtures /tmp/knot-perf-fixtures
 ```
 
-## Project layout
+`scripts/release.sh` is fail-closed. It additionally requires a clean exact release tag, an explicit Developer ID identity and team, an available notarization profile, successful signing, notarization, stapling, and Gatekeeper assessment. An unsigned development build is not a release artifact.
 
-```
-Knot/
-  Shared/        SwiftUI views and view model used on both platforms
-  macOS/         AppKit shell — NSStatusItem popover, optional
-                 detached NSWindow, global hotkey
-  iOS/           Single SwiftUI scene
-Packages/
-  KnotKit/       Pure Swift package — file I/O, models, formatting,
-                 unit tests. No UI, no platform deps.
-project.yml      XcodeGen project definition (the source of truth)
-USAGE.md         End-user documentation
-```
+## Project Layout
 
-`KnotKit` contains every platform-independent piece — file writing,
-the "## Quick notes" heading splicer, slug generation, routing, the
-Obsidian-config importer. The two app targets are thin SwiftUI
-shells over it.
-
-## How notes are written
-
-**Short notes (≤ 280 chars, single line)** become a bullet appended
-under the `## Quick notes` heading in
-`<vault>/Daily/YYYY-MM-DD.md`. If the file or the heading don't
-exist yet, Knot creates both. Format:
-
-```markdown
-## Quick notes
-
-- 14:32 your note here
+```text
+Knot/Shared/                  shared SwiftUI orchestration and quick UI
+Knot/macOS/                   AppKit surfaces, hotkey, recovery, WKWebView bridge
+Knot/macOS/GutenbergWeb/      TypeScript editor, locked dependencies, tests
+Knot/iOS/                     experimental compatibility shell
+Packages/KnotKit/             domain, formatting, persistence, vault I/O
+Tests/KnotMacOSTests/         hosted native and WK resource tests
+rewrite-evidence/             audited baseline and generated test evidence
+scripts/                      build, verification, benchmark, release tools
+project.yml                   generated-project and version source of truth
 ```
 
-**Longer notes** become a new file at
-`<vault>/Inbox/YYYY-MM-DD HHmm.md` (or
-`<vault>/Inbox/<heading>.md` if the first line is a 1–7-word
-`# Title`). On a filename collision, Knot appends a counter.
-
-### Date format strings
-
-Filename patterns use the [Moment.js display format
-spec](https://momentjs.com/docs/#/displaying/format/) — the same
-conventions Obsidian's Daily Notes / Periodic Notes plugins use, so
-existing format strings (`YYYY-MM-DD`, `YYYY/MM/YYYY-MM-DD dddd`,
-etc.) work as-is. Slashes act as path separators, so a daily
-filename pattern of `YYYY/MM/YYYY-MM-DD` produces
-`Daily/2026/04/2026-04-25.md`. Knot creates the subfolders for you.
-
-In the daily-note **bullet** template, anything inside `{{...}}` is a
-Moment pattern; `{{content}}` is the note text. Default:
-
-```
-- {{HH:mm}} {{content}}
-```
-
-You can use any Moment tokens, e.g.
-`- [[{{YYYY-MM-DD}}]] {{HH:mm}} {{content}}`.
-
-## Concurrency safety
-
-Knot uses `NSFileCoordinator` for every read and write so Obsidian
-and Obsidian Sync's own `FilePresenter`s coordinate correctly.
-Daily-note appends are read-modify-write inside a single coordination
-block; Inbox writes are atomic. If a true conflict happens
-(typically because another device wrote the same daily file while
-offline), Obsidian's own `*.conflict-*.md` convention takes over —
-Knot doesn't try to outsmart it.
+Generated `Knot.xcodeproj`, web `dist`, `node_modules`, and build products are intentionally ignored.
 
 ## License
 
-GPL-2.0 — see [LICENSE](LICENSE).
+GPL-2.0-only. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

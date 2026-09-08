@@ -1,0 +1,22 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  macos:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+          cache-dependency-path: Knot/macOS/GutenbergWeb/package-lock.json
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Verify
+        run: DEVELOPER_DIR="$(xcode-select -p)" ./scripts/verify.sh

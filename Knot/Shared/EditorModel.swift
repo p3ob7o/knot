@@ -1,195 +1,298 @@
 import Foundation
+import KnotKit
 import Observation
 import SwiftUI
-import KnotKit
 
 struct EditorAttachment: Sendable, Equatable {
     let token: String
     let filename: String
     let data: Data
+    var mediaType: String = "image/png"
 }
 
-@MainActor
-@Observable
+@MainActor @Observable
 final class EditorModel {
-
-    // MARK: - State the views observe
-
-    var content: String = ""
-    var manualMode: NoteMode? = nil
+    var content = "" {
+        didSet {
+            guard !suppressCheckpoint, content != oldValue else { return }
+            if let next = try? draftRevision.next() { draftRevision = next }
+            scheduleCheckpoint()
+        }
+    }
+    var manualMode: NoteMode?
     var status: Status = .idle
-    var settings: AppSettings = AppSettings.load()
-    var vaultName: String? = nil
-    var vaultUnavailableName: String? = nil
-    var onboardingRequired: Bool = false
-    private(set) var hasVault: Bool = false
-    var lastImport: VaultImportResult? = nil
+    var settings = AppSettings()
+    var vaultName: String?
+    var vaultUnavailableName: String?
+    var onboardingRequired = true
+    private(set) var hasVault = false
+    private(set) var onboardingSession: OnboardingSession?
+    var pendingCount = 0
+    private(set) var storageAvailable = false
+    private(set) var configurationDiff: ConfigDiff?
 
     enum Status: Equatable {
-        case idle
-        case sending
-        case sent
+        case idle, checkpointing, sent
+        case locallySaved(CaptureID)
+        case sending(CaptureID?)
+        case saved(VaultRelativePath)
+        case retryable(CaptureID, String)
+        case needsReview(CaptureID, String)
         case error(String)
     }
 
-    enum VaultImportResult: Equatable {
-        case imported(ImportedVaultConfig, previous: AppSettings)
-        case noConfigFound
-    }
-
-    // MARK: - Dependencies
-
     private let vaultStore: VaultStore
-    private let queue: Queue?
     private let defaults: UserDefaults
+    private let supportDirectoryOverride: URL?
     private let onboardingCompletedKey = "knot.onboarding.completed"
+    var store: CaptureStore?
+    var supportDirectory: URL?
+    var profile: VaultProfileRecord?
+    var gateway: VaultGateway?
+    var assetStager: AssetStager?
+    var draftID = DraftID()
+    var draftRevision = Revision.zero
+    private var checkpointTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    var suppressCheckpoint = false
+    private var sessionGeneration = 0
 
-    // MARK: - Init
-
-    init(vaultStore: VaultStore = VaultStore(), defaults: UserDefaults = .standard) {
+    init(vaultStore: VaultStore = VaultStore(), defaults: UserDefaults = .standard, supportDirectory: URL? = nil) {
         self.vaultStore = vaultStore
         self.defaults = defaults
-        // Persist any failed writes inside the app's Application Support
-        // folder so they survive relaunches.
-        let queueDir = (try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appending(path: "Knot", directoryHint: .isDirectory)) ?? FileManager.default.temporaryDirectory
-        self.queue = try? Queue(directory: queueDir)
-        refreshVaultStatus()
-        seedOnboardingState()
+        self.supportDirectoryOverride = supportDirectory
+        settings = AppSettings.load(from: defaults)
+        vaultName = vaultStore.vaultName
+        Task { await bootstrap() }
     }
 
-    // MARK: - Derived
+    var documentRevision: Revision { draftRevision }
+    var settingsRevision: Revision? { profile?.settingsRevision }
 
     var resolvedMode: NoteMode {
-        manualMode ?? RoutingPolicy(settings: settings).decide(for: content)
+        let value = (try? settings.validated()) ?? (try! ValidatedSettings())
+        return manualMode ?? RoutingPolicy(settings: value).decide(for: content)
     }
-
     var canSend: Bool {
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        hasVault &&
-        (status != .sending)
+        content.unicodeScalars.contains { !$0.properties.isWhitespace } &&
+            profile != nil && storageAvailable && !isSending
     }
+    var shouldShowOnboarding: Bool { onboardingRequired || profile == nil }
+    private var isSending: Bool { if case .sending = status { true } else { false } }
 
-    var shouldShowOnboarding: Bool {
-        onboardingRequired || !hasVault
-    }
-
-    // MARK: - Vault
-
-    func refreshVaultStatus() {
-        let hadBookmark = vaultStore.hasBookmark
+    func bootstrap() async {
         do {
-            let resolved = try vaultStore.resolveAccessibleVault()
-            hasVault = resolved != nil
-            vaultUnavailableName = resolved == nil && hadBookmark ? vaultStore.vaultName : nil
+            let directoryOverride = supportDirectoryOverride
+            let pair = try await Task.detached(priority: .userInitiated) { () -> (URL, CaptureStore) in
+                let directory = try directoryOverride ?? CaptureStore.applicationSupportDirectory()
+                return (directory, try CaptureStore(directory: directory))
+            }.value
+            supportDirectory = pair.0
+            store = pair.1
+            assetStager = AssetStager(rootDirectory: pair.0, store: pair.1)
+            storageAvailable = true
+            try await migrateLegacyStateIfNeeded(store: pair.1, support: pair.0)
+            try await restoreState(store: pair.1)
         } catch {
-            hasVault = false
-            vaultUnavailableName = hadBookmark ? vaultStore.vaultName : nil
-        }
-        vaultName = vaultStore.vaultName
-        if vaultUnavailableName != nil {
+            storageAvailable = false
             onboardingRequired = true
-        }
-    }
-
-    @discardableResult
-    func setVault(url: URL) throws -> VaultImportResult {
-        try vaultStore.saveBookmark(from: url)
-
-        let imported = ObsidianConfigImporter.readVaultConfig(vaultURL: url)
-        guard imported.daily != nil || imported.attachment != nil else {
-            refreshVaultStatus()
-            return .noConfigFound
-        }
-
-        let previous = settings
-        var merged = settings
-        if let daily = imported.daily {
-            merged.dailyFolder = daily.folder
-            merged.dailyFilenameFormat = daily.filenameFormat
-        }
-        if let attachment = imported.attachment {
-            merged.attachmentFolderPath = attachment.attachmentFolderPath
-        }
-
-        guard merged != previous else {
-            refreshVaultStatus()
-            return .noConfigFound
-        }
-
-        updateSettings(merged)
-        let result: VaultImportResult = .imported(imported, previous: previous)
-        lastImport = result
-        refreshVaultStatus()
-        return result
-    }
-
-    func resolveVaultURL() throws -> URL? {
-        try vaultStore.resolveAccessibleVault()
-    }
-
-    func undoLastImport() {
-        if case .imported(_, let previous) = lastImport {
-            updateSettings(previous)
-        }
-        lastImport = nil
-    }
-
-    func dismissLastImport() {
-        lastImport = nil
-    }
-
-    func clearVault() {
-        vaultStore.clear()
-        lastImport = nil
-        defaults.removeObject(forKey: onboardingCompletedKey)
-        onboardingRequired = true
-        refreshVaultStatus()
-    }
-
-    // MARK: - Send
-
-    func send() {
-        guard canSend else { return }
-        let note = Note(
-            content: content,
-            mode: resolvedMode,
-            createdAt: Date()
-        )
-        let savedSettings = settings
-
-        // Resolve the bookmark on the main actor up-front; the actual write
-        // happens off the main thread so file coordination doesn't block UI.
-        let url: URL
-        do {
-            guard let resolved = try vaultStore.resolveAccessibleVault() else {
-                refreshVaultStatus()
-                status = .error(VaultError.noVaultConfigured.localizedDescription)
-                return
-            }
-            url = resolved
-        } catch {
             status = .error(error.localizedDescription)
-            return
         }
+    }
 
-        status = .sending
-        let savedQueue = queue
-
-        Task.detached { [weak self] in
-            do {
-                let vault = Vault(url: url, settings: savedSettings)
-                _ = try vault.write(note: note)
-                await self?.handleWriteSucceeded()
-            } catch {
-                try? savedQueue?.enqueue(note)
-                await self?.handleWriteFailed(message: error.localizedDescription)
+    private func migrateLegacyStateIfNeeded(store: CaptureStore, support: URL) async throws {
+        if let raw = defaults.data(forKey: AppSettings.userDefaultsKey) {
+            let report = try LegacySettingsMigrator(applicationSupportDirectory: support).migrate(rawData: raw)
+            settings = AppSettings(validated: report.settings)
+        }
+        if try await store.activeProfile() == nil,
+           try await store.latestOnboardingSession() == nil,
+           let bookmark = vaultStore.bookmarkData {
+            let defaultSettings = try ValidatedSettings()
+            let value = (try? settings.validated()) ?? defaultSettings
+            if defaults.object(forKey: onboardingCompletedKey) as? Bool == true {
+                _ = try await store.createProfile(
+                    displayName: vaultStore.vaultName ?? "Vault",
+                    bookmark: bookmark,
+                    settings: value,
+                    onboardingState: "complete"
+                )
+            } else {
+                let session = try OnboardingSession(
+                    step: .vault,
+                    workingSettings: value,
+                    proposedBookmark: bookmark
+                )
+                try await store.saveOnboardingSession(session)
             }
         }
+        let legacyQueue = support.appending(path: "knot-queue.jsonl")
+        if FileManager.default.fileExists(atPath: legacyQueue.path) {
+            _ = try await LegacyQueueMigrator(store: store, applicationSupportDirectory: support)
+                .migrate(queueURL: legacyQueue)
+        }
+    }
+
+    private func restoreState(store: CaptureStore) async throws {
+        profile = try await store.activeProfile()
+        onboardingSession = try await store.latestOnboardingSession()
+        onboardingRequired = profile == nil
+        if let profile {
+            settings = AppSettings(validated: profile.settings)
+            vaultName = profile.displayName
+            configureGateway(profile, store: store)
+            if let draft = try await store.latestDraft(profileID: profile.id) {
+                suppressCheckpoint = true
+                draftID = draft.id
+                draftRevision = draft.revision
+                content = String(data: draft.markdown, encoding: .utf8) ?? ""
+                manualMode = Self.noteMode(for: draft.routingChoice)
+                suppressCheckpoint = false
+            }
+            await refreshVaultStatus()
+            await resumePendingWork()
+        } else if let session = onboardingSession {
+            sessionGeneration = session.generation
+            settings = AppSettings(validated: session.workingSettings)
+        }
+        pendingCount = try await store.pendingCaptures().count
+    }
+
+    private func configureGateway(_ profile: VaultProfileRecord, store: CaptureStore) {
+        guard let supportDirectory else { return }
+        gateway = VaultGateway(
+            store: store,
+            access: BookmarkVaultAccessProvider(
+                vaultID: profile.id,
+                bookmark: profile.bookmark,
+                didRefresh: { data in
+                    Task { try? await store.updateBookmark(profileID: profile.id, bookmark: data) }
+                }
+            ),
+            privateRoot: supportDirectory
+        )
+    }
+
+    func refreshVaultStatus() async {
+        guard let gateway else { hasVault = false; return }
+        let result = await gateway.inspect()
+        hasVault = result == .usable
+        vaultUnavailableName = hasVault ? nil : vaultName
+        if [.missing, .bookmarkDenied, .malformedBookmark].contains(result) { onboardingRequired = true }
+    }
+
+    func makeFolderBrowser() -> VaultBrowser? {
+        guard let session = onboardingSession, let bookmark = session.proposedBookmark else { return nil }
+        let vaultID = session.importDiff?.vaultID ?? session.profileID ?? VaultID()
+        let access = BookmarkVaultAccessProvider(vaultID: vaultID, bookmark: bookmark)
+        return VaultBrowser(provider: DescriptorFolderListingProvider(access: access), generation: session.generation)
+    }
+
+    func discoverDaily(settings: ValidatedSettings, explicitLargeFileAnalysis: Bool = false) async -> DailyDiscoveryResult? {
+        guard let session = onboardingSession, let bookmark = session.proposedBookmark else { return nil }
+        let vaultID = session.importDiff?.vaultID ?? session.profileID ?? VaultID()
+        return await DailyDiscovery.discover(
+            access: BookmarkVaultAccessProvider(vaultID: vaultID, bookmark: bookmark),
+            settings: settings,
+            explicitLargeFileAnalysis: explicitLargeFileAnalysis
+        )
+    }
+
+    func discoverDailyTemplate(explicitLargeFileAnalysis: Bool = false) async -> DailyDiscoveryResult? {
+        guard let session = onboardingSession, let bookmark = session.proposedBookmark,
+              let path = session.dailyTemplatePath else { return nil }
+        let vaultID = session.importDiff?.vaultID ?? session.profileID ?? VaultID()
+        return await DailyDiscovery.discover(
+            access: BookmarkVaultAccessProvider(vaultID: vaultID, bookmark: bookmark),
+            path: path, explicitLargeFileAnalysis: explicitLargeFileAnalysis
+        )
+    }
+
+    func discoverSampleDaily(_ url: URL) async throws -> [DiscoveredHeading] {
+        try await Task.detached(priority: .userInitiated) {
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let byteCount = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard byteCount <= DailyDocument.explicitSizeLimit else { throw DailyDocumentError.tooLarge }
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            return try DailyDocument(data: data, maximumBytes: DailyDocument.explicitSizeLimit).headings
+        }.value
+    }
+
+    func selectVault(_ url: URL) async throws {
+        guard let store else { throw CaptureStoreError.storageUnavailable("uninitialized") }
+        let bookmark = try vaultStore.saveBookmark(from: url)
+        sessionGeneration += 1
+        let vaultID = VaultID()
+        let imported = await ObsidianConfigurationReader.read(
+            access: BookmarkVaultAccessProvider(vaultID: vaultID, bookmark: bookmark)
+        )
+        let validatedSettings = try settings.validated()
+        let base = onboardingSession?.workingSettings ?? validatedSettings
+        let result = try? base.applying(imported: imported)
+        let adopted = result?.0 ?? base
+        let entries = result?.1.entries ?? []
+        let diff = entries.isEmpty ? nil : ConfigDiff(vaultID: vaultID, baseRevision: .zero, entries: entries)
+        let templatePath = imported.daily?.templatePath.flatMap {
+            try? VaultRelativePath($0, kind: .file)
+        }
+        let session = try OnboardingSession(
+            id: onboardingSession?.id ?? OnboardingSessionID(),
+            generation: sessionGeneration,
+            step: .inbox,
+            workingSettings: adopted,
+            proposedBookmark: bookmark,
+            importDiff: diff,
+            dailyTemplatePath: templatePath
+        )
+        try await store.saveOnboardingSession(session)
+        onboardingSession = session
+        settings = AppSettings(validated: adopted)
+        vaultName = url.lastPathComponent
+        hasVault = true
+        onboardingRequired = true
+    }
+
+    func persistOnboarding(_ session: OnboardingSession) async throws {
+        guard let store else { throw CaptureStoreError.storageUnavailable("uninitialized") }
+        guard session.generation == sessionGeneration else { throw ConfigurationError.staleResult }
+        try await store.saveOnboardingSession(session)
+        onboardingSession = session
+        settings = AppSettings(validated: session.workingSettings)
+    }
+
+    func completeOnboarding(session: OnboardingSession) async throws {
+        guard let store else { throw CaptureStoreError.storageUnavailable("uninitialized") }
+        var final = session
+        final.step = .summary
+        final.updatedAt = Date()
+        try await store.saveOnboardingSession(final)
+        let profileID = try await store.finishOnboarding(
+            sessionID: final.id,
+            profileID: final.profileID ?? VaultID(),
+            displayName: vaultName ?? "Vault"
+        )
+        guard let saved = try await store.profile(id: profileID) else { throw CaptureStoreError.profileMissing }
+        profile = saved
+        onboardingSession = nil
+        configurationDiff = final.importDiff
+        onboardingRequired = false
+        defaults.set(true, forKey: onboardingCompletedKey)
+        settings = AppSettings(validated: saved.settings)
+        configureGateway(saved, store: store)
+        await refreshVaultStatus()
+    }
+
+    func completeOnboarding() {
+        guard let session = onboardingSession else { return }
+        Task { try? await completeOnboarding(session: session) }
+    }
+    func resolveVaultURL() throws -> URL? { try vaultStore.resolveAccessibleVault() }
+    func clearVault() { Task { await resetConfiguration() } }
+    func send() {
+        let value = content
+        Task { await sendDocument(value, inbox: false, attachments: []) { _ in } }
     }
 
     func sendInboxMarkdown(
@@ -198,180 +301,303 @@ final class EditorModel {
         promotedContent: String?,
         completion: @escaping @MainActor @Sendable (Bool) -> Void
     ) {
-        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, hasVault, status != .sending else {
+        Task {
+            await sendDocument(markdown, inbox: true, attachments: attachments,
+                               promotedContent: promotedContent, completion: completion)
+        }
+    }
+
+    private func sendDocument(
+        _ markdown: String,
+        inbox: Bool,
+        attachments: [EditorAttachment],
+        promotedContent: String? = nil,
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) async {
+        guard let store, let profile, let gateway else {
+            status = .error("Complete vault setup before sending.")
             completion(false)
             return
         }
-
-        let note = Note(
-            content: trimmed,
-            mode: .inbox,
-            createdAt: Date()
-        )
-        let savedSettings = settings
-
-        let url: URL
+        let sourceDraft = draftID
+        let sourceRevision = draftRevision
         do {
-            guard let resolved = try vaultStore.resolveAccessibleVault() else {
-                refreshVaultStatus()
-                status = .error(VaultError.noVaultConfigured.localizedDescription)
-                completion(false)
-                return
-            }
-            url = resolved
-        } catch {
-            status = .error(error.localizedDescription)
-            completion(false)
-            return
-        }
-
-        status = .sending
-        let savedQueue = queue
-
-        Task.detached { [weak self] in
-            var queueNote = note
-            do {
-                let inbox = InboxWriter(vault: url, settings: savedSettings)
-                let planned = try inbox.makePlan(for: note)
-                let attachmentWriter = AttachmentWriter(vault: url, settings: savedSettings)
-                var body = planned.body
-
+            status = .checkpointing
+            try await checkpoint(store, markdown: markdown, id: sourceDraft, revision: sourceRevision, profileID: profile.id)
+            var durableMarkdown = markdown
+            var stagedIDs: [AssetID] = []
+            if !attachments.isEmpty {
+                guard let assetStager else { throw CaptureStoreError.storageUnavailable("stager") }
                 for attachment in attachments {
-                    let result = try attachmentWriter.write(AttachmentWriteRequest(
-                        filename: attachment.filename,
+                    let asset = try await assetStager.stage(
                         data: attachment.data,
-                        noteURL: planned.fileURL
-                    ))
-                    body = body.replacingOccurrences(
-                        of: attachment.token,
-                        with: result.markdownEmbed
+                        originalName: attachment.filename,
+                        declaredMediaType: attachment.mediaType,
+                        draftID: sourceDraft
+                    )
+                    stagedIDs.append(asset.id)
+                    durableMarkdown = durableMarkdown.replacingOccurrences(
+                        of: attachment.token, with: "knot-asset://\(asset.id.description)"
                     )
                 }
-
-                queueNote = Note(
-                    id: note.id,
-                    content: body,
-                    mode: .inbox,
-                    createdAt: note.createdAt
-                )
-                try inbox.write(InboxWritePlan(fileURL: planned.fileURL, body: body))
-                await self?.handleInboxWriteSucceeded(
-                    promotedContent: promotedContent,
-                    completion: completion
-                )
-            } catch {
-                try? savedQueue?.enqueue(queueNote)
-                await self?.handleWriteFailed(
-                    message: error.localizedDescription,
-                    completion: completion
-                )
+                try await checkpoint(store, markdown: durableMarkdown, id: sourceDraft,
+                                     revision: sourceRevision, profileID: profile.id)
             }
-        }
-    }
-
-    @MainActor
-    private func handleWriteSucceeded() {
-        content = ""
-        manualMode = nil
-        status = .sent
-        lastImport = nil
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1200))
-            if case .sent = self.status {
-                self.status = .idle
-            }
-        }
-    }
-
-    @MainActor
-    private func handleWriteFailed(message: String) {
-        status = .error(message)
-    }
-
-    @MainActor
-    private func handleInboxWriteSucceeded(
-        promotedContent: String?,
-        completion: @escaping @MainActor @Sendable (Bool) -> Void
-    ) {
-        if let promotedContent {
-            if content == promotedContent {
+            let date = Date()
+            let mode = inbox ? NoteMode.inbox : (manualMode ?? RoutingPolicy(settings: profile.settings).decide(for: durableMarkdown))
+            let prepared = try prepare(markdown: durableMarkdown, mode: mode, settings: profile.settings, date: date)
+            let snapshot = try CaptureSnapshot(
+                draftID: sourceDraft,
+                draftRevision: sourceRevision,
+                vaultID: profile.id,
+                settingsRevision: profile.settingsRevision,
+                settings: profile.settings,
+                createdAt: date,
+                timeZoneIdentifier: TimeZone.current.identifier,
+                localeIdentifier: Locale.current.identifier,
+                destination: prepared.destination,
+                document: try CaptureDocument(
+                    markdown: prepared.markdown,
+                    representation: attachments.isEmpty ? .markdown : .blocks,
+                    assetIDs: stagedIDs
+                ),
+                assetIDs: stagedIDs
+            )
+            let captureID = try await store.enqueue(snapshot)
+            pendingCount = try await store.pendingCaptures().count
+            status = .locallySaved(captureID)
+            status = .sending(captureID)
+            let receipt = try await gateway.commit(captureID: captureID)
+            pendingCount = try await store.pendingCaptures().count
+            if draftID == sourceDraft, draftRevision == sourceRevision,
+               promotedContent == nil || content == promotedContent {
+                suppressCheckpoint = true
                 content = ""
+                manualMode = nil
+                draftID = DraftID()
+                draftRevision = .zero
+                suppressCheckpoint = false
             }
-        } else {
-            content = ""
+            status = .saved(receipt.notePath)
+            completion(true)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                if let self, case .saved = self.status { self.status = .idle }
+            }
+        } catch {
+            let pending = (try? await store.pendingCaptures()) ?? []
+            pendingCount = pending.count
+            if let capture = pending.last, capture.state == .needsReview {
+                status = .needsReview(capture.snapshot.id, error.localizedDescription)
+            } else if let capture = pending.last {
+                status = .retryable(capture.snapshot.id, error.localizedDescription)
+            } else {
+                status = .error(error.localizedDescription)
+            }
+            scheduleRetryWorker()
+            completion(false)
         }
-        manualMode = nil
-        status = .sent
-        lastImport = nil
-        completion(true)
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1200))
-            if case .sent = self.status {
-                self.status = .idle
+    }
+
+    private func checkpoint(
+        _ store: CaptureStore, markdown: String, id: DraftID,
+        revision: Revision, profileID: VaultID?
+    ) async throws {
+        try await store.checkpointDraft(try DraftCheckpoint(
+            id: id,
+            profileID: profileID,
+            revision: revision,
+            markdown: Data(markdown.utf8),
+            routingChoice: Self.routingChoice(for: manualMode)
+        ))
+    }
+
+    func flushDraft() async {
+        checkpointTask?.cancel()
+        guard let store else { return }
+        do {
+            try await checkpoint(store, markdown: content, id: draftID,
+                                 revision: draftRevision, profileID: profile?.id)
+            if case .checkpointing = status { status = .idle }
+        } catch { status = .error(error.localizedDescription) }
+    }
+
+    private func scheduleCheckpoint() {
+        checkpointTask?.cancel()
+        status = .checkpointing
+        let id = draftID, revision = draftRevision, markdown = content, profileID = profile?.id
+        checkpointTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, let store = self.store else { return }
+            do {
+                try await self.checkpoint(store, markdown: markdown, id: id,
+                                          revision: revision, profileID: profileID)
+                if self.draftID == id, self.draftRevision == revision,
+                   case .checkpointing = self.status { self.status = .idle }
+            } catch { self.status = .error(error.localizedDescription) }
+        }
+    }
+
+    func retry(captureID: CaptureID) {
+        Task {
+            guard let gateway else { return }
+            do {
+                status = .sending(captureID)
+                status = .saved(try await gateway.commit(captureID: captureID).notePath)
+                pendingCount = (try? await store?.pendingCaptures().count) ?? pendingCount
+            } catch {
+                status = .retryable(captureID, error.localizedDescription)
+                scheduleRetryWorker()
             }
         }
     }
 
-    @MainActor
-    private func handleWriteFailed(
-        message: String,
-        completion: @escaping @MainActor @Sendable (Bool) -> Void
-    ) {
-        status = .error(message)
-        completion(false)
-    }
-
-    // MARK: - Settings
-
-    func updateSettings(_ newValue: AppSettings) {
-        settings = newValue
-        newValue.save()
-    }
-
-    func completeOnboarding() {
-        defaults.set(true, forKey: onboardingCompletedKey)
-        onboardingRequired = false
-        vaultUnavailableName = nil
-        refreshVaultStatus()
-    }
-
-    /// Wipes everything the model knows how to persist and resets in-memory
-    /// state to factory defaults: clears the vault bookmark, drops the saved
-    /// AppSettings JSON, and broadcasts `.knotSettingsReset` so platform code
-    /// can clean up the bits the model doesn't own (the global shortcut and
-    /// the detached-window state on macOS). Useful for re-running the
-    /// onboarding flow without manually editing UserDefaults.
-    func resetAllSettings() {
-        UserDefaults.standard.removeObject(forKey: AppSettings.userDefaultsKey)
-        defaults.removeObject(forKey: onboardingCompletedKey)
-        vaultStore.clear()
-        settings = AppSettings()
-        manualMode = nil
-        content = ""
-        status = .idle
-        lastImport = nil
-        onboardingRequired = true
-        refreshVaultStatus()
-        NotificationCenter.default.post(name: .knotSettingsReset, object: nil)
-    }
-
-    private func seedOnboardingState() {
-        if let completed = defaults.object(forKey: onboardingCompletedKey) as? Bool {
-            onboardingRequired = !completed || !hasVault
-        } else {
-            // Existing users upgrading with a reachable vault should keep the
-            // editor-first behavior they already had.
-            onboardingRequired = !hasVault
+    func resumePendingWork() async {
+        guard let store, let gateway, let profile else { return }
+        let captures = (try? await store.pendingCaptures(profileID: profile.id)) ?? []
+        pendingCount = captures.count
+        let now = Date()
+        for capture in captures {
+            if let next = capture.nextAttemptAt, next > now { continue }
+            do {
+                let receipt = capture.state == .committing || capture.state == .needsReview
+                    ? try await gateway.reconcile(captureID: capture.snapshot.id)
+                    : try await gateway.commit(captureID: capture.snapshot.id)
+                status = .saved(receipt.notePath)
+            } catch {
+                if let current = try? await store.capture(id: capture.snapshot.id), current.state == .needsReview {
+                    status = .needsReview(capture.snapshot.id, error.localizedDescription)
+                    break
+                }
+            }
         }
-        if vaultUnavailableName != nil {
+        pendingCount = (try? await store.pendingCaptures().count) ?? pendingCount
+        scheduleRetryWorker()
+    }
+
+    func scheduleRetryWorker() {
+        retryTask?.cancel()
+        guard let store, let profile else { return }
+        retryTask = Task { [weak self] in
+            let captures = (try? await store.pendingCaptures(profileID: profile.id)) ?? []
+            guard let deadline = captures.compactMap(\.nextAttemptAt).min() else { return }
+            let delay = max(0, deadline.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, self.profile?.id == profile.id else { return }
+            await self.resumePendingWork()
+        }
+    }
+
+    func updateSettings(_ value: AppSettings) { Task { try? await applySettings(value) } }
+    func applySettings(_ value: AppSettings, expectedRevision: Revision? = nil) async throws {
+        guard let store, let profile else { throw CaptureStoreError.profileMissing }
+        let validated = try value.validated()
+        let revision = try await store.applySettings(
+            profileID: profile.id, expectedRevision: expectedRevision ?? profile.settingsRevision, settings: validated
+        )
+        self.profile = VaultProfileRecord(
+            id: profile.id, displayName: profile.displayName, bookmark: profile.bookmark,
+            resourceIdentity: profile.resourceIdentity, settingsRevision: revision,
+            settings: validated, onboardingState: profile.onboardingState
+        )
+        settings = value
+    }
+    func reimportConfiguration() async throws {
+        guard let store, let profile else { throw CaptureStoreError.profileMissing }
+        let imported = await ObsidianConfigurationReader.read(
+            access: BookmarkVaultAccessProvider(vaultID: profile.id, bookmark: profile.bookmark)
+        )
+        let result = try profile.settings.applying(imported: imported)
+        guard !result.1.entries.isEmpty else { configurationDiff = nil; return }
+        let diff = ConfigDiff(vaultID: profile.id, baseRevision: profile.settingsRevision, entries: result.1.entries)
+        try await applySettings(AppSettings(validated: result.0))
+        configurationDiff = diff
+        _ = store
+    }
+
+    func undoConfigurationImport() async throws {
+        guard let diff = configurationDiff, let profile, diff.vaultID == profile.id else { return }
+        let restored = try profile.settings.undoing(diff)
+        try await applySettings(AppSettings(validated: restored))
+        configurationDiff = nil
+    }
+
+    func resetAllSettings() { Task { await resetConfiguration() } }
+
+    private func resetConfiguration() async {
+        retryTask?.cancel()
+        await flushDraft()
+        guard let store else { return }
+        do {
+            sessionGeneration += 1
+            let session = try await store.resetConfiguration(profileID: profile?.id, defaults: ValidatedSettings())
+            profile = nil
+            gateway = nil
+            onboardingSession = session
             onboardingRequired = true
+            hasVault = false
+            vaultUnavailableName = nil
+            vaultName = nil
+            vaultStore.clear()
+            defaults.removeObject(forKey: onboardingCompletedKey)
+            settings = AppSettings(validated: session.workingSettings)
+            NotificationCenter.default.post(name: .knotSettingsReset, object: nil)
+        } catch { status = .error(error.localizedDescription) }
+    }
+
+    func eraseLocalDrafts() async throws -> Int {
+        checkpointTask?.cancel()
+        guard let store else { throw CaptureStoreError.storageUnavailable("uninitialized") }
+        let erased = try await store.eraseLocalDrafts()
+        suppressCheckpoint = true
+        content = ""
+        manualMode = nil
+        draftID = DraftID()
+        draftRevision = .zero
+        suppressCheckpoint = false
+        try await checkpoint(store, markdown: "", id: draftID, revision: .zero, profileID: profile?.id)
+        status = .idle
+        return erased
+    }
+
+    func prepare(
+        markdown: String, mode: NoteMode, settings: ValidatedSettings, date: Date
+    ) throws -> (markdown: String, destination: ResolvedDestination) {
+        let zone = TimeZone.current, locale = Locale.current
+        switch mode {
+        case .daily:
+            let rendered = settings.compiledDailyPattern.render(date: date, locale: locale, timeZone: zone)
+            let path = try joinedFilePath(parent: settings.dailyFolder, formatted: rendered)
+            return (markdown, .today(notePath: path, target: settings.dailyTarget))
+        case .inbox:
+            let rendered = settings.compiledInboxPattern.render(date: date, locale: locale, timeZone: zone)
+            let path = try VaultRelativePath(rendered, kind: .file)
+            let extracted = TitleExtractor.extract(from: markdown)
+            let parent = try VaultRelativePath(
+                components: settings.inboxFolder.components + path.parent.components, kind: .folder
+            )
+            return (extracted?.strippedBody ?? markdown,
+                    .inbox(parent: parent, filenameStem: extracted?.filename ?? path.lastComponent ?? "Untitled"))
         }
+    }
+
+    private func joinedFilePath(parent: VaultRelativePath, formatted: String) throws -> VaultRelativePath {
+        let path = try VaultRelativePath(formatted, kind: .file)
+        guard let leaf = path.lastComponent else { throw PathValidationError.emptyFilename }
+        return try VaultRelativePath(
+            components: parent.components + path.parent.components + [leaf.hasSuffix(".md") ? leaf : leaf + ".md"],
+            kind: .file
+        )
+    }
+
+    private static func routingChoice(for mode: NoteMode?) -> RoutingChoice {
+        switch mode { case nil: .automatic; case .daily: .today; case .inbox: .inbox }
+    }
+    private static func noteMode(for choice: RoutingChoice) -> NoteMode? {
+        switch choice { case .automatic: nil; case .today: .daily; case .inbox: .inbox }
     }
 }
 
 extension Notification.Name {
-    /// Broadcast by `EditorModel.resetAllSettings()`. Platforms observe it
-    /// to clear their own UserDefaults keys.
     static let knotSettingsReset = Notification.Name("knot.settingsReset")
 }

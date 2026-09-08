@@ -1,77 +1,66 @@
-import SwiftUI
 import KnotKit
+import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
-/// The entire app's primary surface: textarea + mode toggle + send button.
-/// Designed to look the same on macOS and iOS — only the surrounding chrome
-/// differs.
 struct EditorView: View {
     @Bindable var model: EditorModel
-    var openBlockEditor: (() -> Void)? = nil
+    var openBlockEditor: (() -> Void)?
+    var detachQuickSurface: (() -> Void)?
     #if os(macOS)
-    // ChromelessTextEditor reports focus back via a Binding<Bool>, so
-    // we use plain @State here. iOS keeps SwiftUI's @FocusState because
-    // it drives keyboard avoidance and other UIKit niceties.
-    @State private var editorFocused: Bool = false
+    @State private var editorFocused = false
     #else
     @FocusState private var editorFocused: Bool
     #endif
 
     var body: some View {
         VStack(spacing: 12) {
-            VaultImportBanner(model: model)
-                .animation(.easeInOut(duration: 0.18), value: model.lastImport)
-
+            #if os(macOS)
+            if let detachQuickSurface {
+                QuickSurfaceDetachHandle(onDetach: detachQuickSurface)
+            }
+            #endif
             editor
-
             HStack(spacing: 12) {
                 ModeToggle(manualMode: $model.manualMode, resolvedMode: model.resolvedMode)
-                Spacer()
-                statusPill
+                Spacer(minLength: 8)
+                statusView.frame(maxWidth: 180, alignment: .trailing)
                 #if os(macOS)
+                Button(action: clearUsingTextSystem) {
+                    Image(systemName: "eraser").frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .help("Clear draft")
+                .accessibilityLabel("Clear draft")
                 if let openBlockEditor {
-                    blockEditorButton(openBlockEditor)
+                    Button(action: openBlockEditor) {
+                        Image(systemName: "square.and.pencil").frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open rich editor")
+                    .accessibilityLabel("Open rich editor")
                 }
                 #endif
                 sendButton
             }
+            .frame(minHeight: 32)
         }
         .padding(Theme.editorPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         #if !os(macOS)
-        .onAppear {
-            editorFocused = true
-        }
+        .onAppear { editorFocused = true }
         #endif
-        // Cmd/Ctrl+Enter to send. Esc clears.
-        .onSubmit { model.send() }
-        .background {
-            // Hidden buttons just to wire keyboard shortcuts.
-            VStack {
-                Button(action: model.send) { EmptyView() }
-                    .keyboardShortcut(.return, modifiers: [.command])
-                    .opacity(0).frame(width: 0, height: 0)
-                #if os(macOS)
-                Button(action: model.send) { EmptyView() }
-                    .keyboardShortcut(.return, modifiers: [.control])
-                    .opacity(0).frame(width: 0, height: 0)
-                #endif
-                Button(action: { model.content = "" }) { EmptyView() }
-                    .keyboardShortcut(.escape, modifiers: [])
-                    .opacity(0).frame(width: 0, height: 0)
-            }
-        }
     }
 
-    // MARK: - Subviews
-
-    @ViewBuilder
-    private var editor: some View {
-        // Locked-in design: minimal empty voice — no placeholder copy. The
-        // textarea sits on a soft surface, picks up an accent ring on focus.
+    @ViewBuilder private var editor: some View {
         Group {
             #if os(macOS)
             ChromelessTextEditor(
                 text: $model.content,
+                revision: model.documentRevision,
+                onSend: model.send,
+                onEscape: { NotificationCenter.default.post(name: .knotHideQuickSurface, object: nil) },
                 isFocused: $editorFocused,
                 font: .systemFont(ofSize: 16)
             )
@@ -81,96 +70,117 @@ struct EditorView: View {
                 .font(.system(size: 16))
                 .scrollContentBackground(.hidden)
                 .padding(8)
+                .scrollDismissesKeyboard(.interactively)
             #endif
         }
         .background(
-            RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: min(Theme.cornerRadius, 8), style: .continuous)
                 .fill(.background.secondary)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous)
-                .stroke(
-                    editorFocused
-                        ? Color.accentColor.opacity(0.55)
-                        : Color.primary.opacity(0.08),
-                    lineWidth: editorFocused ? 1.5 : 0.5
-                )
+            RoundedRectangle(cornerRadius: min(Theme.cornerRadius, 8), style: .continuous)
+                .stroke(editorFocused ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08),
+                        lineWidth: editorFocused ? 1.5 : 0.5)
         )
-        .frame(minHeight: Theme.editorMinHeight)
-        .animation(.easeOut(duration: 0.18), value: editorFocused)
+        .frame(minHeight: max(140, Theme.editorMinHeight))
     }
 
-    @ViewBuilder
-    private var statusPill: some View {
+    @ViewBuilder private var statusView: some View {
         switch model.status {
         case .idle:
-            EmptyView()
+            if model.pendingCount > 0 {
+                Label("\(model.pendingCount) pending", systemImage: "clock")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .checkpointing:
+            Label("Saving draft", systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption).foregroundStyle(.secondary)
+        case .locallySaved:
+            Label("Pending", systemImage: "internaldrive")
+                .font(.caption).foregroundStyle(.secondary)
         case .sending:
-            ProgressView().controlSize(.small)
-        case .sent:
-            // Locked-in feedback: green check + "Saved" label, fades in
-            // and out alongside the sent state in the editor model.
-            Label("Saved", systemImage: "checkmark.circle.fill")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color(red: 0.396, green: 0.690, blue: 0.478))
-                .transition(.opacity)
+            ProgressView().controlSize(.small).accessibilityLabel("Saving to vault")
+        case .sent, .saved:
+            Label("Saved to vault", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium)).foregroundStyle(.green)
+        case .retryable(let captureID, let message):
+            HStack(spacing: 5) {
+                Label(message, systemImage: "arrow.clockwise.circle").lineLimit(2)
+                Button { model.retry(captureID: captureID) } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).help("Retry")
+            }
+            .font(.caption).foregroundStyle(.orange)
+        case .needsReview(_, let message):
+            Label(message, systemImage: "exclamationmark.magnifyingglass")
+                .font(.caption).foregroundStyle(.orange).lineLimit(2).help(message)
         case .error(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color(red: 0.851, green: 0.416, blue: 0.416))
-                .lineLimit(1)
-                .help(message)
+                .font(.caption).foregroundStyle(.red).lineLimit(2).help(message)
         }
     }
 
     private var sendButton: some View {
-        // Two visible states. The arrow stays the same shape across both
-        // so the affordance is recognisable at a glance — only the fill
-        // and the arrow colour soften when there's nothing to send.
-        let enabled = model.canSend
-        return Button(action: model.send) {
+        Button(action: model.send) {
             ZStack {
-                Circle()
-                    .fill(
-                        enabled
-                            ? AnyShapeStyle(Color.accentColor)
-                            : AnyShapeStyle(Color.primary.opacity(0.16))
-                    )
+                Circle().fill(model.canSend ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.secondary.opacity(0.18)))
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(
-                        enabled
-                            ? Color(red: 0.114, green: 0.114, blue: 0.122)
-                            : Color.secondary
-                    )
+                    .foregroundStyle(model.canSend ? Color.primary : Color.secondary)
             }
             .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
-        .keyboardShortcut(.defaultAction)
-        .scaleEffect(sendPressed ? 0.94 : 1.0)
-        .animation(.easeOut(duration: 0.08), value: sendPressed)
-        .animation(.easeOut(duration: 0.18), value: enabled)
+        .disabled(!model.canSend)
+        .scaleEffect(sendPressed ? 0.94 : 1)
         .accessibilityLabel("Send")
+        .accessibilityValue(model.resolvedMode == .daily ? "Today" : "Inbox")
+    }
+
+    private var sendPressed: Bool {
+        if case .sending = model.status { return true }
+        return false
     }
 
     #if os(macOS)
-    private func blockEditorButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: "square.and.pencil")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .frame(width: 30, height: 30)
-                .contentShape(Circle())
+    private func clearUsingTextSystem() {
+        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+        DispatchQueue.main.async {
+            NSApp.sendAction(#selector(NSText.deleteBackward(_:)), to: nil, from: nil)
         }
-        .buttonStyle(.plain)
-        .help("Open block editor")
-        .accessibilityLabel("Open block editor")
     }
     #endif
 }
 
-extension EditorView {
-    fileprivate var sendPressed: Bool { model.status == .sending }
+#if os(macOS)
+private struct QuickSurfaceDetachHandle: View {
+    let onDetach: () -> Void
+    @State private var dragTriggered = false
+
+    var body: some View {
+        Button(action: onDetach) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { _ in
+                    guard !dragTriggered else { return }
+                    dragTriggered = true
+                    onDetach()
+                }
+                .onEnded { _ in dragTriggered = false }
+        )
+        .help("Detach window")
+        .accessibilityLabel("Detach window")
+        .accessibilityHint("Click or drag to detach the quick capture surface")
+    }
 }
+
+extension Notification.Name {
+    static let knotHideQuickSurface = Notification.Name("knot.hideQuickSurface")
+}
+#endif

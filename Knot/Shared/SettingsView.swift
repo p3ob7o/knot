@@ -1,233 +1,262 @@
-import SwiftUI
 import KnotKit
+import SwiftUI
 
-/// Reveals the configurable knobs: vault folder, paths, daily-note format,
-/// and routing thresholds. Live-binds to the model's settings so changes
-/// take effect immediately.
 struct SettingsView: View {
     @Bindable var model: EditorModel
+    @State private var working = AppSettings()
+    @State private var base = AppSettings()
+    @State private var baseRevision: Revision?
     @State private var pickerPresented = false
-    @State private var pickerError: String?
+    @State private var errorMessage: String?
+    @State private var applying = false
     @State private var resetConfirmation = false
+    @State private var eraseConfirmation = false
+    @State private var localDataMessage: String?
     #if os(macOS)
-    @State private var shortcut: Shortcut = ShortcutStore.load()
+    @State private var shortcut = ShortcutStore.load()
+    @State private var baseShortcut = ShortcutStore.load()
     @State private var hotkeyError: String?
+    @State private var legacyBareApproved = false
+    @State private var baseLegacyBareApproved = false
     #endif
 
     var body: some View {
-        Form {
-            if case .imported = model.lastImport {
-                Section {
-                    VaultImportBanner(model: model)
-                }
-                .listRowBackground(Color.clear)
+        VStack(spacing: 0) {
+            Form {
+                vaultSection
+                #if os(macOS)
+                shortcutSection
+                #endif
+                dailySection
+                inboxSection
+                attachmentSection
+                routingSection
+                localDataSection
             }
+            .formStyle(.grouped)
+            Divider()
+            footer
+        }
+        .frame(minWidth: 520, minHeight: 480)
+        .navigationTitle("Settings")
+        .onAppear { reload() }
+        .folderPicker(isPresented: $pickerPresented) { url in
+            Task {
+                do { try await model.selectVault(url) }
+                catch { errorMessage = error.localizedDescription }
+            }
+        }
+        .alert("Reset configuration?", isPresented: $resetConfirmation) {
+            Button("Reset", role: .destructive) { model.resetAllSettings() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Drafts and pending captures remain in local recovery. Vault files are not deleted.")
+        }
+        .alert("Erase local drafts?", isPresented: $eraseConfirmation) {
+            Button("Erase Drafts", role: .destructive) { Task { await eraseDrafts() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This erases active and parked local drafts. Pending captures and every vault file remain unchanged.")
+        }
+    }
 
-            Section("Vault") {
-                HStack {
-                    Image(systemName: "folder")
-                    Text(model.vaultName ?? "No vault selected")
-                        .font(.body.weight(.medium))
-                    Spacer()
-                    Button("Change…") { pickerPresented = true }
-                }
-                if let pickerError {
-                    Text(pickerError)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                }
-                Button(role: .destructive) {
-                    model.clearVault()
-                } label: {
-                    Text("Disconnect vault")
+    private var vaultSection: some View {
+        Section("Vault") {
+            LabeledContent("Connected") {
+                Label(model.vaultName ?? "None", systemImage: model.hasVault ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.exclamationmark")
+            }
+            HStack {
+                Button("Change", systemImage: "folder") { pickerPresented = true }
+                Button("Reimport", systemImage: "arrow.clockwise") {
+                    Task { await reimport() }
                 }
                 .disabled(!model.hasVault)
             }
+            if let count = model.configurationDiff?.entries.count, count > 0 {
+                HStack {
+                    Label("\(count) imported values", systemImage: "arrow.down.doc")
+                    Spacer()
+                    Button("Undo Import") { Task { await undoImport() } }
+                }
+            }
+        }
+    }
 
-            #if os(macOS)
-            Section {
-                ShortcutPickerView(shortcut: $shortcut)
-                    .onChange(of: shortcut) { _, newValue in
-                        ShortcutStore.save(newValue)
-                        NotificationCenter.default.post(name: .knotShortcutChanged, object: nil)
-                    }
-                if let hotkeyError {
-                    Label(hotkeyError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                }
-            } header: {
-                Text("Toggle Knot")
-            } footer: {
-                Text("Click the field, then press any single character with any combination of ⌃⌥⇧⌘. Backspace clears; Esc cancels.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    #if os(macOS)
+    private var shortcutSection: some View {
+        Section("Global Shortcut") {
+            ShortcutPickerView(shortcut: $shortcut)
+            if let shortcut, shortcut.isLegacyBare {
+                Toggle("Enable imported bare key", isOn: $legacyBareApproved)
+                Label("A bare shortcut can intercept normal typing. Confirm it here before Knot enables it.", systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .knotHotkeyStatusChanged)) { _ in
-                hotkeyError = HotkeyManager.shared.lastRegistrationError
+            if let hotkeyError {
+                Label(hotkeyError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange)
             }
-            .task {
-                hotkeyError = HotkeyManager.shared.lastRegistrationError
-            }
-            #endif
+        }
+    }
+    #endif
 
-            Section("Folders") {
-                LabeledContent("Daily folder") {
-                    settingsField(
-                        TextField("Daily", text: settingsBinding(\.dailyFolder))
-                    )
-                }
-                LabeledContent("Inbox folder") {
-                    settingsField(
-                        TextField("Inbox", text: settingsBinding(\.inboxFolder))
-                    )
-                }
+    private var dailySection: some View {
+        Section("Daily Note") {
+            LabeledContent("Folder") { field(TextField("Daily", text: $working.dailyFolder)) }
+            LabeledContent("Filename") { field(TextField("YYYY-MM-DD", text: $working.dailyFilenameFormat)) }
+            LabeledContent("Heading") { field(TextField("## Quick notes", text: $working.dailyHeading)) }
+            LabeledContent("Bullet") { field(TextField("- {{HH:mm}} {{content}}", text: $working.dailyBulletFormat)) }
+            LabeledContent("Preview") {
+                Text(dailyPreview).font(.caption.monospaced()).textSelection(.enabled)
             }
+        }
+    }
 
-            Section {
-                LabeledContent("Filename pattern") {
-                    settingsField(
-                        TextField("YYYY-MM-DD", text: settingsBinding(\.dailyFilenameFormat))
-                    )
-                }
-                LabeledContent("Heading") {
-                    settingsField(
-                        TextField("## Quick notes", text: settingsBinding(\.dailyHeading))
-                    )
-                }
-                LabeledContent("Bullet format") {
-                    settingsField(
-                        TextField("- {{HH:mm}} {{content}}", text: settingsBinding(\.dailyBulletFormat))
-                    )
-                }
-            } header: {
-                Text("Daily note")
-            } footer: {
-                formatHelp
+    private var inboxSection: some View {
+        Section("Inbox") {
+            LabeledContent("Folder") { field(TextField("Inbox", text: $working.inboxFolder)) }
+            LabeledContent("Filename") { field(TextField("YYYY-MM-DD HHmm", text: $working.inboxFilenameFormat)) }
+        }
+    }
+
+    private var attachmentSection: some View {
+        Section("Attachments") {
+            LabeledContent("Destination") { field(TextField("Vault root", text: $working.attachmentFolderPath)) }
+        }
+    }
+
+    private var routingSection: some View {
+        Section("Automatic Routing") {
+            LabeledContent("Daily limit") {
+                TextField("280", value: $working.routingMaxChars, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 90)
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
             }
+            Toggle("Multiline captures go to Inbox", isOn: $working.routingRequiresSingleLine)
+        }
+    }
 
-            Section {
-                LabeledContent("Filename") {
-                    settingsField(
-                        TextField("YYYY-MM-DD HHmm", text: settingsBinding(\.inboxFilenameFormat))
-                    )
-                }
-            } header: {
-                Text("Inbox")
-            } footer: {
-                Text("Slashes create subfolders. Wrap literal text in [brackets] — e.g. [Notes]/YYYY-MM-DD produces Notes/2026-04-25. The Inbox folder above is already literal, so prefer putting fixed parent names there.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    private var localDataSection: some View {
+        Group {
+            Section("Local Data") {
+            Button("Erase Local Drafts", systemImage: "trash", role: .destructive) {
+                eraseConfirmation = true
             }
-
-            Section {
-                LabeledContent("Path") {
-                    settingsField(
-                        TextField("Vault root", text: settingsBinding(\.attachmentFolderPath))
-                    )
-                }
-            } header: {
-                Text("Attachments")
-            } footer: {
-                Text("Uses Obsidian's attachment path semantics. Empty or / saves at the vault root; . saves beside the note; ./assets saves in a subfolder beside the note; any other path is vault-relative.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            if let localDataMessage {
+                Text(localDataMessage).font(.callout).foregroundStyle(.secondary)
             }
-
-            Section("Routing") {
-                LabeledContent("Max characters for daily") {
-                    TextField("280", value: settingsBinding(\.routingMaxChars), format: .number)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        #endif
-                }
-                Toggle(
-                    "Force inbox when note has multiple lines",
-                    isOn: settingsBinding(\.routingRequiresSingleLine)
-                )
-            }
-
-            Section {
-                Button(role: .destructive) {
+        }
+            Section("Configuration") {
+                Button("Reset Configuration", systemImage: "arrow.counterclockwise", role: .destructive) {
                     resetConfirmation = true
-                } label: {
-                    Label("Reset settings to defaults", systemImage: "arrow.counterclockwise")
-                        .frame(maxWidth: .infinity)
                 }
             }
         }
-        .formStyle(.grouped)
-        .navigationTitle("Settings")
-        .folderPicker(isPresented: $pickerPresented) { url in
-            do {
-                try model.setVault(url: url)
-            } catch {
-                pickerError = error.localizedDescription
+    }
+
+    private var footer: some View {
+        VStack(spacing: 8) {
+            if let errorMessage {
+                Text(errorMessage).font(.callout).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Button("Cancel") { reload() }.disabled(!isDirty || applying)
+                Spacer()
+                if applying { ProgressView().controlSize(.small) }
+                Button("Apply") { Task { await apply() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isDirty || applying)
             }
         }
-        .alert("Reset all settings?", isPresented: $resetConfirmation) {
-            Button("Reset", role: .destructive) {
-                model.resetAllSettings()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This forgets your vault, the global shortcut, and every preference on this page. You'll need to pick the vault folder again.")
-        }
+        .padding(16)
+    }
+
+    private func field<V: View>(_ value: V) -> some View {
+        value.textFieldStyle(.roundedBorder).frame(width: 260)
+    }
+
+    private var dailyPreview: String {
+        guard let pattern = try? CompiledDatePattern(working.dailyFilenameFormat) else { return "Invalid format" }
+        return ([working.dailyFolder, pattern.render(date: Date(), timeZone: .current) + ".md"]
+            .filter { !$0.isEmpty }).joined(separator: "/")
+    }
+
+    private var isDirty: Bool {
         #if os(macOS)
-        .onReceive(NotificationCenter.default.publisher(for: .knotSettingsReset)) { _ in
-            // The hotkey field reads from @State, so reload it explicitly
-            // when the platform layer has cleared the persisted shortcut.
-            shortcut = ShortcutStore.load()
-        }
+        working != base || shortcut != baseShortcut || legacyBareApproved != baseLegacyBareApproved
+        #else
+        working != base
         #endif
     }
 
-    private var formatHelp: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Filename and bullet patterns use Moment.js display format — the same conventions as Obsidian's Daily Notes.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("Slashes in the filename pattern create subfolders. Wrap literal text in [brackets] (otherwise letters like Q, k, and s are interpreted as date tokens). In the bullet, use {{...}} for date placeholders plus {{content}} for the note text.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Link(
-                "Open the Moment.js format reference",
-                destination: URL(string: "https://momentjs.com/docs/#/displaying/format/")!
-            )
-            .font(.caption)
-        }
+    private func reload() {
+        working = model.settings
+        base = model.settings
+        baseRevision = model.settingsRevision
+        errorMessage = nil
+        #if os(macOS)
+        shortcut = ShortcutStore.load()
+        baseShortcut = shortcut
+        legacyBareApproved = shortcut.map { ShortcutStore.isLegacyBareApproved($0) } ?? false
+        baseLegacyBareApproved = legacyBareApproved
+        hotkeyError = HotkeyManager.shared.lastRegistrationError
+        #endif
     }
 
-    /// Fixed width for the editable column. `LabeledContent` inside a
-    /// grouped Form silently expands flexible content (like a bare
-    /// `TextField`) back to fill the row, so we use a hard
-    /// `.frame(width:)` plus a leading `Spacer()` to right-align the
-    /// field and leave breathing room before the scroller.
-    private static let fieldWidth: CGFloat = 240
-
-    @ViewBuilder
-    private func settingsField<Field: View>(_ field: Field) -> some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            field
-                .labelsHidden()
-                .textFieldStyle(.roundedBorder)
-                .frame(width: Self.fieldWidth)
-        }
-    }
-
-    private func settingsBinding<T>(_ keyPath: WritableKeyPath<AppSettings, T>) -> Binding<T> {
-        Binding(
-            get: { model.settings[keyPath: keyPath] },
-            set: { newValue in
-                var updated = model.settings
-                updated[keyPath: keyPath] = newValue
-                model.updateSettings(updated)
-                model.lastImport = nil
+    private func apply() async {
+        applying = true
+        errorMessage = nil
+        do {
+            _ = try working.validated()
+            #if os(macOS)
+            if let shortcut, shortcut.isLegacyBare, !legacyBareApproved {
+                throw HotkeyRegistrationError.legacyApprovalRequired
             }
-        )
+            try HotkeyManager.shared.replace(
+                current: baseShortcut, with: shortcut, allowLegacyBare: legacyBareApproved
+            )
+            do {
+                try await model.applySettings(working, expectedRevision: baseRevision)
+            } catch {
+                try? HotkeyManager.shared.replace(
+                    current: shortcut, with: baseShortcut, allowLegacyBare: baseLegacyBareApproved
+                )
+                throw error
+            }
+            ShortcutStore.save(shortcut, approvingLegacyBare: legacyBareApproved)
+            baseShortcut = shortcut
+            baseLegacyBareApproved = legacyBareApproved
+            #else
+            try await model.applySettings(working, expectedRevision: baseRevision)
+            #endif
+            baseRevision = model.settingsRevision
+            base = working
+        } catch { errorMessage = error.localizedDescription }
+        applying = false
+    }
+
+    private func eraseDrafts() async {
+        do {
+            let count = try await model.eraseLocalDrafts()
+            localDataMessage = count == 1 ? "Erased 1 local draft." : "Erased \(count) local drafts."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reimport() async {
+        do {
+            try await model.reimportConfiguration()
+            reload()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func undoImport() async {
+        do {
+            try await model.undoConfigurationImport()
+            reload()
+        } catch { errorMessage = error.localizedDescription }
     }
 }

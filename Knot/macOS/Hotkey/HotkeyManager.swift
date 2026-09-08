@@ -1,129 +1,150 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Registers the user's chosen `Shortcut` as a system-wide hotkey using the
-/// Carbon `RegisterEventHotKey` API.
-///
-/// Carbon is chosen over `NSEvent.addGlobalMonitorForEvents` because Carbon
-/// hotkeys actually swallow the keystroke (so the underlying app never sees
-/// it) and because they accept arbitrary modifier combinations — including
-/// the four-modifier "Hyperkey" pattern that some users rely on.
+enum HotkeyRegistrationError: Error, LocalizedError {
+    case eventHandler(OSStatus)
+    case invalidShortcut
+    case legacyApprovalRequired
+    case conflict
+    case rejected(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .eventHandler(let status): "Knot could not install its hotkey handler (OSStatus \(status))."
+        case .invalidShortcut: "Use a character with Command, Control, or Option."
+        case .legacyApprovalRequired: "Confirm the imported bare key before enabling it."
+        case .conflict: "Another app already owns that shortcut."
+        case .rejected(let status): "macOS rejected the shortcut (OSStatus \(status))."
+        }
+    }
+}
+
 @MainActor
 final class HotkeyManager {
-
     static let shared = HotkeyManager()
-
-    /// `nil` when registration succeeded; otherwise a human-readable
-    /// description of the OSStatus value `RegisterEventHotKey` returned.
-    /// SettingsView observes `Notification.Name.knotHotkeyStatusChanged`
-    /// to surface this to the user.
     private(set) var lastRegistrationError: String?
+    private(set) var registeredShortcut: Shortcut?
 
     private var handler: (() -> Void)?
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
-
-    private static let signature: OSType = OSType(0x4B4E_4F54) // 'KNOT'
-    private static let id: UInt32 = 1
+    private var activeID: UInt32?
+    private var nextID: UInt32 = 1
+    private var suspendedShortcut: Shortcut?
+    private static let signature: OSType = OSType(0x4B4E_4F54)
 
     private init() {}
 
-    /// Stash the closure to invoke whenever the hotkey fires. Call this once
-    /// at app launch.
     func setHandler(_ handler: @escaping () -> Void) {
         self.handler = handler
-        installEventHandlerIfNeeded()
+        do { try installEventHandlerIfNeeded() }
+        catch { publish(error) }
     }
 
-    /// Register `shortcut` as the active global hotkey. Passing an invalid
-    /// shortcut (e.g. `Shortcut.empty`) just clears any existing
-    /// registration, which is how users disable the hotkey.
-    func update(to shortcut: Shortcut) {
-        unregister()
-        lastRegistrationError = nil
-        defer { NotificationCenter.default.post(name: .knotHotkeyStatusChanged, object: nil) }
+    func update(to shortcut: Shortcut?) {
+        do { try replace(current: registeredShortcut, with: shortcut, allowLegacyBare: shortcut?.isLegacyBare == true) }
+        catch { publish(error) }
+    }
 
-        guard shortcut.isValid else { return }
+    func replace(current: Shortcut?, with proposed: Shortcut?, allowLegacyBare: Bool = false) throws {
+        if proposed == registeredShortcut { return }
+        if let proposed, !proposed.isValid, !(allowLegacyBare && proposed.isLegacyBare) {
+            throw HotkeyRegistrationError.invalidShortcut
+        }
+        try installEventHandlerIfNeeded()
 
-        let hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.id)
-        var ref: EventHotKeyRef?
+        guard let proposed else {
+            unregisterCurrent()
+            registeredShortcut = nil
+            lastRegistrationError = nil
+            publish(nil)
+            return
+        }
+
+        let candidateID = nextID
+        nextID = nextID == UInt32.max ? 1 : nextID + 1
+        var candidateRef: EventHotKeyRef?
         let status = RegisterEventHotKey(
-            shortcut.keyCode,
-            shortcut.carbonModifiers,
-            hotKeyID,
+            proposed.keyCode,
+            proposed.carbonModifiers,
+            EventHotKeyID(signature: Self.signature, id: candidateID),
             GetApplicationEventTarget(),
             0,
-            &ref
+            &candidateRef
         )
-
-        if status == noErr {
-            hotKeyRef = ref
-        } else {
-            let message: String
-            switch status {
-            case OSStatus(eventHotKeyExistsErr):
-                message = "Another app already owns that shortcut. Pick a different combination."
-            case OSStatus(eventHotKeyInvalidErr):
-                message = "macOS rejected that shortcut (system reserved). Pick a different combination."
-            default:
-                message = "Couldn't register hotkey (OSStatus \(status))."
-            }
-            lastRegistrationError = message
-            NSLog("Knot: RegisterEventHotKey failed with status \(status) for shortcut \(shortcut.displayString)")
+        guard status == noErr, let candidateRef else {
+            let error: HotkeyRegistrationError = status == eventHotKeyExistsErr ? .conflict : .rejected(status)
+            publish(error)
+            throw error
         }
+
+        unregisterCurrent()
+        hotKeyRef = candidateRef
+        activeID = candidateID
+        registeredShortcut = proposed
+        lastRegistrationError = nil
+        publish(nil)
     }
 
-    func unregister() {
-        if let ref = hotKeyRef {
-            UnregisterEventHotKey(ref)
-            hotKeyRef = nil
-        }
+    func suspendRegistration() {
+        guard suspendedShortcut == nil else { return }
+        suspendedShortcut = registeredShortcut
+        unregisterCurrent(clearShortcut: false)
     }
 
-    // MARK: - Carbon plumbing
+    func resumeRegistration() {
+        guard let shortcut = suspendedShortcut else { return }
+        suspendedShortcut = nil
+        registeredShortcut = nil
+        update(to: shortcut)
+    }
 
-    private func installEventHandlerIfNeeded() {
+    func shutdown() {
+        unregisterCurrent()
+        if let eventHandlerRef {
+            RemoveEventHandler(eventHandlerRef)
+            self.eventHandlerRef = nil
+        }
+        handler = nil
+    }
+
+    private func unregisterCurrent(clearShortcut: Bool = true) {
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        hotKeyRef = nil
+        activeID = nil
+        if clearShortcut { registeredShortcut = nil }
+    }
+
+    private func installEventHandlerIfNeeded() throws {
         guard eventHandlerRef == nil else { return }
-
-        var spec = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let pointer = Unmanaged.passUnretained(self).toOpaque()
+        let status = InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, eventRef, userData -> OSStatus in
-                guard let userData, let eventRef else { return OSStatus(eventNotHandledErr) }
-                let me = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-
-                var hotKeyID = EventHotKeyID()
-                let status = GetEventParameter(
-                    eventRef,
+            { _, event, userData -> OSStatus in
+                guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+                let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+                var id = EventHotKeyID()
+                let result = GetEventParameter(
+                    event,
                     EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &hotKeyID
+                    EventParamType(typeEventHotKeyID), nil,
+                    MemoryLayout<EventHotKeyID>.size, nil, &id
                 )
-
-                guard status == noErr,
-                      hotKeyID.signature == HotkeyManager.signature,
-                      hotKeyID.id == HotkeyManager.id
-                else {
-                    return OSStatus(eventNotHandledErr)
-                }
-
-                DispatchQueue.main.async {
-                    me.handler?()
+                guard result == noErr, id.signature == HotkeyManager.signature else { return OSStatus(eventNotHandledErr) }
+                Task { @MainActor in
+                    guard id.id == manager.activeID else { return }
+                    manager.handler?()
                 }
                 return noErr
             },
-            1,
-            &spec,
-            selfPtr,
-            &eventHandlerRef
+            1, &spec, pointer, &eventHandlerRef
         )
+        guard status == noErr else { throw HotkeyRegistrationError.eventHandler(status) }
+    }
+
+    private func publish(_ error: Error?) {
+        lastRegistrationError = error?.localizedDescription
+        NotificationCenter.default.post(name: .knotHotkeyStatusChanged, object: nil)
     }
 }

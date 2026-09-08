@@ -3,25 +3,48 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "test": "npm run build && vitest run --environment jsdom"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run clean && vite build",
+    "test:unit": "vitest run tests/rewriteCodec.test.ts tests/protocol.test.ts tests/showdownAdapter.test.ts --environment jsdom --pool forks --maxWorkers 1",
+    "test:integration": "vitest run tests/nativeBridge.test.js tests/distBundle.test.js --environment jsdom --pool forks --maxWorkers 1",
+    "test": "npm run typecheck && npm run test:unit && npm run build && npm run test:integration"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "@wordpress/block-editor": "latest",
-    "@wordpress/block-library": "latest",
-    "@wordpress/blocks": "latest",
-    "@wordpress/components": "latest",
-    "@wordpress/data": "latest",
-    "@wordpress/element": "latest",
-    "@wordpress/format-library": "latest",
-    "@wordpress/i18n": "latest",
-    "vite": "latest",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@vitejs/plugin-react": "6.0.2",
+    "@wordpress/block-editor": "15.21.0",
+    "@wordpress/block-library": "9.48.0",
+    "@wordpress/blocks": "15.21.0",
+    "@wordpress/components": "35.0.0",
+    "@wordpress/data": "10.48.0",
+    "@wordpress/element": "8.0.0",
+    "@wordpress/format-library": "5.48.0",
+    "@wordpress/i18n": "6.21.0",
+    "hast-util-from-html": "2.0.3",
+    "hast-util-sanitize": "5.0.2",
+    "hast-util-to-mdast": "10.1.2",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-frontmatter": "2.0.1",
+    "mdast-util-gfm": "3.1.0",
+    "mdast-util-to-markdown": "2.1.2",
+    "micromark-extension-frontmatter": "2.0.0",
+    "micromark-extension-gfm": "3.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "showdown": "file:vendor/showdown-safe",
+    "vite": "8.0.16"
+  },
+  "overrides": {
+    "browserslist": "4.28.9",
+    "nanoid": "3.3.18",
+    "postcss": "8.5.28",
+    "shell-quote": "1.10.0",
+    "showdown": "$showdown",
+    "undici": "7.29.1"
   },
   "devDependencies": {
-    "jsdom": "latest",
-    "vitest": "latest"
+    "jsdom": "29.1.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.8"
   }
 }

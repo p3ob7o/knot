@@ -19,9 +19,9 @@ public final class VaultStore: @unchecked Sendable {
 
     /// Whether a vault bookmark has been saved, regardless of whether the
     /// folder still exists at the bookmarked location.
-    public var hasBookmark: Bool {
-        defaults.data(forKey: bookmarkKey) != nil
-    }
+    public var bookmarkData: Data? { defaults.data(forKey: bookmarkKey) }
+
+    public var hasBookmark: Bool { bookmarkData != nil }
 
     /// Whether a vault has been chosen.
     public var hasVault: Bool {
@@ -35,7 +35,8 @@ public final class VaultStore: @unchecked Sendable {
 
     /// Persist the bookmark for `url`. The caller is responsible for having
     /// obtained access to `url` (e.g. via a document picker or open panel).
-    public func saveBookmark(from url: URL) throws {
+    @discardableResult
+    public func saveBookmark(from url: URL) throws -> Data {
         let data: Data
         #if os(macOS)
         data = try url.bookmarkData(
@@ -52,6 +53,7 @@ public final class VaultStore: @unchecked Sendable {
         #endif
         defaults.set(data, forKey: bookmarkKey)
         defaults.set(url.lastPathComponent, forKey: nameKey)
+        return data
     }
 
     /// Resolves the persisted bookmark to a URL. The returned URL is
@@ -81,7 +83,7 @@ public final class VaultStore: @unchecked Sendable {
         )
         #endif
         if stale {
-            try? saveBookmark(from: url)
+            _ = try? saveBookmark(from: url)
         }
         return url
     }
