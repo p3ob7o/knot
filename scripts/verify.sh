@@ -43,7 +43,8 @@ done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging ios-hosted launch mac-ui soak perf tsan model-report"
+contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
+model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
 contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
@@ -550,6 +551,18 @@ step_mac_ui() {
     grep -E "Test Case .* (passed|failed)|Executed" "$log" | tail -n 5
 }
 
+# The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
+# scripts/gate-steps.txt until their packages build them. Should a line turn to required
+# before the step is filled in, the gate fails here rather than pass a check it did not run.
+step_live_smoke() {
+    echo "live-smoke: not built yet. WP-22 builds the .live smoke tests (docs/architecture.md §17)."
+    return 1
+}
+step_two_process() {
+    echo "two-process: not built yet. WP-34 builds it after G1 and SP-3 (docs/architecture.md §18)."
+    return 1
+}
+
 # ---- The soak step. It belongs to WP-06, which builds the harness in
 # ---- Packages/KnotKit/Tests/KnotSoak/ and fills this function in.
 step_soak() {
@@ -684,7 +697,11 @@ else
                 leaf)
                     STEPS="$common package-test contract-two-targets self-test apps launch"
                     [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
-                everything) STEPS="$common package-test contract-two-targets self-test apps packaging ios-hosted launch" ;;
+                everything)
+                    # docs/architecture.md §18: everything adds the two-process test and the
+                    # .live smoke tests. They are pending until their packages build them.
+                    STEPS="$common package-test contract-two-targets self-test apps packaging ios-hosted launch"
+                    STEPS="$STEPS live-smoke two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
