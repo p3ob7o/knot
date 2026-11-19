@@ -131,7 +131,7 @@ A voice segment is always in one of these states, named for what you can do, not
 | Saved, text being made elsewhere | The same, but the work belongs to the device that recorded it. | Play it, or move the work to this device. |
 | Ready | The text is there. Cleanup may still replace the raw text once. | Everything. |
 | Needs you | A step failed. The recording is kept. | Retry. |
-| Kept, no text | No words were recognised, the audio or the drawing cannot be read, the handwriting is in a language that cannot be recognised, or this device cannot turn speech into text. This is a final state, not an error. | Play or share the file, or delete it. Where this device cannot make the text and another can, move the work to that device there. |
+| Kept, no text | No words were recognised, the audio or the drawing cannot be read, the handwriting is in a language that cannot be recognised, or this device cannot turn speech into text. This is a final state, not an error. | Play, view or share the file, or delete it. Where this device cannot make the text and another can, move the work to that device there. |
 
 Typed and handwritten segments use the same names. A typed segment is Ready. A drawing whose text is still being recognised is "Saved, text on its way", a recognised one is Ready, one whose recognition failed is "Needs you", and one whose drawing cannot be read, or whose handwriting is in a language that cannot be recognised, is "Kept, no text", with its file kept. A recording whose transcript is there is Ready while cleanup runs. A segment that a newer Knot made in a state this one does not know says so, and offers nothing else.
 

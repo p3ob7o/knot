@@ -374,7 +374,7 @@ This section is the proposal that spike SP-4 tests.
 - **Retry:** the watch re-sends each capture that is neither acknowledged nor still outstanding, on every trigger: when the session activates, when reachability changes, when either app comes forward, after each new capture, and on its background refresh. A capture that is still outstanding is never queued again. At launch the watch first waits for the session's activation callback and adopts `outstandingFileTransfers` by the capture ID in their metadata, before it queues anything again, so a relaunch makes no duplicate. Cancelling a transfer gives no delegate call, so the transport reports the cancel itself. A capture queued for longer than a set time with no `didFinish` and no acknowledgement, while the session is activated and reachable, is cancelled and queued again. That stall rule rests on the time since queueing until SP-2's sitting shows that a transfer's progress moves. Duplicates are harmless, because ingest is idempotent.
 - **Checksums:** the phone checks each file against its manifest and acknowledges only a file that matches. On a mismatch the watch sends the file again. On the third mismatch the phone ingests what it received as a failed capture and keeps it, and it still does not acknowledge. The watch keeps its own copy, shows it as not delivered, and tries again when the session next activates. An intact delivery later replaces the damaged copy and makes the capture stored.
 - **Back channel:** the phone sends the watch no note text and nothing about a transcript, because the watch is a capture device only (product spec §6). The watch learns that a recording arrived from the acknowledgement above. `updateApplicationContext` carries only what the watch needs to say whether a recording continues a note or starts a new one (product spec §3, rule 4): the end of the capture that a new recording would join, if there is one, and the window. The phone works that out by the rules of product spec §3, so a note closed by "New note" and a deleted note give none. What the watch shows is a forecast. The phone decides at ingest, by the recording's own timestamps. The Watch reads `receivedApplicationContext` at activation and does not wait for a callback at launch.
-- **Testing:** in the 27.2 simulators neither files nor user info reach the other app, in either direction, while application context, from iPhone to Watch, and `sendMessage`, from Watch to iPhone, do. The logic is tested against a fake transport, and the real transport has no simulator test. Delivery is tested on hardware.
+- **Testing:** in the 27.2 simulators files from the Watch to the iPhone, and user info in either direction, do not reach the other app, while application context, from iPhone to Watch, and `sendMessage`, from Watch to iPhone, do. The logic is tested against a fake transport, and the real transport has no simulator test. Delivery is tested on hardware.
 
 ## 13. Processes and extensions
 
@@ -416,7 +416,7 @@ On iPhone and iPad the intents that start a recording declare `supportedModes = 
 
 Knot's URL scheme only navigates: it opens the capture surface or a note. It never writes text and never starts a recording.
 
-Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad. The pinned SDK marks it unavailable on macOS (§20), so a type that adopts it, or that uses ActivityKit, is compiled for iOS only, inside `#if os(iOS)`. `canImport(ActivityKit)` does not tell the two apart, because it is true on the Mac too. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication.
+Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad. The pinned SDK marks it unavailable on macOS (§20), so a type that adopts it, or that uses ActivityKit, is compiled for iOS only, inside `#if os(iOS)`. `canImport(ActivityKit)` does not tell the two apart, because it is true on the Mac too. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication, and declare `authenticationPolicy = .requiresAuthentication`, because the default is `.alwaysAllowed` (§20).
 
 ## 15. Mac specifics
 
@@ -452,7 +452,7 @@ Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the
 | Store | Migrations, search, concurrency, a kill in mid-transaction, a second process | Mac |
 | Recorder | File-driven input, the kill test, interruptions | Mac and iOS Simulator |
 | Speech, cleanup | Fixtures, with accuracy reported | A Mac with the models installed |
-| Ink | Fixtures, with accuracy reported | Tests hosted in the app in the iOS Simulator, never `swift test` |
+| Ink | Fixtures, with accuracy reported | Tests hosted in the app in the iOS Simulator, never the package tests |
 | Sync | Mapping, conflicts and the change log, with constructed records; a two-replica simulation | Mac |
 | End to end | Fixture audio through to a finished note; kill and relaunch | Mac and Simulator |
 | UI smoke | Type, record with injected audio, search, delete and undo | XCUITest on iOS Simulator and Mac |
@@ -565,7 +565,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | watchOS has CloudKit with `CKSyncEngine`, SwiftData, WidgetKit, AppIntents, WatchConnectivity and FoundationModels. | SDK |
 | `ControlWidget` is available on iOS 18, macOS 26 and watchOS 26. `handGestureShortcut` is available on watchOS 11. | SDK |
 | `LongRunningIntent` exists from OS 27, with `performBackgroundTask`. | SDK |
-| `AppIntent.allowedExecutionTargets` exists from OS 27. With `[.main]` the system runs an intent only in the app, though its type is compiled into the widget extension too, and the metadata of both bundles records it. | SDK and the metadata, read by SP-1 on 2026-11-19. |
+| `AppIntent.allowedExecutionTargets` exists from OS 27. With `[.main]` the system runs an intent only in the app, though its type is compiled into the widget extension too, and the metadata of both bundles records it. | SDK, Apple docs and the metadata, read by SP-1 on 2026-11-19. |
 | An intent's `authenticationPolicy` defaults to `.alwaysAllowed`. | SDK and the metadata, read by SP-1 on 2026-11-19. |
 | `IntentSystemContext.preciseTimestamp` is recorded only for the Action Button of an Apple Watch Ultra. | Apple docs, read by SP-1 on 2026-11-19. |
 | `BGContinuedProcessingTaskRequest` is submitted from the foreground, as a result of a person's action, and its task must report progress. In the iOS simulator it fails as unavailable, `BGTaskSchedulerErrorDomain` 1. | Apple docs, and observed by SP-1 in the iOS 27.2 simulator on 2026-11-19. |

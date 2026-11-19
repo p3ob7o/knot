@@ -36,7 +36,7 @@ Each section puts first the points that block the earliest packages. Item IDs su
 
 12. **A cut and the design sub-packages.** If the iPad Pencil step is cut, WP-35 is not started, yet WP-40b waits for WP-35 as its platform's app package. If the second step is cut, WP-40d waits in the same way for WP-32's third PR (`eng-057`). PLAN.md §5 also lists WP-32's third PR among what M6 needs, and WP-31's second PR if M5 is cut. PLAN.md §4 has the orchestrator update the briefs when a part is cut, and no text says what those sub-packages, or M6, then wait for. The orchestrator settles it at the cut.
 
-13. **The release dry run.** WP-43's release script refuses a candidate that lacks any milestone's evidence, and WP-43's merge criterion is a dry run that passes every check short of uploading. WP-43 starts after M5, so when it merges the evidence of M6 and M7 cannot exist yet (`eng-033`). The brief holds each line as written. The orchestrator settles what the dry run checks, and the last point of this file asks the owner about signing.
+13. **The release dry run.** WP-43's release script refuses a candidate that lacks any milestone's evidence, and WP-43's merge criterion is a dry run that passes every check short of uploading. WP-43 starts after M5, so when it merges the evidence of M6 and M7 cannot exist yet (`eng-033`). The brief holds each line as written. The orchestrator settles what the dry run checks, and the point "Distribution signing in WP-43's dry run" asks the owner about signing.
 
 ## Choices the fold made
 
