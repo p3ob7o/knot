@@ -22,7 +22,7 @@ After a reset, read the last lines of the journal, list the open pull requests a
 What the build Mac has today, for every first message:
 
 - The pinned Xcode is the one `.xcode-version` names. The beta is used only by name, through `KNOT_XCODE`.
-- A recursive delete, a forced push and a forced removal of a worktree (`git worktree remove --force`) each wait for Paolo's approval, and a thread that sends one stalls there. A thread takes a new folder from `mktemp -d` in place of a delete, never rewrites a branch it has pushed, and never chains a command that removes something with one that must run.
+- A forced push can wait for Paolo's approval, and a thread that sends one stalls there. A thread never rewrites a branch it has pushed, takes a new folder from `mktemp -d` in place of a recursive delete, and never chains a command that removes something with one that must run.
 - When a tool call comes back as declined together with a message on another subject, Paolo answered while the call waited for approval. The thread acts on the message, and sends the call again if it was already allowed.
 - The owner's recordings, when he has made them, are in the folder that `KNOT_LOCAL_FIXTURES` names. Nothing derived from them enters a commit, a pull request, a log or a test.
 - `KNOT_AGENT=1` is exported in every shell before a script runs.
@@ -45,7 +45,7 @@ The last line of its final message is `RESULT ok` or `RESULT blocked` with a cod
 - `brief_wrong`: correct the brief first, in a pull request of the orchestrator's own.
 - `baseline_red` and `tool_failure`: find the cause before launching anything else on that base.
 
-A top-level thread does not wake the orchestrator by ending. The RESULT line that it sends with `t3_thread_send` does. That line is not Paolo's: the orchestrator reads the thread's last message before it acts on it. One scheduled check an hour looks for a thread that stalled on an approval prompt. A delegated task wakes the orchestrator by itself, and so does a watched pull request when its checks end.
+A top-level thread does not wake the orchestrator by ending. The RESULT line that it sends with `t3_thread_send` does. That line is not Paolo's: the orchestrator reads the thread's last message before it acts on it. One scheduled check an hour looks for a thread that stalled on an approval prompt. A thread that shows as waiting on a background command of its own is at work, and it has not handed back until its RESULT line arrives. A delegated task wakes the orchestrator by itself, and so does a watched pull request when its checks end.
 
 ## Review
 
@@ -60,22 +60,16 @@ A top-level thread does not wake the orchestrator by ending. The RESULT line tha
 One pull request at a time.
 
 1. In the gate worktree, check out the pull request's head. If `main` has moved since the branch last took it in, merge `main` into it there. A conflict goes back to the implementer.
-2. Run the gate on that commit, and write the result in the journal with the base, the head and the tree.
+2. Run the gate on that commit from the main checkout, so that main's scripts check the candidate: `scripts/verify.sh --gate --tree <the gate worktree> --package <ID>`. A stated exception to path ownership is passed with `--allow <path>`, and an allowance that matches nothing fails. A pull request that changes `scripts/` is gated with its own scripts, from the gate worktree. Write the result in the journal with the base, the head and the tree.
 3. If step 1 made a merge, push it to the branch as an ordinary push, and let the workflow run on the new head. Never rebase a branch that was pushed and never force a push: a forced push waits for Paolo's approval.
-4. Post the status `knot/gate` on that head, with the gate's summary line.
-5. Squash-merge with `gh pr merge --squash --match-head-commit <head>`, with a subject and a body of the orchestrator's own, so that no session link enters the history.
+4. Post the status `knot/gate` on that head, with the output of `scripts/verify.sh --status-line --tree <the gate worktree>`: the same `--tree` as the gate run, because the line is kept in that tree's `.build/logs` and names no commit. A failed gate is posted too, as a failure, and what it found goes to the implementer.
+5. Squash-merge with `gh pr merge --squash --match-head-commit <head>`, with a subject and a body of the orchestrator's own, so that no session link enters the history. The subject starts with the package's ID, as in `WP-02 PR 1: …`, because the gate's helper reads the subjects on `main` when it cannot ask GitHub which pull requests have merged.
 6. Check that the tree on `main` is the tree that was tested. If `main` or the head moved in between, the result is void.
 7. Delete the branch. A branch whose pull request was squashed gets no further commits. If the thread goes straight on with the package's next pull request, it starts a new branch from `origin/main` in the same worktree. Otherwise remove the worktree.
 
-The gate depends on what has merged:
+The gate is `scripts/verify.sh --gate`, and its depth comes from the diff (docs/architecture.md §18). `scripts/gate-steps.txt` lists every step and marks those that are still pending, each with what delivers it, and the orchestrator turns a line to required when that has arrived: the Mac UI step with WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode, the team-ID check with his signing configuration on the Mac, the soak with WP-06, the `.live` smoke tests with WP-22 and the two-process test with WP-34.
 
-| Until | The gate is |
-|---|---|
-| WP-01's first pull request merges | `scripts/check-plan.sh` and the package's own merge criteria, because `scripts/verify.sh` does not exist yet |
-| WP-01's second pull request merges | `scripts/verify.sh --quick` |
-| Afterwards | `scripts/verify.sh --gate` |
-
-The gate's Mac UI step stays pending until WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode.
+A pull request that changes the gate, or a contract that others build on, is tried on the next pull request in the queue before it merges, by running its scripts with `--tree` on that candidate. On 2026-11-19 this found two faults in the tooling that its own gate could not show.
 
 ## What needs Paolo
 
