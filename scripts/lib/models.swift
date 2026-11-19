@@ -5,7 +5,10 @@
 //   xcrun swift scripts/lib/models.swift
 //
 // Output, one line each: `speech: available|unavailable`, `speech-english: <locales>|missing`,
-// `cleanup: available|unavailable (<reason>)`, and `os: <build>`.
+// `cleanup: available|unavailable (<reason>)`, `cleanup-model: <name>`, and `os: <build>`.
+// The cleanup model names itself (SystemLanguageModel.variant, macOS 27.0), so a change of
+// model shows in the nightly report even without an update of the system. The speech API
+// names no version of its asset, as WP-13's proof step found, so only the locales show.
 
 import Foundation
 import FoundationModels
@@ -20,4 +23,5 @@ case .available:
 case .unavailable(let reason):
     print("cleanup: unavailable (\(reason))")
 }
+print("cleanup-model: \(SystemLanguageModel.default.variant.displayName)")
 print("os: \(ProcessInfo.processInfo.operatingSystemVersionString)")
