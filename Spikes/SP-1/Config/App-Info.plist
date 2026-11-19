@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).sp1.process.*</string>
+	</array>
+	<key>CFBundleDisplayName</key>
+	<string>Knot SP-1</string>
+	<key>KnotAppGroup</key>
+	<string>$(KNOT_APP_GROUP)</string>
+	<key>KnotFlavour</key>
+	<string>$(KNOT_FLAVOUR)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Knot SP-1 records a test clip to measure how fast recording starts. It keeps no text.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>processing</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

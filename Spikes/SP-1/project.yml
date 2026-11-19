@@ -1,0 +1,75 @@
+# SP-1's throwaway app: recording from a locked iPhone (docs/plan/SP-1.md). It lives on the
+# branch spike/locked-recording and is never merged. Generate and build it with
+# Spikes/SP-1/build.sh, never by hand. The generated SP1.xcodeproj is git-ignored.
+#
+# It shares Apps/Config/Base.xcconfig with the real apps, so it takes the development
+# identifiers (com.p3ob7o.knot.dev, group.com.p3ob7o.knot.dev) and the same signing switch:
+# KNOT_SIGNING=local for the Simulator, team for the owner's iPhone. It never names a
+# milestone identifier.
+
+name: SP1
+
+options:
+  bundleIdPrefix: com.p3ob7o
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  defaultConfig: Debug
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: ../../Apps/Config/Base.xcconfig
+  Release: ../../Apps/Config/Base.xcconfig
+
+targets:
+  SP1:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Shared
+      - path: ../../Apps/iOS/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_NAME: SP1
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
+        INFOPLIST_FILE: Config/App-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/SP1-$(KNOT_SIGNING).entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+    dependencies:
+      - target: SP1Widgets
+
+  # The widget extension: the controls and the Live Activity's views. The intents are
+  # compiled into it too (docs/architecture.md §14, rule 1), but no host is registered
+  # here, so an intent that the system runs in this process fails with a typed error.
+  SP1Widgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widgets
+      - Shared
+    settings:
+      base:
+        PRODUCT_NAME: SP1Widgets
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).widgets
+        INFOPLIST_FILE: Config/Widgets-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/Widgets-$(KNOT_SIGNING).entitlements
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - sdk: SwiftUI.framework
+      - sdk: WidgetKit.framework
+
+schemes:
+  SP1:
+    build:
+      targets:
+        SP1: all
