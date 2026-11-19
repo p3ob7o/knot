@@ -96,7 +96,7 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
         let down = ContinuousClock.now
         let tap = HotkeyMachine.reduce(.pressed(since: down), .keyUp)
         #expect(!tap.1.contains(.startHoldRecording))
-        let hold = HotkeyMachine.reduce(.pressed(since: down), .markReached)
+        let hold = HotkeyMachine.reduce(.pressed(since: down), .markReached(forKeyDownAt: down))
         #expect(hold.1 == [.startHoldRecording])
         #expect(HotkeyMachine.markDeadline(after: down) - down == .milliseconds(250))
     }

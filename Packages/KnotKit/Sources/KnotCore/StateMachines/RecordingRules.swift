@@ -128,8 +128,9 @@ public enum HotkeyState: Hashable, Sendable {
 public enum HotkeyEvent: Hashable, Sendable {
     case keyDown(at: ContinuousClock.Instant)
     case keyUp
-    /// The timer set at key-down for `HotkeyMachine.markDeadline(after:)` fired.
-    case markReached
+    /// The timer set at key-down for `HotkeyMachine.markDeadline(after:)` fired. It names the
+    /// key-down it was set for, so that a timer left from an earlier press is ignored.
+    case markReached(forKeyDownAt: ContinuousClock.Instant)
     /// The once-a-second check found the key up while a hold records: its release was missed.
     case keyFoundUp
     case escape
@@ -170,7 +171,9 @@ public enum HotkeyMachine {
             return (.pressed(since: at), [.prepareMicrophone])
         case (.pressed, .keyUp):
             return (.idle, [.releaseMicrophone, .tap])
-        case (.pressed(let since), .markReached):
+        case (.pressed(let since), .markReached(let keyDown)):
+            // A mark left from an earlier press must not open the microphone on this one.
+            guard keyDown == since else { return (state, []) }
             return (.holding(since: since), [.startHoldRecording])
         case (.holding, .keyUp), (.holding, .keyFoundUp), (.holding, .escape), (.holding, .keyDown):
             // Releasing stops the hold. If a release was missed, the check of the key's state,

@@ -124,14 +124,14 @@ import Testing
         #expect(state == .idle)
         #expect(effects == [.releaseMicrophone, .tap])
         // A timer that fires after the release changes nothing.
-        (state, effects) = HotkeyMachine.reduce(state, .markReached)
+        (state, effects) = HotkeyMachine.reduce(state, .markReached(forKeyDownAt: Self.down))
         #expect(state == .idle)
         #expect(effects.isEmpty)
     }
 
     @Test func theMicrophoneOpensAtTheMarkOfAHold() {
         var (state, effects) = HotkeyMachine.reduce(.idle, .keyDown(at: Self.down))
-        (state, effects) = HotkeyMachine.reduce(state, .markReached)
+        (state, effects) = HotkeyMachine.reduce(state, .markReached(forKeyDownAt: Self.down))
         #expect(state == .holding(since: Self.down))
         #expect(effects == [.startHoldRecording])
         (state, effects) = HotkeyMachine.reduce(state, .keyUp)
@@ -153,7 +153,7 @@ import Testing
 
     @Test func theMarkOpensTheHoldWhateverTheWallClockSays() {
         // The wall clock moved back between key-down and the mark: the machine never reads it.
-        let (state, effects) = HotkeyMachine.reduce(.pressed(since: Self.down), .markReached)
+        let (state, effects) = HotkeyMachine.reduce(.pressed(since: Self.down), .markReached(forKeyDownAt: Self.down))
         #expect(state == .holding(since: Self.down))
         #expect(effects == [.startHoldRecording])
     }
@@ -169,12 +169,31 @@ import Testing
         #expect(HotkeyMachine.reduce(.idle, .keyUp) == (.idle, []))
         #expect(HotkeyMachine.reduce(.idle, .escape) == (.idle, []))
         #expect(HotkeyMachine.reduce(.idle, .keyFoundUp) == (.idle, []))
-        #expect(HotkeyMachine.reduce(.idle, .markReached) == (.idle, []))
+        #expect(HotkeyMachine.reduce(.idle, .markReached(forKeyDownAt: Self.down)) == (.idle, []))
         #expect(
             HotkeyMachine.reduce(.pressed(since: Self.down), .keyDown(at: Self.down)) == (
                 .pressed(since: Self.down), []
             ))
         #expect(HotkeyMachine.reduce(.pressed(since: Self.down), .escape) == (.idle, [.releaseMicrophone]))
-        #expect(HotkeyMachine.reduce(.holding(since: Self.down), .markReached) == (.holding(since: Self.down), []))
+        #expect(
+            HotkeyMachine.reduce(.holding(since: Self.down), .markReached(forKeyDownAt: Self.down)) == (
+                .holding(since: Self.down), []
+            ))
+    }
+}
+
+@Suite struct HotkeyStaleMarkTests {
+    @Test func aMarkLeftFromAnEarlierPressNeverOpensTheMicrophone() {
+        let pressA = ContinuousClock.now
+        let pressB = pressA.advanced(by: .milliseconds(300))
+        // Press A is released, press B starts, and A's mark arrives before B is 250 ms old.
+        var (state, effects) = HotkeyMachine.reduce(.pressed(since: pressA), .keyUp)
+        (state, effects) = HotkeyMachine.reduce(state, .keyDown(at: pressB))
+        (state, effects) = HotkeyMachine.reduce(state, .markReached(forKeyDownAt: pressA))
+        #expect(state == .pressed(since: pressB))
+        #expect(effects.isEmpty, "A tap must never open the microphone.")
+        // B's own mark opens the hold.
+        (state, effects) = HotkeyMachine.reduce(state, .markReached(forKeyDownAt: pressB))
+        #expect(effects == [.startHoldRecording])
     }
 }
