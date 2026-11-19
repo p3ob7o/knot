@@ -54,7 +54,7 @@ One pull request at a time.
 4. Post the status `knot/gate` on that head, with the gate's summary line.
 5. Squash-merge with `gh pr merge --squash --match-head-commit <head>`, with a subject and a body of the orchestrator's own, so that no session link enters the history.
 6. Check that the tree on `main` is the tree that was tested. If `main` or the head moved in between, the result is void.
-7. Tell the thread to fast-forward if it goes on with another pull request. Remove the worktree and delete the branch when the package's last pull request has merged.
+7. Delete the branch. A branch whose pull request was squashed gets no further commits. If the thread goes straight on with the package's next pull request, it starts a new branch from `origin/main` in the same worktree. Otherwise remove the worktree.
 
 The gate depends on what has merged:
 

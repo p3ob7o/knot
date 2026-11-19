@@ -2,7 +2,7 @@
 
 Guidance for coding agents working in Knot. `CLAUDE.md` imports this file.
 
-Knot is being rebuilt from an empty repository. This tree holds the plan, the licence and the brand assets, and the first code arrives with WP-01. The earlier app, an Obsidian capture tool with the same name, is retired. Its code lives on the tags and archive branches that `README.md` lists, and nothing here builds on it.
+Knot is being rebuilt from an empty repository, one work package at a time. The tree holds the plan and the scaffold of WP-01: every module and every app target, still empty, with the scripts that check them. `PLAN.md` §6 lists the packages and what each one adds. The earlier app, an Obsidian capture tool with the same name, is retired. Its code lives on the tags and archive branches that `README.md` lists, and nothing here builds on it.
 
 ## Product contract
 
@@ -56,6 +56,7 @@ The rules are in `docs/architecture.md` §6. Three of them:
 - Branch names are `wp/…`, `spike/…` and `contract/…`. Never `master`.
 - Never push to `main`. The orchestrator merges.
 - Never rebase a branch you have pushed, and never force a push. The merge queue brings a branch up to date by merging `main` into it.
+- Each pull request has a branch of its own. After a squash, start the next one on a new branch from `main`.
 - No session links in commits or pull-request descriptions.
 
 ## Needs Paolo's explicit authorisation
@@ -68,4 +69,4 @@ The rules are in `docs/architecture.md` §6. Three of them:
 
 ## Commands
 
-`scripts/check-plan.sh` checks the plan, and it is the only script so far. WP-01 adds `scripts/bootstrap.sh`, `scripts/doctor.sh` and `scripts/verify.sh`, and commits `.xcode-version`. Every script sets `DEVELOPER_DIR` from that file itself and checks the version, so never change the machine's `xcode-select`. Use that Xcode, and the beta only by name. Package criteria name `scripts/verify.sh --quick`, never a bare `swift test`.
+`scripts/bootstrap.sh` prepares a fresh worktree. `scripts/verify.sh --quick` is the check to run before a pull request, and `scripts/doctor.sh` and `scripts/check-plan.sh` are among its steps. WP-01's second pull request adds the other tiers. `.xcode-version` pins the Xcode. Every script sets `DEVELOPER_DIR` from that file itself and checks the version, so never change the machine's `xcode-select`. Use that Xcode, and the beta only by name, through `KNOT_XCODE`. `scripts/sdk-path.sh` prints where the pinned SDK's Swift interfaces are, and `scripts/sim.sh` manages the worktree's own simulators. Package criteria name `scripts/verify.sh --quick`, never a bare `swift test`. `docs/dev-setup.md` has the rest.

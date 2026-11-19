@@ -207,9 +207,9 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
-| WP-13 | Proof step | Transcription of the fixtures and of the owner's recordings, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
+| WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
-| WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
+| WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-14 | 1 | The whole package | WP-05 |
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
 | WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
@@ -396,7 +396,7 @@ A thread that finds its brief wrong or blocked stops and says so. It does not wi
 3. A reviewer thread runs gstack `/review` on the PR. WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from a different model through `/codex`.
 4. The implementer fixes the findings. After two rounds, the orchestrator decides what is left. Every finding the orchestrator sets aside is written in the PR and in the journal.
 5. The orchestrator takes the PR into its merge queue. When `main` has moved, it merges `main` into the branch. It never rebases a branch that was pushed and never forces a push. It runs the merge gate, `scripts/verify.sh --gate`, on that head, and squash-merges. Until the second PR of WP-01 merges, the gate is `--quick` (§9). After the queue has updated a branch, its thread fast-forwards to the remote branch before it changes anything else.
-6. The orchestrator removes the worktree.
+6. The orchestrator removes the worktree, unless the thread goes straight on with the package's next PR. That PR starts on a new branch from `main`, in the same worktree.
 
 The orchestrator runs a serial queue and binds each result to a base, a head and a tree. Merges follow the dependency order in §6, inside the queue's own order. The merge gate, the merge queue and the orchestrator's state follow docs/architecture.md §18.
 
@@ -419,7 +419,7 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
 
 - Five implementer threads at a time, to start with. The machine has 16 cores and 48 GB of memory.
 - Three heavy builds at a time, enforced by `scripts/build-slot.sh`. One slot is kept for the gate, Mac UI tests queue on one exclusive slot, and the script also limits how many simulators are booted at once.
-- Worktrees are removed after merge, with `scripts/worktree-remove.sh`. Each holds several gigabytes of build products. Removing a worktree also removes its simulators and its development store.
+- Worktrees are removed after merge, with `scripts/worktree-remove.sh`, unless a thread goes straight on with its package's next PR. Each holds several gigabytes of build products. Removing a worktree also removes its simulators and its development store.
 
 ### 8.7 Status
 
@@ -557,7 +557,7 @@ WP-00's first PR wrote it, with these sections:
   - A PR that changes the cleanup instructions, the guard or the speech settings reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
   - No agent cuts scope. Scope leaves only on the owner's word.
 - **Working in parallel.** Edit only the paths your package owns. Contract changes and shared files go through the orchestrator. Keep the repository, the build folder and the fixtures folder out of any folder that a cloud file provider syncs: `scripts/doctor.sh` refuses them there.
-- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. Never rebase a branch that was pushed, and never force a push. No session links in commits or PR descriptions.
+- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. Never rebase a branch that was pushed, and never force a push. One branch for each PR. No session links in commits or PR descriptions.
 - **Needs Paolo's explicit authorisation.** Moving a tag, distribution signing, notarising, uploading, deploying the CloudKit production schema, every operation on the milestone iCloud container in either environment, deleting an archive branch.
 - **Commands.** `scripts/bootstrap.sh` and `scripts/verify.sh`. Every script sets `DEVELOPER_DIR` from `.xcode-version` and checks the version. Implementers use that Xcode, and the beta only by name. Package criteria name `scripts/verify.sh --quick`, never a bare `swift test`.
 
@@ -582,7 +582,8 @@ Before using any OS 26 or OS 27 API, read its declaration in the SDK
 Work on the branch you are on. Run scripts/verify.sh --quick, then open a PR
 against main. After the merge queue has updated your branch, fast-forward
 to the remote branch before you change anything else. Never rebase a branch
-you have pushed, and never force a push.
+you have pushed, and never force a push. When a PR of yours has been
+squashed, start your next one on a new branch from origin/main.
 
 In your final message, state what you built, what you verified and how, what
 needs hardware, and any departure from the brief. Its last line is one of:

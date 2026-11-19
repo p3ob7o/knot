@@ -486,6 +486,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 - A failed step is rerun once, and only for an infrastructure code from `fail.sh`. A test that passes on a rerun is logged with an owner. The soak is never rerun to green, and storage, capture and sync tests are never set aside.
 - A red night stops the queue. The cause is found by bisecting the squash merges, and it is reverted unless the fix is plain.
 - A contract PR is additive where it can be: a new requirement comes with a default that throws the typed unavailable error, so open branches still compile. A breaking one carries the mechanical edits to every conformer and call site, as a stated exception to path ownership. A contract PR that only adds merges in the normal queue. One that breaks merges at one of two fixed times a day.
+- Each pull request has a branch of its own. A branch whose pull request was squashed gets no further commits: the thread starts the package's next pull request on a new branch from `main`.
 - Stacking happens only inside one package, and a stacked branch stays local until its base has merged. The thread records its fork point, rebases with `--onto` after the base is squashed, and only then pushes the branch for the first time.
 - After the queue has updated a branch, its thread fast-forwards to the remote branch before it changes anything else.
 - A pull request that did not come from one of the project's own threads is never run through the gate before its diff has been read, because the gate runs its code on the owner's Mac. The scripts that drive the gate come from `main`, not from the branch.
@@ -518,7 +519,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 
 ## 20. Platform facts
 
-"SDK" means the declaration was read in the 27.3 beta SDK on this Mac on 2026-11-18. `scripts/sdk-facts.sh` checks each of those rows against the SDK of the pinned Xcode, 27.2, which is the one the code is built against, and a row says so where the two SDKs differ. "Apple docs" and "reported" come from the research of the same day and were not re-checked.
+"SDK" means the declaration was read in the 27.3 beta SDK on this Mac on 2026-11-18. The code is built against the SDK of the pinned Xcode, and `scripts/sdk-facts.sh` is the check of those rows against it. Where the pinned SDK and the beta's differ, the row says so. "Apple docs" and "reported" come from the research of the same day and were not re-checked.
 
 | Fact | Status |
 |---|---|
@@ -529,7 +530,8 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | `ControlWidget` is available on iOS 18, macOS 26 and watchOS 26. `handGestureShortcut` is available on watchOS 11. | SDK |
 | `LongRunningIntent` exists from OS 27, with `performBackgroundTask`. | SDK |
 | `LiveActivityIntent` and ActivityKit's `ActivityAttributes` are marked unavailable on macOS in the 27.2 SDK. The 27.3 beta SDK offers both from macOS 27.3. `canImport(ActivityKit)` is true on macOS with either. | SDK, both read on 2026-11-19 |
-| The notes schema offers `createNote`, `updateNote` and `appendText`. | SDK |
+| The notes schema offers `createNote`, `updateNote` and `appendText`. It is unavailable on watchOS. | SDK |
+| Xcode warns when an app lists a statically linked package in `AppIntentsPackage.includedPackages`, because that package's metadata is already included. Warnings are errors, so the apps declare no `AppIntentsPackage` of their own. | Found by WP-01's build with Xcode 27.2. |
 | `PKStrokeRecognizer` exists on iOS and macOS, with an async `search`. | SDK |
 | `SystemLanguageModel` exposes `availability`, `contextSize`, `tokenCount(for:)` and `supportedLanguages`. | SDK |
 | `SpeechTranscriber` exposes `isAvailable`, `supportedLocales` and `installedLocales`. `AssetInventory` exposes `assetInstallationRequest(supporting:)`. | SDK |
