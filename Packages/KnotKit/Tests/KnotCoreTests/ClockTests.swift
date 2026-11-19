@@ -25,12 +25,13 @@ import Testing
                 in: AppendContext(window: .default, captures: captures))?
                 .segmentID == id(1))
 
-        // A heartbeat written before the clock moved back is ahead of now. It is stale, so
-        // a press after a crash recovers the orphan and starts a recording.
+        // A heartbeat written before the clock moved back is ahead of now. It is stale, so the
+        // controls of other processes stop showing a recording, and a press in the app
+        // recovers the orphan and starts a recording.
         let saved = SavedRecordingState(captureID: id(2), launchID: id(3), heartbeatAt: at("10:00"))
         #expect(saved.isStale(at: at("09:58")))
         #expect(
-            RecordingPressRule.decide(Press(.tap, at: at("09:58")), recorder: nil, saved: saved, now: at("09:58"))
+            RecordingPressRule.decide(Press(.tap, at: at("09:58")), recorder: .idle, saved: saved)
                 == .recoverOrphanThenStart(id(2)))
 
         // A note whose latest capture is ahead of now is unsettled until its window closes.

@@ -65,8 +65,6 @@ public enum PressDecision: Hashable, Sendable {
     /// Stop the recording and discard it: a tap-started recording stopped within one
     /// second of its press.
     case stopAndDiscard
-    /// Ask the process that runs the recording to stop it.
-    case askOwnerToStop(CaptureID)
     /// The press is ignored: the recording is still starting or stopping.
     case ignore
 }
@@ -76,37 +74,34 @@ public enum RecordingPressRule {
     /// The accidental-press window. It is measured between the two presses, not in audio.
     public static let accidentalPressWindow: TimeInterval = 1
 
-    /// The decision for `press`.
+    /// The decision for `press`, made in the app's process, where the recorder is.
+    ///
+    /// Only a process that has a recorder decides a press: every recording intent runs in
+    /// the app's process (docs/architecture.md §14), and a control in another process hands
+    /// its press to the app, where this rule runs. The recorder is the truth: a press stops a
+    /// recording that this process is running, whatever the heartbeat says, and an idle
+    /// recorder that finds a saved state, fresh or stale, recovers the orphan and starts a
+    /// new recording, so a press never does nothing after a crash.
     ///
     /// - Parameters:
-    ///   - recorder: this process's recorder, or `nil` in a process that has none, such as
-    ///     the widget extension. Where there is a recorder it decides, whatever the heartbeat
-    ///     says: a press stops a recording that this process is running.
-    ///   - saved: the saved recording state, which serves other processes and recovery.
-    ///   - now: the time to judge the heartbeat by.
-    public static func decide(
-        _ press: Press, recorder: RecorderActivity?, saved: SavedRecordingState?, now: Date
-    ) -> PressDecision {
-        if let recorder {
-            switch recorder {
-            case .starting, .stopping:
-                return .ignore
-            case .recording(let start):
-                // A release ends only the hold that started the recording.
-                if press.kind == .holdRelease, start.kind != .holdStart { return .ignore }
-                return isAccidental(start: start, stop: press) ? .stopAndDiscard : .stopAndKeep
-            case .idle:
-                if press.kind == .holdRelease { return .ignore }
-                // Nothing records in this process, so a saved state is an orphan, fresh or not.
-                if let saved { return .recoverOrphanThenStart(saved.captureID) }
-                return .start
-            }
+    ///   - recorder: this process's recorder. There is no way to call the rule without one.
+    ///   - saved: the saved recording state, which recovery reads.
+    public static func decide(_ press: Press, recorder: RecorderActivity, saved: SavedRecordingState?)
+        -> PressDecision
+    {
+        switch recorder {
+        case .starting, .stopping:
+            return .ignore
+        case .recording(let start):
+            // A release ends only the hold that started the recording.
+            if press.kind == .holdRelease, start.kind != .holdStart { return .ignore }
+            return isAccidental(start: start, stop: press) ? .stopAndDiscard : .stopAndKeep
+        case .idle:
+            if press.kind == .holdRelease { return .ignore }
+            // Nothing records in this process, so a saved state is an orphan, fresh or not.
+            if let saved { return .recoverOrphanThenStart(saved.captureID) }
+            return .start
         }
-        guard let saved else { return press.kind == .holdRelease ? .ignore : .start }
-        if saved.isStale(at: now) {
-            return press.kind == .holdRelease ? .ignore : .recoverOrphanThenStart(saved.captureID)
-        }
-        return press.kind == .holdStart ? .ignore : .askOwnerToStop(saved.captureID)
     }
 
     /// True when a stop discards the recording: a tap started it and the stop came within

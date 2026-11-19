@@ -6,7 +6,7 @@ import Testing
     struct Row: Sendable, CustomTestStringConvertible {
         let name: String
         let press: Press
-        let recorder: RecorderActivity?
+        let recorder: RecorderActivity
         let saved: SavedRecordingState?
         let expected: PressDecision
         var testDescription: String { name }
@@ -61,39 +61,27 @@ import Testing
         Row(
             name: "after a crash, a stale heartbeat is an orphan", press: Press(.tap, at: now), recorder: .idle,
             saved: stale, expected: .recoverOrphanThenStart(orphan)),
-        // In another process, such as a control in the widget extension, the heartbeat decides.
         Row(
-            name: "elsewhere: nothing saved, a tap starts", press: Press(.tap, at: now), recorder: nil, saved: nil,
-            expected: .start),
-        Row(
-            name: "elsewhere: a fresh heartbeat, a tap asks the app to stop", press: Press(.tap, at: now),
-            recorder: nil, saved: fresh, expected: .askOwnerToStop(orphan)),
-        Row(
-            name: "elsewhere: a stale heartbeat, a tap recovers and starts", press: Press(.tap, at: now), recorder: nil,
-            saved: stale, expected: .recoverOrphanThenStart(orphan)),
-        Row(
-            name: "elsewhere: a stale heartbeat, a release does nothing", press: Press(.holdRelease, at: now),
-            recorder: nil, saved: stale, expected: .ignore),
+            name: "after a crash, a release with nothing held does nothing", press: Press(.holdRelease, at: now),
+            recorder: .idle, saved: stale, expected: .ignore),
     ]
 
     @Test(arguments: rows) func pressDecisions(row: Row) {
         #expect(
-            RecordingPressRule.decide(row.press, recorder: row.recorder, saved: row.saved, now: Self.now)
+            RecordingPressRule.decide(row.press, recorder: row.recorder, saved: row.saved)
                 == row.expected)
     }
 
     @Test func thePressAfterACrashNeverDoesNothing() {
         // docs/product-spec.md §4.2: if a crash cut a recording short, the next press starts a
-        // new recording and the cut one is recovered beside it, fresh heartbeat or stale,
-        // in the app or elsewhere.
+        // new recording and the cut one is recovered beside it, fresh heartbeat or stale.
         for saved in [Self.fresh, Self.stale] {
-            #expect(
-                RecordingPressRule.decide(Press(.tap, at: Self.now), recorder: .idle, saved: saved, now: Self.now)
-                    != .ignore)
+            for kind in [PressKind.tap, .holdStart] {
+                #expect(
+                    RecordingPressRule.decide(Press(kind, at: Self.now), recorder: .idle, saved: saved)
+                        == .recoverOrphanThenStart(Self.orphan))
+            }
         }
-        #expect(
-            RecordingPressRule.decide(Press(.tap, at: Self.now), recorder: nil, saved: Self.stale, now: Self.now)
-                == .recoverOrphanThenStart(Self.orphan))
     }
 
     @Test(arguments: [(0.0, false), (2.9, false), (3.0, false), (3.1, true), (-3.0, false), (-3.1, true)])
@@ -164,5 +152,18 @@ import Testing
             HotkeyMachine.reduce(.holding(since: Self.down), .markReached(at: Self.down)) == (
                 .holding(since: Self.down), []
             ))
+    }
+}
+
+@Suite struct PressAfterCrashTests {
+    @Test(arguments: [0.0, 0.5, 1.0, 2.0, 3.0])
+    func aPressWithinThreeSecondsOfACrashIsNeverLost(secondsSinceCrash: Double) {
+        let crash = at("10:00")
+        let saved = SavedRecordingState(captureID: id(1), launchID: id(2), heartbeatAt: crash)
+        let now = crash.addingTimeInterval(secondsSinceCrash)
+        // Only the app's process, which has the recorder, decides a press: a control in another
+        // process hands the press to it, so no heartbeat, however fresh, can swallow a press.
+        let decision = RecordingPressRule.decide(Press(.tap, at: now), recorder: .idle, saved: saved)
+        #expect(decision == .recoverOrphanThenStart(id(1)))
     }
 }
