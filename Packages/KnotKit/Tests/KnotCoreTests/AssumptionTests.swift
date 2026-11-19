@@ -93,11 +93,12 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
 
     @Test("A16: the microphone opens at the 250 ms mark of a hold, never on a tap")
     func a16() {
-        let down = at("10:00")
-        let tap = HotkeyMachine.reduce(.pressed(since: down), .keyUp(at: at("10:00:00.249")))
+        let down = ContinuousClock.now
+        let tap = HotkeyMachine.reduce(.pressed(since: down), .keyUp)
         #expect(!tap.1.contains(.startHoldRecording))
-        let hold = HotkeyMachine.reduce(.pressed(since: down), .markReached(at: at("10:00:00.25")))
+        let hold = HotkeyMachine.reduce(.pressed(since: down), .markReached)
         #expect(hold.1 == [.startHoldRecording])
+        #expect(HotkeyMachine.markDeadline(after: down) - down == .milliseconds(250))
     }
 
     @Test("A17: a typed capture starts at its first keystroke")

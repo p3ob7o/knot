@@ -114,21 +114,22 @@ public enum RecordingPressRule {
     }
 }
 
-/// The Mac hotkey's states (docs/product-spec.md §6, docs/architecture.md §15).
+/// The Mac hotkey's states (docs/product-spec.md §6, docs/architecture.md §15). Times are on
+/// the monotonic clock, which a change of the wall clock cannot move.
 public enum HotkeyState: Hashable, Sendable {
     case idle
-    /// The key is down and its 250 ms mark has not passed.
-    case pressed(since: Date)
+    /// The key is down and its 250 ms mark has not been handled.
+    case pressed(since: ContinuousClock.Instant)
     /// The key is held past the mark and a recording runs.
-    case holding(since: Date)
+    case holding(since: ContinuousClock.Instant)
 }
 
 /// What happens to the hotkey.
 public enum HotkeyEvent: Hashable, Sendable {
-    case keyDown(at: Date)
-    case keyUp(at: Date)
-    /// The timer set at key-down fired.
-    case markReached(at: Date)
+    case keyDown(at: ContinuousClock.Instant)
+    case keyUp
+    /// The timer set at key-down for `HotkeyMachine.markDeadline(after:)` fired.
+    case markReached
     /// The once-a-second check found the key up while a hold records: its release was missed.
     case keyFoundUp
     case escape
@@ -150,20 +151,26 @@ public enum HotkeyEffect: Hashable, Sendable {
 
 /// The hotkey's state machine. A press shorter than 250 ms is a tap, and the microphone opens
 /// only at the 250 ms mark of a hold, never on a tap.
+///
+/// The order of events decides, not the clock: a release that arrives before the mark has
+/// been handled is a tap, because the microphone has not opened, and the mark that arrives
+/// first opens the hold. So no press does nothing, and no clock can leave the key stuck. The
+/// app sets the mark's timer on the monotonic clock, at `markDeadline(after:)`.
 public enum HotkeyMachine {
-    public static let holdMark: TimeInterval = 0.25
+    public static let holdMark: Duration = .milliseconds(250)
+
+    /// When the mark's timer fires for a key that went down at `keyDown`.
+    public static func markDeadline(after keyDown: ContinuousClock.Instant) -> ContinuousClock.Instant {
+        keyDown.advanced(by: holdMark)
+    }
 
     public static func reduce(_ state: HotkeyState, _ event: HotkeyEvent) -> (HotkeyState, [HotkeyEffect]) {
         switch (state, event) {
         case (.idle, .keyDown(let at)):
             return (.pressed(since: at), [.prepareMicrophone])
-        case (.pressed(let since), .keyUp(let at)):
-            // A release that comes at or after the mark, before the mark's timer was handled,
-            // is not a tap, and the microphone never opened.
-            return at.timeIntervalSince(since) < holdMark
-                ? (.idle, [.releaseMicrophone, .tap]) : (.idle, [.releaseMicrophone])
-        case (.pressed(let since), .markReached(let at)):
-            guard at.timeIntervalSince(since) >= holdMark else { return (state, []) }
+        case (.pressed, .keyUp):
+            return (.idle, [.releaseMicrophone, .tap])
+        case (.pressed(let since), .markReached):
             return (.holding(since: since), [.startHoldRecording])
         case (.holding, .keyUp), (.holding, .keyFoundUp), (.holding, .escape), (.holding, .keyDown):
             // Releasing stops the hold. If a release was missed, the check of the key's state,
