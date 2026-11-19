@@ -34,6 +34,7 @@ public final class PowerCutFileLayer: FileLayer {
         var operations = 0
         var syncs = 0
         var forgotten: Set<Int> = []
+        var denied: Set<String> = []
         var dieAfter: Int?
         var failNextWrite: KnotError?
     }
@@ -63,6 +64,12 @@ public final class PowerCutFileLayer: FileLayer {
     /// that forgot it would. A test uses it to show that it notices every missing sync.
     public func forgetSync(_ index: Int) {
         state.withLock { _ = $0.forgotten.insert($0.syncs + index) }
+    }
+
+    /// Makes the folder at `url` one that this process may not open, as a sandboxed app may not
+    /// open a folder above its container: syncing it fails with `EPERM`.
+    public func denyOpening(_ url: URL) {
+        state.withLock { _ = $0.denied.insert(Self.path(url)) }
     }
 
     /// Removes a folder and everything in it, synced, as something other than Knot might.
@@ -170,6 +177,7 @@ public final class PowerCutFileLayer: FileLayer {
     public func syncFolder(_ url: URL) throws(KnotError) {
         try run { state throws(KnotError) in
             let path = Self.path(url)
+            guard !state.denied.contains(path) else { throw KnotError.writeFailed.with(.init(posixError: EPERM)) }
             guard state.folders[path] != nil else { throw KnotError.writeFailed.with(.init(posixError: ENOENT)) }
             if Self.forgets(&state) { return }
             state.folders[path]!.synced = state.folders[path]!.current

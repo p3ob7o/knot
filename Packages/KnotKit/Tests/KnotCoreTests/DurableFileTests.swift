@@ -91,6 +91,18 @@ private let storeRoot = URL(fileURLWithPath: "/store", isDirectory: true)
         shared.cutPower()
         #expect((try? shared.read(storeRoot.appending(path: "A/x"))) == new, "B's acknowledged save was lost.")
 
+        // The root's own ancestors: Library/Application Support made by someone else and never
+        // synced, as an app shell's FileManager does. A save into KnotStore/Inbox survives.
+        let container = PowerCutFileLayer()
+        let support = URL(fileURLWithPath: "/app/Library/Application Support", isDirectory: true)
+        try container.createFolder(URL(fileURLWithPath: "/app", isDirectory: true))
+        try container.createFolder(URL(fileURLWithPath: "/app/Library", isDirectory: true))
+        try container.createFolder(support)
+        let knotStore = support.appending(path: "KnotStore", directoryHint: .isDirectory)
+        try DurableFile(layer: container, root: knotStore).place(new, at: knotStore.appending(path: "Inbox/x"))
+        container.cutPower()
+        #expect((try? container.read(knotStore.appending(path: "Inbox/x"))) == new, "The root's ancestors were lost.")
+
         // And the test notices a DurableFile that forgets any one of its syncs: with each
         // sync of each operation forgotten in turn, what the operation promised is lost.
         for scenario in Scenario.allCases {
@@ -441,5 +453,26 @@ private let storeRoot = URL(fileURLWithPath: "/store", isDirectory: true)
         try FileManager.default.removeItem(at: store.appending(path: "A"))
         try data.write(to: store.appending(path: "A"))
         #expect(throws: KnotError.self) { try durable.place(data, at: store.appending(path: "A/third")) }
+    }
+}
+
+@Suite struct RootAncestorTests {
+    @Test func theWalkStopsAtTheFirstFolderTheProcessMayNotOpen() throws {
+        let layer = PowerCutFileLayer()
+        let app = URL(fileURLWithPath: "/app", isDirectory: true)
+        // /app was there before Knot, synced; above it the process may not open.
+        try layer.createFolder(app)
+        try layer.syncFolder(URL(fileURLWithPath: "/", isDirectory: true))
+        layer.denyOpening(URL(fileURLWithPath: "/", isDirectory: true))
+        try layer.createFolder(app.appending(path: "Library"))
+        let root = app.appending(path: "Library/KnotStore", directoryHint: .isDirectory)
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.place(Data("x".utf8), at: root.appending(path: "Inbox/x"))
+        layer.cutPower()
+        #expect((try? layer.read(root.appending(path: "Inbox/x"))) == Data("x".utf8))
+        // Once per instance: a second save syncs no ancestor again.
+        let before = layer.syncCount
+        try durable.place(Data("y".utf8), at: root.appending(path: "Inbox/y"))
+        #expect(layer.syncCount - before == 2, "the file and its folder")
     }
 }

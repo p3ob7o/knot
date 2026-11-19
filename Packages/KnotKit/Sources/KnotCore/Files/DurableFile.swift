@@ -116,7 +116,9 @@ public struct DurableFile: Sendable {
     /// a save forgets it and goes the whole way again once, and is never acknowledged falsely. Each of these folders must be a folder: a file or a
     /// symbolic link in its place is refused, and a link is never followed.
     public func makeFolder(_ url: URL) throws(KnotError) {
-        for folder in try chain(to: url) {
+        let chain = try chain(to: url)
+        try syncRootAncestorsOnce()
+        for folder in chain {
             let key = folder.path
             if synced.contains(key) { continue }
             if layer.entryKind(folder) == nil { try layer.createFolder(folder) }
@@ -130,6 +132,30 @@ public struct DurableFile: Sendable {
             synced.insert(key)
         }
     }
+
+    /// Makes the names of the root's own ancestors durable, once for this value: an app shell
+    /// makes a folder such as `Library/Application Support` with `FileManager`, which does
+    /// not sync. From the root's parent upward it syncs the folder that holds each name, and
+    /// stops at the first one this process may not open, which is the system's and was there
+    /// before Knot. The root's own name is synced as the first step of every path.
+    private func syncRootAncestorsOnce() throws(KnotError) {
+        guard !synced.contains(Self.ancestorsKey) else { return }
+        var folder = root.deletingLastPathComponent().standardizedFileURL
+        while folder.path != "/" {
+            let parent = folder.deletingLastPathComponent().standardizedFileURL
+            do {
+                try layer.syncFolder(parent)
+            } catch {
+                guard error.context.posixError == EACCES || error.context.posixError == EPERM else { throw error }
+                break
+            }
+            folder = parent
+        }
+        synced.insert(Self.ancestorsKey)
+    }
+
+    /// The memory's mark that the root's ancestors are synced. No path holds a NUL.
+    private static let ancestorsKey = "\u{0}root-ancestors"
 
     /// Runs `operation`, and if it fails because a folder on the way to `folder` is missing or
     /// is not a folder, forgets what was remembered for that folder and everything below it
