@@ -5,10 +5,11 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
 
     python3 scripts/lib/knot_tool.py package [--package <ID>] [--branch <name>]
     python3 scripts/lib/knot_tool.py owns <ID>
-    python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref>
+    python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
-    python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git]
-    python3 scripts/lib/knot_tool.py lint [--team-config <path>]
+    python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
+    python3 scripts/lib/knot_tool.py lint
+    python3 scripts/lib/knot_tool.py team-id --team-config <path>
     python3 scripts/lib/knot_tool.py links
     python3 scripts/lib/knot_tool.py status [--write]
 
@@ -25,8 +26,11 @@ import sys
 
 BRIEFS = "docs/plan"
 NAMED_TESTS = os.path.join(BRIEFS, "named-tests.txt")
-OWNERSHIP_EXTRA = "scripts/ownership-extra.txt"
-CONCURRENCY_ESCAPES = "scripts/concurrency-escapes.txt"
+# The scripts' own folder. The gate may run main's scripts against another tree: then the
+# plan and the sources come from the current folder, the tree under test, and the lists that
+# only the orchestrator edits come from the scripts' checkout.
+SCRIPTS = os.environ.get("KNOT_SCRIPTS", "scripts")
+CONCURRENCY_ESCAPES = os.path.join(SCRIPTS, "concurrency-escapes.txt")
 
 
 def git(*args):
@@ -63,42 +67,107 @@ def packages():
     return sorted((name[:-3] for name in os.listdir(BRIEFS) if re.match(r"^(WP|SP)-\d+\.md$", name)), key=key)
 
 
-def pr_count(package):
-    """How many pull requests a brief plans: the rows of its 'Starts after' table."""
-    rows = [line for line in section(package, "Starts after") if re.match(r"^\|\s*\d+\s*\|", line)]
-    return max(1, len(rows))
+NOTE_ROWS = ("Proof step", "Notes")
+
+
+def plan_rows(package):
+    """The pull requests a brief plans: the first cell of every row of its 'Starts after'
+    table, as in "Proof step", "Notes", "1", "2" or "40a"."""
+    rows = []
+    for line in section(package, "Starts after"):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or not cells or cells[0] in ("PR", "") or set(cells[0]) <= set("-: "):
+            continue
+        rows.append(cells[0])
+    return rows or ["1"]
+
+
+def is_note_branch(branch):
+    """A proof step's note merges from wp/<number>-note, and a spike's from spike/<name>-note."""
+    branch = re.sub(r"^(refs/heads/|origin/)", "", branch or "")
+    return bool(re.match(r"^wp/\d+-note$", branch) or re.match(r"^spike/.+-note$", branch))
+
+
+def merge_state(package, merged):
+    """How many of a package's planned pull requests have merged, out of how many.
+
+    `merged` is a list of (package, is_note) for every merged pull request. A note fills the
+    brief's "Proof step" or "Notes" row; every other pull request fills the next of its
+    other rows, "1", "2" or "40a" to "40d"."""
+    rows = plan_rows(package)
+    note_rows = sum(1 for row in rows if row in NOTE_ROWS)
+    other_rows = len(rows) - note_rows
+    notes = sum(1 for p, note in merged if p == package and note)
+    others = sum(1 for p, note in merged if p == package and not note)
+    return min(notes, note_rows) + min(others, other_rows), len(rows)
+
+
+def has_merged(package, merged):
+    done, total = merge_state(package, merged)
+    return done >= total
 
 
 PATH_TOKEN = re.compile(r"`([^`\s]+)`")
+PART = re.compile(r"\b(\w+) step of `([^`\s]+)`", re.I)
+
+
+def top_level(token):
+    """Whether a path starts at the repository's root, as `docs/x.md` does and `Preview/`
+    does not."""
+    return os.path.exists(token.split("/")[0]) or token.split("/")[0] in ("Packages", "Apps", "docs", "scripts",
+                                                                          "Fixtures", "Resources", "Spikes")
 
 
 def owned_paths(package):
-    """The paths a brief's 'Owns' section names, and the ones its 'except' clauses take out.
+    """The paths a brief's 'Owns' section names, the ones its 'except' clauses take out, and
+    the parts of files it owns.
 
-    A path named after "of", as in "the soak step of `scripts/verify.sh`", is a part of that
-    file that another package owns, so the file stays owned.
+    An 'except' path that is not from the root, as in "`KnotFakes/`, except its `Preview/`
+    folder", is resolved against the folder the same line owns. A path named after "of", as
+    in "the soak step of `scripts/verify.sh`", is a part of that file: the package owns the
+    lines between the part's markers, not the file. scripts/ownership-extra.txt adds paths.
     """
-    owned, excluded = [], []
+    owned, excluded, parts = [], [], []
     for line in section(package, "Owns"):
         if not line.startswith("- "):
             continue
         index = line.find(" except ")
         head, tail = (line[:index], line[index:]) if index >= 0 else (line, "")
-        owned += [token for token in PATH_TOKEN.findall(head) if "/" in token or "." in token]
+        for match in PART.finditer(head):
+            parts.append((match.group(2), match.group(1).lower()))
+        part_paths = {path for path, _ in parts}
+        folder = None
+        for match in PATH_TOKEN.finditer(head):
+            token = match.group(1)
+            if token in part_paths or not ("/" in token or "." in token):
+                continue
+            owned.append(token)
+            if folder is None and token.endswith("/"):
+                folder = token
         for match in PATH_TOKEN.finditer(tail):
             before = tail[:match.start()].rstrip()
             if before.endswith(" of") or before.endswith(" in"):
                 continue
-            excluded.append(match.group(1))
-    if os.path.exists(OWNERSHIP_EXTRA):
-        with open(OWNERSHIP_EXTRA) as f:
+            token = match.group(1)
+            if not top_level(token) and folder:
+                token = folder + token
+            excluded.append(token)
+    for fields in extra_lines():
+        if fields[0] == package:
+            owned.append(fields[1])
+    return owned, excluded, parts
+
+
+def extra_lines():
+    path = os.path.join(SCRIPTS, "ownership-extra.txt")
+    found = []
+    if os.path.exists(path):
+        with open(path) as f:
             for line in f:
                 fields = line.rstrip("\n").split("\t")
-                if line.startswith("#") or len(fields) < 2:
-                    continue
-                if fields[0] == package:
-                    owned.append(fields[1])
-    return owned, excluded
+                if not line.startswith("#") and len(fields) >= 2:
+                    found.append(fields)
+    return found
 
 
 def matches(path, pattern):
@@ -110,8 +179,9 @@ def matches(path, pattern):
 
 
 def package_of_branch(branch):
-    """The package a branch belongs to: wp/01-tooling is WP-01; a spike branch is the spike
-    whose brief owns it; a contract branch is 'contract'."""
+    """The package a branch belongs to: wp/01-tooling is WP-01, wp/13-note is WP-13; a spike
+    branch, or its -note branch, is the spike whose brief owns it; a contract branch is
+    'contract'."""
     branch = re.sub(r"^(refs/heads/|origin/)", "", branch)
     match = re.match(r"^wp/(\d+)-", branch)
     if match:
@@ -119,8 +189,9 @@ def package_of_branch(branch):
     if branch.startswith("contract/"):
         return "contract"
     if branch.startswith("spike/"):
+        name = re.sub(r"-note$", "", branch)
         for package in packages():
-            if any(token == branch for token in PATH_TOKEN.findall("\n".join(section(package, "Owns")))):
+            if any(token == name for token in PATH_TOKEN.findall("\n".join(section(package, "Owns")))):
                 return package
     return None
 
@@ -142,22 +213,101 @@ def contract_owned(path):
     return path.startswith(("Packages/KnotKit/Sources/", "Packages/KnotKit/Tests/", "Apps/"))
 
 
-def cmd_ownership(package, base):
+def owners_of(path):
+    """Every package but WP-00 whose brief or ownership-extra line owns the path, whole or in
+    part."""
+    found = []
+    for package in packages():
+        if package == "WP-00":
+            continue
+        owned, excluded, parts = owned_paths(package)
+        if (any(matches(path, p) for p in owned) and not any(matches(path, p) for p in excluded)) \
+                or any(path == part for part, _ in parts):
+            found.append(package)
+    return found
+
+
+def part_markers(text, name):
+    """The line numbers (from 1) of the two markers that bound a part of a file, such as
+    `# ---- The soak step.` and `# ---- End of the soak step.`, or None."""
+    begin = end = None
+    for number, line in enumerate(text.splitlines(), 1):
+        if begin is None and re.match(r"^\s*# ---- The " + re.escape(name) + r" step\b", line, re.I):
+            begin = number
+        elif begin is not None and re.match(r"^\s*# ---- End of the " + re.escape(name) + r" step\b", line, re.I):
+            end = number
+            break
+    return (begin, end) if begin is not None and end is not None else None
+
+
+def inside_part(path, name, base):
+    """Whether every change to `path` since `base` lies between the markers of its part."""
+    merge_base = git("merge-base", base, "HEAD").strip()
+    try:
+        old = git("show", f"{merge_base}:{path}")
+    except subprocess.CalledProcessError:
+        return False, "the file is new, so it has no part to change"
+    with open(path) as f:
+        new = f.read()
+    old_part, new_part = part_markers(old, name), part_markers(new, name)
+    if not old_part or not new_part:
+        return False, f"the markers of the {name} step are missing"
+    for hunk in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", git("diff", "-U0", merge_base, "--", path), re.M):
+        old_start, old_count = int(hunk.group(1)), int(hunk.group(2) or 1)
+        new_start, new_count = int(hunk.group(3)), int(hunk.group(4) or 1)
+        if old_count and not (old_part[0] < old_start and old_start + old_count - 1 < old_part[1]):
+            return False, f"lines {old_start} to {old_start + old_count - 1} of the base lie outside the {name} step"
+        if new_count and not (new_part[0] < new_start and new_start + new_count - 1 < new_part[1]):
+            return False, f"lines {new_start} to {new_start + new_count - 1} lie outside the {name} step"
+    return True, ""
+
+
+def cmd_ownership(package, base, allowed):
+    """Holds the diff to the paths the package owns.
+
+    WP-00, the orchestrator's own package, owns what PLAN.md §8.5 gives the orchestrator
+    (its lines in scripts/ownership-extra.txt) and every path that no brief owns. A path that
+    no brief owns fails for every other package. `allowed` are paths that the orchestrator
+    allows by hand for this pull request: a shared file it arranged inside a package's
+    paths, or the mechanical edits of a breaking contract change.
+    """
     files = changed_files(base)
-    if package == "contract":
-        bad = [path for path in files if not contract_owned(path)]
-        owned_by = "a contract branch"
-    else:
-        if not os.path.exists(brief_path(package)):
-            print(f"ownership: no brief for {package} in {BRIEFS}")
-            return 1
-        owned, excluded = owned_paths(package)
-        bad = [path for path in files
-               if not any(matches(path, p) for p in owned) or any(matches(path, p) for p in excluded)]
-        owned_by = package
-    for path in bad:
-        print(f"ownership: {path} is not a path that {owned_by} owns")
-    print(f"ownership: {len(files)} changed paths, {len(bad)} outside what {owned_by} owns")
+    bad = []
+    if package != "contract" and not os.path.exists(brief_path(package)):
+        print(f"ownership: no brief for {package} in {BRIEFS}")
+        return 1
+    if package != "contract":
+        owned, excluded, parts = owned_paths(package)
+    for path in files:
+        if any(matches(path, p) for p in allowed):
+            print(f"ownership: {path} is allowed by hand for this pull request")
+            continue
+        if package == "contract":
+            if not contract_owned(path):
+                bad.append((path, "is not a path that a contract branch changes"))
+            continue
+        if any(matches(path, p) for p in excluded):
+            bad.append((path, f"is excepted from what {package} owns"))
+            continue
+        if any(matches(path, p) for p in owned):
+            continue
+        part = next((name for part_path, name in parts if part_path == path), None)
+        if part:
+            ok, why = inside_part(path, part, base)
+            if not ok:
+                bad.append((path, f"is owned by {package} only in its {part} step, and {why}"))
+            continue
+        owners = owners_of(path)
+        if package == "WP-00" and not owners:
+            continue
+        if owners:
+            bad.append((path, f"is owned by {', '.join(owners)}, not {package}"))
+        else:
+            bad.append((path, "is owned by no brief. Ask the orchestrator, who owns it"))
+    for path, why in bad:
+        print(f"ownership: {path} {why}")
+    print(f"ownership: {len(files)} changed paths, {len(bad)} outside what {package} owns, "
+          f"{sum(1 for path in files if any(matches(path, p) for p in allowed))} allowed by hand")
     return 1 if bad else 0
 
 
@@ -212,7 +362,7 @@ def is_document(path):
     return path.endswith(".md") or path.startswith("docs/") or path in ("LICENSE", "TODOS.md")
 
 
-def classify(files):
+def classify(files, base="origin/main"):
     reasons, depth = [], "documents"
     order = {"documents": 0, "leaf": 1, "everything": 2}
     for path in files:
@@ -233,15 +383,17 @@ def classify(files):
     if not files:
         reasons = ["no change from the base"]
     soak = any(any(path.startswith(p) or path == p for p in SOAK) for path in files)
-    if "Packages/KnotKit/Package.swift" in files and "grdb" in git("diff", "--unified=0", "--", "Packages/KnotKit/Package.swift").lower():
-        soak = True
+    if "Packages/KnotKit/Package.swift" in files:
+        merge_base = git("merge-base", base, "HEAD").strip()
+        if "grdb" in git("diff", "--unified=0", merge_base, "--", "Packages/KnotKit/Package.swift").lower():
+            soak = True
     mac_ui = any(any(path.startswith(p) or path == p for p in MAC_UI) for path in files)
     return depth, reasons, soak, mac_ui
 
 
 def cmd_depth(base):
     files = changed_files(base)
-    depth, reasons, soak, mac_ui = classify(files)
+    depth, reasons, soak, mac_ui = classify(files, base)
     print(f"depth={depth}")
     print(f"soak={'1' if soak else '0'}")
     print(f"mac_ui={'1' if mac_ui else '0'}")
@@ -253,26 +405,27 @@ def cmd_depth(base):
 # ---------------------------------------------------------------- named tests
 
 
-def merged_counts(source):
-    """How many pull requests of each package have merged into main."""
-    counts = {}
+def merged_prs(source):
+    """Every merged pull request of a package, as (package, is_note)."""
+    found = []
     if source == "github":
         try:
-            out = subprocess.run(["gh", "pr", "list", "--state", "merged", "--base", "main", "--limit", "500",
+            out = subprocess.run(["gh", "pr", "list", "--state", "merged", "--base", "main", "--limit", "1000",
                                   "--json", "headRefName"], check=True, capture_output=True, text=True).stdout
             for pr in json.loads(out):
                 package = package_of_branch(pr["headRefName"])
                 if package and package != "contract":
-                    counts[package] = counts.get(package, 0) + 1
-            return counts
+                    found.append((package, is_note_branch(pr["headRefName"])))
+            return found
         except (OSError, subprocess.CalledProcessError, ValueError):
             pass
-    # Without GitHub: the squash subjects on origin/main, which start with the package ID.
+    # Without GitHub: the squash subjects on origin/main, which start with the package ID. A
+    # note's subject names its proof step or the spike's code half.
     for subject in lines(git("log", "origin/main", "--format=%s")):
         match = re.match(r"^((?:WP|SP)-\d+)\b", subject)
         if match:
-            counts[match.group(1)] = counts.get(match.group(1), 0) + 1
-    return counts
+            found.append((match.group(1), bool(re.search(r"proof step|code half|\bnote\b", subject, re.I))))
+    return found
 
 
 def code_text():
@@ -289,8 +442,12 @@ def code_text():
     return found
 
 
-def cmd_named_tests(source):
-    counts = merged_counts(source)
+def cmd_named_tests(source, package=None, branch=None):
+    """Every named test of a package that has merged must exist. The pull request under test
+    counts as merged, so a package's last pull request is held to its tests at its own gate."""
+    merged = merged_prs(source)
+    if package and package != "contract":
+        merged.append((package, is_note_branch(branch)))
     code = code_text()
     missing, required = [], 0
     with open(NAMED_TESTS) as f:
@@ -298,14 +455,15 @@ def cmd_named_tests(source):
             if line.startswith("#") or not line.strip():
                 continue
             owner, slug, _ = line.rstrip("\n").split("\t", 2)
-            if counts.get(owner, 0) < pr_count(owner):
+            if not has_merged(owner, merged):
                 continue
             required += 1
             if not any(slug in text for text in code.values()):
                 missing.append((owner, slug))
     for owner, slug in missing:
         print(f"named-tests: {slug}, which {owner} owns, is in no test, script or workflow, and {owner} has merged")
-    print(f"named-tests: {required} required because their package has merged, {len(missing)} missing")
+    print(f"named-tests: {required} required because their package has merged"
+          f"{' or merges with this pull request' if package else ''}, {len(missing)} missing")
     return 1 if missing else 0
 
 
@@ -368,7 +526,27 @@ def module_of(path):
     return match.group(1) if match else None
 
 
-def cmd_lint(team_config):
+def cmd_team_id(team_config):
+    """The signing team's ID, from the owner's local configuration, in no tracked file.
+
+    Exits 3 when there is no local configuration with a team ID: the check did not run, and
+    scripts/verify.sh counts it as skipped, never as passed."""
+    team = None
+    if team_config and os.path.exists(team_config):
+        with open(team_config) as f:
+            match = re.search(r"^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]{10})\s*$", f.read(), re.M)
+            team = match.group(1) if match else None
+    if not team:
+        print(f"team-id: no local configuration with a team ID at {team_config or 'KNOT_LOCAL_CONFIG'}, so the check did not run")
+        return 3
+    found = lines(subprocess.run(["git", "grep", "-l", "-F", team], capture_output=True, text=True).stdout)
+    for path in found:
+        print(f"team-id: {path} holds the signing team's ID from the local configuration")
+    print(f"team-id: looked for the team ID in every tracked file, {len(found)} holding it")
+    return 1 if found else 0
+
+
+def cmd_lint():
     problems = []
 
     def problem(path, number, rule, message):
@@ -436,20 +614,6 @@ def cmd_lint(team_config):
         if re.search(r" 2(\.[^/.]+)?$", os.path.basename(path)):
             problem(path, "-", "copy-file", 'a file whose name ends in " 2"')
 
-    # The signing team's ID, from the local configuration, in no tracked file.
-    team = None
-    if team_config and os.path.exists(team_config):
-        with open(team_config) as f:
-            match = re.search(r"^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]{10})\s*$", f.read(), re.M)
-            team = match.group(1) if match else None
-    if team:
-        found = subprocess.run(["git", "grep", "-l", "-F", team], capture_output=True, text=True).stdout
-        for path in lines(found):
-            problem(path, "-", "team-id", "holds the signing team's ID from the local configuration")
-        print("lint: looked for the team ID of the local configuration in every tracked file")
-    else:
-        print("lint: no local configuration with a team ID, so there was no team ID to look for")
-
     for line in problems:
         print(line)
     print(f"lint: {len(files)} Swift files, {len(problems)} problems")
@@ -514,8 +678,8 @@ def cmd_status(write):
     rows = ["| Package | State | Thread | Pull requests | Milestone evidence |", "|---|---|---|---|---|"]
     for package in packages():
         mine = [pr for pr in prs if package_of_branch(pr["headRefName"]) == package]
-        merged = sum(1 for pr in mine if pr["state"] == "MERGED")
-        total = pr_count(package)
+        merged, total = merge_state(package, [(package, is_note_branch(pr["headRefName"]))
+                                              for pr in mine if pr["state"] == "MERGED"])
         open_prs = [pr for pr in mine if pr["state"] == "OPEN"]
         if merged >= total:
             state = "merged"
@@ -583,20 +747,26 @@ def main(argv):
         print(found)
         return 0
     if command == "owns":
-        owned, excluded = owned_paths(args[0])
+        owned, excluded, parts = owned_paths(args[0])
         for path in owned:
             print(path)
         for path in excluded:
             print("except " + path)
+        for path, name in parts:
+            print(f"the {name} step of {path}")
         return 0
     if command == "ownership":
-        return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"))
+        allowed = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--allow"]
+        return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"), allowed)
     if command == "depth":
         return cmd_depth(option(args, "--base", "origin/main"))
     if command == "named-tests":
-        return cmd_named_tests(option(args, "--merged-from", "github"))
+        return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
+                               option(args, "--branch"))
     if command == "lint":
-        return cmd_lint(option(args, "--team-config"))
+        return cmd_lint()
+    if command == "team-id":
+        return cmd_team_id(option(args, "--team-config"))
     if command == "links":
         return cmd_links()
     if command == "status":

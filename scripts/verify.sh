@@ -34,10 +34,10 @@
 
 source "$(dirname "$0")/lib/common.sh"
 
-ALL_STEPS="doctor plan links fixtures format pins lint ownership core-api named-tests package-build package-test
+ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
 contract-two-targets self-test apps packaging launch mac-ui soak perf tsan model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
-FULL_STEPS="doctor plan links fixtures format pins lint ownership core-api named-tests package-build package-test
+FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
 contract-two-targets self-test apps packaging launch mac-ui"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
@@ -79,6 +79,7 @@ else
     BASE=""
     SEED=""
     SKIP=""
+    ALLOW=()
     set_tier() {
         [[ -z $TIER ]] || usage_fail "One run takes one tier; got --$TIER and $1."
         TIER=${1#--}
@@ -92,6 +93,7 @@ else
             --seed) SEED=${2:-}; [[ $SEED =~ ^[0-9]+$ ]] || usage_fail "--seed needs a number."; shift 2 ;;
             --package) PACKAGE=${2:-}; [[ $PACKAGE =~ ^(WP|SP)-[0-9]+$|^contract$ ]] || usage_fail "--package needs an ID such as WP-10."; shift 2 ;;
             --branch) BRANCH=${2:-}; [[ -n $BRANCH ]] || usage_fail "--branch needs a branch name."; shift 2 ;;
+            --allow) [[ -n ${2:-} ]] || usage_fail "--allow needs a path."; ALLOW+=("$2"); shift 2 ;;
             --base) BASE=${2:-}; [[ -n $BASE ]] || usage_fail "--base needs a ref."; shift 2 ;;
             --status-line)
                 [[ -f $STATUS_FILE ]] || knot_fail "verify-no-status" "No run has written $STATUS_FILE yet." \
@@ -111,7 +113,8 @@ else
     [[ -z $SEED || $TIER == soak ]] || usage_fail "--seed belongs to --soak."
     [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || $ONLY == ownership ]] ||
         usage_fail "--package and --branch belong to --gate, --full and --only ownership."
-    [[ -z $PACKAGE || -z $BRANCH ]] || usage_fail "Use --package or --branch, not both."
+    ((${#ALLOW[@]} == 0)) || [[ $TIER == gate || $ONLY == ownership ]] ||
+        usage_fail "--allow belongs to --gate and --only ownership: the orchestrator allows a path by hand there."
     BASE=${BASE:-origin/main}
 fi
 
@@ -187,10 +190,15 @@ step_format() {
         scripts/lib/models.swift)
 }
 
-step_lint() {
+step_lint() { (cd "$KNOT_ROOT" && tool lint); }
+
+# The signing team's ID in no tracked file. Without the owner's local configuration on this
+# Mac there is no ID to look for: the step then exits 3 and counts as skipped, and the gate
+# lists it as pending in scripts/gate-steps.txt.
+step_team_id() {
     local config="${KNOT_LOCAL_CONFIG:-}"
     [[ -n $config ]] || config="$KNOT_CONFIG/Local.xcconfig"
-    (cd "$KNOT_ROOT" && tool lint --team-config "$config")
+    (cd "$KNOT_ROOT" && tool team-id --team-config "$config")
 }
 
 step_ownership() {
@@ -198,10 +206,19 @@ step_ownership() {
         echo "ownership: no package to check. This is not a package's branch, and no --package or --branch named one."
         return 0
     fi
-    (cd "$KNOT_ROOT" && tool ownership --package "$PACKAGE" --base "$BASE")
+    local allow=() path
+    for path in ${ALLOW[@]+"${ALLOW[@]}"}; do allow+=(--allow "$path"); done
+    (cd "$KNOT_ROOT" && tool ownership --package "$PACKAGE" --base "$BASE" ${allow[@]+"${allow[@]}"})
 }
 
-step_named_tests() { (cd "$KNOT_ROOT" && tool named-tests); }
+# The pull request under test counts as merged, so a package's last pull request is held
+# to its named tests at its own gate.
+step_named_tests() {
+    local options=()
+    [[ -n $PACKAGE ]] && options+=(--package "$PACKAGE")
+    [[ -n $BRANCH ]] && options+=(--branch "$BRANCH")
+    (cd "$KNOT_ROOT" && tool named-tests ${options[@]+"${options[@]}"})
+}
 
 # KnotCore's public API: on a branch that is not a contract branch, it must equal the base's
 # (docs/architecture.md §3). It compares the public symbols and relationships of the two
@@ -575,6 +592,9 @@ if [[ -z $PACKAGE ]]; then
         PACKAGE="$(cd "$KNOT_ROOT" && tool package 2>/dev/null || true)"
     fi
 fi
+# The branch tells a proof step's note from the package's own pull requests. On a detached
+# head the orchestrator names it with --branch.
+[[ -n $BRANCH ]] || BRANCH="$(git -C "$KNOT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 
 DEPTH=""
 RUN_MAC_UI=0
@@ -624,7 +644,7 @@ else
             gate_soak="$(printf '%s\n' "$depth_out" | sed -n 's/^soak=//p')"
             gate_mac_ui="$(printf '%s\n' "$depth_out" | sed -n 's/^mac_ui=//p')"
             reason="$(printf '%s\n' "$depth_out" | sed -n 's/^reason=//p')"
-            common="doctor plan format ownership core-api package-build named-tests pins lint links fixtures"
+            common="doctor plan format ownership core-api package-build named-tests pins lint team-id links fixtures"
             case $DEPTH in
                 documents) STEPS="doctor plan links ownership named-tests" ;;
                 leaf) STEPS="$common package-test contract-two-targets self-test apps launch" ;;
@@ -655,6 +675,10 @@ fi
 mkdir -p "$KNOT_LOGS"
 START=$(knot_now)
 PASSED=0
+SKIPPED_STEPS=0
+# A step that cannot run on this Mac exits with this status, and counts as skipped.
+SKIPPED_CODE=3
+SKIPPABLE="team-id"
 FAILED_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -686,9 +710,16 @@ for step in $STEPS; do
         "$KNOT_ROOT/scripts/build-slot.sh" run $( [[ $TIER == gate ]] && echo --gate ) $options --label "$step" \
             -- "$KNOT_ROOT/scripts/verify.sh" --in-step "$step" >"$log" 2>&1 &
     fi
-    if wait $!; then
+    code=0
+    wait $! || code=$?
+    if ((code == SKIPPED_CODE)) && [[ " $SKIPPABLE " == *" $step "* ]]; then
+        # A step that could not run here says so, and counts as skipped, never as passed.
+        SKIPPED_STEPS=$((SKIPPED_STEPS + 1))
+        printf 'verify: skip  %-22s %s\n' "$step" "$(tail -n 1 "$log")"
+    elif ((code == 0)); then
         PASSED=$((PASSED + 1))
         printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
+        [[ $step == ownership ]] && ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
         [[ $step == package-test || $step == tsan || $step == soak ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
@@ -709,23 +740,28 @@ done
 
 total=$(echo $STEPS | wc -w | tr -d ' ')
 failed=$((${#FAILED_STEP} > 0 ? 1 : 0))
-not_run=$((total - PASSED - failed))
+not_run=$((total - PASSED - failed - SKIPPED_STEPS))
+ALLOWED=${ALLOWED:-0}
 pending=0
 for word in $PENDING; do [[ $word == "("* ]] && pending=$((pending + 1)); done
 status=ok
 [[ -n $FAILED_STEP ]] && status=FAILED
 xcode="$( [[ -n ${KNOT_XCODE_VERSION:-} ]] && knot_xcode_label || echo 'Xcode not selected')"
 duration="$(knot_duration $(($(knot_now) - START)))"
-printf 'verify %s: %s · steps %d passed, %d failed, %d not run, %d pending · tests %d passed, %d failed, %d skipped · %s · %s · %s\n' \
-    "$LABEL" "$status" "$PASSED" "$failed" "$not_run" "$pending" \
-    "$TESTS_PASSED" "$TESTS_FAILED" "$TESTS_SKIPPED" "$duration" "$xcode" "$(knot_macos_label)"
+allowed_text=""
+((ALLOWED)) && allowed_text=" · $ALLOWED paths allowed by hand"
+printf 'verify %s: %s · steps %d passed, %d failed, %d skipped, %d not run, %d pending · tests %d passed, %d failed, %d skipped%s · %s · %s · %s\n' \
+    "$LABEL" "$status" "$PASSED" "$failed" "$SKIPPED_STEPS" "$not_run" "$pending" \
+    "$TESTS_PASSED" "$TESTS_FAILED" "$TESTS_SKIPPED" "$allowed_text" "$duration" "$xcode" "$(knot_macos_label)"
 
 # The status line: the same facts in at most 140 characters, for a commit status, whose
 # description GitHub cuts at 140. scripts/verify.sh --status-line prints it again.
 short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}: $PASSED/$total steps, $TESTS_PASSED tests"
 ((TESTS_FAILED)) && short="$short, $TESTS_FAILED failed"
 ((TESTS_SKIPPED)) && short="$short, $TESTS_SKIPPED skipped"
+((SKIPPED_STEPS)) && short="$short, $SKIPPED_STEPS steps skipped"
 ((pending)) && short="$short, $pending pending"
+((ALLOWED)) && short="$short, $ALLOWED allowed by hand"
 short="$short · $duration · Xcode ${KNOT_XCODE_VERSION:-?} ${KNOT_XCODE_BUILD:-}"
 [[ -n ${KNOT_XCODE_NOTE:-} ]] && short="$short*"
 candidate="$short · macOS $(sw_vers -buildVersion)"

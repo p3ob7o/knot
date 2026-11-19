@@ -1,3 +1,23 @@
 # Paths a package owns beyond what its brief's "Owns" section names, for the ownership check
 # of scripts/verify.sh. One line each, three fields separated by one tab: the package, the
 # path (a folder ends in /), and the decision that gave it. Only the orchestrator edits it.
+WP-00	Packages/KnotKit/Package.swift	PLAN.md §8.5: the orchestrator's shared files
+WP-00	Packages/KnotKit/Package.resolved	PLAN.md §8.5
+WP-00	project.yml	PLAN.md §8.5
+WP-00	AGENTS.md	PLAN.md §8.5
+WP-00	PLAN.md	PLAN.md §8.5
+WP-00	docs/plan/	PLAN.md §8.5
+WP-00	docs/reviews/	PLAN.md §8.5
+WP-00	docs/orchestrator.md	PLAN.md §8.5
+WP-00	docs/product-spec.md	PLAN.md §8.5
+WP-00	docs/architecture.md	PLAN.md §8.5
+WP-00	scripts/	PLAN.md §8.5: after WP-01 merges
+WP-00	docs/checklists/	PLAN.md §8.5: after WP-04 merges
+WP-00	docs/status.md	PLAN.md §8.7: written at milestones
+WP-13	Packages/KnotKit/Sources/knot-eval/Speech*.swift	pull request 19: each command of knot-eval in files of its own
+WP-13	Packages/KnotKit/Tests/knot-evalTests/Speech*.swift	pull request 19
+WP-14	Packages/KnotKit/Sources/knot-eval/Cleanup*.swift	pull request 19
+WP-14	Packages/KnotKit/Tests/knot-evalTests/Cleanup*.swift	pull request 19
+WP-00	Packages/KnotKit/Sources/knot-eval/main.swift	pull request 19: shared by the two commands
+WP-00	Packages/KnotKit/Sources/knot-eval/EvalOptions.swift	pull request 19: shared by the two commands
+WP-00	Packages/KnotKit/Tests/knot-evalTests/knot-evalTests.swift	pull request 19: shared by the two commands

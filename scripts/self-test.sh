@@ -102,7 +102,7 @@ if python3 -I -B - <<'PY'
 import sys
 sys.path.insert(0, "scripts/lib")
 import knot_tool as k
-owned, excluded = k.owned_paths("WP-01")
+owned, excluded, parts = k.owned_paths("WP-01")
 assert "scripts/" in owned and "scripts/release.sh" in excluded, (owned, excluded)
 assert "scripts/verify.sh" not in excluded, excluded       # "the soak step of scripts/verify.sh" is a part
 assert k.package_of_branch("wp/01-tooling") == "WP-01"
@@ -116,6 +116,25 @@ assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[2] is True
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[2] is False
 assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True                  # Mac UI tests
 assert k.matches("scripts/verify.sh", "scripts/") and not k.matches("scriptsx/a", "scripts/")
+# Every row of a brief's start table is a pull request, notes included (blocker 1 of PR 20).
+assert k.plan_rows("WP-14") == ["Proof step", "1"], k.plan_rows("WP-14")
+assert k.plan_rows("WP-40")[1:] == ["40a", "40b", "40c", "40d"], k.plan_rows("WP-40")
+assert k.is_note_branch("wp/14-note") and k.is_note_branch("spike/locked-recording-note")
+assert not k.is_note_branch("wp/14-cleaner")
+assert k.merge_state("WP-14", [("WP-14", True)]) == (1, 2)
+assert not k.has_merged("WP-14", [("WP-14", True)])
+assert k.has_merged("WP-14", [("WP-14", True), ("WP-14", False)])
+assert k.package_of_branch("spike/locked-recording-note") == "SP-1"
+# An 'except' path is resolved against the folder its line owns (fix 3).
+owned, excluded, parts = k.owned_paths("WP-02")
+assert "Packages/KnotKit/Sources/KnotFakes/Preview/" in excluded, excluded
+# A part of a file: WP-06 owns the soak step of scripts/verify.sh, not the file (fix 5).
+owned, excluded, parts = k.owned_paths("WP-06")
+assert ("scripts/verify.sh", "soak") in parts and "scripts/verify.sh" not in owned, (owned, parts)
+text = "a\n# ---- The soak step. It belongs to WP-06\nb\n# ---- End of the soak step.\nc\n"
+assert k.part_markers(text, "soak") == (2, 4), k.part_markers(text, "soak")
+# A path that no brief owns falls to WP-00 (blocker 2).
+assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
 then
     pass "the gate's helper reads a brief's paths, the branches and the depth table"
