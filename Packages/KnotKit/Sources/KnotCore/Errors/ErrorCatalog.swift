@@ -76,13 +76,20 @@ extension KnotError {
 
     // MARK: Speech, cleanup and ink
 
-    /// The speech model is not installed yet. The recording waits, pending, and plays.
+    /// The speech model is not installed yet, or is still installing. The recording waits,
+    /// pending, and plays.
     public static let speechModelNotInstalled = KnotError(
         code: "speech_model_not_installed", errorClass: .deferral, next: .waitForModel, retry: .safe,
         written: .nothing, exitStatus: .unexpected)
     /// The recording cannot be read. It is kept, with no text. This is final, not a failure to fix.
     public static let audioUnreadable = KnotError(
-        code: "audio_unreadable", next: .none, retry: .notSafe, written: .contentKept, exitStatus: .unexpected)
+        code: "audio_unreadable", errorClass: .final, next: .none, retry: .notSafe, written: .contentKept,
+        exitStatus: .unexpected)
+    /// Speech recognition is unavailable on this device. The recording stays recorded and shows
+    /// as kept with no text here, until another device takes the work. Final on this device.
+    public static let speechUnavailable = KnotError(
+        code: "speech_unavailable", errorClass: .final, next: .none, retry: .notSafe, written: .contentKept,
+        exitStatus: .unexpected)
     /// The transcriber returned an error. The recording is kept.
     public static let transcriptionFailed = KnotError(
         code: "transcription_failed", next: .retry, retry: .safe(times: 5), written: .contentKept,
@@ -93,12 +100,18 @@ extension KnotError {
         written: .textUnchanged, exitStatus: .unexpected)
     /// The device cannot use the cleanup model. The raw transcript is the final text.
     public static let cleanupModelUnavailable = KnotError(
-        code: "cleanup_model_unavailable", next: .none, retry: .notSafe, written: .textUnchanged,
-        exitStatus: .unexpected)
-    /// Cleanup declined: a refusal, an empty or malformed result, or a result the guard rejected.
-    /// The raw transcript is the text, and `context.detail` says which happened.
+        code: "cleanup_model_unavailable", errorClass: .final, next: .none, retry: .notSafe,
+        written: .textUnchanged, exitStatus: .unexpected)
+    /// Cleanup declined: a refusal, a guardrail violation, an empty or malformed result, a result
+    /// the guard rejected, text too long for the model, an unsupported language or an
+    /// unsupported request. The raw transcript is the text, and `context.detail` says which.
     public static let cleanupDeclined = KnotError(
         code: "cleanup_declined", next: .none, retry: .notSafe, written: .textUnchanged, exitStatus: .unexpected)
+    /// Cleanup took longer than its time allows. The raw transcript stays the text, and the job
+    /// tries again.
+    public static let cleanupTimedOut = KnotError(
+        code: "cleanup_timed_out", next: .retry, retry: .safe(times: 5), written: .textUnchanged,
+        exitStatus: .unexpected)
     /// Handwriting recognition failed. The drawing is kept.
     public static let recognitionFailed = KnotError(
         code: "recognition_failed", next: .retry, retry: .safe(times: 5), written: .contentKept,
@@ -106,10 +119,15 @@ extension KnotError {
 
     // MARK: Deferrals: a step that cannot run now
 
-    /// The system limits requests to the model for now.
+    /// The system limits requests to the model for now. `context.retryAt` says when to try
+    /// again, when the system gives a time.
     public static let requestsLimited = KnotError(
         code: "requests_limited", errorClass: .deferral, next: .waitAndRetry, retry: .safe, written: .nothing,
         exitStatus: .unexpected)
+    /// The system limits its resources for now.
+    public static let systemResourcesLimited = KnotError(
+        code: "system_resources_limited", errorClass: .deferral, next: .waitAndRetry, retry: .safe,
+        written: .nothing, exitStatus: .unexpected)
     /// The app has no background time left.
     public static let noBackgroundTime = KnotError(
         code: "no_background_time", errorClass: .deferral, next: .openKnot, retry: .safe, written: .nothing,
@@ -263,9 +281,9 @@ extension KnotError {
         storeNotOpen, writeFailed, groupContainerMissing, agentRefusedMilestoneStore, devStoreFolderInvalid,
         microphonePermissionRefused, noInputDevice, audioSessionBusy, tooLittleSpace, captureStoppedDiskFull,
         conversionFailed, captureBlockedByRecording,
-        speechModelNotInstalled, audioUnreadable, transcriptionFailed, cleanupModelNotReady,
-        cleanupModelUnavailable, cleanupDeclined, recognitionFailed,
-        requestsLimited, noBackgroundTime, deviceLocked,
+        speechModelNotInstalled, audioUnreadable, speechUnavailable, transcriptionFailed, cleanupModelNotReady,
+        cleanupModelUnavailable, cleanupDeclined, cleanupTimedOut, recognitionFailed,
+        requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked,
         inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch,
         syncSignedOut, syncAccountChanged, syncZoneRemoved, syncMassDeletePaused, syncUploadNeedsConsent,
         textTooLong, captureIDConflict, revisionStale, revisionForeign, cursorForeign, cursorAheadOfStore,

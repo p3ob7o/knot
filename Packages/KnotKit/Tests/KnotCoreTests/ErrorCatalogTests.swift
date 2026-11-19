@@ -91,7 +91,8 @@ import Testing
             .noInputDevice, .audioSessionBusy, .tooLittleSpace, .conversionFailed, .speechModelNotInstalled,
             .audioUnreadable, .cleanupModelNotReady, .cleanupModelUnavailable, .cleanupDeclined, .recognitionFailed,
             .inboxItemUnreadable, .checksumMismatch, .syncSignedOut, .syncAccountChanged, .syncZoneRemoved,
-            .syncMassDeletePaused, .textTooLong, .captureStoppedDiskFull, .cursorForeign,
+            .syncMassDeletePaused, .textTooLong, .captureStoppedDiskFull, .cursorForeign, .speechUnavailable,
+            .cleanupTimedOut, .transcriptionFailed, .systemResourcesLimited,
         ]
         for error in named { #expect(KnotError.catalog.contains(error)) }
     }
@@ -103,8 +104,35 @@ import Testing
                 == Set(
                     [
                         KnotError.cleanupModelNotReady, .speechModelNotInstalled, .requestsLimited, .noBackgroundTime,
-                        .deviceLocked,
+                        .deviceLocked, .systemResourcesLimited,
                     ].map(\.code)))
+    }
+
+    @Test func threeErrorsAreFinal() {
+        // docs/architecture.md §4 and §5: no retry on this device can fix them, so the job
+        // ends at once and is not tried again.
+        #expect(
+            Set(KnotError.catalog.filter(\.isFinal).map(\.code))
+                == Set([KnotError.speechUnavailable, .audioUnreadable, .cleanupModelUnavailable].map(\.code)))
+        for error in KnotError.catalog where error.isFinal {
+            #expect(!error.retry.isSafe, "\(error.code) is final, so no retry is offered.")
+        }
+        // A failed recognition is an attempt, with a retry.
+        #expect(KnotError.recognitionFailed.errorClass == .failure)
+        #expect(KnotError.recognitionFailed.retry.isSafe)
+    }
+
+    @Test func theCasesThatSection5NamesNow() {
+        #expect(KnotError.cleanupTimedOut.errorClass == .failure)
+        #expect(KnotError.systemResourcesLimited.isDeferral)
+        #expect(KnotError.speechModelNotInstalled.isDeferral, "Not installed or still installing.")
+        let details: [ErrorDetail] = [
+            .cleanupRefused, .guardrailViolation, .cleanupEmpty, .cleanupMalformed, .guardRejected,
+            .textTooLongForModel, .unsupportedLanguage, .unsupportedRequest,
+        ]
+        #expect(Set(details).count == 8)
+        let limited = KnotError.requestsLimited.with(.init(retryAt: at("10:05")))
+        #expect(limited.context.retryAt == at("10:05"), "The time to try again, when the system gives one.")
     }
 
     @Test func aThrownErrorMatchesItsCaseByCode() {

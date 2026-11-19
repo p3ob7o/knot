@@ -1,3 +1,5 @@
+import Foundation
+
 /// A stable error code, such as `disk_full` (docs/architecture.md §19).
 ///
 /// Codes are values, not a closed list of cases: a code that a newer Knot wrote still reads,
@@ -33,13 +35,15 @@ public struct ErrorCode: RawRepresentable, Hashable, Sendable, Codable, Expressi
     }
 }
 
-/// Whether an error is a failure, or a step that cannot run now (docs/architecture.md §4).
+/// Whether an error is a failure, a step that cannot run now, or final (docs/architecture.md §4).
 ///
 /// A failure counts as an attempt. A deferral is never counted: the work runs again when the
-/// app comes forward or the model's availability changes.
+/// app comes forward or the model's availability changes. A final error is one that no retry
+/// on this device can fix: the job ends at once and is not tried again here.
 public enum ErrorClass: String, Hashable, Sendable, Codable {
     case failure
     case deferral
+    case final
 }
 
 /// What to do next. The command line, `--json`, MCP results and the app render it.
@@ -145,9 +149,13 @@ public enum ExitStatus: Int32, Hashable, Sendable, Codable, CaseIterable {
 /// A detail that names which of several outcomes one code covers. It never holds note text.
 public enum ErrorDetail: String, Hashable, Sendable, Codable {
     case cleanupRefused = "cleanup_refused"
+    case guardrailViolation = "guardrail_violation"
     case cleanupEmpty = "cleanup_empty"
     case cleanupMalformed = "cleanup_malformed"
     case guardRejected = "guard_rejected"
+    case textTooLongForModel = "text_too_long_for_model"
+    case unsupportedLanguage = "unsupported_language"
+    case unsupportedRequest = "unsupported_request"
 }
 
 /// The IDs and numbers an error is about. It holds IDs only, never text (docs/architecture.md §19).
@@ -160,10 +168,13 @@ public struct ErrorContext: Hashable, Sendable, Codable {
     /// The POSIX error number of a failed file operation.
     public var posixError: Int32?
     public var detail: ErrorDetail?
+    /// When to try again, when the system gives a time, as it may for limited requests.
+    public var retryAt: Date?
 
     public init(
         captureID: CaptureID? = nil, noteID: NoteID? = nil, segmentID: SegmentID? = nil,
-        assetID: AssetID? = nil, jobID: JobID? = nil, posixError: Int32? = nil, detail: ErrorDetail? = nil
+        assetID: AssetID? = nil, jobID: JobID? = nil, posixError: Int32? = nil, detail: ErrorDetail? = nil,
+        retryAt: Date? = nil
     ) {
         self.captureID = captureID
         self.noteID = noteID
@@ -172,6 +183,7 @@ public struct ErrorContext: Hashable, Sendable, Codable {
         self.jobID = jobID
         self.posixError = posixError
         self.detail = detail
+        self.retryAt = retryAt
     }
 
     public static let empty = ErrorContext()
@@ -207,6 +219,9 @@ public struct KnotError: Error, Hashable, Sendable, Codable {
 
     /// True for a step that cannot run now, which is never counted as an attempt.
     public var isDeferral: Bool { errorClass == .deferral }
+
+    /// True for an error that no retry on this device can fix.
+    public var isFinal: Bool { errorClass == .final }
 
     /// The same case with its context.
     public func with(_ context: ErrorContext) -> KnotError {

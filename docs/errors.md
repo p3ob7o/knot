@@ -4,7 +4,7 @@ Every error that Knot reports has a stable code. This page has one entry for eac
 
 Each entry gives:
 
-- **Class.** A `failure` counts as an attempt. A `deferral` is a step that cannot run now and is never counted: the work runs again when the app comes forward or the model's availability changes (`docs/architecture.md` §4).
+- **Class.** A `failure` counts as an attempt. A `deferral` is a step that cannot run now and is never counted: the work runs again when the app comes forward or the model's availability changes. A `final` error is one that no retry on this device can fix: the job ends at once and is not tried again here (`docs/architecture.md` §4).
 - **Next.** What to do next, by its stable name.
 - **Retry.** Whether repeating the same call is safe, and how often it is worth it.
 - **Written.** What was written before the error.
@@ -200,7 +200,7 @@ A typing or drawing capture cannot start while a recording runs on this device.
 
 ### `speech_model_not_installed`
 
-The speech model is not installed yet. The recording waits, pending, and plays.
+The speech model is not installed yet, or is still installing. The recording waits, pending, and plays.
 
 - Class: deferral
 - Next: wait_for_model
@@ -212,7 +212,17 @@ The speech model is not installed yet. The recording waits, pending, and plays.
 
 The recording cannot be read. It is kept, with no text. This is final, not a failure to fix.
 
-- Class: failure
+- Class: final
+- Next: none
+- Retry: not safe
+- Written: content_kept
+- Exit code: 1
+
+### `speech_unavailable`
+
+Speech recognition is unavailable on this device. The recording stays recorded and shows as kept with no text here, until another device takes the work. Final on this device.
+
+- Class: final
 - Next: none
 - Retry: not safe
 - Written: content_kept
@@ -242,7 +252,7 @@ The cleanup model is still downloading or not ready.
 
 The device cannot use the cleanup model. The raw transcript is the final text.
 
-- Class: failure
+- Class: final
 - Next: none
 - Retry: not safe
 - Written: text_unchanged
@@ -250,11 +260,21 @@ The device cannot use the cleanup model. The raw transcript is the final text.
 
 ### `cleanup_declined`
 
-Cleanup declined: a refusal, an empty or malformed result, or a result the guard rejected. The raw transcript is the text, and `context.detail` says which happened.
+Cleanup declined: a refusal, a guardrail violation, an empty or malformed result, a result the guard rejected, text too long for the model, an unsupported language or an unsupported request. The raw transcript is the text, and `context.detail` says which.
 
 - Class: failure
 - Next: none
 - Retry: not safe
+- Written: text_unchanged
+- Exit code: 1
+
+### `cleanup_timed_out`
+
+Cleanup took longer than its time allows. The raw transcript stays the text, and the job tries again.
+
+- Class: failure
+- Next: retry
+- Retry: safe, up to 5 times
 - Written: text_unchanged
 - Exit code: 1
 
@@ -272,7 +292,17 @@ Handwriting recognition failed. The drawing is kept.
 
 ### `requests_limited`
 
-The system limits requests to the model for now.
+The system limits requests to the model for now. `context.retryAt` says when to try again, when the system gives a time.
+
+- Class: deferral
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `system_resources_limited`
+
+The system limits its resources for now.
 
 - Class: deferral
 - Next: wait_and_retry
