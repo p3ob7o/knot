@@ -125,6 +125,16 @@ import Testing
         var negative = Self.manifest
         negative.duration = .seconds(-1)
         #expect(throws: KnotError.self) { try negative.encoded() }
+        // The Duration itself is compared with both bounds, before any conversion.
+        var justBelowZero = Self.manifest
+        justBelowZero.duration = .nanoseconds(-1)
+        #expect(throws: KnotError.self) { try justBelowZero.encoded() }
+        var justPastTheLongest = Self.manifest
+        justPastTheLongest.duration = .seconds(1_000_000_000) + .nanoseconds(1)
+        #expect(throws: KnotError.self) { try justPastTheLongest.encoded() }
+        var zero = Self.manifest
+        zero.duration = .zero
+        #expect(throws: Never.self) { try zero.encoded() }
         var revision = Self.manifest
         revision.revision = -1
         #expect(throws: KnotError.self) { try revision.encoded() }

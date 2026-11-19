@@ -111,3 +111,16 @@ import Testing
         #expect(try JSONDecoder().decode(NoteID.self, from: json) == lower)
     }
 }
+
+@Suite struct UUIDv7TimeBoundsTests {
+    @Test func aDateOutsideTheRangeIsClampedNeverTrappedOrWrapped() {
+        var generator = SystemRandomNumberGenerator()
+        let far = UUIDv7.make(at: Date(timeIntervalSince1970: 1e20), using: &generator)
+        #expect(UUIDv7.milliseconds(of: far) == (1 << 48) - 1)
+        let before = UUIDv7.make(at: Date(timeIntervalSince1970: -1e20), using: &generator)
+        #expect(UUIDv7.milliseconds(of: before) == 0)
+        // Just past 48 bits must not wrap round to a small time.
+        let wrap = UUIDv7.make(at: Date(timeIntervalSince1970: Double(1 << 48) / 1000 + 1), using: &generator)
+        #expect(UUIDv7.milliseconds(of: wrap) == (1 << 48) - 1)
+    }
+}

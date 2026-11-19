@@ -70,7 +70,8 @@ public struct CaptureManifest: Hashable, Sendable {
         let context = ErrorContext(captureID: captureID)
         // Held to the bounds the reader holds, so that nothing is written that could not be
         // read again.
-        let durationIsValid = duration.map { (0...Self.longestDurationSeconds).contains(Self.seconds($0)) } ?? true
+        // The Duration itself is compared with both bounds, before any conversion could round it.
+        let durationIsValid = duration.map { $0 >= .zero && $0 <= Self.longestDuration } ?? true
         guard durationIsValid, revision >= 0, (payloadByteCount ?? 0) >= 0 else {
             throw KnotError.writeFailed.with(context)
         }
@@ -273,6 +274,7 @@ extension CaptureManifest {
     /// The longest duration a manifest may carry: far beyond any recording, and well inside
     /// what milliseconds in an `Int64` can hold.
     static let longestDurationSeconds: Double = 1_000_000_000
+    static let longestDuration: Duration = .seconds(1_000_000_000)
 
     /// Dates are ISO 8601 in UTC with milliseconds, such as `2026-11-19T09:58:00.000Z`.
     private static func text(_ date: Date) -> String {

@@ -40,7 +40,11 @@ public enum UUIDv7 {
 
     /// A version 7 UUID for `date`, with bits from `generator`.
     public static func make(at date: Date, using generator: inout some RandomNumberGenerator) -> UUID {
-        let milliseconds = UInt64(max(0, (date.timeIntervalSince1970 * 1000).rounded(.down)))
+        // Clamped to the 48 bits the ID holds before the conversion, which would otherwise trap
+        // for a date far enough out, or wrap round to a small time.
+        let largest = Double((UInt64(1) << 48) - 1)
+        let raw = (date.timeIntervalSince1970 * 1000).rounded(.down)
+        let milliseconds = UInt64(raw.isNaN ? 0 : min(max(raw, 0), largest))
         let random = (0..<10).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return make(milliseconds: milliseconds, random: random)
     }
