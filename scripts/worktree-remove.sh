@@ -48,17 +48,26 @@ name="$(basename "$TARGET")"
 id="$name-$(printf '%s' "$TARGET" | shasum -a 256 | cut -c1-6)"
 echo "worktree-remove: $TARGET, ID $id"
 
-# 1. Its simulators: every set named by its ID, and those from before the names carried
-#    the hash. A booted one is shut down first, because simctl cannot delete it.
+# 1. Its simulators: every set named by its ID. A booted one is shut down first, because
+#    simctl cannot delete it. Simulators named the old way, by the folder's name alone,
+#    could belong to another checkout in a folder of the same name, so they are listed for
+#    a person to remove and left alone.
 knot_select_xcode
 xcrun simctl list devices -j | python3 -I -c '
 import json, sys
 id, name = sys.argv[1], sys.argv[2]
 for devices in json.load(sys.stdin)["devices"].values():
     for d in devices:
-        if d["name"].startswith(id + "-") or d["name"] in (name + "-iphone", name + "-ipad", name + "-watch"):
-            print("\t".join([d["udid"], d["name"], d["state"]]))' "$id" "$name" |
-    while IFS=$'\t' read -r udid simulator state; do
+        if d["name"].startswith(id + "-"):
+            print("\t".join(["delete", d["udid"], d["name"], d["state"]]))
+        elif d["name"] in (name + "-iphone", name + "-ipad", name + "-watch"):
+            print("\t".join(["old", d["udid"], d["name"], d["state"]]))' "$id" "$name" |
+    while IFS=$'\t' read -r what udid simulator state; do
+        if [[ $what == old ]]; then
+            echo "worktree-remove: left $simulator ($udid), named the old way: another checkout may own it."
+            echo "worktree-remove: delete it with xcrun simctl delete $udid once you know nothing uses it."
+            continue
+        fi
         [[ $state == Shutdown ]] || xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
         xcrun simctl delete "$udid" ||
             knot_fail "infra-simulator-delete" "simctl could not delete $simulator ($udid)." \

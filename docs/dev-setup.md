@@ -47,6 +47,8 @@ scripts/verify.sh --quick    # the plan, the fixtures, formatting, the pins, the
 
 `scripts/worktree-remove.sh <folder>` removes a worktree with its simulators and its development store folder.
 
+Simulators named the old way, by a folder's name alone, as in `knot-iphone`, are never deleted by a script: the name cannot tell which checkout made it, and another checkout in a folder of the same name may still use it. `scripts/sim.sh ensure`, `scripts/sim.sh delete` and `scripts/worktree-remove.sh` list them with their UDIDs, for a person to delete with `xcrun simctl delete <UDID>`.
+
 Keep the repository, its worktrees, the build folder (`~/knot-build`, or `KNOT_BUILD_FOLDER`) and the fixtures folder (`KNOT_LOCAL_FIXTURES`) out of any folder that a cloud file provider syncs, such as `~/Documents` or `~/Desktop` with iCloud Drive on. `scripts/doctor.sh` refuses them there.
 
 ## Build flavours and signing

@@ -8,7 +8,7 @@
 #   scripts/sim.sh udid <role>     print the UDID of iphone, ipad or watch
 #   scripts/sim.sh boot <role>     boot one and wait until it is ready
 #   scripts/sim.sh shutdown        shut down the set
-#   scripts/sim.sh delete          delete the set, and any simulator left from an earlier one
+#   scripts/sim.sh delete          delete every set named by this worktree's ID
 #
 # The ID is the worktree's folder name and a short hash of its path, as in
 # wp-01-tooling-1a2b3c-iphone. Each simulator runs the runtime that matches the pinned
@@ -136,11 +136,6 @@ ensure() {
         # deleted, so that no duplicate appears beside it.
         devices | awk -F'\t' -v want="$name" '$2 == want && $4 == "unavailable" { print $1 }' |
             while IFS= read -r udid; do remove "$udid" "$name"; done
-        # One left from before simulators were named by the worktree's ID, without the hash.
-        if [[ -z $(set_suffix) ]]; then
-            udid="$(udid_of "$KNOT_WORKTREE-$role")"
-            [[ -n $udid ]] && remove "$udid" "$KNOT_WORKTREE-$role"
-        fi
         udid="$(udid_of "$name")"
         if [[ -n $udid ]]; then
             # A simulator left on another runtime, such as one made with the beta, is made
@@ -168,6 +163,21 @@ ensure() {
                 "this worktree's simulators were created"
     fi
     list
+    old_names
+}
+
+# Simulators named the old way, by a folder's name without the hash, are left alone: a
+# name like knot-iphone cannot tell which checkout made it, and another checkout in a
+# folder of the same name may still use it. They are listed for a person to remove.
+old_names() {
+    local found
+    found="$(devices | awk -F'\t' -v old="$KNOT_WORKTREE" '$2 == old "-iphone" || $2 == old "-ipad" || $2 == old "-watch" { print "  " $2 " (" $1 ")" }')"
+    if [[ -n $found ]]; then
+        echo "sim: simulators named the old way, by the folder name $KNOT_WORKTREE alone, are left alone because"
+        echo "sim: another checkout in a folder of that name may own them. Delete one with xcrun simctl delete <UDID>"
+        echo "sim: once you know nothing uses it:"
+        printf '%s\n' "$found"
+    fi
 }
 
 list() {
@@ -203,11 +213,11 @@ case ${1:-} in
         devices | awk -F'\t' -v id="$KNOT_WORKTREE_ID" 'index($2, id "-") == 1 && $3 != "Shutdown" { print $1 }' |
             while IFS= read -r udid; do xcrun simctl shutdown "$udid" 2>/dev/null || true; done ;;
     delete)
-        # Every simulator of this worktree: each set, the unavailable ones, and those from
-        # before the names carried the hash.
-        devices | awk -F'\t' -v id="$KNOT_WORKTREE_ID" -v old="$KNOT_WORKTREE" '
-            index($2, id "-") == 1 || $2 == old "-iphone" || $2 == old "-ipad" || $2 == old "-watch" { print $1 "\t" $2 }' |
-            while IFS=$'\t' read -r udid name; do remove "$udid" "$name"; done ;;
+        # Every simulator of this worktree: each set named by its ID, available or not. Old
+        # names, without the hash, are listed and left alone.
+        devices | awk -F'\t' -v id="$KNOT_WORKTREE_ID" 'index($2, id "-") == 1 { print $1 "\t" $2 }' |
+            while IFS=$'\t' read -r udid name; do remove "$udid" "$name"; done
+        old_names ;;
     -h | --help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) knot_fail "sim-usage" "Unknown command: ${1:-none}." \
         "Use ensure, list, udid <role>, boot <role>, shutdown or delete (scripts/sim.sh --help)." "safe" "nothing" ;;
