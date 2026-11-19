@@ -23,7 +23,7 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 
 The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-4.md`, merged by a pull request that holds nothing else.
 
-WP-02 PR 3 waits for SP-4's short note, and not for its report. No chain to M2 waits for the report of SP-4. WP-02 fixes its size numbers after SP-4 confirms CloudKit's record limit.
+WP-02 PR 3 waits for SP-4's short note, and not for its report. No chain to M2 waits for the report of SP-4. The short note carries CloudKit's record limit as the code half measured it, and WP-02 PR 3 fixes its size numbers from that value. The report confirms the limit.
 
 SP-4 is done when its report has merged and the owner has confirmed its decision. Gate G3 is the owner's sitting for those confirmations, and each spike is confirmed on its own, so a package waits only for the spikes its row names.
 
@@ -51,7 +51,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
   - What happens on a change of account with uploads pending?
   - What does a restored or replaced phone do to device identity?
   - Does an existing sync layer over GRDB and CKSyncEngine, such as SQLiteData, meet those rules, and at what dependency cost?
-- Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, from memory, that a record holds at most about 1 MB apart from its assets.
+- Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, from memory, that a record holds at most about 1 MB apart from its assets. The code half measures the limit and its short note carries the value, because WP-02 PR 3 fixes its size numbers from the note. The report confirms it. If the code half cannot reach CloudKit before its short note, the note says so, and WP-02 PR 3 keeps the first values of `docs/architecture.md` §4, which leave about half of the reported limit free. The report then confirms the limit, or a contract PR changes the sizes.
 - Fix the mechanism of account isolation, which WP-16 builds. A record counts as synced only for the account, the environment and the zone identity it was synced under, and the zone carries an identity written when it is made. So a record missing from the zone it was synced to is deleted locally, and a zone that is gone or new deletes nothing. A fetch that would delete more than a set share of the local notes pauses sync and asks.
 - `docs/architecture.md` §20 reports that CKSyncEngine downloads assets eagerly and offers no way to fetch selected fields. SP-4 checks it.
 - The engine's events cannot be built in a test, so `docs/architecture.md` §11 has the thin adapter between CKSyncEngine and the merge core proven by SP-4's harness, and on hardware at M4.
