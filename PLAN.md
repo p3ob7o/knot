@@ -351,7 +351,7 @@ A spike counts as finished when its report has merged and the owner has confirme
 
 WP-12, WP-13, WP-14 and WP-18 each begin with a proof step. It is the first thing the package does, and its brief says what it must show.
 
-Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
+Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
 
 ### Prior art
 
@@ -411,6 +411,8 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
   - `scripts/release.sh` belongs to WP-43, though the rest of `scripts/` passes to the orchestrator after WP-01.
   - WP-35 owns `Apps/iOS/Ink/`, the canvas screens shared by the iPad and a Pencil-capable iPhone.
   - WP-05 owns `Packages/KnotKit/Sources/KnotFakes/Preview/`.
+  - WP-13 owns `Fixtures/results/speech/` and WP-14 owns `Fixtures/results/cleanup/`, inside WP-04's `Fixtures/`. Each commits its synthetic results there.
+  - A proof step and the code half of a spike each own their short note, `docs/notes/<ID>.md`.
   - WP-06 owns the soak step of `scripts/verify.sh`. WP-11, WP-12 and WP-15 each add one file of kill points to `Packages/KnotKit/Tests/KnotSoak/` in their own PRs.
   - WP-40's ownership extends to the view models that a difference listed in `docs/design/deltas.md` touches. Where the handoff is silent, the implementer uses the system default and adds a line to that file, which the owner clears at M6.
 - The README links to setup, the command reference, contributing and recovery. A changelog is kept from M4, with a section for the command line.

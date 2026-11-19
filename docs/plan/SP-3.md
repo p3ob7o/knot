@@ -12,6 +12,7 @@ Decide how the `knot` command and the MCP server reach the Mac app's store: dire
 
 - `spike/agent-access`, the branch that holds the spike's code. It is never merged.
 - `docs/spikes/SP-3.md`, the report.
+- `docs/notes/SP-3.md`, the short note of its code half
 
 ## Starts after
 
@@ -20,7 +21,7 @@ Decide how the `knot` command and the MCP server reach the Mac app's store: dire
 | Notes | The code half on `spike/agent-access`, and its short note | WP-01 PR 1; WP-04 |
 | 1 | The report, `docs/spikes/SP-3.md`, which ends with a decision | SP-3 notes |
 
-The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. No package waits for SP-3's short note.
+The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-3.md`, merged by a pull request that holds nothing else. No package waits for SP-3's short note.
 
 The TestFlight upload of the spike app runs only once the owner has handed over the API key at G1.
 
