@@ -154,16 +154,39 @@ else
     fail "the gate's helper does not read the plan as it states it"
 fi
 
-# 5. The lint catches every case of its fixture, scripts/lint-cases/Cases.swift: each
-#    "expect: <rule>" line must be answered by a finding of that rule on the next line. The
-#    fixture is linted from a folder named "Copies 2", as if it sat in the iOS widget
-#    extension, whose manifest declares no file timestamps, so the folder's name and the
-#    required-reason rule are tested too.
+# 5. The lint catches every case of its fixture, scripts/lint-cases/Cases.swift, and lets its
+#    harmless lines pass: each "expect: <rule>" line must be answered by a finding of that
+#    rule on the next line, and each "expect: nothing" line by none. The fixture is linted
+#    from a folder named "Copies 2", so the folder-name rule is tested too, and against a
+#    privacy manifest of the self-test's own, which declares only the defaults reason: the
+#    verdict must not rest on the tree's manifests, which packages go on changing.
 copies="$scratch/Copies 2"
 mkdir -p "$copies"
 cp "$KNOT_SCRIPTS/lint-cases/Cases.swift" "$copies/Cases.swift"
-python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
-    --as Apps/Extensions/Widgets-iOS/Sources/ >"$scratch/lint.out" || true
+fixture_manifest="$scratch/FixturePrivacyInfo.xcprivacy"
+cat >"$fixture_manifest" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array><string>1C8F.1</string></array>
+		</dict>
+	</array>
+</dict>
+</plist>
+XML
+lint_fixture() {
+    # lint_fixture <folder to run from> <output>: the fixture's lint, from that folder.
+    (cd "$1" && python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
+        --as Apps/Extensions/Widgets-iOS/Sources/ --manifest "$fixture_manifest" >"$2") || true
+}
+lint_fixture "$KNOT_ROOT" "$scratch/lint.out"
 if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
 import re, sys
 fixture, output = sys.argv[1], open(sys.argv[2]).read()
@@ -193,6 +216,30 @@ then
     pass "the lint catches every case of its fixture, and lets its harmless lines pass"
 else
     fail "the lint misses or wrongly flags cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
+fi
+
+# 5b. The fixture's verdict is the same when the tree's manifests change: run again from a
+#     copy whose real manifests declare every required reason, the findings must not move.
+manifests="$scratch/manifests"
+for manifest in Apps/iOS Apps/macOS Apps/watchOS Apps/Extensions/Widgets-iOS Apps/Extensions/Widgets-watchOS; do
+    mkdir -p "$manifests/$manifest"
+    python3 -I - "$KNOT_ROOT/$manifest/PrivacyInfo.xcprivacy" "$manifests/$manifest/PrivacyInfo.xcprivacy" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as f:
+    manifest = plistlib.load(f)
+manifest["NSPrivacyAccessedAPITypes"] = [
+    {"NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategory" + category, "NSPrivacyAccessedAPITypeReasons": [reason]}
+    for category, reason in [("UserDefaults", "CA92.1"), ("FileTimestamp", "C617.1"), ("SystemBootTime", "35F9.1"),
+                             ("DiskSpace", "E174.1"), ("ActiveKeyboards", "3EC4.1")]]
+with open(sys.argv[2], "wb") as f:
+    plistlib.dump(manifest, f)
+PY
+done
+lint_fixture "$manifests" "$scratch/lint-changed.out"
+if [[ -s $scratch/lint.out ]] && diff "$scratch/lint.out" "$scratch/lint-changed.out" >/dev/null; then
+    pass "the fixture's verdict does not move when the tree's manifests gain every reason"
+else
+    fail "the fixture's verdict moved with the tree's manifests"
 fi
 
 if ((FAILED)); then

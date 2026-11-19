@@ -9,7 +9,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py depth --base <ref>
     python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
-    python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/]
+    python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/] [--manifest <privacy manifest>]
     python3 scripts/lib/knot_tool.py team-id --team-config <path>
     python3 scripts/lib/knot_tool.py links
     python3 scripts/lib/knot_tool.py status [--write]
@@ -675,10 +675,11 @@ def cmd_team_id(team_config):
     return 1 if found else 0
 
 
-def cmd_lint(only=None, as_prefix=None):
+def cmd_lint(only=None, as_prefix=None, manifest=None):
     """The gate's lint (docs/architecture.md §18). With `only`, it reads those files alone;
-    with `as_prefix`, it judges each of them as if it sat in that folder, which is how the
-    self-test runs it on its fixture."""
+    with `as_prefix`, it judges each of them as if it sat in that folder; with `manifest`, it
+    judges required-reason APIs against that privacy manifest alone, never the tree's. That
+    is how the self-test runs it on its fixture, whatever the real manifests come to hold."""
     problems = []
 
     def problem(path, number, rule, message):
@@ -732,7 +733,8 @@ def cmd_lint(only=None, as_prefix=None):
                     f"{count} × {escape}, {reviewed.get((path, escape), 0)} on {CONCURRENCY_ESCAPES}")
 
     # A required-reason API must have its reason in the manifest of every target that holds it.
-    for manifest, reach in MANIFESTS.items():
+    manifests = {manifest: [as_prefix or ""]} if manifest else MANIFESTS
+    for manifest, reach in manifests.items():
         with open(manifest, "rb") as f:
             declared = {entry["NSPrivacyAccessedAPIType"] for entry in plistlib.load(f).get("NSPrivacyAccessedAPITypes", [])
                         if entry.get("NSPrivacyAccessedAPITypeReasons")}
@@ -903,7 +905,7 @@ def main(argv):
                                option(args, "--branch"))
     if command == "lint":
         only = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--files"]
-        return cmd_lint(only or None, option(args, "--as"))
+        return cmd_lint(only or None, option(args, "--as"), option(args, "--manifest"))
     if command == "team-id":
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
