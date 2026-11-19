@@ -12,6 +12,7 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 
 - `spike/sync-shape`, the branch that holds the spike's code. It is never merged.
 - `docs/spikes/SP-4.md`, the report.
+- `docs/notes/SP-4.md`, the short note of its code half
 
 ## Starts after
 
@@ -20,7 +21,7 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 | Notes | The code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
 | 1 | The report, `docs/spikes/SP-4.md`, which holds the final CloudKit schema and ends with a decision | SP-4 notes |
 
-The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors.
+The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-4.md`, merged by a pull request that holds nothing else.
 
 WP-02 PR 3 waits for SP-4's short note, and not for its report. No chain to M2 waits for the report of SP-4. WP-02 fixes its size numbers after SP-4 confirms CloudKit's record limit.
 

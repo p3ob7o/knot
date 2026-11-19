@@ -1,0 +1,262 @@
+{
+  "schema": 2,
+  "generator": "Fixtures/tools/fixtures.py",
+  "generatorVersion": 2,
+  "speechRate": 175,
+  "voices": [
+    {
+      "key": "eddy",
+      "name": "Eddy (English (US))",
+      "locale": "en_US",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    },
+    {
+      "key": "flo",
+      "name": "Flo (English (US))",
+      "locale": "en_US",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    },
+    {
+      "key": "reed",
+      "name": "Reed (English (US))",
+      "locale": "en_US",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    },
+    {
+      "key": "reed-uk",
+      "name": "Reed (English (UK))",
+      "locale": "en_GB",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    },
+    {
+      "key": "sandy",
+      "name": "Sandy (English (US))",
+      "locale": "en_US",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    },
+    {
+      "key": "shelley",
+      "name": "Shelley (English (US))",
+      "locale": "en_US",
+      "source": "Built into macOS: /System/Library/PrivateFrameworks/TextToSpeechKonaSupport.framework"
+    }
+  ],
+  "generatedAudio": "generated/manifest.json",
+  "audio": [
+    {
+      "name": "clean",
+      "about": "Clean speech: four plain sentences.",
+      "file": "generated/audio/clean.wav",
+      "reference": "audio/clean.txt",
+      "referenceSha256": "473ed964bf5a8cfbd0640720e59466eb77893f2d498e91ba4e44a9076f9885a3",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 17.5,
+      "toleranceSeconds": 6,
+      "noiseSeed": 1263423316,
+      "voice": "Reed (English (US))"
+    },
+    {
+      "name": "fillers",
+      "about": "Scripted fillers (um, uh, I mean), a repeated word and two spoken self-corrections.",
+      "file": "generated/audio/fillers.wav",
+      "reference": "audio/fillers.txt",
+      "referenceSha256": "ddfb8da0113b5acf4c73b0b6e96af87896ae4de026a0170d5b5301f02fb6df53",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 17.9,
+      "toleranceSeconds": 6,
+      "noiseSeed": 1263423317,
+      "voice": "Shelley (English (US))"
+    },
+    {
+      "name": "list",
+      "about": "A spoken shopping list.",
+      "file": "generated/audio/list.wav",
+      "reference": "audio/list.txt",
+      "referenceSha256": "068c26c14378c90a013b20d3e224b482859dfdec6a0f3a74c096c91b4c52b5cf",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 6.6,
+      "toleranceSeconds": 3,
+      "noiseSeed": 1263423318,
+      "voice": "Sandy (English (US))"
+    },
+    {
+      "name": "numbers-names",
+      "about": "Times, a date, an amount, a flight number, a room number and four names.",
+      "file": "generated/audio/numbers-names.wav",
+      "reference": "audio/numbers-names.txt",
+      "referenceSha256": "78a1447cdc295eafbfcd6d2709793f25fbad40522a877e5b83d08c4cbe671c42",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 18.3,
+      "toleranceSeconds": 6,
+      "noiseSeed": 1263423319,
+      "voice": "Eddy (English (US))"
+    },
+    {
+      "name": "short",
+      "about": "A clip under two seconds, for the soak test and the discard rule.",
+      "file": "generated/audio/short.wav",
+      "reference": "audio/short.txt",
+      "referenceSha256": "7489975eccbd0f13d52a37238bcc58a3bde57811e5f37da982c0535b9d2fa0b3",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 1.4,
+      "toleranceSeconds": 0.6,
+      "noiseSeed": 1263423320,
+      "voice": "Sandy (English (US))"
+    },
+    {
+      "name": "canary",
+      "about": "Holds the made-up canary word of the end-to-end suite (Quillfarrow).",
+      "file": "generated/audio/canary.wav",
+      "reference": "audio/canary.txt",
+      "referenceSha256": "dba8023eabbe665fa2be112a42ae499140e8dc15faebc11df724a9dc912f6f27",
+      "kind": "speech",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 6.7,
+      "toleranceSeconds": 3,
+      "noiseSeed": 1263423321,
+      "voice": "Shelley (English (US))"
+    },
+    {
+      "name": "noisy",
+      "about": "Clean speech mixed with seeded low-passed noise at 10 dB SNR.",
+      "file": "generated/audio/noisy.wav",
+      "reference": "audio/noisy.txt",
+      "referenceSha256": "298c85fb5a5d2bec7e94260b0243045efe4e2f54b44cb687bd0ed64272c0e1e2",
+      "kind": "noisy",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 11.3,
+      "toleranceSeconds": 4,
+      "noiseSeed": 1263423322,
+      "voice": "Flo (English (US))",
+      "snrDb": 10
+    },
+    {
+      "name": "silence",
+      "about": "Ten seconds of a noise floor near -60 dBFS and no speech. The reference is empty.",
+      "file": "generated/audio/silence.wav",
+      "reference": "audio/silence.txt",
+      "referenceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "kind": "silence",
+      "format": {
+        "container": "wav",
+        "codec": "lpcm",
+        "bitsPerSample": 16,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 10.0,
+      "toleranceSeconds": 0,
+      "noiseSeed": 1263423323
+    },
+    {
+      "name": "long",
+      "about": "Exactly ten minutes of paragraphs in three voices with pauses, stored as AAC.",
+      "file": "generated/audio/long.m4a",
+      "reference": "audio/long.txt",
+      "referenceSha256": "5b68cb2d61e651f104a29513ac1e5fd5fb24be28ce912d9045b9b481d6f3b25b",
+      "kind": "long",
+      "format": {
+        "container": "m4a",
+        "codec": "aac",
+        "bitRate": 32000,
+        "sampleRate": 16000,
+        "channels": 1
+      },
+      "expectedSeconds": 600.0,
+      "toleranceSeconds": 0,
+      "noiseSeed": 1263423324,
+      "voices": [
+        "Reed (English (US))",
+        "Shelley (English (US))",
+        "Reed (English (UK))"
+      ],
+      "paragraphs": 25,
+      "pauseSeconds": 1.2
+    }
+  ],
+  "ink": [
+    {
+      "name": "line",
+      "about": "One line of print handwriting.",
+      "file": "ink/line.json",
+      "preview": "ink/line.svg",
+      "expectedText": "call the vet at noon",
+      "strokes": 21,
+      "points": 471,
+      "durationSeconds": 10.548,
+      "sha256": "f778513a0fbea58eb89a74a02c054b405ee75f4d90ebdbb882816276ce1df44d",
+      "previewSha256": "72f515304e3990c8cb3784ec57e9025bf5465e5009695c9a8b6f3294a7ba617b"
+    },
+    {
+      "name": "list",
+      "about": "A list of three items, one a line, each with a dash.",
+      "file": "ink/list.json",
+      "preview": "ink/list.svg",
+      "expectedText": "- milk\n- eggs\n- bread",
+      "strokes": 22,
+      "points": 501,
+      "durationSeconds": 12.298,
+      "sha256": "fd69c016831a44f1ee7f15133d6c9ec0d79759e2c4cd4e5fb63f87177ced4425",
+      "previewSha256": "6fcf4713b2ea675dbbed284b38bad9b48a1e7bbb240b6067bc3e7a19425cb663"
+    },
+    {
+      "name": "sketch",
+      "about": "A house, a sun and an arrow. It holds no words, so recognition should return no text.",
+      "file": "ink/sketch.json",
+      "preview": "ink/sketch.svg",
+      "expectedText": "",
+      "strokes": 15,
+      "points": 654,
+      "durationSeconds": 14.62,
+      "sha256": "470ac8e559c3ff65145231fb279e261b0cfd74964e4ed206e0a54e615fb8ed16",
+      "previewSha256": "a47468b51c9450dc7466bc2355e9a233a1d4ba1356b5bde2734f5596b8833882"
+    }
+  ]
+}

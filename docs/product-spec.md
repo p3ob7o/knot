@@ -4,7 +4,7 @@ Draft of 2026-11-18 · assumptions answered by Paolo on 2026-11-19
 
 This file says what Knot v1 does. How it is built is in [architecture.md](architecture.md). How the work is organised is in [PLAN.md](../PLAN.md).
 
-Where a behaviour here is an assumption and not yet Paolo's decision, it is marked **(A)** and listed again in section 16. Two are left.
+Where a behaviour here is an assumption and not yet Paolo's decision, it is marked **(A)** and listed again in section 16. None is left.
 
 ## 1. What Knot is
 
@@ -99,7 +99,7 @@ Until the "live" cue, nothing on any device implies that Knot is recording. The 
 | Could not start | A different haptic, and the reason in the Live Activity or the app | A failure haptic and the reason | The panel with the reason |
 | Discarded, under one second | A light haptic, and the surface says nothing was kept | The same | Does not apply: a hold is exempt |
 | Stopped at the limit, by a call, or because it could not be saved further | The stop cue, and the segment says why | The stop cue and the reason | The stop cue and the reason |
-| Delivered to the iPhone | Nothing | The capture's row changes to sent | Nothing |
+| Delivered to the iPhone | Nothing | The count of waiting recordings on the complication goes down | Nothing |
 
 ## 5. After a capture
 
@@ -199,7 +199,7 @@ The panel floats above other windows, including full-screen apps, on the display
 - Recording continues with the wrist down.
 - The watch saves the recording, then hands it to the iPhone when the phone is reachable. The iPhone transcribes it. With no phone nearby the recording waits on the watch, and nothing reaches the stream until the phone is back.
 - The watch is a capture device only. It shows no note content: no stream, no text of a recording and no preview of one, and there is no typing on it.
-- The watch lists its own recent recordings by time and length, and says of each whether it still waits for the iPhone, has been sent, or could not be delivered. It says nothing about a transcript. **(A)**
+- The watch app has one screen: the record control, with its recording states. It has no list of recordings and says nothing about a transcript. A recording that has not reached the iPhone stays on the watch and is sent again by itself, and the complication shows how many recordings wait and how many failed.
 
 ## 7. The stream and the note
 
@@ -207,14 +207,13 @@ The panel floats above other windows, including full-screen apps, on the display
 - A row's preview is the text of the note's latest segment. A note with no text yet says what it holds, such as "Recording, 0:42" or "Sketch". At large text sizes the preview gives way first, then the kinds. The title or first line, the time and a failed marker always stay.
 - A late capture is marked as arrived until its note is opened, and the stream says once that captures arrived, with a way to go to them.
 - Opening a note shows its segments in order. Text is edited in place as plain text, with Markdown lightly styled. Voice segments have a play control. Ink segments show the drawing.
-- A note is a stack of segments, separated by spacing alone. Each segment is edited on its own, and undo covers the segment being edited. Copying a whole note is one action.
-- Several segments can be selected at once. They are selected as whole segments, and the selection is copied, shared or deleted together. A text selection made inside a segment stays inside it, and "Move to its own note" still takes one segment at a time. **(A)**
+- A note is a stack of segments, separated by spacing alone. Each segment is edited on its own, a selection does not cross from one segment into the next, and undo covers the segment being edited. Copying a whole note is one action.
 - New text enters through the capture field, which is the last element of every open note. Capturing in an older note looks the same as capturing in a new one, and with the window open the capture surface is that note with its field focused.
 - A title is the heading of the note. It is edited in place and can be cleared.
 - "Show original" shows the raw transcript and returns to the text as it was, your edits included.
 - A segment written through the command line or MCP carries a quiet mark. A segment made by a newer Knot says so and asks for an update.
 - Search is full text over titles, segment text and recognised handwriting. It filters the stream as you type.
-- Delete works on a segment, on several selected segments or on a whole note. It can be undone at once, in one step, and deleted items stay recoverable for 30 days.
+- Delete works on a segment or a whole note. It can be undone at once, and deleted items stay recoverable for 30 days.
 - "Move to its own note" takes one segment out of a note and makes it a note by itself. It repairs a grouping the window got wrong. It is offered on a segment when its note holds another segment that is not deleted, and never on a capture still in progress. The segment keeps its text, its recording or drawing, and any work still pending on it. The new note is dated by that capture, so it takes its place in the stream by its own time, and the note it left stays open in front of you. Titles stay where they are. A title you typed is never touched, and a title that Knot generated is dropped if it no longer fits the note it is on, which then shows its first line. The move can be undone at once, like a delete. In the app, a move that is not undone at once stays: v1 does not put a segment into another existing note. The command line can return a moved segment for 30 days (section 10).
 - If a note you have open is deleted on another device, the note says so and offers to restore it.
 - "Remove recording" keeps a voice segment's text and deletes its audio. The text stays, without a player.
@@ -222,7 +221,7 @@ The panel floats above other windows, including full-screen apps, on the display
 
 ## 8. Getting notes out
 
-- Share or copy a note as text or Markdown. Share a recording or a drawing as a file. A selection of segments is shared or copied the same way, in the order of the note.
+- Share or copy a note as text or Markdown. Share a recording or a drawing as a file.
 - Export everything to a folder of Markdown files with their recordings and drawings. Export first downloads any that are still on another device, and lists those it could not get.
 - On the Mac, drag a note out of the window. It drops as text into another app, or as a Markdown file into Finder. Recordings and drawings stay behind; Share sends those.
 - On the Mac, the command line and MCP server read and write notes.
@@ -351,23 +350,18 @@ Each target is measured over at least 20 runs and reported as a median and a 95t
 - A share extension, Mac widgets and controls, CarPlay, visionOS.
 - Note text on the Watch, and typing there. The Watch is a capture device only.
 - Merging notes, splitting a note at a point, and moving a segment into another existing note. Moving one segment to a note of its own is in v1 (section 7).
+- Selecting several segments at once.
 
 ## 16. Assumptions
 
 Paolo answered every assumption in this section on 2026-11-19, at gate G0 of PLAN.md. A1, A4 and A11 had been confirmed the day before. They are decisions D28, D27 and D25 in PLAN.md.
 
-- He confirmed 32 of the 34 as written. They are decisions now, and their marks are gone from the text.
-- He changed two, A6 and A27. The table gives his words, and sections 6 and 7 follow them.
+- He confirmed 33 of the 34 as written. They are decisions now, and their marks are gone from the text.
+- He changed one, A6. The table gives his words, and section 6 follows them.
+- He first changed A27 as well, and later the same day he dropped that change from v1, so A27 is among the 33. TODOS.md carries what he had asked for.
 - He confirmed A35 for v1 and said that cleanup will do more later. TODOS.md carries that.
 
-### Still open
-
-Applying his two changes took a reading of each. Both readings are assumptions until he confirms them, and they carry the only **(A)** marks left in the text.
-
-| ID | Assumption | Section | Change later |
-|---|---|---|---|
-| A38 | The Watch lists its own recent recordings by time and length, with whether each waits for the iPhone, was sent or could not be delivered. It says nothing about a transcript. The other reading of his answer is a Watch with no list at all. | 6 | Cheap |
-| A39 | "Select multiple segments" means whole segments. A selection is copied, shared or deleted together, a text selection stays inside one segment, and "Move to its own note" still takes one segment. The other reading is a text selection that runs from one segment into the next, which needs the rich-text editor that D20 rules out. | 7 | Costly |
+Applying his changes to A6 and A27 took a reading of each, A38 and A39. He answered both the same day: A38 is now part of A6, and A39 went with his change to A27. No assumption is left open.
 
 ### Answered on 2026-11-19
 
@@ -376,7 +370,7 @@ Applying his two changes took a reading of each. Both readings are assumptions u
 | A2 | A late capture is placed by its timestamps, and existing notes are never regrouped. | 3 | Costly | Confirmed |
 | A3 | Notes created on two offline devices are not merged automatically. | 3 | Costly | Confirmed |
 | A5 | A recording stops after 30 minutes. | 4.2 | Cheap | Confirmed |
-| A6 | The watch is a capture device only. It shows no note content, and it has no stream and no typing. | 6 | Cheap | Changed. His words: "Watch doesn't show content, it's only a capture device." |
+| A6 | The watch is a capture device only. It shows no note content, and it has no stream and no typing. It has one screen, the record control, with no list of recordings. | 6 | Cheap | Changed. His words: "Watch doesn't show content, it's only a capture device." Later the same day, on what the Watch shows: "Watch: only record button". |
 | A7 | Deleted items stay recoverable for 30 days. | 7 | Cheap | Confirmed |
 | A8 | "Remove recording" keeps the text and deletes the audio. | 7 | Cheap | Confirmed |
 | A9 | When the same text was edited on two devices, both versions are kept. | 9 | Costly | Confirmed |
@@ -396,7 +390,7 @@ Applying his two changes took a reading of each. Both readings are assumptions u
 | A24 | What Knot does when a capture cannot start or cannot be saved follows section 4.4. | 4.4 | Cheap | Confirmed |
 | A25 | One capture is open at a time on a device, and a running recording blocks typing and Pencil. | 3 | Costly | Confirmed |
 | A26 | If the notes are removed from iCloud, the device keeps them and asks before uploading again. | 9 | Cheap | Confirmed |
-| A27 | A note is a stack of segments, each edited on its own, and new text enters through the capture field. Several segments can be selected at once. | 7 | Costly | Changed. His words: "It should be possible to select multiple segments at once." |
+| A27 | A note is a stack of segments, each edited on its own. A selection does not cross segments, and new text enters through the capture field. | 7 | Costly | Confirmed as first drafted. He first asked for more: "It should be possible to select multiple segments at once." Later the same day he dropped it for now: "Segments: drop multi-segment selection for now" and "Moving takes one segment at a time for now." TODOS.md carries it. |
 | A28 | A finished drawing is not reopened. Writing more starts a new ink segment. | 4.3 | Costly | Confirmed |
 | A29 | The first-run stream says that sync is on, and may carry up to three dismissible setup rows. | 12 | Cheap | Confirmed |
 | A30 | The Mac panel and window have a microphone control beside the hotkey. | 6 | Cheap | Confirmed |
@@ -418,7 +412,7 @@ Applying his two changes took a reading of each. Both readings are assumptions u
 - **A19.** You record on the iPhone and close Knot before the transcript is ready. On the Mac the segment shows as pending and is not transcribed there, although the recording has synced. It becomes text when the iPhone finishes, or when you press Retry on the Mac, which moves the work there.
 - **A20.** A recording is being cleaned on the iPhone while you correct a word in its raw transcript on the Mac. Your correction stays. The cleaned text does not replace it, and no conflict copy appears.
 - **A21.** You delete a note on the Mac at 09:00. The iPhone, offline, appends a recording to that note at 09:03. After sync the note stays deleted, and the recording appears as a new note dated 09:03.
-- **A27 and A39.** You open a note that holds a typed line, a recording and a sketch. You select the typed line and the recording, and copy them: the clipboard holds both texts in the order of the note, and the sketch is left out. You delete the two, and one undo brings both back. Inside the typed line, a text selection that you drag still stops at the end of that line. To copy everything, you use Copy note.
+- **A27.** You open a note that holds a typed line and a recording. You drag a selection from the typed line: it stops at the end of that line and does not run into the recording's text. To copy everything, you use Copy note.
 - **A28.** You sketch on the iPad and end the capture. A minute later you want to add an arrow, so you draw again. The arrow is a second sketch in the same note, below the first.
 - **A32.** Your agent last read the store at cursor 1840. An hour later a Watch recording from this morning arrives and joins a note from this morning. `knot changes --after 1840` returns that note, although nothing about its time is new.
 - **A33.** An agent replaces a segment's text with a summary. The next day you want your own words back: `knot restore` on that segment returns them.

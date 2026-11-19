@@ -1,0 +1,4 @@
+# Machine-written files; never merge them as text.
+ink/*.json -diff linguist-generated
+ink/*.svg -diff linguist-generated
+manifest.json linguist-generated

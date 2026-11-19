@@ -1,0 +1,382 @@
+{
+  "schema": 1,
+  "about": "The synthetic cleanup evaluation set. Fixtures/cleanup/README.md defines every field.",
+  "cases": [
+    {
+      "id": "c01",
+      "title": "A negation behind fillers",
+      "categories": ["negation", "filler"],
+      "meaningCritical": true,
+      "raw": "um so I don't think we should sign the lease yet uh not until the landlord fixes the heating",
+      "reference": "So I don't think we should sign the lease yet, not until the landlord fixes the heating.",
+      "keep": ["don't think we should sign", "not until the landlord fixes the heating"],
+      "remove": ["um", "uh"],
+      "wrong": [
+        {"output": "So I think we should sign the lease yet, not until the landlord fixes the heating.", "why": "Dropping \"don't\" reverses the decision."}
+      ],
+      "notes": "Both negations stay. The fillers go. \"So\" is kept: it is not on the filler list."
+    },
+    {
+      "id": "c02",
+      "title": "A negation inside a restart",
+      "categories": ["negation", "restart"],
+      "meaningCritical": true,
+      "raw": "it's not it's not the blue folder it's the green one",
+      "reference": "It's not the blue folder, it's the green one.",
+      "keep": ["not the blue folder", "the green one"],
+      "remove": ["it's", "not"],
+      "notes": "The repeated \"it's not\" may go because the same negation survives straight after it. Removing both copies of \"not\" changes the meaning."
+    },
+    {
+      "id": "c03",
+      "title": "A split negation in a reminder",
+      "categories": ["negation"],
+      "meaningCritical": true,
+      "raw": "remind me to not reply to the email from the bank until I've called them",
+      "reference": "Remind me to not reply to the email from the bank until I've called them.",
+      "keep": ["to not reply", "until I've called them"],
+      "remove": [],
+      "wrong": [
+        {"output": "Remind me to reply to the email from the bank until I've called them.", "why": "Dropping \"not\" turns a warning into an instruction."}
+      ],
+      "notes": "Nothing to remove. Moving \"not\" to read \"not to reply\" reorders words, which v1 does not allow."
+    },
+    {
+      "id": "c04",
+      "title": "An amount in dollars and cents",
+      "categories": ["amount", "filler"],
+      "meaningCritical": true,
+      "raw": "pay the plumber 240 dollars um and 50 cents for the parts",
+      "reference": "Pay the plumber 240 dollars and 50 cents for the parts.",
+      "keep": ["240 dollars", "and 50 cents"],
+      "remove": ["um"],
+      "wrong": [
+        {"output": "Pay the plumber $240.50 for the parts.", "why": "Numbers stay as transcribed in v1. Rewriting the amount is a change of words."}
+      ],
+      "notes": "The amount stays exactly as transcribed, digits and words alike."
+    },
+    {
+      "id": "c05",
+      "title": "Numbers spoken as words",
+      "categories": ["amount", "filler"],
+      "meaningCritical": true,
+      "raw": "we need forty two chairs and uh six tables for the hall",
+      "reference": "We need forty two chairs and six tables for the hall.",
+      "keep": ["forty two chairs", "six tables"],
+      "remove": ["uh"],
+      "wrong": [
+        {"output": "We need 42 chairs and 6 tables for the hall.", "why": "Converting words to digits changes the words, which v1 does not allow."}
+      ],
+      "notes": "Hyphenating \"forty-two\" is allowed: it is punctuation and keeps both words."
+    },
+    {
+      "id": "c06",
+      "title": "A date and a time",
+      "categories": ["date"],
+      "meaningCritical": true,
+      "raw": "the dentist moved my appointment to the 14th of March at 9:30",
+      "reference": "The dentist moved my appointment to the 14th of March at 9:30.",
+      "keep": ["14th of March", "at 9:30"],
+      "remove": [],
+      "notes": "Capitalising March is a change of case and is allowed. The date and the time stay as written."
+    },
+    {
+      "id": "c07",
+      "title": "A date with a negated alternative",
+      "categories": ["date", "negation"],
+      "meaningCritical": true,
+      "raw": "the flight is next Friday the 3rd not Thursday",
+      "reference": "The flight is next Friday the 3rd, not Thursday.",
+      "keep": ["next Friday the 3rd", "not Thursday"],
+      "remove": [],
+      "wrong": [
+        {"output": "The flight is next Friday the 3rd.", "why": "Dropping \"not Thursday\" loses the warning against the other day."}
+      ],
+      "notes": "A full stop before \"Not Thursday\" is also correct: a sentence break alone does not change the meaning here."
+    },
+    {
+      "id": "c08",
+      "title": "Two names, kept as transcribed",
+      "categories": ["name", "filler"],
+      "meaningCritical": true,
+      "raw": "send the draft to Siobhan and copy uh Mateus on it",
+      "reference": "Send the draft to Siobhan and copy Mateus on it.",
+      "keep": ["Siobhan", "Mateus"],
+      "remove": ["uh"],
+      "wrong": [
+        {"output": "Send the draft to Siobhan and copy Matthews on it.", "why": "\"Correcting\" a name replaces a word."}
+      ],
+      "notes": "Names keep the transcriber's spelling, even when another spelling looks likelier."
+    },
+    {
+      "id": "c09",
+      "title": "A title, a name and a date",
+      "categories": ["name", "date"],
+      "meaningCritical": true,
+      "raw": "ask Dr Okafor whether Lena can start on the 2nd",
+      "reference": "Ask Dr. Okafor whether Lena can start on the 2nd.",
+      "keep": ["Dr Okafor", "Lena", "on the 2nd"],
+      "remove": [],
+      "notes": "Adding the full stop after \"Dr\" is punctuation and is allowed."
+    },
+    {
+      "id": "c10",
+      "title": "A spoken self-correction of a day",
+      "categories": ["self-correction", "date"],
+      "meaningCritical": true,
+      "raw": "let's meet at the café on Tuesday no Wednesday at 10",
+      "reference": "Let's meet at the café on Tuesday, no, Wednesday at 10.",
+      "keep": ["on Tuesday no Wednesday at 10"],
+      "remove": [],
+      "wrong": [
+        {"output": "Let's meet at the café on Wednesday at 10.", "why": "v1 leaves a spoken self-correction as it was said. Resolving it is a later feature."}
+      ],
+      "notes": "The correction stays word for word. Commas around \"no\" make it readable."
+    },
+    {
+      "id": "c11",
+      "title": "A self-correction of a quantity",
+      "categories": ["self-correction", "amount"],
+      "meaningCritical": true,
+      "raw": "buy 2 no 3 bags of rice",
+      "reference": "Buy 2, no, 3 bags of rice.",
+      "keep": ["2 no 3 bags of rice"],
+      "remove": [],
+      "wrong": [
+        {"output": "Buy 3 bags of rice.", "why": "The correction is resolved, and a number is dropped."}
+      ],
+      "notes": "Both numbers and the \"no\" between them stay."
+    },
+    {
+      "id": "c12",
+      "title": "A self-correction of a code",
+      "categories": ["self-correction", "amount"],
+      "meaningCritical": true,
+      "raw": "the door code is 4 7 1 9 sorry 4 7 9 1",
+      "reference": "The door code is 4 7 1 9, sorry, 4 7 9 1.",
+      "keep": ["4 7 1 9 sorry 4 7 9 1"],
+      "remove": [],
+      "wrong": [
+        {"output": "The door code is 4791.", "why": "Joining the digits rewrites them, and the first code is gone."}
+      ],
+      "notes": "\"Sorry\" is not a filler here: it marks the correction."
+    },
+    {
+      "id": "c13",
+      "title": "Punctuation only: \"no more than\"",
+      "categories": ["punctuation", "amount", "negation"],
+      "meaningCritical": true,
+      "raw": "no more than five people can come to the tasting",
+      "reference": "No more than five people can come to the tasting.",
+      "keep": ["no more than five people"],
+      "remove": [],
+      "mustNotMatch": ["^\\s*no\\s*[.!,;:]"],
+      "wrong": [
+        {"output": "No. More than five people can come to the tasting.", "why": "Every word is kept, but a limit becomes its opposite."}
+      ],
+      "notes": "The guard accepts the wrong output, because the words are the same. Only this check catches it."
+    },
+    {
+      "id": "c14",
+      "title": "Punctuation only: how many people",
+      "categories": ["punctuation", "name"],
+      "meaningCritical": true,
+      "raw": "invite Anna Maria and Joe to the dinner",
+      "reference": "Invite Anna Maria and Joe to the dinner.",
+      "keep": ["Anna Maria and Joe"],
+      "remove": [],
+      "mustNotMatch": ["Anna\\s*,\\s*Maria"],
+      "wrong": [
+        {"output": "Invite Anna, Maria and Joe to the dinner.", "why": "A comma turns two guests into three."}
+      ],
+      "notes": "The raw text is ambiguous. A correct cleanup does not decide it by adding a comma."
+    },
+    {
+      "id": "c15",
+      "title": "Punctuation only: a time and a count",
+      "categories": ["punctuation", "amount"],
+      "meaningCritical": true,
+      "raw": "meet at ten thirty two people from finance are joining",
+      "reference": "Meet at ten thirty. Two people from finance are joining.",
+      "keep": ["ten thirty two people"],
+      "remove": [],
+      "mustNotMatch": ["\\bten\\s*[.,;:!?]+\\s*thirty"],
+      "wrong": [
+        {"output": "Meet at ten. Thirty two people from finance are joining.", "why": "The time changes, and so does the number of people."}
+      ],
+      "notes": "The reading \"ten thirty\" is the natural one. A break between \"ten\" and \"thirty\" changes both facts."
+    },
+    {
+      "id": "c16",
+      "title": "Punctuation only: \"not sure\"",
+      "categories": ["punctuation", "negation"],
+      "meaningCritical": true,
+      "raw": "I'm not sure we should cancel the booking",
+      "reference": "I'm not sure we should cancel the booking.",
+      "keep": ["not sure we should cancel"],
+      "remove": [],
+      "mustNotMatch": ["\\bnot\\s*[.,;:!?]+\\s*sure"],
+      "wrong": [
+        {"output": "I'm not. Sure, we should cancel the booking.", "why": "Doubt becomes a decision to cancel."}
+      ],
+      "notes": "Nothing to remove and nothing to split."
+    },
+    {
+      "id": "c17",
+      "title": "A sentence thick with fillers",
+      "categories": ["filler"],
+      "meaningCritical": false,
+      "raw": "um so uh I want to uh like try the new running route tomorrow morning you know the one by the river",
+      "reference": "So I want to try the new running route tomorrow morning, the one by the river.",
+      "keep": ["try the new running route tomorrow morning", "the one by the river"],
+      "remove": ["um", "uh", "uh", "like", "you", "know"],
+      "notes": "\"Like\" and \"you know\" are fillers here. Compare c29 and c30, where they are not."
+    },
+    {
+      "id": "c18",
+      "title": "Repeated words",
+      "categories": ["repeat"],
+      "meaningCritical": false,
+      "raw": "the the meeting with the the design team went well",
+      "reference": "The meeting with the design team went well.",
+      "keep": ["meeting with the", "design team went well"],
+      "remove": ["the", "the"],
+      "notes": "Each doubled \"the\" loses one copy."
+    },
+    {
+      "id": "c19",
+      "title": "A restart with the same words",
+      "categories": ["restart"],
+      "meaningCritical": false,
+      "raw": "we should we should book the hotel this week",
+      "reference": "We should book the hotel this week.",
+      "keep": ["we should book the hotel this week"],
+      "remove": ["we", "should"],
+      "notes": "The first \"we should\" repeats the words that follow it, so it goes."
+    },
+    {
+      "id": "c20",
+      "title": "A spoken shopping list",
+      "categories": ["list"],
+      "meaningCritical": false,
+      "raw": "shopping list eggs milk bread two lemons and coffee",
+      "reference": "Shopping list: eggs, milk, bread, two lemons and coffee.",
+      "keep": ["eggs", "milk", "bread", "two lemons", "and coffee"],
+      "remove": [],
+      "notes": "A bulleted list is also correct if it keeps every word, \"and\" included. Dropping \"and\" to tidy the list is a removal v1 does not allow."
+    },
+    {
+      "id": "c21",
+      "title": "A numbered list said in words",
+      "categories": ["list"],
+      "meaningCritical": false,
+      "raw": "three things for the trip first the passport second the charger third the blue jacket",
+      "reference": "Three things for the trip: first, the passport; second, the charger; third, the blue jacket.",
+      "keep": ["first the passport", "second the charger", "third the blue jacket"],
+      "remove": [],
+      "notes": "A numbered list is also correct if \"first\", \"second\" and \"third\" stay."
+    },
+    {
+      "id": "c22",
+      "title": "Two topics, two paragraphs",
+      "categories": ["paragraphs", "filler"],
+      "meaningCritical": false,
+      "raw": "okay two things about the garden the tomato plants need staking before the weekend and the hose by the shed is leaking um separate thing the neighbours asked if they can borrow the ladder on Sunday",
+      "reference": "Okay, two things about the garden. The tomato plants need staking before the weekend, and the hose by the shed is leaking.\n\nSeparate thing: the neighbours asked if they can borrow the ladder on Sunday.",
+      "keep": ["the tomato plants need staking before the weekend", "the hose by the shed is leaking", "borrow the ladder on Sunday"],
+      "remove": ["um"],
+      "notes": "A paragraph break before \"separate thing\" is the structure a good cleanup adds."
+    },
+    {
+      "id": "c23",
+      "title": "A question",
+      "categories": ["question"],
+      "meaningCritical": false,
+      "raw": "do we still have the spare key for the bike lock or did it go with the old bike",
+      "reference": "Do we still have the spare key for the bike lock, or did it go with the old bike?",
+      "keep": ["spare key for the bike lock", "or did it go with the old bike"],
+      "remove": [],
+      "notes": "It ends with a question mark."
+    },
+    {
+      "id": "c24",
+      "title": "Already clean",
+      "categories": ["already-clean"],
+      "meaningCritical": false,
+      "raw": "water the plants",
+      "reference": "Water the plants.",
+      "keep": ["water the plants"],
+      "remove": [],
+      "notes": "Only a capital and a full stop are added."
+    },
+    {
+      "id": "c25",
+      "title": "Nothing but a filler",
+      "categories": ["single-filler"],
+      "meaningCritical": false,
+      "raw": "um",
+      "reference": "Um.",
+      "keep": ["um"],
+      "remove": [],
+      "notes": "Removing the only word would empty the segment. The guard rejects a result that drops more than its set share of the words, and the raw transcript stays."
+    },
+    {
+      "id": "c26",
+      "title": "A run-on note",
+      "categories": ["run-on", "filler"],
+      "meaningCritical": false,
+      "raw": "so this morning I went to the market and then I got the bread and then I saw that the fish stall had moved to the other end and uh then I ran into the neighbours and they said the street party is on the last Saturday of the month and we should bring chairs",
+      "reference": "So this morning I went to the market, and then I got the bread. And then I saw that the fish stall had moved to the other end, and then I ran into the neighbours, and they said the street party is on the last Saturday of the month, and we should bring chairs.",
+      "keep": ["the fish stall had moved to the other end", "the last Saturday of the month", "we should bring chairs"],
+      "remove": ["uh"],
+      "notes": "Sentences are formed by punctuation alone. The \"and then\" chains stay: \"and\" is not a filler, so v1 may not remove it to tidy the sentences."
+    },
+    {
+      "id": "c27",
+      "title": "A restart that changes a verb",
+      "categories": ["restart"],
+      "meaningCritical": false,
+      "raw": "can you pick up can you grab the parcel from the post office",
+      "reference": "Can you grab the parcel from the post office?",
+      "keep": ["can you grab the parcel from the post office"],
+      "remove": ["can", "you", "pick", "up"],
+      "notes": "A restart: the speaker began again with the same first word, so the abandoned start may go. Keeping it is also correct, as the words are kept."
+    },
+    {
+      "id": "c28",
+      "title": "Product names and casing",
+      "categories": ["casing"],
+      "meaningCritical": false,
+      "raw": "remind me to update the iOS app and check the API keys tonight",
+      "reference": "Remind me to update the iOS app and check the API keys tonight.",
+      "keep": ["iOS app", "API keys"],
+      "remove": [],
+      "notes": "Casing that the transcriber got right stays."
+    },
+    {
+      "id": "c29",
+      "title": "\"Like\" as a verb and as a filler",
+      "categories": ["filler", "amount", "date"],
+      "meaningCritical": false,
+      "raw": "I'd like to like book a table for 4 on Saturday",
+      "reference": "I'd like to book a table for 4 on Saturday.",
+      "keep": ["I'd like to", "for 4", "on Saturday"],
+      "remove": ["like"],
+      "notes": "Only the second \"like\" is a filler. Removing the first breaks the sentence."
+    },
+    {
+      "id": "c30",
+      "title": "\"You know\" that is not a filler",
+      "categories": ["filler-lookalike"],
+      "meaningCritical": true,
+      "raw": "you know the answer better than I do so just decide",
+      "reference": "You know the answer better than I do, so just decide.",
+      "keep": ["you know the answer"],
+      "remove": [],
+      "wrong": [
+        {"output": "The answer better than I do, so just decide.", "why": "\"You know\" is the subject and verb here. A filler list that holds \"you know\" must not apply to it."}
+      ],
+      "notes": "The guard's closed filler list allows removing \"you know\", so the guard alone would accept the wrong output."
+    }
+  ]
+}

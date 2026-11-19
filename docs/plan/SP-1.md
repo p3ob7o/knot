@@ -12,6 +12,7 @@ Find out whether a recording starts from a locked iPhone while Knot is not runni
 
 - `spike/locked-recording`, the branch that holds the spike's code. It is never merged.
 - `docs/spikes/SP-1.md`, the report.
+- `docs/notes/SP-1.md`, the short note of its code half
 
 ## Starts after
 
@@ -20,7 +21,7 @@ Find out whether a recording starts from a locked iPhone while Knot is not runni
 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 
-The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors.
+The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-1.md`, merged by a pull request that holds nothing else.
 
 WP-02 PR 3 waits for SP-1's short note, and not for its report.
 

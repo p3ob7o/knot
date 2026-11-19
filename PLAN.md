@@ -66,13 +66,11 @@ These are Paolo's. D1 to D31 are from 2026-11-18, and D32 to D36 from 2026-11-19
 
 Q1 to Q8 were answered on 2026-11-18 and became D10 and D25 to D30. The owner answered the 34 assumptions of the product spec on 2026-11-19, and docs/product-spec.md §16 lists each with his answer.
 
-Three things are still open at gate G0:
+Nothing is open at gate G0. Later on 2026-11-19 the owner answered what was left:
 
-- A38, a reading of his answer on the Watch: the Watch still lists its own recent recordings, by time, length and delivery state.
-- A39, a reading of his answer on selection: "select multiple segments" means whole segments, with copy, share and delete, and "Move to its own note" still takes one segment at a time.
-- How many sittings a week he can give.
-
-Both readings are in docs/product-spec.md §16. WP-02 does not start before the owner has confirmed them, because WP-02 turns them into tests. A39 is the costly one.
+- The two readings of his answers on the Watch and on selection. The Watch app has one screen, the record control, with no list of recordings. Selecting several segments at once leaves v1, and `TODOS.md` defers it. "Move to its own note" takes one segment at a time.
+- His recordings for gate G4: ten spontaneous voice notes in all, five on the iPhone and five on the Watch, as `docs/checklists/G4-spontaneous-notes.md` asks.
+- His cadence: about an hour a day for the sittings (§10).
 
 ## 4. Scope
 
@@ -84,7 +82,7 @@ In v1, by device:
 - **Watch:** one-tap recording from a complication, widget, control or Double Tap, and delivery to the iPhone.
 - **Everywhere but the watch:** on-device transcription and cleanup, optional iCloud sync, export.
 
-Out of v1: see product spec §15. `TODOS.md` at the repo root holds the sixteen items deferred from v1.
+Out of v1: see product spec §15. `TODOS.md` at the repo root holds the seventeen items deferred from v1.
 
 ### The cut order
 
@@ -102,7 +100,7 @@ Each milestone is something Paolo can do on a device. Hardware checks come from 
 | ID | Name | Paolo can |
 |---|---|---|
 | M0 | Foundations | Read a new `main` holding the plan, the scaffold and the contracts. Read five spike reports. Hold a design brief ready for Claude Design. |
-| M1 | Skeleton on four devices | Type a line on iPhone, iPad and Mac and find it in the stream after relaunch. Record on the Watch and see the capture listed on the Watch as saved. Local only, system-default look. |
+| M1 | Skeleton on four devices | Type a line on iPhone, iPad and Mac and find it in the stream after relaunch. Record on the Watch and see "Saved" on the Watch. Local only, system-default look. |
 | M2 | iPhone voice and text | Press the Action Button, speak, and find a cleaned, titled note. Type notes, watch the append window work, search, edit, delete and undo. Kill the app while recording and lose nothing. |
 | M3 | Watch voice | Tap the complication, record with the wrist down, and find the note transcribed on the iPhone, including after the phone was away. |
 | M4 | Mac and sync | Tap the hotkey to type and hold it to record, over a full-screen app. Use `knot` and the MCP server from Claude Code. See notes sync both ways between iPhone and Mac. |
@@ -186,7 +184,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-00 | 2 | The fold | WP-00 PR 1 |
 | WP-01 | 1 | The scaffold that unblocks WP-02 and the spikes | WP-00 PR 2 |
 | WP-01 | 2 | The tooling, beside WP-02 | WP-01 PR 1 |
-| WP-02 | 1 | The domain types, rules and reducers | WP-01 PR 1; the owner's confirmation of A38 and A39 |
+| WP-02 | 1 | The domain types, rules and reducers | WP-01 PR 1 |
 | WP-02 | 2 | The ports, fakes and suites the tracer needs | WP-02 PR 1; WP-12 proof step; WP-13 proof step; WP-14 proof step |
 | WP-02 | 3 | The remaining ports, fakes and suites | WP-02 PR 2; WP-18 proof step; SP-1 notes; SP-2 notes; SP-4 notes |
 | WP-03 | 1 | The brief as Paolo approves it | the plan's approval |
@@ -233,7 +231,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
 | WP-31 | 2 | The Sketch control and the Home Screen and Lock Screen widgets. Held until the keep-gate ruling. | the ruling |
-| WP-32 | 1 | A skeleton that does not depend on the design direction: the owner records on the Watch and sees the capture listed on the Watch as saved | WP-12 PR 1; WP-17 PR 1; WP-21 PR 1 |
+| WP-32 | 1 | A skeleton that does not depend on the design direction: the owner records on the Watch and sees "Saved" on the Watch | WP-12 PR 1; WP-17 PR 1; WP-21 PR 1 |
 | WP-32 | 2 | The Watch app, built from the direction's structure sheet, with its first complication family and its control | SP-2; the design direction; WP-17 PR 2; WP-19 PR 3; WP-21 PR 2 |
 | WP-32 | 3 | The complication families beyond the first and the Smart Stack widget. Held until the keep-gate ruling. | the ruling |
 | WP-33 | 1 | A skeleton that does not depend on the design direction: a line typed on the Mac is found in the stream after relaunch | WP-21 PR 1 |
@@ -351,7 +349,7 @@ A spike counts as finished when its report has merged and the owner has confirme
 
 WP-12, WP-13, WP-14 and WP-18 each begin with a proof step. It is the first thing the package does, and its brief says what it must show.
 
-Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
+Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
 
 ### Prior art
 
@@ -405,12 +403,14 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
 ### 8.5 Contracts and shared files
 
 - A change to KnotCore's public API goes in its own small PR on a `contract/…` branch, with the fakes updated. The orchestrator merges it first and tells the threads that depend on it to rebase. A contract PR that only adds merges in the normal queue. One that breaks keeps the two fixed times a day of docs/architecture.md §18.
-- `Package.swift`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description.
+- `Package.swift`, `Package.resolved`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description.
 - A package edits only the paths it owns, and the gate checks that. Path ownership has stated exceptions:
   - The first PR of WP-01 creates the first files of every module folder: an empty target with one trivial test, the module's live entry point, the crash hosts and the environment factory. It also declares `AppEnvironment` in KnotCore with its `.unavailable` value and nothing else, because the factory returns that value. Each folder belongs to its package from then on.
   - `scripts/release.sh` belongs to WP-43, though the rest of `scripts/` passes to the orchestrator after WP-01.
   - WP-35 owns `Apps/iOS/Ink/`, the canvas screens shared by the iPad and a Pencil-capable iPhone.
   - WP-05 owns `Packages/KnotKit/Sources/KnotFakes/Preview/`.
+  - WP-13 owns `Fixtures/results/speech/` and WP-14 owns `Fixtures/results/cleanup/`, inside WP-04's `Fixtures/`. Each commits its synthetic results there.
+  - A proof step and the code half of a spike each own their short note, `docs/notes/<ID>.md`.
   - WP-06 owns the soak step of `scripts/verify.sh`. WP-11, WP-12 and WP-15 each add one file of kill points to `Packages/KnotKit/Tests/KnotSoak/` in their own PRs.
   - WP-40's ownership extends to the view models that a difference listed in `docs/design/deltas.md` touches. Where the handoff is silent, the implementer uses the system default and adds a line to that file, which the owner clears at M6.
 - The README links to setup, the command reference, contributing and recovery. A changelog is kept from M4, with a section for the command line.
@@ -465,8 +465,8 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 
 | Gate | When | What | Minutes |
 |---|---|---|---|
-| G0 | Now | Confirm the two readings A38 and A39 in docs/product-spec.md §16, and say how many sittings a week he can give. The rest of G0 is done: on 2026-11-19 he approved the plan, gave the answers that became D32 to D36, and answered the 34 assumptions. | 30 |
-| G0 | Wave 0 | Approve the restart PR and the licence wording. The restart merged on 2026-11-19 as pull request 10. | 15 |
+| G0 | 2026-11-19 | Done, and nothing is open at G0. He approved the plan, gave the answers that became D32 to D36, answered the 34 assumptions and the two readings that followed, and named his cadence: about an hour a day. | 30 |
+| G0 | Wave 0 | Approve the restart PR and the licence wording. Done: the restart merged on 2026-11-19 as pull request 10. | 15 |
 | G2 | Wave 0 | Review the brief, run the Claude Design direction step, choose a direction | 60 |
 | G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
 | G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build | 10 |
@@ -485,7 +485,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 40 |
 | G4 | Seven days after the M2 checklist has passed | The keep-gate sitting (§5) | 30 |
 | G4 | M3 | Checklist | 30 |
-| G4 | M4 | Checklist in two sittings: hotkey, CLI and MCP, two-device sync | 45 |
+| G4 | M4 | Checklist in three sittings: hotkey, CLI and MCP, two-device sync | 45 |
 | G4 | M5 | Checklist | 20 |
 | G4 | M6 | Checklist with the regression rows, and sign-off of the applied design | 90 |
 | G4 | M2 to M5 | The VoiceOver rows, one per capture path | 5 each |
@@ -496,7 +496,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G5 | After M5 | Approve the CloudKit production schema, before the first TestFlight build that syncs | 5 |
 | G5 | M7 | Create Knot's own App Store Connect record, for `com.p3ob7o.knot`; authorise the TestFlight upload and supply an API key as a file path through the secret prompt; install over the M6 milestone build on each device | 30 |
 
-His sittings come to about 18 hours across the build, including the repeat sittings. The orchestrator derives dates for the sittings from the cadence the owner names at G0.
+His sittings come to about 18 hours across the build, including the repeat sittings. The owner gives about an hour a day, and the orchestrator plans the sittings on that.
 
 - A checklist longer than 20 rows is split into two sittings.
 - Gate G3 is the owner's sitting for confirming the spikes' decisions, and each spike is confirmed on its own.
@@ -528,9 +528,9 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 
 1. The restart, WP-00's first PR, merged on 2026-11-19 as pull request 10. It doubled as the spec PR.
 2. The fold is WP-00's second PR. It turns the plan and its amendments into this text and a brief for each package. A second model reviews it item by item, and it merges only when `scripts/check-plan.sh` passes.
-3. Paolo: the three things G0 still holds (§3), the Claude Design direction step, and the recordings of wave 0.
+3. Paolo: the Claude Design direction step and the recordings of wave 0. G0 holds nothing more (§3).
 4. When the fold merges, launch WP-03, WP-04 and the first PR of WP-01. Paolo: G1.
-5. When the first PR of WP-01 merges, launch the first PR of WP-02, once the owner has confirmed A38 and A39. The second PR of WP-01 runs beside it. Once WP-04 has merged too, launch the five spikes and the proof steps of WP-12, WP-13, WP-14 and WP-18.
+5. When the first PR of WP-01 merges, launch the first PR of WP-02. The second PR of WP-01 runs beside it. Once WP-04 has merged too, launch the five spikes and the proof steps of WP-12, WP-13, WP-14 and WP-18.
 6. When the second PR of WP-02 merges, launch WP-05. All of WP-20 may run beside it.
 7. When WP-05 merges, launch wave 2 in the order given in §6.
 

@@ -12,6 +12,7 @@ Prove that the hotkey's press and release arrive in a sandboxed build and that t
 
 - A `spike/…` branch that holds the spike's code. It is never merged. The plan does not name the branch.
 - The report, which merges to `docs/spikes/`.
+- `docs/notes/SP-5.md`, the short note of its code half
 
 ## Starts after
 
@@ -20,7 +21,7 @@ Prove that the hotkey's press and release arrive in a sandboxed build and that t
 | Notes | The code half on its `spike/…` branch, and its short note | WP-01 PR 1 |
 | 1 | The report, which ends with a decision | SP-5 notes |
 
-SP-5 starts after the first PR of WP-01. Its code half starts beside WP-02 PR 1, like the code half of each spike, with the proof steps of WP-12, WP-13, WP-14 and WP-18, and it needs only WP-01 PR 1. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. No package waits for SP-5's short note.
+SP-5 starts after the first PR of WP-01. Its code half starts beside WP-02 PR 1, like the code half of each spike, with the proof steps of WP-12, WP-13, WP-14 and WP-18, and it needs only WP-01 PR 1. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-5.md`, merged by a pull request that holds nothing else. No package waits for SP-5's short note.
 
 SP-5 is done when its report has merged and the owner has confirmed its decision. Gate G3 is the owner's sitting for those confirmations, and each spike is confirmed on its own, so a package waits only for the spikes its row names.
 
