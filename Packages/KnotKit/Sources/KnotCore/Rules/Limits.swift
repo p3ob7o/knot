@@ -21,6 +21,11 @@ public enum Limits {
     /// are kept, for 30 days (docs/product-spec.md §7 and §10).
     public static let keptForDays = 30
 
+    /// Checks a segment's text, or its raw transcript, against the bound.
+    public static func checkSegmentText(_ text: String) throws(KnotError) {
+        guard text.utf8.count <= segmentTextBytes else { throw KnotError.textTooLong }
+    }
+
     /// Checks a title against its bound. A longer title is refused, never cut.
     public static func checkTitle(_ title: String) throws(KnotError) {
         guard title.count <= titleCharacters else { throw KnotError.textTooLong }
@@ -44,16 +49,28 @@ public enum TextPieces {
     ///
     /// A piece ends after the last line break that falls in its second half, or failing
     /// that after the last space there, or failing that at the last whole character that
-    /// fits. A character is never split. A single character longer than `maxBytes`, which
-    /// only a tiny limit allows, is a piece of its own.
+    /// fits. A character is split only when it alone is larger than `maxBytes`, such as a
+    /// letter with a hundred thousand combining accents: it is split between its Unicode
+    /// scalars, which keeps every piece within the limit and every scalar whole.
     public static func split(_ text: String, maxBytes: Int = Limits.segmentTextBytes) -> [String] {
-        precondition(maxBytes > 0, "A piece holds at least one byte.")
+        precondition(maxBytes >= 4, "A piece holds at least one Unicode scalar.")
         var pieces: [String] = []
         var rest = Substring(text)
         while rest.utf8.count > maxBytes {
-            let end = cut(rest, maxBytes: maxBytes)
-            pieces.append(String(rest[..<end]))
-            rest = rest[end...]
+            if let end = cut(rest, maxBytes: maxBytes) {
+                pieces.append(String(rest[..<end]))
+                rest = rest[end...]
+            } else {
+                let scalars = rest.unicodeScalars
+                var bytes = 0
+                var end = scalars.startIndex
+                while end != scalars.endIndex, bytes + scalars[end].utf8.count <= maxBytes {
+                    bytes += scalars[end].utf8.count
+                    end = scalars.index(after: end)
+                }
+                pieces.append(String(String.UnicodeScalarView(scalars[..<end])))
+                rest = Substring(scalars[end...])
+            }
         }
         if !rest.isEmpty || pieces.isEmpty { pieces.append(String(rest)) }
         return pieces
@@ -68,7 +85,8 @@ public enum TextPieces {
         }
     }
 
-    private static func cut(_ text: Substring, maxBytes: Int) -> Substring.Index {
+    /// Where a piece of `text` ends, or `nil` when its first character alone is too large.
+    private static func cut(_ text: Substring, maxBytes: Int) -> Substring.Index? {
         var bytes = 0
         var end = text.startIndex
         var lastLineBreak: Substring.Index?
@@ -86,7 +104,7 @@ public enum TextPieces {
                 }
             }
         }
-        if end == text.startIndex { return text.index(after: end) }
+        if end == text.startIndex { return nil }
         return lastLineBreak ?? lastSpace ?? end
     }
 }

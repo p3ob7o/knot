@@ -7,7 +7,7 @@ func segment(
     _ number: Int, note: NoteID, kind: SegmentKind = .typed, start: Date, end: Date?, text: String = "words",
     state: SegmentState? = nil, owner: DeviceID? = nil, deleted: Date? = nil, conflictOf: SegmentID? = nil
 ) -> Segment {
-    Segment(
+    try! Segment(
         id: id(number), noteID: note, kind: kind, origin: fromDevice, startedAt: start, endedAt: end, text: text,
         textOrigin: kind == .voice ? .rawTranscript : .typed, processingOwner: owner,
         state: state ?? (kind == .voice ? .voice(.ready) : .typed(.ready)), conflictOf: conflictOf,
@@ -153,5 +153,29 @@ func segment(
         #expect(asset.availability == .local)
         #expect(asset.upload == .localOnly)
         #expect(try JSONDecoder().decode(Asset.self, from: JSONEncoder().encode(asset)) == asset)
+    }
+}
+
+@Suite struct SegmentLimitTests {
+    static let tooLong = String(repeating: "x", count: Limits.segmentTextBytes + 1)
+
+    static func build(text: String, raw: String? = nil) throws(KnotError) -> Segment {
+        try Segment(
+            id: id(1), noteID: id(2), kind: .voice, origin: .cli, startedAt: at("09:00"), text: text,
+            textOrigin: .rawTranscript, rawTranscript: raw, state: .voice(.ready))
+    }
+
+    @Test func aSegmentIsNotBuiltPastTheLimit() throws {
+        _ = try Self.build(text: String(repeating: "x", count: Limits.segmentTextBytes))
+        #expect(throws: KnotError.textTooLong) { try Self.build(text: Self.tooLong) }
+        #expect(throws: KnotError.textTooLong) { try Self.build(text: "x", raw: Self.tooLong) }
+    }
+
+    @Test func aSegmentPastTheLimitIsNotDecoded() throws {
+        let segment = try Self.build(text: "x")
+        let json = String(decoding: try JSONEncoder().encode(segment), as: UTF8.self)
+            .replacingOccurrences(of: #""text":"x""#, with: #""text":"\#(Self.tooLong)""#)
+        #expect(json.contains(Self.tooLong))
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(Segment.self, from: Data(json.utf8)) }
     }
 }

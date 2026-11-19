@@ -71,7 +71,9 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         cleanup: CleanupProvenance? = nil, processingOwner: DeviceID? = nil, ownerGeneration: Int = 0,
         arrivedAt: Date? = nil, state: SegmentState, assetID: AssetID? = nil, duration: Duration? = nil,
         conflictOf: SegmentID? = nil, deletedAt: Date? = nil, revision: Int64 = 0
-    ) {
+    ) throws(KnotError) {
+        try Limits.checkSegmentText(text)
+        if let rawTranscript { try Limits.checkSegmentText(rawTranscript) }
         self.id = id
         self.noteID = noteID
         self.kind = kind
@@ -93,6 +95,48 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.conflictOf = conflictOf
         self.deletedAt = deletedAt
         self.revision = revision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, noteID, kind, noteGeneration, origin, startedAt, endedAt, text, textOrigin, rawTranscript
+        case transcription, cleanup, processingOwner, ownerGeneration, arrivedAt, state, assetID, duration
+        case conflictOf, deletedAt, revision
+    }
+
+    /// Decodes a segment, and refuses one whose text or raw transcript is past the size
+    /// limit, as a segment built in code is refused.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let text = try container.decode(String.self, forKey: .text)
+        let rawTranscript = try container.decodeIfPresent(String.self, forKey: .rawTranscript)
+        guard text.utf8.count <= Limits.segmentTextBytes else {
+            throw DecodingError.dataCorruptedError(forKey: .text, in: container, debugDescription: "Text too long.")
+        }
+        guard (rawTranscript?.utf8.count ?? 0) <= Limits.segmentTextBytes else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rawTranscript, in: container, debugDescription: "Raw transcript too long.")
+        }
+        self.id = try container.decode(SegmentID.self, forKey: .id)
+        self.noteID = try container.decode(NoteID.self, forKey: .noteID)
+        self.kind = try container.decode(SegmentKind.self, forKey: .kind)
+        self.noteGeneration = try container.decode(Int.self, forKey: .noteGeneration)
+        self.origin = try container.decode(SegmentOrigin.self, forKey: .origin)
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
+        self.endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        self.text = text
+        self.textOrigin = try container.decode(TextOrigin.self, forKey: .textOrigin)
+        self.rawTranscript = rawTranscript
+        self.transcription = try container.decodeIfPresent(TranscriptionProvenance.self, forKey: .transcription)
+        self.cleanup = try container.decodeIfPresent(CleanupProvenance.self, forKey: .cleanup)
+        self.processingOwner = try container.decodeIfPresent(DeviceID.self, forKey: .processingOwner)
+        self.ownerGeneration = try container.decode(Int.self, forKey: .ownerGeneration)
+        self.arrivedAt = try container.decodeIfPresent(Date.self, forKey: .arrivedAt)
+        self.state = try container.decode(SegmentState.self, forKey: .state)
+        self.assetID = try container.decodeIfPresent(AssetID.self, forKey: .assetID)
+        self.duration = try container.decodeIfPresent(Duration.self, forKey: .duration)
+        self.conflictOf = try container.decodeIfPresent(SegmentID.self, forKey: .conflictOf)
+        self.deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
+        self.revision = try container.decode(Int64.self, forKey: .revision)
     }
 
     /// True for a segment that is neither deleted nor a conflict copy: one that counts as a

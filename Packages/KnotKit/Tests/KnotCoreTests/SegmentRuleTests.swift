@@ -40,8 +40,8 @@ private let noteA: NoteID = id(201)
         ("aaaaaa\nbb cccccc", 12, ["aaaaaa\n", "bb cccccc"]),
         ("abcdefghij", 4, ["abcd", "efgh", "ij"]),
         ("ab\ncdefghij", 4, ["ab\n", "cdef", "ghij"]),
-        ("éééé", 3, ["é", "é", "é", "é"]),
-        ("👩‍👩‍👧‍👦x", 4, ["👩‍👩‍👧‍👦", "x"]),
+        ("éééé", 5, ["éé", "éé"]),
+        ("👩‍👩‍👧‍👦x", 25, ["👩‍👩‍👧‍👦", "x"]),
     ])
     func splitsAtABreakWithoutSplittingACharacter(text: String, limit: Int, expected: [String]) {
         let pieces = TextPieces.split(text, maxBytes: limit)
@@ -242,5 +242,26 @@ private let noteA: NoteID = id(201)
                 "Needs you",
                 "Kept, no text",
             ])
+    }
+}
+
+@Suite struct OversizedCharacterTests {
+    /// The letter a with 131,072 combining accents: one character of 262,145 bytes.
+    static let giant = "a" + String(repeating: "\u{0301}", count: 131_072)
+
+    @Test func aCharacterLargerThanTheLimitIsSplitAtScalarBoundaries() {
+        #expect(Self.giant.count == 1)
+        #expect(Self.giant.utf8.count == 262_145)
+        let pieces = TextPieces.split(Self.giant)
+        #expect(pieces.allSatisfy { $0.utf8.count <= Limits.segmentTextBytes })
+        #expect(pieces.joined() == Self.giant, "Nothing is cut.")
+        #expect(pieces.count == 2)
+        let family = TextPieces.split("👩‍👩‍👧‍👦x", maxBytes: 4)
+        #expect(family.allSatisfy { $0.utf8.count <= 4 })
+        #expect(family.joined().unicodeScalars.elementsEqual("👩‍👩‍👧‍👦x".unicodeScalars))
+        let small = TextPieces.split("x" + String(repeating: "\u{0301}", count: 5), maxBytes: 4)
+        #expect(small.allSatisfy { $0.utf8.count <= 4 })
+        #expect(
+            small.joined().unicodeScalars.elementsEqual(("x" + String(repeating: "\u{0301}", count: 5)).unicodeScalars))
     }
 }
