@@ -58,6 +58,32 @@ import Testing
         #expect(unknown.isEmpty, "docs/errors.md has entries for codes the catalog lacks: \(unknown.sorted()).")
     }
 
+    /// Every code of a `KnotError` case declared anywhere in KnotKit's sources.
+    static func declaredCodes() throws -> [String: String] {
+        let sources = repositoryRoot().appending(path: "Packages/KnotKit/Sources")
+        let pattern = try Regex(#"static\s+let\s+(\w+)\s*=\s*KnotError\(\s*code:\s*"([^"]*)""#)
+        var codes: [String: String] = [:]
+        let files = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        while let file = files?.nextObject() as? URL {
+            guard file.pathExtension == "swift" else { continue }
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for match in text.matches(of: pattern) {
+                let name = String(match.output[1].substring ?? "")
+                codes[String(match.output[2].substring ?? "")] = "\(file.lastPathComponent): \(name)"
+            }
+        }
+        return codes
+    }
+
+    @Test func everyCaseDeclaredIsInTheCatalog() throws {
+        let declared = try Self.declaredCodes()
+        #expect(
+            Set(declared.keys) == Set(KnotError.catalog.map(\.code.rawValue)),
+            "The declared cases and the catalog differ.")
+        let missing = Set(declared.keys).subtracting(KnotError.catalog.map(\.code.rawValue))
+        #expect(missing.isEmpty, "Cases left out of KnotError.catalog: \(missing.sorted().map { declared[$0]! })")
+    }
+
     @Test func theTaxonomyNamesEveryFailureTheArchitectureFixes() {
         // docs/architecture.md §5, with the engineering review's three cases.
         let named: [KnotError] = [
