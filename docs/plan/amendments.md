@@ -183,7 +183,7 @@ How to read it:
 | eng-047 | WP-18 saves a drawing off the main thread with one save in flight, within 500 ms of a stroke. | WP-18; docs/product-spec.md §14 | – |
 | eng-048 | Synthetic cleanup and speech results are committed with the fixtures; a meaning-critical regression blocks the PR; the nightly run reports a changed model. | PLAN.md §9; WP-01, WP-04, WP-13, WP-14 | – |
 | eng-049 | WP-43's release script rechecks the archive for KnotFakes and the preview launch argument; its privacy text calls the switch consent, not a wall. | WP-43; docs/architecture.md §3; docs/architecture.md §19 | – |
-| eng-050 | Appendix B gains a line: after the queue rebases a branch, its thread resets to the remote branch before changing anything. | PLAN.md §8, Appendix B; docs/architecture.md §18 | – |
+| eng-050 | Appendix B gains a line: after the queue rebases a branch, its thread resets to the remote branch before changing anything. | PLAN.md §8, Appendix B; docs/architecture.md §18. Reworded on 2026-11-19, because a forced push waits for the owner's approval on the build Mac: the queue brings a branch up to date by merging `main`, and its thread fast-forwards. | – |
 | eng-051 | The owner's calendar gains about 20 minutes: 10 at G1 for the ruleset, 5 each at M2 and M3 for the forced restart. | PLAN.md §10 | – |
 | eng-052 | TODOS.md gains four deferred items, fourteen in all: automatic takeover, batching the merge queue, a separate agent account, several iPad windows. | TODOS.md | “`TODOS.md` gains two deferred items, ten in all” (design-23) |
 | eng-053 | The owner answered the review's gate on 2026-11-19; the five answers that change the plan join §2 as D32 to D36. | PLAN.md §2; WP-00 | – |

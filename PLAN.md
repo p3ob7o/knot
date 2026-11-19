@@ -199,17 +199,17 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | SP-3 | 1 | The report, `docs/spikes/SP-3.md`, which ends with a decision | SP-3 notes |
 | SP-4 | Notes | The code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
 | SP-4 | 1 | The report, `docs/spikes/SP-4.md`, which holds the final CloudKit schema and ends with a decision | SP-4 notes |
-| SP-5 | Notes | The code half on its `spike/…` branch, and its short note | WP-01 PR 1 |
-| SP-5 | 1 | The report, which ends with a decision | SP-5 notes |
+| SP-5 | Notes | The code half on `spike/mac-hotkey`, and its short note | WP-01 PR 1 |
+| SP-5 | 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | The whole package | WP-05 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
-| WP-13 | Proof step | Transcription of the fixtures and of the owner's recordings, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
+| WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
-| WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
+| WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-14 | 1 | The whole package | WP-05 |
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
 | WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
@@ -341,7 +341,7 @@ A package's "Done when" list is the merge criteria of its brief, and it holds on
 
 ### Spikes
 
-A spike answers questions. Its code stays on its `spike/…` branch and is never merged. Its report merges to `docs/spikes/`, ends with a decision, and updates architecture.md where the answer changes it.
+A spike answers questions. Its code stays on its `spike/…` branch and is never merged. Its report merges to `docs/spikes/` and ends with a decision. Where the answer changes docs/architecture.md, the report lists the changes it asks for, and the orchestrator, who owns that file, makes them in a pull request of its own before it launches a package that waits for the spike.
 
 A spike counts as finished when its report has merged and the owner has confirmed its decision. The code half of each spike starts with the proof steps, and files the same short note. A spike uses the development identifiers, like every build that is not a milestone build.
 
@@ -395,14 +395,14 @@ A thread that finds its brief wrong or blocked stops and says so. It does not wi
 2. The implementer runs `scripts/verify.sh --quick` before opening the PR.
 3. A reviewer thread runs gstack `/review` on the PR. WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from a different model through `/codex`.
 4. The implementer fixes the findings. After two rounds, the orchestrator decides what is left. Every finding the orchestrator sets aside is written in the PR and in the journal.
-5. The orchestrator takes the PR into its merge queue. It rebases the branch on `main`, runs the merge gate, `scripts/verify.sh --gate`, on that head, and squash-merges. Until the second PR of WP-01 merges, the gate is `--quick` (§9). After the queue has rebased a branch, its thread resets to the remote branch before it changes anything else.
-6. The orchestrator removes the worktree.
+5. The orchestrator takes the PR into its merge queue. When `main` has moved, it merges `main` into the branch. It never rebases a branch that was pushed and never forces a push. It runs the merge gate, `scripts/verify.sh --gate`, on that head, and squash-merges. Until the second PR of WP-01 merges, the gate is `--quick` (§9). After the queue has updated a branch, its thread fast-forwards to the remote branch before it changes anything else.
+6. The orchestrator removes the worktree, unless the thread goes straight on with the package's next PR. That PR starts on a new branch from `main`, in the same worktree.
 
 The orchestrator runs a serial queue and binds each result to a base, a head and a tree. Merges follow the dependency order in §6, inside the queue's own order. The merge gate, the merge queue and the orchestrator's state follow docs/architecture.md §18.
 
 ### 8.5 Contracts and shared files
 
-- A change to KnotCore's public API goes in its own small PR on a `contract/…` branch, with the fakes updated. The orchestrator merges it first and tells the threads that depend on it to rebase. A contract PR that only adds merges in the normal queue. One that breaks keeps the two fixed times a day of docs/architecture.md §18.
+- A change to KnotCore's public API goes in its own small PR on a `contract/…` branch, with the fakes updated. The orchestrator merges it first and tells the threads that depend on it to merge `main` into their branches. A contract PR that only adds merges in the normal queue. One that breaks keeps the two fixed times a day of docs/architecture.md §18.
 - `Package.swift`, `Package.resolved`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description.
 - A package edits only the paths it owns, and the gate checks that. Path ownership has stated exceptions:
   - The first PR of WP-01 creates the first files of every module folder: an empty target with one trivial test, the module's live entry point, the crash hosts and the environment factory. It also declares `AppEnvironment` in KnotCore with its `.unavailable` value and nothing else, because the factory returns that value. Each folder belongs to its package from then on.
@@ -419,7 +419,7 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
 
 - Five implementer threads at a time, to start with. The machine has 16 cores and 48 GB of memory.
 - Three heavy builds at a time, enforced by `scripts/build-slot.sh`. One slot is kept for the gate, Mac UI tests queue on one exclusive slot, and the script also limits how many simulators are booted at once.
-- Worktrees are removed after merge, with `scripts/worktree-remove.sh`. Each holds several gigabytes of build products. Removing a worktree also removes its simulators and its development store.
+- Worktrees are removed after merge, with `scripts/worktree-remove.sh`, unless a thread goes straight on with its package's next PR. Each holds several gigabytes of build products. Removing a worktree also removes its simulators and its development store.
 
 ### 8.7 Status
 
@@ -432,7 +432,7 @@ The orchestrator's state is rebuilt from the briefs, GitHub and a journal outsid
 A PR is done when all of these hold:
 
 - Its brief's merge criteria are met, with the evidence in the PR description.
-- `scripts/verify.sh --gate` passes on the head that the queue rebased.
+- `scripts/verify.sh --gate` passes on the head that the queue brought up to date.
 - New behaviour has tests. Storage, capture, ingest and sync have failure-path tests.
 - No note text, transcript or audio appears in logs, test output or fixtures.
 - Any OS 26 or OS 27 API used is named in the PR with the declaration that was read (architecture §21).
@@ -468,7 +468,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G0 | 2026-11-19 | Done, and nothing is open at G0. He approved the plan, gave the answers that became D32 to D36, answered the 34 assumptions and the two readings that followed, and named his cadence: about an hour a day. | 30 |
 | G0 | Wave 0 | Approve the restart PR and the licence wording. Done: the restart merged on 2026-11-19 as pull request 10. | 15 |
 | G2 | Wave 0 | Review the brief, run the Claude Design direction step, choose a direction | 60 |
-| G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
+| G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode, which he did on 2026-11-19; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
 | G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build | 10 |
 | G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt | 5 |
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
@@ -501,7 +501,7 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 - A checklist longer than 20 rows is split into two sittings.
 - Gate G3 is the owner's sitting for confirming the spikes' decisions, and each spike is confirmed on its own.
 - A spike or milestone sitting starts when `scripts/install.sh` has reported success. SP-1 and SP-2 each record the install procedure that worked on the iPhone and on the Watch, and the orchestrator corrects the script from those reports.
-- At G1 the owner installs a release Xcode 27 beside the beta, and WP-01 records its version: it is the Xcode for the merge gate and for the archive.
+- The owner installed the release Xcode 27.2 (27B52) beside the beta on 2026-11-19, and WP-01 pins it in `.xcode-version`: it is the Xcode for the merge gate and for the archive.
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
 - The owner makes the wave 0 recordings with Apple's Voice Memos, on the iPhone and on the Watch, and puts them in the one folder outside every worktree that `KNOT_LOCAL_FIXTURES` names.
@@ -557,7 +557,7 @@ WP-00's first PR wrote it, with these sections:
   - A PR that changes the cleanup instructions, the guard or the speech settings reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
   - No agent cuts scope. Scope leaves only on the owner's word.
 - **Working in parallel.** Edit only the paths your package owns. Contract changes and shared files go through the orchestrator. Keep the repository, the build folder and the fixtures folder out of any folder that a cloud file provider syncs: `scripts/doctor.sh` refuses them there.
-- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. No session links in commits or PR descriptions.
+- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. Never rebase a branch that was pushed, and never force a push. One branch for each PR. No session links in commits or PR descriptions.
 - **Needs Paolo's explicit authorisation.** Moving a tag, distribution signing, notarising, uploading, deploying the CloudKit production schema, every operation on the milestone iCloud container in either environment, deleting an archive branch.
 - **Commands.** `scripts/bootstrap.sh` and `scripts/verify.sh`. Every script sets `DEVELOPER_DIR` from `.xcode-version` and checks the version. Implementers use that Xcode, and the beta only by name. Package criteria name `scripts/verify.sh --quick`, never a bare `swift test`.
 
@@ -580,8 +580,10 @@ Before using any OS 26 or OS 27 API, read its declaration in the SDK
 (docs/architecture.md, section 21).
 
 Work on the branch you are on. Run scripts/verify.sh --quick, then open a PR
-against main. After the merge queue has rebased your branch, reset to the
-remote branch before you change anything else.
+against main. After the merge queue has updated your branch, fast-forward
+to the remote branch before you change anything else. Never rebase a branch
+you have pushed, and never force a push. When a PR of yours has been
+squashed, start your next one on a new branch from origin/main.
 
 In your final message, state what you built, what you verified and how, what
 needs hardware, and any departure from the brief. Its last line is one of:

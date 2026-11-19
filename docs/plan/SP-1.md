@@ -53,7 +53,7 @@ The full design round does not wait for SP-1. The design brief asks for both bra
 - The latencies bear on a first target of `docs/product-spec.md` §14: the Action Button to a live microphone in 1 s. The spikes and WP-42 calibrate those targets.
 - Record the install procedure that worked on the iPhone and on the Watch. The orchestrator corrects `scripts/install.sh` from it.
 - The report, `docs/spikes/SP-1.md`, has a result matrix (locked or unlocked, app running or terminated, each trigger), the latencies and a decision. It includes the feedback flow for each entry state, including Live Activities turned off and a missing microphone permission.
-- The report updates `docs/architecture.md` where the answer changes it.
+- Where the answer changes `docs/architecture.md`, the report lists the changes it asks for. The orchestrator owns that file and makes them in a pull request of its own (PLAN.md §7).
 
 ## Merge criteria
 

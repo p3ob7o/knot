@@ -57,7 +57,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
 - The engine's events cannot be built in a test, so `docs/architecture.md` §11 has the thin adapter between CKSyncEngine and the merge core proven by SP-4's harness, and on hardware at M4.
 - Set the restore time. A fresh install in WP-16 restores within the time SP-4 set.
 - The report, `docs/spikes/SP-4.md`, holds the final CloudKit schema.
-- The report updates `docs/architecture.md` where the answer changes it.
+- Where the answer changes `docs/architecture.md`, the report lists the changes it asks for. The orchestrator owns that file and makes them in a pull request of its own (PLAN.md §7).
 
 ## Merge criteria
 
