@@ -32,10 +32,17 @@ enum PostStop {
             await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en-US"))
             ?? Locale(identifier: "en-US")
         let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
-        let status = await AssetInventory.status(forModules: [transcriber])
-        guard status == .installed else {
+        // WP-13's note: `AssetInventory.status` reports an installed model as not installed, so
+        // installation is read from `installedLocales`.
+        let installed = await SpeechTranscriber.installedLocales
+        guard installed.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) else {
             // A deferral (docs/architecture.md §4): the model is installed from the app, in front.
-            SP1Log.record("transcribe.deferred", ["capture": id, "assets": String(describing: status)])
+            SP1Log.record(
+                "transcribe.deferred",
+                [
+                    "capture": id, "installedCount": String(installed.count),
+                    "assets": String(describing: await AssetInventory.status(forModules: [transcriber])),
+                ])
             return
         }
         let text: String

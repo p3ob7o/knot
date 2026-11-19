@@ -14,7 +14,10 @@ enum SpeechTranscriberFactory {
 
     static func status() async -> String {
         guard SpeechTranscriber.isAvailable else { return "unavailable" }
-        return String(describing: await AssetInventory.status(forModules: [make()]))
+        // `AssetInventory.status` misreports an installed model (WP-13's note): read the locales.
+        let installed = await SpeechTranscriber.installedLocales
+        let english = installed.contains { $0.language.languageCode == .english }
+        return english ? "installed" : "not installed (\(await AssetInventory.status(forModules: [make()])))"
     }
 }
 
