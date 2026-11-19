@@ -1,3 +1,4 @@
+import Foundation
 import KnotTestSupport
 import Testing
 
@@ -5,7 +6,8 @@ import Testing
 #if os(macOS)
     @Test func speechIsNotBuiltYet() throws {
         let url = try #require(CrashHost.executableURL(named: "knot-eval"))
-        let run = try CrashHost.run(url, arguments: ["speech", "--set", "synthetic"])
-        #expect(run.status == 2)
+        let fixtures = FileManager.default.temporaryDirectory.path
+        let run = try CrashHost.run(url, arguments: ["speech", "--set", "synthetic", "--fixtures", fixtures])
+        #expect(run.status == 3)
     }
 #endif
