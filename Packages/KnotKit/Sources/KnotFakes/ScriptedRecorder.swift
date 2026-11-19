@@ -6,8 +6,12 @@
     /// A `Recorder` on injected audio that says what a test scripts (docs/architecture.md §5
     /// and §8): a start that fails with each case, a session that streams levels, durable
     /// counts and live audio, each ending including those it did not ask for, a stop after an
-    /// ending, a discard, and recovery of an orphan of an earlier launch beside a recording of
-    /// the current one. It opens no microphone: it has none.
+    /// ending, a discard, a conversion that fails, and recovery of an orphan of an earlier
+    /// launch beside a recording of the current one. It opens no microphone: it has none.
+    ///
+    /// It writes real files through a `FileLayer`, where `StoreLocations` puts them: the
+    /// manifest before the first sample, the working file with the injected audio's bytes, and
+    /// the converted file, so that what the engine moves into the `AssetStore` is real.
     public final class ScriptedRecorder: Recorder {
         /// What one recording does.
         public struct Script: Sendable {
@@ -34,17 +38,34 @@
         }
 
         private struct State {
-            var script = Script()
+            var script: Script
             var startFailures: [KnotError] = []
+            var conversionFailures: [KnotError] = []
             var orphans: [(launch: LaunchID, audio: RecordedAudio)] = []
             var sessions: [CaptureID: (launch: LaunchID, session: ScriptedSession)] = [:]
             var prepared = 0
         }
 
-        private let state = Mutex(State())
+        public let locations: StoreLocations
+        private let layer: any FileLayer
+        private let files: StoreFiles
+        private let clock: any WallClock
+        /// The injected audio: the bytes a working file holds, such as a fixture's.
+        private let audio: Data?
+        private let state: Mutex<State>
 
-        public init(script: Script = Script()) {
-            state.withLock { $0.script = script }
+        /// - Parameter audio: the bytes of the injected audio, which the working file holds. Left
+        ///   out, the recorder writes synthetic 16-bit samples, two bytes a frame.
+        public init(
+            locations: StoreLocations, layer: any FileLayer, clock: any WallClock, audio: Data? = nil,
+            script: Script = Script()
+        ) {
+            self.locations = locations
+            self.layer = layer
+            self.files = locations.durableFiles(layer: layer)
+            self.clock = clock
+            self.audio = audio
+            self.state = Mutex(State(script: script))
         }
 
         // MARK: Scripting
@@ -54,13 +75,27 @@
         /// The next starts fail with these errors, in order.
         public func failNextStarts(with errors: KnotError...) { state.withLock { $0.startFailures += errors } }
 
-        /// A recording an earlier launch left behind, which `recoverOrphans` finishes.
-        public func leaveOrphan(_ capture: CaptureID, launch: LaunchID, frames: Int64, sampleRate: Double = 16_000) {
+        /// The next conversions fail with these errors, in order.
+        public func failNextConversions(with errors: KnotError...) {
+            state.withLock { $0.conversionFailures += errors }
+        }
+
+        /// A recording an earlier launch left behind, with its manifest and working file on disk,
+        /// which `recoverOrphans` finishes.
+        public func leaveOrphan(
+            _ capture: CaptureID, launch: LaunchID, frames: Int64, sampleRate: Double = 16_000
+        ) throws(KnotError) {
+            let request = RecordingRequest(
+                captureID: capture, launchID: launch, origin: CaptureOrigin(source: .cli, surface: .app))
+            try files.place(try request.manifest(startedAt: clock.now()).encoded(), at: manifestURL(capture))
+            try files.place(bytes(frames: frames), at: workingURL(capture))
             state.withLock {
                 $0.orphans.append(
                     (
                         launch,
-                        RecordedAudio(captureID: capture, frames: frames, sampleRate: sampleRate, ending: .recovered)
+                        RecordedAudio(
+                            captureID: capture, frames: frames, sampleRate: sampleRate, ending: .recovered,
+                            workingFile: workingURL(capture))
                     ))
             }
         }
@@ -76,7 +111,18 @@
                 (state.startFailures.isEmpty ? nil : state.startFailures.removeFirst(), state.script)
             }
             if let failure { throw failure.about(capture: request.captureID) }
-            let session = ScriptedSession(captureID: request.captureID, script: script)
+            // The manifest first, then the working file, before the first sample.
+            try files.place(try request.manifest(startedAt: clock.now()).encoded(), at: manifestURL(request.captureID))
+            try files.place(Data(), at: workingURL(request.captureID))
+            let session = ScriptedSession(
+                captureID: request.captureID, script: script, workingFile: workingURL(request.captureID),
+                write: { [files, audio] frames in
+                    try? files.place(audio ?? Self.synthetic(frames: frames), at: self.workingURL(request.captureID))
+                },
+                remove: { [files] in
+                    try? files.remove(self.workingURL(request.captureID))
+                    try? files.remove(self.manifestURL(request.captureID))
+                })
             state.withLock { $0.sessions[request.captureID] = (request.launchID, session) }
             session.begin()
             return session
@@ -95,6 +141,48 @@
                 return recovered.map(\.audio) + fromSessions
             }
         }
+
+        public func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
+            let failure = state.withLock { state in
+                state.conversionFailures.isEmpty ? nil : state.conversionFailures.removeFirst()
+            }
+            if let failure { throw failure.about(capture: recording.captureID) }
+            guard let working = recording.workingFile else {
+                throw KnotError.audioUnreadable.about(capture: recording.captureID)
+            }
+            let data: Data
+            do {
+                data = try layer.read(working)
+            } catch {
+                throw KnotError.conversionFailed.about(capture: recording.captureID)
+            }
+            let converted = locations.convertedRecording(recording.captureID)
+            try files.place(data, at: converted)
+            // Verified: the converted file reads back whole.
+            guard (try? layer.read(converted)) == data else {
+                throw KnotError.conversionFailed.about(capture: recording.captureID)
+            }
+            return ConvertedRecording(captureID: recording.captureID, file: converted, duration: recording.duration)
+        }
+
+        public func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+            for url in [workingURL(capture), manifestURL(capture)] where layer.entryKind(url) != nil {
+                try files.remove(url)
+            }
+        }
+
+        // MARK: Files
+
+        func workingURL(_ capture: CaptureID) -> URL { locations.recordingAudio(capture, format: .caf) }
+
+        func manifestURL(_ capture: CaptureID) -> URL { locations.recordingManifest(capture) }
+
+        private func bytes(frames: Int64) -> Data { audio ?? Self.synthetic(frames: frames) }
+
+        /// Synthetic 16-bit samples: two bytes a frame.
+        static func synthetic(frames: Int64) -> Data {
+            Data((0..<Int(frames * 2)).map { UInt8(truncatingIfNeeded: $0 &* 37) })
+        }
     }
 
     /// One scripted recording.
@@ -111,12 +199,21 @@
         private let eventSink: AsyncStream<RecordingEvent>.Continuation
         private let audioSink: AsyncStream<AudioChunk>.Continuation
         private let script: ScriptedRecorder.Script
+        private let workingFile: URL
+        private let write: @Sendable (Int64) -> Void
+        private let remove: @Sendable () -> Void
         private let state = Mutex(State())
         private let feeder = Mutex<Task<Void, Never>?>(nil)
 
-        init(captureID: CaptureID, script: ScriptedRecorder.Script) {
+        init(
+            captureID: CaptureID, script: ScriptedRecorder.Script, workingFile: URL,
+            write: @escaping @Sendable (Int64) -> Void, remove: @escaping @Sendable () -> Void
+        ) {
             self.captureID = captureID
             self.script = script
+            self.workingFile = workingFile
+            self.write = write
+            self.remove = remove
             (events, eventSink) = AsyncStream.makeStream(of: RecordingEvent.self)
             // A slow consumer loses the oldest audio; the file never waits.
             (liveAudio, audioSink) = AsyncStream.makeStream(of: AudioChunk.self, bufferingPolicy: .bufferingNewest(8))
@@ -128,7 +225,7 @@
                     if index > 0 { try? await Task.sleep(for: script.interval) }
                     guard append() else { return }
                 }
-                if let ending = script.endsBySelf { finish(ending, frames: nil) }
+                if let ending = script.endsBySelf { finish(ending, discarding: false) }
             }
             feeder.withLock { $0 = task }
         }
@@ -150,35 +247,38 @@
 
         /// Ends the recording once; later calls return the first result.
         @discardableResult
-        private func finish(_ ending: RecordingEnding, frames: Int64?) -> RecordedAudio {
-            let result: RecordedAudio = state.withLock { state in
-                if let result = state.result { return result }
+        private func finish(_ ending: RecordingEnding, discarding: Bool) -> RecordedAudio {
+            let (result, first): (RecordedAudio, Bool) = state.withLock { state in
+                if let result = state.result { return (result, false) }
                 let result = RecordedAudio(
-                    captureID: captureID, frames: frames ?? state.durable, sampleRate: script.sampleRate,
-                    ending: ending)
+                    captureID: captureID, frames: discarding ? 0 : state.durable, sampleRate: script.sampleRate,
+                    ending: ending, workingFile: discarding ? nil : workingFile)
                 state.result = result
-                eventSink.yield(.ended(result))
-                eventSink.finish()
-                audioSink.finish()
-                return result
+                return (result, true)
             }
+            guard first else { return result }
             feeder.withLock { $0?.cancel() }
+            // The file is on the drive before the ending is told.
+            if discarding { remove() } else { write(result.frames) }
+            eventSink.yield(.ended(result))
+            eventSink.finish()
+            audioSink.finish()
             return result
         }
 
         func stop() async -> RecordedAudio {
             // The stop runs in a task of its own, so cancelling the caller does not cancel it.
-            await Task { [self] in finish(.stopped, frames: nil) }.value
+            await Task { [self] in finish(.stopped, discarding: false) }.value
         }
 
         func discard() async {
-            await Task { [self] in _ = finish(.discarded, frames: 0) }.value
+            await Task { [self] in _ = finish(.discarded, discarding: true) }.value
         }
 
         /// The recording as recovery finds it after its launch died, if it had not ended.
         func recoverIfLive() -> RecordedAudio? {
             let live = state.withLock { $0.result == nil }
-            return live ? finish(.recovered, frames: nil) : nil
+            return live ? finish(.recovered, discarding: false) : nil
         }
     }
 #endif

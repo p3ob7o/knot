@@ -40,15 +40,13 @@ public enum AssetStoreContract {
         #expect(subject.exists(placed.url))
         #expect(try await store.find(audio, kind: .audio) == placed)
         try await store.verify(audio, kind: .audio, sha256: sha)
-        await #expect(throws: KnotError.checksumMismatch.with(.init(assetID: audio))) {
+        await expectCode(.checksumMismatch) {
             try await store.verify(audio, kind: .audio, sha256: String(repeating: "0", count: 64))
         }
 
         // The same content again is the stored file; other content is refused and changes nothing.
         #expect(try await store.place(data, as: audio, kind: .audio) == placed)
-        await #expect(throws: KnotError.assetConflict.with(.init(assetID: audio))) {
-            try await store.place(Data("other".utf8), as: audio, kind: .audio)
-        }
+        await expectCode(.assetConflict) { try await store.place(Data("other".utf8), as: audio, kind: .audio) }
         try await store.verify(audio, kind: .audio, sha256: sha)
 
         // A file written elsewhere moves in, and its source is gone.
@@ -59,13 +57,24 @@ public enum AssetStoreContract {
         #expect(!subject.exists(source), "The source of a move is gone.")
         #expect(subject.exists(moved.url))
 
+        // Moving the stored file onto itself changes nothing, and neither does a retry after the
+        // move committed and its source went.
+        #expect(try await store.move(moved.url, as: drawing, kind: .ink) == moved)
+        #expect(try await store.move(source, as: drawing, kind: .ink) == moved)
+        #expect(try await store.find(drawing, kind: .ink) == moved, "The stored file is still there.")
+
         // Removing is final, and removing what is not there is not an error.
         try await store.remove(audio, kind: .audio)
         #expect(try await store.find(audio, kind: .audio) == nil)
         #expect(!subject.exists(placed.url))
         try await store.remove(audio, kind: .audio)
-        await #expect(throws: KnotError.notFound.with(.init(assetID: audio))) {
-            try await store.verify(audio, kind: .audio, sha256: sha)
-        }
+        await expectCode(.notFound) { try await store.verify(audio, kind: .audio, sha256: sha) }
     }
+}
+
+/// Expects `body` to fail with the code of `expected`, whatever the context.
+func expectCode<R>(
+    _ expected: KnotError, sourceLocation: SourceLocation = #_sourceLocation, _ body: () async throws -> R
+) async {
+    await refuses(expected, sourceLocation: sourceLocation, body)
 }

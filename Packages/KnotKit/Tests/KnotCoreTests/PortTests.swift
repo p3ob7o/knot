@@ -20,7 +20,9 @@ import Testing
             try await environment.assets.find(id(3), kind: .audio)
         }
         await #expect(throws: KnotError.portUnavailable.about(capture: capture)) {
-            try await environment.recorder.start(RecordingRequest(captureID: capture, launchID: id(2)))
+            try await environment.recorder.start(
+                RecordingRequest(
+                    captureID: capture, launchID: id(2), origin: CaptureOrigin(source: .cli, surface: .control)))
         }
         #expect(await environment.transcriber.readiness() == .unavailable)
         #expect(await environment.cleaner.availability() == .unavailable(.notInThisBuild))
@@ -60,7 +62,7 @@ import Testing
         await #expect(throws: KnotError.portUnavailable.with(.init(segmentID: segment))) {
             try await environment.queue.enqueue(segment)
         }
-        await environment.queue.runUntilIdle()
+        #expect(await environment.queue.drain(using: StraightThrough(), progress: { _ in }) == .idle)
         var jobs = environment.queue.jobs().makeAsyncIterator()
         #expect(await jobs.next() == nil, "No job is published.")
     }
@@ -93,7 +95,7 @@ import Testing
             TranscriptPiece(text: text, range: .seconds(index) ..< .seconds(index + 1))
         }
         let run = TranscriptionRun(
-            pieces: pieces, resumeAt: nil,
+            startsAt: .zero, pieces: pieces, resumeAt: nil,
             provenance: TranscriptionProvenance(engine: "e", locale: "en_US", osBuild: "b"))
         var segment = try Segment(
             id: id(1), noteID: id(2), kind: .voice, origin: .cli, startedAt: at("10:00"), textOrigin: .rawTranscript,
@@ -108,22 +110,34 @@ import Testing
             AudioChunk(samples: Array(repeating: 0, count: 1_600), sampleRate: 16_000).duration == .milliseconds(100))
         #expect(AudioChunk(samples: [0], sampleRate: 0).duration == .zero)
         #expect(
-            RecordedAudio(captureID: id(1), frames: 48_000, sampleRate: 48_000, ending: .stopped).duration
+            RecordedAudio(captureID: id(1), frames: 48_000, sampleRate: 48_000, ending: .stopped, workingFile: nil)
+                .duration
                 == .seconds(1))
     }
 }
 
 @Suite struct CaptureBodyTests {
-    /// A file's content is judged by the bytes its digest names, as a typed capture's by its text.
+    /// A file's content is judged by the 32 bytes its digest names, which must be 64 hex
+    /// digits. Anything else has no content and is refused, so it can never equal a valid one.
     @Test func aFilesContentIsTheBytesOfItsDigest() {
-        let asset = Asset(id: id(1), segmentID: id(2), kind: .audio, byteCount: 1, sha256: "00ff10Ab")
-        #expect(CaptureBody.file(asset, duration: nil).content == .file(sha256: [0x00, 0xFF, 0x10, 0xAB]))
-        var odd = asset
-        odd.sha256 = "abc"
-        #expect(CaptureBody.file(odd, duration: nil).content != CaptureBody.file(asset, duration: nil).content)
-        var notHex = asset
-        notHex.sha256 = "zz"
-        #expect(CaptureBody.file(notHex, duration: nil).content == .file(sha256: Array("text:zz".utf8)))
-        #expect(CaptureBody.none.content == nil)
+        let hex = "00ff10ab" + String(repeating: "0", count: 56)
+        let asset = Asset(id: id(1), segmentID: id(2), kind: .audio, byteCount: 1, sha256: hex.uppercased())
+        let body = CaptureBody.file(asset, duration: nil)
+        #expect(body.isWellFormed)
+        #expect(body.content == .file(sha256: [0x00, 0xFF, 0x10, 0xAB] + Array(repeating: 0, count: 28)))
+        for malformed in ["abc", "zz" + String(repeating: "0", count: 62), String(repeating: "0", count: 66), ""] {
+            var bad = asset
+            bad.sha256 = malformed
+            #expect(!CaptureBody.file(bad, duration: nil).isWellFormed, "\(malformed.count) characters")
+            #expect(CaptureBody.file(bad, duration: nil).content == nil)
+        }
+        #expect(CaptureBody.none.content == nil && CaptureBody.none.isWellFormed)
+        #expect(CaptureBody.text("x").content == .text("x"))
     }
+}
+
+/// A runner that runs work straight through, for the tests of KnotCore.
+struct StraightThrough: BackgroundRunner {
+    let name = "straight-through"
+    func run(_ work: BackgroundWork) async throws(KnotError) { try await work.body { _ in } }
 }

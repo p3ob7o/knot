@@ -18,8 +18,8 @@ public struct FixtureFailure: Error, CustomStringConvertible, Equatable {
 ///
 /// A test finds `Fixtures/manifest.json` by walking up from its own source file. A committed
 /// file is checked against its SHA-256 in `Fixtures/manifest.json`, and a generated one, which
-/// each Mac makes, against `Fixtures/generated/manifest.json`. A file the manifest does not
-/// describe is returned when it exists, unchecked.
+/// each Mac makes, against `Fixtures/generated/manifest.json`. A manifest that is missing or
+/// cannot be read, and a file it does not describe, fail too: nothing is returned unchecked.
 public enum FixtureFiles {
     /// The `Fixtures/` folder above `file`.
     public static func folder(from file: StaticString = #filePath) throws(FixtureFailure) -> URL {
@@ -58,8 +58,23 @@ public enum FixtureFiles {
                 : "\(shown) is not in this checkout. Restore it with `git checkout -- Fixtures`."
             throw FixtureFailure(code: "fixture_missing", path: shown, message: message)
         }
+        let manifestName = generated ? "Fixtures/generated/manifest.json" : "Fixtures/manifest.json"
         let manifest = fixtures.appending(path: generated ? "generated/manifest.json" : "manifest.json")
-        guard let expected = checksums(in: manifest)[path] else { return target }
+        guard let sums = checksums(in: manifest) else {
+            let fix =
+                generated
+                ? "Run `Fixtures/tools/generate.sh --audio` to make this Mac's audio and its manifest."
+                : "Restore it with `git checkout -- Fixtures/manifest.json`."
+            throw FixtureFailure(
+                code: "fixture_missing", path: manifestName, message: "\(manifestName) is missing or unreadable. \(fix)"
+            )
+        }
+        guard let expected = sums[path] else {
+            throw FixtureFailure(
+                code: "fixture_missing", path: shown,
+                message: "\(shown) is not described in \(manifestName), so it cannot be checked. "
+                    + "Add it to the manifest with `Fixtures/tools/generate.sh --committed`.")
+        }
         let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard actual == expected.lowercased() else {
             let fix =
@@ -74,10 +89,10 @@ public enum FixtureFiles {
     }
 
     /// The checksum of each file a manifest describes, by its path inside `Fixtures/`.
-    static func checksums(in manifest: URL) -> [String: String] {
+    static func checksums(in manifest: URL) -> [String: String]? {
         guard let data = FileManager.default.contents(atPath: manifest.path),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+        else { return nil }
         var sums: [String: String] = [:]
         let pairs = [("file", "sha256"), ("reference", "referenceSha256"), ("preview", "previewSha256")]
         for list in object.values.compactMap({ $0 as? [[String: Any]] }) {

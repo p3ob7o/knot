@@ -2,26 +2,56 @@ import Foundation
 import KnotCore
 import Testing
 
+/// A recorder under test, with where its files go and a way to see them.
+public struct RecorderSubject: Sendable {
+    public let recorder: any Recorder
+    public let locations: StoreLocations
+    /// Whether a file exists, read without the recorder.
+    public let exists: @Sendable (URL) -> Bool
+
+    public init(recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool) {
+        self.recorder = recorder
+        self.locations = locations
+        self.exists = exists
+    }
+}
+
 /// The contract suite of `Recorder` (docs/architecture.md §5 and §8). The factory makes a
 /// recorder whose injected source delivers audio; the real recorder runs it in KnotAudio's
 /// tests on injected audio, never on a microphone.
 public enum RecorderContract {
-    public static func run(_ make: @Sendable () async -> any Recorder) async throws {
-        try await aRecordingStreamsAndStops(make)
+    public static func run(_ make: @Sendable () async throws -> RecorderSubject) async throws {
+        try await aRecordingStreamsStopsAndConverts(make)
         try await aStopIsFinalAndCannotBeCancelled(make)
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
     }
 
-    /// A start returns a live session; levels, durable counts and live audio arrive; the stop
-    /// returns once the file is on the drive; the events end with exactly one `.ended`.
-    public static func aRecordingStreamsAndStops(_ make: @Sendable () async -> any Recorder) async throws {
-        let recorder = await make()
+    static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
+        RecordingRequest(
+            captureID: Identifier(uuid: UUID()), launchID: launch,
+            origin: CaptureOrigin(source: .device(Identifier(uuid: UUID())), surface: .control), placement: .window,
+            shownNote: Identifier(uuid: UUID()))
+    }
+
+    /// A start writes the manifest and the working file and returns a live session; levels,
+    /// durable counts and live audio arrive; the stop leaves the working file on the drive; the
+    /// events end with exactly one `.ended`; the conversion makes the stored format beside it,
+    /// and the working file goes only when asked.
+    public static func aRecordingStreamsStopsAndConverts(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
         await recorder.prepare()
         await recorder.prepare()
-        let request = RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID()))
+        let request = request()
         let session = try await recorder.start(request)
+        let manifest = subject.locations.recordingManifest(request.captureID)
+        let working = subject.locations.recordingAudio(request.captureID, format: .caf)
         #expect(session.captureID == request.captureID)
+        #expect(subject.exists(manifest), "The manifest is written before the first sample.")
+        #expect(subject.exists(working), "The working file exists once the recording is live.")
 
         var durable: [Int64] = []
         var levels = 0
@@ -48,21 +78,31 @@ public enum RecorderContract {
         #expect(chunks == 1, "Live audio arrives.")
 
         let result = await session.stop()
-        #expect(result.captureID == request.captureID)
-        #expect(result.ending == .stopped)
+        #expect(result.captureID == request.captureID && result.ending == .stopped)
         #expect(result.frames >= (durable.last ?? 0), "What was durable is in the file.")
-        #expect(result.sampleRate > 0)
+        #expect(result.workingFile == working && subject.exists(working), "The working file stays after the stop.")
         var endings: [RecordedAudio] = []
         for await event in session.events { if case .ended(let audio) = event { endings.append(audio) } }
         #expect(endings == [result], "The events end with exactly one ending, the stop's result.")
+
+        let converted = try await recorder.convert(result)
+        #expect(converted.file == subject.locations.convertedRecording(request.captureID))
+        #expect(subject.exists(converted.file), "The converted file is on the drive.")
+        #expect(converted.duration == result.duration, "Its length matches the working file's.")
+        #expect(subject.exists(working), "The working file stays until it is removed.")
+        try await recorder.removeWorkingFile(of: request.captureID)
+        #expect(!subject.exists(working) && !subject.exists(manifest), "Removing takes the working file and manifest.")
+        try await recorder.removeWorkingFile(of: request.captureID)
+        #expect(subject.exists(converted.file))
     }
 
     /// A stop called again returns the same result, and a stop whose caller is cancelled
     /// still finishes.
-    public static func aStopIsFinalAndCannotBeCancelled(_ make: @Sendable () async -> any Recorder) async throws {
-        let recorder = await make()
-        let session = try await recorder.start(
-            RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID())))
+    public static func aStopIsFinalAndCannotBeCancelled(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let session = try await subject.recorder.start(request())
         let stopping = Task { await session.stop() }
         stopping.cancel()
         let first = await stopping.value
@@ -71,22 +111,25 @@ public enum RecorderContract {
     }
 
     /// A discard ends the recording and keeps nothing.
-    public static func aDiscardRemovesTheRecording(_ make: @Sendable () async -> any Recorder) async throws {
-        let recorder = await make()
-        let session = try await recorder.start(
-            RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID())))
+    public static func aDiscardRemovesTheRecording(_ make: @Sendable () async throws -> RecorderSubject) async throws {
+        let subject = try await make()
+        let request = request()
+        let session = try await subject.recorder.start(request)
         await session.discard()
         let after = await session.stop()
-        #expect(after.ending == .discarded && after.frames == 0, "After a discard nothing is kept.")
+        #expect(after.ending == .discarded && after.frames == 0 && after.workingFile == nil, "Nothing is kept.")
+        #expect(!subject.exists(subject.locations.recordingAudio(request.captureID, format: .caf)))
+        #expect(!subject.exists(subject.locations.recordingManifest(request.captureID)))
     }
 
     /// Recovery finishes recordings of earlier launches and never one of the current launch.
-    public static func recoveryNeverTouchesTheCurrentLaunch(_ make: @Sendable () async -> any Recorder) async throws {
-        let recorder = await make()
+    public static func recoveryNeverTouchesTheCurrentLaunch(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
         let launch: LaunchID = Identifier(uuid: UUID())
-        let session = try await recorder.start(
-            RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: launch))
-        let recovered = try await recorder.recoverOrphans(currentLaunch: launch)
+        let session = try await subject.recorder.start(request(launch))
+        let recovered = try await subject.recorder.recoverOrphans(currentLaunch: launch)
         #expect(
             !recovered.contains { $0.captureID == session.captureID }, "The current launch's recording is left alone.")
         #expect(recovered.allSatisfy { $0.ending == .recovered })

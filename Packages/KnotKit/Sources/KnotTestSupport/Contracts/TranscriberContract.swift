@@ -2,24 +2,30 @@ import Foundation
 import KnotCore
 import Testing
 
-/// What a `Transcriber` under test reads: a file with speech, an empty or silent one, and a
-/// path with no file.
+/// What a `Transcriber` under test reads.
 public struct TranscriberSubject: Sendable {
     public let transcriber: any Transcriber
+    /// A file with speech.
     public let speech: URL
+    /// A file whose run lasts long enough to be cancelled while it runs: a second or more.
+    public let long: URL
+    /// A file of silence, or with no frames.
     public let silence: URL
+    /// A path with no file.
     public let missing: URL
-    /// A budget shorter than the speech, so that it takes more than one run.
+    /// A budget shorter than the first phrase of `speech`, so that every run must take a
+    /// phrase longer than its budget.
     public let budget: Duration
     /// Audio for live text.
     public let liveChunks: [AudioChunk]
 
     public init(
-        transcriber: any Transcriber, speech: URL, silence: URL, missing: URL, budget: Duration,
+        transcriber: any Transcriber, speech: URL, long: URL, silence: URL, missing: URL, budget: Duration,
         liveChunks: [AudioChunk]
     ) {
         self.transcriber = transcriber
         self.speech = speech
+        self.long = long
         self.silence = silence
         self.missing = missing
         self.budget = budget
@@ -38,44 +44,55 @@ public enum TranscriberContract {
         // A whole file in one run.
         let whole = try await transcriber.transcribe(file: subject.speech, from: .zero, budget: nil)
         #expect(!whole.pieces.isEmpty && whole.resumeAt == nil, "One run without a budget reads the whole file.")
+        #expect(whole.startsAt == .zero)
         #expect(
             zip(whole.pieces, whole.pieces.dropFirst()).allSatisfy { $0.range.upperBound <= $1.range.lowerBound },
             "Pieces come in order and do not overlap.")
         #expect(!whole.provenance.engine.isEmpty && !whole.provenance.osBuild.isEmpty, "A run says what made it.")
-        #expect(
-            whole.provenance.locale == transcriber.locale.identifier, "A run names the locale in use.")
+        #expect(whole.provenance.locale == transcriber.locale.identifier, "A run names the locale in use.")
 
-        // The same file in runs that each move on, never splitting a phrase.
+        // The same file in runs with a budget shorter than a phrase: each run takes at least one
+        // phrase, every run moves on, and together they cover the file and end.
         var offset: Duration = .zero
         var runs = 0
+        var last: Duration = .zero
         while runs < 1_000 {
             let run = try await transcriber.transcribe(file: subject.speech, from: offset, budget: subject.budget)
             runs += 1
+            #expect(run.startsAt == offset, "A run says where it started.")
             #expect(run.pieces.allSatisfy { $0.range.lowerBound >= offset }, "A run starts where it was asked to.")
+            last = run.pieces.last?.range.upperBound ?? last
             guard let next = run.resumeAt else { break }
+            #expect(!run.pieces.isEmpty, "A run that is not the last takes at least a phrase.")
             #expect(next > offset, "Every run moves on.")
             offset = next
         }
-        #expect(runs > 1, "A budget shorter than the speech takes more than one run.")
+        #expect(runs > 1 && runs < 1_000, "The runs end.")
+        let wholeEnd = whole.pieces.last?.range.upperBound ?? .zero
+        #expect(abs((last - wholeEnd) / .seconds(1)) <= 1, "The runs together cover what one run covers.")
 
         // Silence is ready with empty text, not an error.
         let silent = try await transcriber.transcribe(file: subject.silence, from: .zero, budget: nil)
         #expect(silent.pieces.isEmpty && silent.resumeAt == nil)
-
-        await #expect(throws: KnotError.audioUnreadable) {
-            try await transcriber.transcribe(file: subject.missing, from: .zero, budget: nil)
+        do {
+            _ = try await transcriber.transcribe(file: subject.missing, from: .zero, budget: nil)
+            Issue.record("A missing file must fail.")
+        } catch {
+            #expect(error.code == KnotError.audioUnreadable.code)
         }
 
-        // A cancelled run throws the yield within a second.
-        let started = ContinuousClock.now
-        let task = Task { try await transcriber.transcribe(file: subject.speech, from: .zero, budget: nil) }
+        // A run cancelled while it runs throws the yield within a second.
+        let task = Task { try await transcriber.transcribe(file: subject.long, from: .zero, budget: nil) }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancelled = ContinuousClock.now
         task.cancel()
         do {
             _ = try await task.value
-        } catch let error as KnotError {
-            #expect(error == KnotError.cancelled, "A cancelled run throws the yield.")
+            Issue.record("A run cancelled while it runs must throw, not finish.")
+        } catch {
+            #expect((error as? KnotError)?.code == KnotError.cancelled.code, "A cancelled run throws the yield.")
         }
-        #expect(ContinuousClock.now - started < .seconds(1))
+        #expect(ContinuousClock.now - cancelled < .seconds(1), "It stops within a second.")
 
         // Live text: updates while the audio arrives, and the stream ends when it does.
         let (chunks, feed) = AsyncStream.makeStream(of: AudioChunk.self)
@@ -91,5 +108,18 @@ public enum TranscriberContract {
         #expect(!updates.isEmpty, "Live text arrives.")
         #expect(updates.last?.volatile == "", "When the audio ends, everything is final.")
         #expect(!(updates.last?.final.isEmpty ?? true))
+
+        // A consumer that goes away stops the live stream within a second.
+        let (endless, keep) = AsyncStream.makeStream(of: AudioChunk.self)
+        keep.yield(subject.liveChunks[0])
+        let consumer = Task {
+            for await _ in transcriber.live(endless) {}
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        let gone = ContinuousClock.now
+        consumer.cancel()
+        await consumer.value
+        #expect(ContinuousClock.now - gone < .seconds(1), "The stream ends when its consumer goes away.")
+        keep.finish()
     }
 }

@@ -14,7 +14,10 @@ public protocol Recorder: Sendable {
 
     /// Writes the manifest and the working file, starts the input, and returns once the
     /// recording is live: the moment of the "live" cue. Before it returns, nothing implies a
-    /// recording. Cancelling the calling task does not cancel the start.
+    /// recording. Cancelling the calling task does not cancel the start: a start runs to live
+    /// or to an error whatever its caller does, so a caller that gave up while it ran (the
+    /// engine, after a press that ended the wait) must stop or discard the session that comes
+    /// back, or it records on.
     ///
     /// Errors: microphone permission refused, no input device, audio session busy, too little
     /// space, write failed. Each leaves no file, or a manifest that recovery ends as a
@@ -24,19 +27,66 @@ public protocol Recorder: Sendable {
     /// Finishes the recordings of earlier launches: each orphaned working file is read to its
     /// last complete frame. A recording of `currentLaunch` is never touched.
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio]
+
+    /// Converts a stopped recording's working file to the stored format, AAC mono in `.m4a`,
+    /// and verifies it: its length matches the working file's (docs/architecture.md §8). The
+    /// converted file sits at `StoreLocations.convertedRecording(_:)`, and the engine moves it
+    /// into the `AssetStore` and ends the capture with the asset. The working file stays. If
+    /// conversion fails, with `conversion_failed`, the working file stays as the recording and
+    /// the conversion is tried again.
+    func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording
+
+    /// Removes a recording's working file and its manifest, once the capture's row points to
+    /// the stored asset (§6, rule 7). Removing what is not there is not an error.
+    func removeWorkingFile(of capture: CaptureID) async throws(KnotError)
 }
 
-/// What a recording is for.
+/// A recording converted to the stored format and verified.
+public struct ConvertedRecording: Hashable, Sendable {
+    public var captureID: CaptureID
+    /// The converted file, at `StoreLocations.convertedRecording(_:)`.
+    public var file: URL
+    /// The length read from the converted file.
+    public var duration: Duration
+
+    public init(captureID: CaptureID, file: URL, duration: Duration) {
+        self.captureID = captureID
+        self.file = file
+        self.duration = duration
+    }
+}
+
+/// What a recording is for: what its manifest records before the first sample
+/// (docs/architecture.md §6, rule 3).
 public struct RecordingRequest: Hashable, Sendable {
     public var captureID: CaptureID
     public var launchID: LaunchID
+    /// Where the capture came from: the device, and the surface it started on.
+    public var origin: CaptureOrigin
+    /// The placement that was asked for.
+    public var placement: CapturePlacement
+    /// The note the surface showed, if any.
+    public var shownNote: NoteID?
     /// The longest the recording runs before it ends by itself: 30 minutes in v1.
     public var limit: Duration
 
-    public init(captureID: CaptureID, launchID: LaunchID, limit: Duration = .seconds(Limits.longestRecording)) {
+    public init(
+        captureID: CaptureID, launchID: LaunchID, origin: CaptureOrigin, placement: CapturePlacement = .window,
+        shownNote: NoteID? = nil, limit: Duration = .seconds(Limits.longestRecording)
+    ) {
         self.captureID = captureID
         self.launchID = launchID
+        self.origin = origin
+        self.placement = placement
+        self.shownNote = shownNote
         self.limit = limit
+    }
+
+    /// The manifest the recorder writes before the first sample.
+    public func manifest(startedAt: Date) -> CaptureManifest {
+        CaptureManifest(
+            captureID: captureID, kind: .voice, origin: origin, launchID: launchID, startedAt: startedAt,
+            placement: placement, shownNoteID: shownNote)
     }
 }
 
@@ -50,11 +100,14 @@ public protocol RecordingSession: AnyObject, Sendable {
     var events: AsyncStream<RecordingEvent> { get }
 
     /// The audio the file receives, for live text. When the consumer falls behind, the oldest
-    /// chunks are dropped: the file never waits for it.
+    /// chunks are dropped: the file never waits for it. When it goes away, nothing changes
+    /// for the recording.
     var liveAudio: AsyncStream<AudioChunk> { get }
 
     /// Ends the recording: writes what is left, syncs, closes the file, and returns once it
-    /// is on the drive, so that the "saved" cue can follow. Called again, or after the
+    /// is on the drive, so that the "saved" cue can follow. The working file stays at
+    /// `StoreLocations.recordingAudio(_:format:)`, named in the result, until
+    /// `Recorder.removeWorkingFile(of:)`. Called again, or after the
     /// recording ended by itself, it returns the same result. Cancelling the calling task does
     /// not cancel the stop. It never throws: a failure is the result's `ending`.
     func stop() async -> RecordedAudio
@@ -82,12 +135,17 @@ public struct RecordedAudio: Hashable, Sendable {
     public var frames: Int64
     public var sampleRate: Double
     public var ending: RecordingEnding
+    /// The working file the recording left, or `nil` after a discard.
+    public var workingFile: URL?
 
-    public init(captureID: CaptureID, frames: Int64, sampleRate: Double, ending: RecordingEnding) {
+    public init(
+        captureID: CaptureID, frames: Int64, sampleRate: Double, ending: RecordingEnding, workingFile: URL?
+    ) {
         self.captureID = captureID
         self.frames = frames
         self.sampleRate = sampleRate
         self.ending = ending
+        self.workingFile = workingFile
     }
 
     /// How long the recording lasts.

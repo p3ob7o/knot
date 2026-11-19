@@ -4,54 +4,97 @@ import KnotFakes
 import Testing
 
 /// What a `NoteStore` under test starts from. The factory builds a store on this clock,
-/// these IDs, this device and this window, holding the seeded notes.
+/// these IDs, this device and this window, and must hold the seeded notes from the start.
 public struct NoteStoreSetup: Sendable {
     public let clock: FakeClock
     public let ids: any IDGenerator
     public let deviceID: DeviceID
     public let window: AppendWindow
     /// Notes with their segments that the store holds from the start, such as conflict
-    /// copies and generated titles, which only sync and the queue make.
+    /// copies and generated titles, which only sync and the queue make. The real store seeds
+    /// them through the interface sync uses.
     public let seed: [NoteRecord]
 }
 
-public typealias NoteStoreFactory = @Sendable (NoteStoreSetup) async -> any NoteStore
+/// A store under test, with a way to apply what sync applies.
+public struct NoteStoreSubject: Sendable {
+    public let store: any NoteStore
+    /// Applies a change of a segment's note that arrived by sync (a remote move, or the
+    /// deleted-note rule): the segment and its conflict copies go to the note, with a higher
+    /// generation. A store that gives none fails the check that needs it.
+    public let applySyncedNoteChange: (@Sendable (SegmentID, NoteID) async throws -> Void)?
+
+    public init(store: any NoteStore, applySyncedNoteChange: (@Sendable (SegmentID, NoteID) async throws -> Void)?) {
+        self.store = store
+        self.applySyncedNoteChange = applySyncedNoteChange
+    }
+}
+
+public typealias NoteStoreFactory = @Sendable (NoteStoreSetup) async -> NoteStoreSubject
 
 /// The contract suite of `NoteStore` (docs/architecture.md §5 and §17). Each check is a
 /// function that takes a factory, so the in-memory fake and the real store run the same
-/// checks, and a deliberately broken fake shows which check catches it.
+/// checks, and a deliberately broken store shows which check catches it. Errors are compared
+/// by their code: a real store need not reproduce a context the documents do not fix.
 public enum NoteStoreContract {
     /// Every check, in turn.
     public static func run(_ make: NoteStoreFactory) async throws {
-        try await repeatedCaptureIDReturnsFirstResult(make)
-        try await sameCaptureIDDifferentContentConflicts(make)
-        try await concurrentRepeatsMakeOneCapture(make)
-        try await staleRevisionFails(make)
-        try await changesAfterCursorIncludeLateCaptureAndDeletion(make)
-        try await cursorAheadOfStoreIsReported(make)
-        try await checkpointOlderThanStoredTextChangesNothing(make)
-        try await replaceTextChecksPrecedence(make)
-        try await replacedTextIsKeptAndRestored(make)
-        try await moveAndReturnLeaveBothNotes(make)
-        try await moveRepeatedAfterCaptureJoinedNewNote(make)
-        try await moveRefusedOpenCaptureDeletedSegmentConflictCopy(make)
-        try await moveRefusedSegmentAloneInNote(make)
-        try await returnRefusedNoteLeftIsDeleted(make)
-        try await droppedTitlePutBackByReturn(make)
-        try await predictionAgreesWithDecision(make)
-        try await lateArrivalIsMarkedUntilCleared(make)
-        try await textPastTheLimitContinuesAndRepeats(make)
-        try await anotherSurfaceEndsTheOpenCapture(make)
-        try await deletionsStayReportableAfterThePurge(make)
-        try await transcriptAndCleanupAreStoredWithWhatMadeThem(make)
-        try await streamAndSearch(make)
-        try await anEmptyCaptureLeavesNothing(make)
+        for check in checks { try await check.run(make) }
     }
+
+    /// One check, by name.
+    public struct Check: Sendable {
+        public let name: String
+        public let run: @Sendable (NoteStoreFactory) async throws -> Void
+    }
+
+    public static let checks: [Check] = [
+        Check(name: "repeat", run: repeatedCaptureIDReturnsFirstResult),
+        Check(name: "conflict", run: sameCaptureIDDifferentContentConflicts),
+        Check(name: "concurrent", run: concurrentRepeatsMakeOneCapture),
+        Check(name: "segment-id-owned", run: aSegmentIDAnotherCaptureOwnsIsRefused),
+        Check(name: "stale-revision", run: staleRevisionFails),
+        Check(name: "changes", run: changesAfterCursorIncludeLateCaptureAndDeletion),
+        Check(name: "cursor-ahead", run: cursorAheadOfStoreIsReported),
+        Check(name: "checkpoint", run: checkpointOlderThanStoredTextChangesNothing),
+        Check(name: "end-is-a-save", run: endIsASaveOrderedByRevision),
+        Check(name: "later-save", run: aLaterSaveAppliesToAnEndedCapture),
+        Check(name: "ingest", run: ingestReconcilesEachStateOfTheRow),
+        Check(name: "inbox-placement", run: anInboxItemGoesWhereItsManifestSays),
+        Check(name: "end-outcomes", run: endWithEachOutcome),
+        Check(name: "failed", run: aFailedCaptureNeedsYouAndARetryStoresIt),
+        Check(name: "recovery", run: recoveryOfTheThreeKinds),
+        Check(name: "open-captures", run: changeSignalsAndOpenCapturesByLaunch),
+        Check(name: "precedence", run: replaceTextChecksPrecedence),
+        Check(name: "replaced-text", run: replacedTextIsKeptAndRestoredFor30Days),
+        Check(name: "remove-recording", run: removeRecordingKeepsTheText),
+        Check(name: "move-return", run: moveAndReturnLeaveBothNotes),
+        Check(name: "move-repeat", run: moveRepeatedAfterCaptureJoinedNewNote),
+        Check(name: "move-refused", run: moveRefusedOpenCaptureDeletedSegmentConflictCopy),
+        Check(name: "move-alone", run: moveRefusedSegmentAloneInNote),
+        Check(name: "move-open", run: aMoveDuringAnOpenCapture),
+        Check(name: "return-gone", run: returnRefusedNoteLeftIsDeleted),
+        Check(name: "return-order", run: returnsUndoMovesInOrder),
+        Check(name: "return-changed", run: returnAfterNoteChangedAgain),
+        Check(name: "titles", run: droppedTitlePutBackByReturn),
+        Check(name: "conflict-copy", run: aConflictCopyMovesWithItsSegment),
+        Check(name: "prediction", run: predictionAgreesWithDecision),
+        Check(name: "new-note-closes", run: newNoteClosesTheNoteItLeaves),
+        Check(name: "late-deleted", run: aLateCaptureNeverJoinsADeletedNote),
+        Check(name: "arrival", run: lateArrivalIsMarkedUntilCleared),
+        Check(name: "pieces", run: textPastTheLimitContinuesInOrder),
+        Check(name: "handoff", run: anotherSurfaceEndsTheOpenCapture),
+        Check(name: "deletes", run: deletesRestoresAndThePurge),
+        Check(name: "emptied", run: anEmptyCaptureLeavesAnEmptiedNote),
+        Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
+        Check(name: "stream-search", run: streamAndSearch),
+    ]
 
     // MARK: Idempotence
 
     /// A repeated capture ID with the same content changes nothing and returns the first
-    /// result (`repeated-capture-id-returns-first-result`).
+    /// result, for a finished capture and for one still open
+    /// (`repeated-capture-id-returns-first-result`).
     public static func repeatedCaptureIDReturnsFirstResult(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let capture = h.tool("Buy oat milk", at: 0)
@@ -63,10 +106,17 @@ public enum NoteStoreContract {
         #expect(try await h.store.cursor() == cursor, "A repeat changes nothing: the counter stays.")
         #expect(try await h.store.note(first.noteID)?.segments.count == 1, "A repeat makes no second segment.")
         #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "A repeat reports no change.")
+
+        let open = h.recordingStart(at: 5, surface: .control)
+        let started = try await h.store.record(open)
+        let atStart = try await h.store.cursor()
+        #expect(try await h.store.record(open) == started, "A repeat of an open capture returns its receipt.")
+        #expect(try await h.store.cursor() == atStart)
+        #expect(try await h.store.openCaptures().map(\.id) == [open.id], "One open capture, not two.")
     }
 
-    /// The same capture ID with different content fails as a conflict and changes nothing
-    /// (`same-capture-id-different-content-fake`).
+    /// The same capture ID with different content fails as a conflict and changes nothing,
+    /// whatever the row's state (`same-capture-id-different-content-fake`).
     public static func sameCaptureIDDifferentContentConflicts(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let capture = h.tool("Buy oat milk", at: 0)
@@ -74,20 +124,25 @@ public enum NoteStoreContract {
         let cursor = try await h.store.cursor()
         var other = capture
         other.body = .text("Buy rice")
-        await #expect(throws: KnotError.captureIDConflict.about(capture: capture.id)) {
-            try await h.store.record(other)
-        }
-        #expect(try await h.store.segment(first.segmentIDs[0])?.text == "Buy oat milk", "The first text stays.")
+        await refuses(.captureIDConflict) { try await h.store.record(other) }
+        #expect(try await h.text(first.segmentIDs[0]) == "Buy oat milk", "The first text stays.")
         #expect(try await h.store.cursor() == cursor, "A conflict changes nothing.")
 
-        // The same holds for the end of a capture that has ended.
+        // record(open), end(A), record(B): B is other content.
         let open = h.typedDraft("Call", at: 1)
         _ = try await h.store.record(open)
         let ended = try await h.store.end(h.endTyped(open.id, "Call the vet", at: 2, revision: 2))
+        var later = open
+        later.body = .text("Call the bank")
+        later.revision = 2
+        await refuses(.captureIDConflict) { try await h.store.record(later) }
+        later.endedAt = h.at(2)
+        await refuses(.captureIDConflict) { try await h.store.record(later) }
         #expect(try await h.store.end(h.endTyped(open.id, "Call the vet", at: 3, revision: 2)) == ended)
-        await #expect(throws: KnotError.captureIDConflict.about(capture: open.id)) {
-            try await h.store.end(h.endTyped(open.id, "Call the bank", at: 3, revision: 3))
+        await refuses(.captureIDConflict) {
+            try await h.store.end(h.endTyped(open.id, "Call the bank", at: 3, revision: 2))
         }
+        #expect(try await h.text(SegmentID(open.id)) == "Call the vet")
     }
 
     /// Two processes, or two tasks, recording the same capture at once make one capture.
@@ -103,15 +158,33 @@ public enum NoteStoreContract {
         #expect(try await h.store.note(receipts[0].noteID)?.segments.count == 1, "One segment, not sixteen.")
     }
 
+    /// A capture whose ID is a segment ID that another capture owns, first or derived, is
+    /// refused as a conflict, and nothing is written.
+    public static func aSegmentIDAnotherCaptureOwnsIsRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let first = try await h.store.record(h.tool(Harness.longText(pieces: 2), at: 0))
+        let derived = first.segmentIDs[1]
+        let before = try await h.text(derived)
+        let cursor = try await h.store.cursor()
+        var thief = h.tool("Overwrite the continuation", at: 1)
+        thief.id = CaptureID(derived)
+        await refuses(.captureIDConflict) { try await h.store.record(thief) }
+        #expect(try await h.store.cursor() == cursor, "Nothing is written.")
+        #expect(try await h.text(derived) == before)
+        #expect(try await h.store.segment(derived)?.segment.noteID == first.noteID)
+    }
+
     // MARK: Revisions and cursors
 
-    /// A stale revision fails, and one from another store or generation is foreign
-    /// (`stale-revision-fails`).
+    /// A stale revision fails, and one from another store or generation is foreign. Reads give
+    /// the stamped revision, so no caller joins a number to a generation (`stale-revision-fails`).
     public static func staleRevisionFails(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let receipt = try await h.store.record(h.tool("Draft one", at: 0))
         let segment = receipt.segmentIDs[0]
-        let read = receipt.revision
+        let read = try #require(try await h.store.segment(segment)).revision
+        #expect(read == receipt.revision, "The read and the receipt stamp the same revision.")
+        #expect(try await h.store.note(receipt.noteID)?.revision(of: segment) == read)
         let edited = try await h.store.replaceText(
             TextReplacement(
                 segment: segment, text: "Draft two", origin: .edited, writer: .commandLine, ifRevision: read))
@@ -120,8 +193,7 @@ public enum NoteStoreContract {
             return
         }
         #expect(now.value > read.value, "An edit raises the segment's revision.")
-        let cursor = try await h.store.cursor()
-        await #expect(throws: KnotError.revisionStale) {
+        await refuses(.revisionStale) {
             try await h.store.replaceText(
                 TextReplacement(
                     segment: segment, text: "Draft three", origin: .edited, writer: .commandLine, ifRevision: read))
@@ -131,27 +203,24 @@ public enum NoteStoreContract {
         var otherStore = now
         otherStore.storeID = h.ids.make()
         for foreign in [otherGeneration, otherStore] {
-            await #expect(throws: KnotError.revisionForeign) {
+            await refuses(.revisionForeign) {
                 try await h.store.replaceText(
                     TextReplacement(
                         segment: segment, text: "Draft four", origin: .edited, writer: .commandLine,
                         ifRevision: foreign))
             }
         }
-        // Titles take the note's revision the same way.
-        let note = try #require(try await h.store.note(receipt.noteID)).note
-        let noteRevision = StampedRevision(storeID: now.storeID, generation: now.generation, value: note.revision)
-        _ = try await h.store.setTitle("Drafts", of: note.id, ifRevision: noteRevision)
-        await #expect(throws: KnotError.revisionStale) {
-            try await h.store.setTitle("Old drafts", of: note.id, ifRevision: noteRevision)
+        let noteRevision = try #require(try await h.store.note(receipt.noteID)).revision
+        _ = try await h.store.setTitle("Drafts", of: receipt.noteID, ifRevision: noteRevision)
+        await refuses(.revisionStale) {
+            try await h.store.setTitle("Old drafts", of: receipt.noteID, ifRevision: noteRevision)
         }
-        #expect(try await h.store.segment(segment)?.text == "Draft two", "A refused edit changes nothing.")
-        #expect(try await h.store.note(note.id)?.note.title == "Drafts")
-        _ = cursor
+        #expect(try await h.text(segment) == "Draft two", "A refused edit changes nothing.")
+        #expect(try await h.store.note(receipt.noteID)?.note.title == "Drafts")
     }
 
-    /// Changes after a cursor include a late capture and a deletion
-    /// (`changes-after-cursor-include-late-capture-and-deletion`).
+    /// Changes after a cursor include a late capture and a deletion, and paging never loses
+    /// the two notes of a move (`changes-after-cursor-include-late-capture-and-deletion`).
     public static func changesAfterCursorIncludeLateCaptureAndDeletion(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let early = try await h.store.record(h.typed("Pick up the parcel", from: 0, to: 0.5))
@@ -173,19 +242,28 @@ public enum NoteStoreContract {
             "The report holds the late capture.")
         #expect(byNote[later.noteID]?.isDeleted == true, "The deleted note is reported as deleted.")
         #expect(page.changes.map(\.counter) == page.changes.map(\.counter).sorted(), "Changes come in counter order.")
-        #expect(!page.hasMore)
         #expect(try await h.store.changes(after: page.cursor, limit: 10).changes.isEmpty, "Nothing after the end.")
 
-        // Paging never skips a change.
-        var seen: [NoteID] = []
-        var next: StoreCursor? = nil
-        repeat {
+        // A move changes two notes under one counter: paging by one never loses either.
+        let a = try await h.store.record(h.typed("Keep this", from: 100, to: 100.2))
+        let b = try await h.store.record(h.typed("Move this", from: 101, to: 101.2))
+        let beforeMove = try await h.store.cursor()
+        guard case .moved(let moved) = try await h.store.move(b.segmentIDs[0], from: a.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        #expect(
+            moved.from.revision > beforeMove.counter && moved.to.revision > beforeMove.counter,
+            "Both notes take a new counter value.")
+        var seen: Set<NoteID> = []
+        var next = beforeMove
+        for _ in 0..<10 {
             let one = try await h.store.changes(after: next, limit: 1)
-            seen += one.changes.map(\.noteID)
+            seen.formUnion(one.changes.map(\.noteID))
             next = one.cursor
             if !one.hasMore { break }
-        } while true
-        #expect(Set(seen) == [early.noteID, later.noteID], "Paging from the start sees every note.")
+        }
+        #expect(seen == [a.noteID, moved.to.id], "Paging by one sees both notes of a move.")
     }
 
     /// A cursor ahead of the store is reported, and a foreign one refused
@@ -196,81 +274,394 @@ public enum NoteStoreContract {
         let cursor = try await h.store.cursor()
         var ahead = cursor
         ahead.counter += 1
-        await #expect(throws: KnotError.cursorAheadOfStore) { try await h.store.changes(after: ahead, limit: 10) }
+        await refuses(.cursorAheadOfStore) { try await h.store.changes(after: ahead, limit: 10) }
         var otherGeneration = cursor
         otherGeneration.generation += 1
-        await #expect(throws: KnotError.cursorForeign) {
-            try await h.store.changes(after: otherGeneration, limit: 10)
-        }
+        await refuses(.cursorForeign) { try await h.store.changes(after: otherGeneration, limit: 10) }
         var otherStore = cursor
         otherStore.storeID = h.ids.make()
-        await #expect(throws: KnotError.cursorForeign) { try await h.store.changes(after: otherStore, limit: 10) }
+        await refuses(.cursorForeign) { try await h.store.changes(after: otherStore, limit: 10) }
     }
 
-    // MARK: Checkpoints and text
+    // MARK: Saves
 
-    /// A checkpoint from `Inbox/` older than the stored text changes nothing, and a
-    /// checkpoint never lowers the stored revision (`checkpoint-from-inbox-older-than-stored-text-fake`).
+    /// A checkpoint from `Inbox/` older than the stored text changes nothing, a checkpoint never
+    /// lowers the stored revision, and the row keeps the time of the last save applied
+    /// (`checkpoint-from-inbox-older-than-stored-text-fake`).
     public static func checkpointOlderThanStoredTextChangesNothing(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let draft = h.typedDraft("Gro", at: 0, revision: 1)
         let receipt = try await h.store.record(draft)
         let segment = receipt.segmentIDs[0]
+        h.clock.set(h.at(1))
         var result = try await h.store.checkpoint(
             CaptureCheckpoint(captureID: draft.id, text: "Groceries", revision: 3))
         #expect(result == CheckpointResult(applied: true, storedRevision: 3))
+        #expect(try await h.row(draft.id)?.lastSavedAt == h.at(1), "The row keeps the time of the save.")
+        h.clock.set(h.at(2))
         // The slow save of revision 2 arrives late, from Inbox/.
         result = try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "Grocer", revision: 2))
         #expect(result == CheckpointResult(applied: false, storedRevision: 3), "An older checkpoint is not applied.")
         result = try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "Grocerie", revision: 3))
         #expect(!result.applied, "A checkpoint of the stored revision is not applied again.")
-        #expect(try await h.store.segment(segment)?.text == "Groceries", "The newer text stays.")
-        #expect(try await h.store.segment(segment)?.revision == 3, "The stored revision never goes down.")
-        _ = try await h.store.end(h.endTyped(draft.id, "Groceries list", at: 1, revision: 4))
-        result = try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "Gro", revision: 9))
-        #expect(!result.applied, "A checkpoint after the end changes nothing.")
-        #expect(try await h.store.segment(segment)?.text == "Groceries list")
+        #expect(try await h.text(segment) == "Groceries", "The newer text stays.")
+        #expect(try await h.row(draft.id)?.revision == 3, "The stored revision never goes down.")
+        #expect(try await h.row(draft.id)?.lastSavedAt == h.at(1), "A refused save is no durable write.")
     }
 
-    /// Replacing text checks the precedence of edited, cleaned and raw inside the store
+    /// `end` is a save, ordered by revision. A stale end ends the capture with the stored
+    /// content; an end at the stored revision with other content is a conflict.
+    public static func endIsASaveOrderedByRevision(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        // Kept at revision 3, then an empty end at revision 2: the text is kept.
+        let first = h.typedDraft("k", at: 0, revision: 1)
+        _ = try await h.store.record(first)
+        _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: first.id, text: "kept", revision: 3))
+        let empty = try await h.store.end(h.endTyped(first.id, "", at: 1, revision: 2))
+        #expect(empty.outcome == .stored, "A stale empty end does not discard newer text.")
+        #expect(try await h.text(SegmentID(first.id)) == "kept")
+        #expect(try await h.row(first.id)?.revision == 3)
+        // What is stored is what is hashed: a replay of it is the same content.
+        var replay = first
+        replay.body = .text("kept")
+        replay.revision = 3
+        replay.endedAt = h.at(1)
+        #expect(
+            try await h.store.record(replay).captureID == first.id, "A replay of the stored content is no conflict.")
+
+        // Stale text that is not empty: the stored text and revision win.
+        let second = h.typedDraft("a", at: 10, revision: 1)
+        _ = try await h.store.record(second)
+        _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: second.id, text: "a newer line", revision: 4))
+        _ = try await h.store.end(h.endTyped(second.id, "an older line", at: 11, revision: 2))
+        #expect(try await h.text(SegmentID(second.id)) == "a newer line")
+        #expect(try await h.store.segment(SegmentID(second.id))?.segment.state == .typed(.ready))
+
+        // The same revision with other content is a conflict.
+        let third = h.typedDraft("x", at: 20, revision: 1)
+        _ = try await h.store.record(third)
+        _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: third.id, text: "this", revision: 2))
+        await refuses(.captureIDConflict) { try await h.store.end(h.endTyped(third.id, "that", at: 21, revision: 2)) }
+        #expect(try await h.row(third.id)?.outcome == .open, "A refused end leaves the capture open.")
+    }
+
+    /// Every later save is ordered by revision, an ended capture's too: after rule 15 ended a
+    /// draft as it stood, the engine's own end with newer text applies, unless a person
+    /// replaced the text since, which precedence keeps.
+    public static func aLaterSaveAppliesToAnEndedCapture(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("Half a", at: 0, revision: 1)
+        let typed = try await h.store.record(draft)
+        _ = try await h.store.record(h.recordingStart(at: 0.5, surface: .macPanel))
+        #expect(try await h.row(draft.id)?.outcome == .stored, "Rule 15 ended the draft as it stood.")
+        let ended = try await h.store.end(h.endTyped(draft.id, "Half a thought, finished", at: 0.6, revision: 2))
+        #expect(ended.noteID == typed.noteID)
+        #expect(try await h.text(SegmentID(draft.id)) == "Half a thought, finished", "The later save applies.")
+        #expect(try await h.row(draft.id)?.revision == 2)
+
+        // A person's edit since then is kept against a later save.
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: SegmentID(draft.id), text: "My words", origin: .edited, writer: .app))
+        let check = try await h.store.checkpoint(
+            CaptureCheckpoint(captureID: draft.id, text: "Half a thought, finished.", revision: 3))
+        #expect(!check.applied, "Precedence keeps the person's text.")
+        #expect(try await h.text(SegmentID(draft.id)) == "My words")
+    }
+
+    /// Ingest reconciles an inbox item with each state of the row, and says what is stored.
+    public static func ingestReconcilesEachStateOfTheRow(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        // No row: the row and the segments are made.
+        let fresh = h.inboxText("From the inbox", at: 0, revision: 2)
+        let made = try await h.store.ingest(fresh)
+        #expect(made.applied && made.storedRevision == 2 && made.receipt.outcome == .stored)
+        #expect(try await h.text(SegmentID(fresh.id)) == "From the inbox")
+        // An ended row with the same content: nothing changes.
+        let cursor = try await h.store.cursor()
+        let same = try await h.store.ingest(fresh)
+        #expect(!same.applied && same.storedRevision == 2)
+        #expect(try await h.store.cursor() == cursor)
+
+        // An open row: the content is applied by revision, and the capture ends.
+        let draft = h.typedDraft("Begun", at: 10, revision: 1)
+        _ = try await h.store.record(draft)
+        var item = h.inboxText("Begun and finished", at: 10, revision: 5)
+        item.id = draft.id
+        item.startedAt = draft.startedAt
+        let ended = try await h.store.ingest(item)
+        #expect(ended.applied && ended.storedRevision == 5 && ended.receipt.outcome == .stored)
+        #expect(try await h.text(SegmentID(draft.id)) == "Begun and finished")
+
+        // An ended row at a lower revision: the item is a later save of the same capture.
+        var newer = item
+        newer.body = .text("Begun and finished, then more")
+        newer.revision = 6
+        let replaced = try await h.store.ingest(newer)
+        #expect(replaced.applied && replaced.storedRevision == 6)
+        #expect(try await h.text(SegmentID(draft.id)) == "Begun and finished, then more")
+        // An ended row at an equal or higher revision with other content: a conflict.
+        var clash = newer
+        clash.body = .text("Something else")
+        await refuses(.captureIDConflict) { try await h.store.ingest(clash) }
+        clash.revision = 4
+        await refuses(.captureIDConflict) { try await h.store.ingest(clash) }
+        // A later save onto text a person replaced since the end is a conflict, and the file stays.
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: SegmentID(draft.id), text: "Edited by hand", origin: .edited, writer: .app))
+        var after = newer
+        after.revision = 9
+        after.body = .text("The inbox's later save")
+        await refuses(.captureIDConflict) { try await h.store.ingest(after) }
+        #expect(try await h.text(SegmentID(draft.id)) == "Edited by hand")
+
+        // A failed row becomes stored.
+        let failing = h.typedDraft("Could not save", at: 20, revision: 1)
+        _ = try await h.store.record(failing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: failing.id, endedAt: h.at(20.5), outcome: .failed(KnotError.diskFull.code), revision: 1))
+        var retry = h.inboxText("Could not save, saved now", at: 20, revision: 2)
+        retry.id = failing.id
+        retry.startedAt = failing.startedAt
+        let stored = try await h.store.ingest(retry)
+        #expect(stored.receipt.outcome == .stored && stored.storedRevision == 2)
+        #expect(try await h.store.segment(SegmentID(failing.id))?.segment.state == .typed(.ready))
+    }
+
+    /// An inbox item made in the app goes where its manifest says: the note its surface showed,
+    /// or a new note when it showed none, whatever came since. Only a late delivery is placed
+    /// by rule 7.
+    public static func anInboxItemGoesWhereItsManifestSays(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let shown = try await h.store.record(h.typed("The note on screen", from: 0, to: 0.2))
+        // Another capture takes the window before ingest runs.
+        let other = try await h.store.record(h.typed("Asked for a new note", from: 1, to: 1.1, placement: .newNote))
+        var item = h.inboxText("Typed while the store was busy", at: 1.2, revision: 3)
+        item.shownNote = shown.noteID
+        let placed = try await h.store.ingest(item)
+        #expect(placed.receipt.noteID == shown.noteID, "The item goes to the note its surface showed.")
+        #expect(try await h.row(item.id)?.shownNoteID == shown.noteID, "The row records the note shown.")
+        #expect(try await h.row(item.id)?.placement == .window, "The row records what was asked.")
+        let none = try await h.store.ingest(h.inboxText("The surface showed a new note", at: 1.3, revision: 1))
+        #expect(!none.receipt.joinedExistingNote && none.receipt.noteID != other.noteID)
+    }
+
+    /// `end` with each outcome sets the segment's state: a voice file, a drawing, empty text,
+    /// and a failure.
+    public static func endWithEachOutcome(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make, window: .off)
+        let voice = h.recordingStart(at: 0, surface: .control)
+        _ = try await h.store.record(voice)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: voice.id, endedAt: h.at(1),
+                outcome: .stored(.file(h.asset(.audio, for: voice.id), duration: .seconds(60))), revision: 0))
+        let recorded = try #require(try await h.store.segment(SegmentID(voice.id))).segment
+        #expect(recorded.state == .voice(.recorded) && recorded.assetID != nil && recorded.duration == .seconds(60))
+
+        let drawing = h.drawingStart(at: 2)
+        _ = try await h.store.record(drawing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: drawing.id, endedAt: h.at(3),
+                outcome: .stored(.file(h.asset(.ink, for: drawing.id), duration: nil)), revision: 0))
+        #expect(
+            try await h.store.segment(SegmentID(drawing.id))?.segment.state == .ink(.recognising),
+            "A drawing goes on to recognition.")
+
+        let empty = h.typedDraft("x", at: 4)
+        _ = try await h.store.record(empty)
+        let discarded = try await h.store.end(h.endTyped(empty.id, " \n", at: 5, revision: 2))
+        #expect(discarded.outcome == .discardedEmpty && discarded.segmentIDs.isEmpty)
+
+        let failing = h.recordingStart(at: 6, surface: .control)
+        _ = try await h.store.record(failing)
+        let failed = try await h.store.end(
+            CaptureEnd(
+                captureID: failing.id, endedAt: h.at(7), outcome: .failed(KnotError.writeFailed.code), revision: 0))
+        #expect(failed.outcome == .failed(KnotError.writeFailed.code))
+        let segment = try #require(try await h.store.segment(SegmentID(failing.id))).segment
+        #expect(segment.state == .voice(.failed(.record, KnotError.writeFailed.code)))
+        #expect(!segment.state.isCapturing)
+        #expect(VisibleState.of(segment, thisDevice: h.device, speech: .ready) == .needsYou)
+
+        // A capture with no content is the same only as the same outcome.
+        let repeatFailure = CaptureEnd(
+            captureID: failing.id, endedAt: h.at(8), outcome: .failed(KnotError.writeFailed.code), revision: 0)
+        #expect(try await h.store.end(repeatFailure) == failed, "The same failure again is the same.")
+        await refuses(.captureIDConflict, "Another failure code is other content.") {
+            try await h.store.end(
+                CaptureEnd(
+                    captureID: failing.id, endedAt: h.at(8), outcome: .failed(KnotError.diskFull.code), revision: 0))
+        }
+        await refuses(.captureIDConflict, "A discard is other content than a stored recording.") {
+            try await h.store.end(
+                CaptureEnd(captureID: voice.id, endedAt: h.at(8), outcome: .discardedEmpty, revision: 0))
+        }
+        await refuses(.captureIDConflict, "A failure is other content than a stored recording.") {
+            try await h.store.end(
+                CaptureEnd(
+                    captureID: voice.id, endedAt: h.at(8), outcome: .failed(KnotError.writeFailed.code), revision: 0))
+        }
+        await refuses(.captureIDConflict, "Text at the revision of a discard is other content.") {
+            try await h.store.end(
+                CaptureEnd(
+                    captureID: empty.id, endedAt: h.at(8), outcome: .stored(.text("now with words")), revision: 2))
+        }
+    }
+
+    /// A failed capture shows "Needs you" with its content kept, and becomes stored when a
+    /// retry succeeds, by `end` with a higher revision as by ingest (§6, rule 6).
+    public static func aFailedCaptureNeedsYouAndARetryStoresIt(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("Lost connection", at: 0, revision: 1)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.end(
+            CaptureEnd(captureID: draft.id, endedAt: h.at(1), outcome: .failed(KnotError.diskFull.code), revision: 1))
+        let failed = try #require(try await h.store.segment(SegmentID(draft.id))).segment
+        #expect(failed.state == .typed(.failed) && failed.text == "Lost connection", "Its content is kept.")
+        #expect(VisibleState.of(failed, thisDevice: h.device, speech: .ready) == .needsYou)
+        #expect(try await h.row(draft.id)?.contentHash == nil, "A failure has no content to hash.")
+        let retried = try await h.store.end(h.endTyped(draft.id, "Lost connection, back now", at: 2, revision: 2))
+        #expect(retried.outcome == .stored)
+        #expect(try await h.text(SegmentID(draft.id)) == "Lost connection, back now")
+        #expect(try await h.store.segment(SegmentID(draft.id))?.segment.state == .typed(.ready))
+    }
+
+    /// Recovery of the three kinds: a typed draft becomes a finished segment, a drawing goes on
+    /// to recognition, and a recording is stored; each ends at its last durable write. Only one
+    /// capture is open on a device at a time, so each kind dies and is recovered on its own.
+    public static func recoveryOfTheThreeKinds(_ make: NoteStoreFactory) async throws {
+        // A typed draft, with a save after its first keystroke.
+        let typed = await Harness(make)
+        let draft = typed.typedDraft("Draft found", at: 0, revision: 1)
+        _ = try await typed.store.record(draft)
+        typed.clock.set(typed.at(0.5))
+        _ = try await typed.store.checkpoint(
+            CaptureCheckpoint(captureID: draft.id, text: "Draft found at relaunch", revision: 2))
+        // The process dies. At the next launch, recovery ends the rows of the earlier launch.
+        typed.clock.set(typed.at(60))
+        let relaunch: LaunchID = typed.ids.make()
+        let open = try await typed.store.openCaptures()
+        #expect(open.map(\.id) == [draft.id] && open[0].needsRecovery(currentLaunch: relaunch))
+        #expect(!open[0].needsRecovery(currentLaunch: typed.launch), "Never a capture of the current launch.")
+        let row = try #require(try await typed.row(draft.id))
+        #expect(row.lastSavedAt == typed.at(0.5) && row.revision == 2, "The row knows its last durable write.")
+        let lastWrite = try #require(row.lastSavedAt)
+        let text = try await typed.text(SegmentID(draft.id))
+        _ = try await typed.store.end(
+            CaptureEnd(captureID: draft.id, endedAt: lastWrite, outcome: .stored(.text(text)), revision: row.revision))
+        let finished = try #require(try await typed.store.segment(SegmentID(draft.id))).segment
+        #expect(finished.state == .typed(.ready), "A draft found at relaunch becomes a finished segment.")
+        #expect(
+            finished.endedAt == lastWrite && finished.text == "Draft found at relaunch", "It ends at its last write.")
+        #expect(try await typed.store.openCaptures().isEmpty, "After recovery no row is open.")
+
+        // A drawing: recovery ends it with its saved drawing, and it goes on to recognition.
+        let inked = await Harness(make)
+        let drawing = inked.drawingStart(at: 1)
+        _ = try await inked.store.record(drawing)
+        inked.clock.set(inked.at(60))
+        _ = try await inked.store.end(
+            CaptureEnd(
+                captureID: drawing.id, endedAt: inked.at(1.2),
+                outcome: .stored(.file(inked.asset(.ink, for: drawing.id), duration: nil)), revision: 0))
+        #expect(try await inked.store.segment(SegmentID(drawing.id))?.segment.state == .ink(.recognising))
+        #expect(try await inked.store.segment(SegmentID(drawing.id))?.segment.endedAt == inked.at(1.2))
+
+        // A recording: recovery ends it with the file the recorder read to its last frame.
+        let voiced = await Harness(make)
+        let recording = voiced.recordingStart(at: 2, surface: .control)
+        _ = try await voiced.store.record(recording)
+        voiced.clock.set(voiced.at(60))
+        _ = try await voiced.store.end(
+            CaptureEnd(
+                captureID: recording.id, endedAt: voiced.at(2.5),
+                outcome: .stored(.file(voiced.asset(.audio, for: recording.id), duration: .seconds(30))), revision: 0,
+                transcribeJob: voiced.ids.make()))
+        let recovered = try #require(try await voiced.store.segment(SegmentID(recording.id))).segment
+        #expect(recovered.state == .voice(.recorded) && recovered.endedAt == voiced.at(2.5))
+        #expect(try await voiced.store.jobs(for: recovered.id).count == 1, "A recovered recording has its job.")
+    }
+
+    /// A signal follows each committed write, and the open captures name their launch.
+    public static func changeSignalsAndOpenCapturesByLaunch(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        var signals = h.store.changeSignals().makeAsyncIterator()
+        let receipt = try await h.store.record(h.tool("Signal me", at: 0))
+        let signal = await signals.next()
+        #expect(signal.map { $0.counter >= receipt.cursor.counter } == true, "A write sends a signal.")
+        let draft = h.typedDraft("Open", at: 1)
+        _ = try await h.store.record(draft)
+        let open = try await h.store.openCaptures()
+        #expect(open.map(\.id) == [draft.id] && open.first?.launchID == h.launch)
+    }
+
+    // MARK: Text
+
+    /// Replacing text checks the precedence of edited, cleaned and raw inside the store, and
+    /// refuses the typed origin, which only a capture's saves write
     /// (`replace-text-precedence-edited-cleaned-raw-fake`).
     public static func replaceTextChecksPrecedence(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let voice = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
         let segment = voice.segmentIDs[0]
-        _ = try await h.store.appendTranscript(h.run("so um the meeting moved", resumeAt: nil), to: segment, job: nil)
-        func replace(_ text: String, _ origin: TextOrigin) async throws -> TextReplacementResult {
+        let job = try #require(try await h.store.jobs(for: segment).first)
+        _ = try await h.store.appendTranscript(
+            h.run("so um the meeting moved", from: .zero, resumeAt: nil), to: segment, job: job.id)
+        func replace(_ text: String, _ origin: TextOrigin) async throws -> Bool {
             try await h.store.replaceText(
-                TextReplacement(
-                    segment: segment, text: text, origin: origin, writer: origin == .edited ? .app : .queue))
+                TextReplacement(segment: segment, text: text, origin: origin, writer: origin == .edited ? .app : .queue)
+            ).isReplaced
         }
-        #expect(try await replace("So the meeting moved.", .cleaned).isReplaced, "Cleaned replaces raw.")
-        #expect(try await !replace("so um the meeting moved", .rawTranscript).isReplaced, "Raw never replaces cleaned.")
-        #expect(
-            try await replace("The meeting moved to Friday.", .edited).isReplaced, "A person's edit replaces cleaned.")
-        #expect(try await !replace("So the meeting moved.", .cleaned).isReplaced, "Cleaned never replaces edited.")
-        #expect(try await !replace("so um the meeting moved", .rawTranscript).isReplaced, "Raw never replaces edited.")
-        let stored = try #require(try await h.store.segment(segment))
-        #expect(stored.text == "The meeting moved to Friday.")
-        #expect(stored.textOrigin == .edited)
+        #expect(try await replace("So the meeting moved.", .cleaned), "Cleaned replaces raw.")
+        #expect(try await !replace("so um the meeting moved", .rawTranscript), "Raw never replaces cleaned.")
+        #expect(try await replace("The meeting moved to Friday.", .edited), "A person's edit replaces cleaned.")
+        #expect(try await !replace("So the meeting moved.", .cleaned), "Cleaned never replaces edited.")
+        #expect(try await !replace("so um the meeting moved", .rawTranscript), "Raw never replaces edited.")
+        await refuses(.illegalTransition) { try await replace("Typed over it", .typed) }
+        let stored = try #require(try await h.store.segment(segment)).segment
+        #expect(stored.text == "The meeting moved to Friday." && stored.textOrigin == .edited)
         #expect(stored.rawTranscript == "so um the meeting moved", "The raw transcript is never modified.")
     }
 
-    /// Text that the command line or MCP replaces is kept and can be restored; a person's own
-    /// edit in the app is not kept.
-    public static func replacedTextIsKeptAndRestored(_ make: NoteStoreFactory) async throws {
+    /// Text that the command line or MCP replaces is kept for 30 days and can be restored; a
+    /// person's own edit in the app is not kept (A33).
+    public static func replacedTextIsKeptAndRestoredFor30Days(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let receipt = try await h.store.record(h.tool("Plant tulips", at: 0))
         let segment = receipt.segmentIDs[0]
         _ = try await h.store.replaceText(
             TextReplacement(segment: segment, text: "Plant daffodils", origin: .edited, writer: .mcp))
         _ = try await h.store.restore(.replacedText(segment))
-        #expect(try await h.store.segment(segment)?.text == "Plant tulips", "Restore brings the replaced text back.")
+        #expect(try await h.text(segment) == "Plant tulips", "Restore brings the replaced text back.")
         _ = try await h.store.replaceText(
             TextReplacement(segment: segment, text: "Plant roses", origin: .edited, writer: .app))
-        await #expect(throws: KnotError.notFound.with(.init(segmentID: segment))) {
+        await refuses(.notFound) { try await h.store.restore(.replacedText(segment)) }
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Plant lilies", origin: .edited, writer: .commandLine))
+        h.clock.advance(by: 31 * 86_400)
+        await refuses(.notFound, "After 30 days the replaced text is gone.") {
             try await h.store.restore(.replacedText(segment))
         }
+        #expect(try await h.text(segment) == "Plant lilies")
+    }
+
+    /// "Remove recording" keeps a voice segment's text and removes its recording (A8).
+    public static func removeRecordingKeepsTheText(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let voice = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = voice.segmentIDs[0]
+        let job = try #require(try await h.store.jobs(for: segment).first)
+        _ = try await h.store.appendTranscript(
+            h.run("keep these words", from: .zero, resumeAt: nil), to: segment, job: job.id)
+        let assetID = try #require(try await h.store.segment(segment)?.segment.assetID)
+        let removed = try await h.store.removeRecording(of: segment)
+        #expect(removed.id == assetID, "The caller learns which file to remove.")
+        let after = try #require(try await h.store.segment(segment)).segment
+        #expect(after.text == "keep these words" && after.assetID == nil, "The text stays, without a player.")
+        #expect(try await h.store.asset(assetID) == nil)
+        await refuses(.notFound) { try await h.store.removeRecording(of: segment) }
     }
 
     // MARK: Moves
@@ -290,31 +681,26 @@ public enum NoteStoreContract {
             Issue.record("A segment in the note named moves.")
             return
         }
-        #expect(moved.to.id != first.noteID)
-        #expect(moved.to.title == nil, "The new note has no title.")
+        #expect(moved.to.id != first.noteID && moved.to.title == nil, "A new note with no title.")
         #expect(moved.to.createdAt == moved.segment.startedAt, "The new note is dated by the segment.")
         #expect(moved.to.lastCaptureEndedAt == moved.segment.latestTime)
         #expect(moved.segment.noteGeneration == 1, "The move raises the note generation.")
-        #expect(moved.segment.revision == before.segments[1].revision, "A move changes no text.")
+        #expect(moved.revision == before.revision(of: segment), "A move changes no text.")
         #expect(moved.from.lastCaptureEndedAt == before.segments[0].latestTime, "The note it left is recomputed.")
 
-        let back = try await h.store.returnToFormerNote(segment)
+        let back = try await h.store.returnToFormerNote(segment, from: moved.to.id)
         #expect(back.to.id == first.noteID)
         let after = try #require(try await h.store.note(first.noteID))
         #expect(after.segments.map(\.id) == before.segments.map(\.id), "The note holds its segments again.")
-        #expect(after.note.title == before.note.title)
-        #expect(after.note.titleOrigin == before.note.titleOrigin)
+        #expect(after.note.title == before.note.title && after.note.titleOrigin == before.note.titleOrigin)
         #expect(after.note.lastCaptureEndedAt == before.note.lastCaptureEndedAt)
-        #expect(after.note.closedAt == before.note.closedAt)
-        #expect(after.note.deletedAt == nil)
+        #expect(after.note.closedAt == before.note.closedAt && after.note.deletedAt == nil)
         #expect(after.segments[1].noteGeneration == 2, "The return raises the generation again.")
         #expect(after.segments[1].text == before.segments[1].text)
         let made = try await h.store.note(moved.to.id)
-        #expect(made?.isShown == false, "The note the move made is empty, hidden, and not marked deleted.")
-        #expect(made?.note.deletedAt == nil)
-        await #expect(throws: KnotError.returnRefusedNoMove.with(.init(segmentID: segment))) {
-            try await h.store.returnToFormerNote(segment)
-        }
+        #expect(made?.isShown == false && made?.note.deletedAt == nil, "The made note is empty, hidden, not deleted.")
+        await refuses(.returnRefusedNoMove) { try await h.store.returnToFormerNote(segment, from: moved.to.id) }
+        await refuses(.returnRefusedNoMove) { try await h.store.returnToFormerNote(segment, from: first.noteID) }
     }
 
     /// A move repeated after a capture joined the new note answers where the segment is and
@@ -349,29 +735,18 @@ public enum NoteStoreContract {
             Harness.fixedID(3), in: note, from: Harness.base.addingTimeInterval(20), text: "Other",
             origin: .device(device))
         let copy = try Build.conflictCopy(of: kept, losingDevice: Harness.fixedID(4), text: "Kept, edited elsewhere")
-        let seed = NoteRecord(
-            note: Build.note(note, at: Harness.base.addingTimeInterval(30)), segments: [kept, other, copy])
-        let h = await Harness(make, device: device, seed: [seed])
-        let cursor = try await h.store.cursor()
-        await #expect(throws: KnotError.moveRefusedConflictCopy.with(.init(noteID: note, segmentID: copy.id))) {
-            try await h.store.move(copy.id, from: note)
-        }
+        let h = await Harness(
+            make, device: device,
+            seed: [Harness.seed(Build.note(note, at: Harness.base.addingTimeInterval(30)), [kept, other, copy])])
+        await refuses(.moveRefusedConflictCopy) { try await h.store.move(copy.id, from: note) }
         _ = try await h.store.delete(.segment(other.id))
-        await #expect(throws: KnotError.moveRefusedDeletedSegment.with(.init(noteID: note, segmentID: other.id))) {
-            try await h.store.move(other.id, from: note)
-        }
-        h.clock.set(h.at(2))
+        await refuses(.moveRefusedDeletedSegment) { try await h.store.move(other.id, from: note) }
         let draft = h.typedDraft("Half a tho", at: 2)
         let open = try await h.store.record(draft)
         #expect(open.noteID == note, "The draft joins the note inside its window.")
         let afterDraft = try await h.store.cursor()
-        await #expect(
-            throws: KnotError.moveRefusedOpenCapture.with(.init(noteID: note, segmentID: SegmentID(draft.id)))
-        ) {
-            try await h.store.move(SegmentID(draft.id), from: note)
-        }
+        await refuses(.moveRefusedOpenCapture) { try await h.store.move(SegmentID(draft.id), from: note) }
         #expect(try await h.store.cursor() == afterDraft, "A refused move changes nothing.")
-        #expect(cursor.counter < afterDraft.counter)
     }
 
     /// A move is refused for a segment alone in its note, its own conflict copies apart
@@ -388,19 +763,33 @@ public enum NoteStoreContract {
         let h = await Harness(
             make, device: device,
             seed: [
-                NoteRecord(note: Build.note(alone, at: Harness.base), segments: [only]),
-                NoteRecord(note: Build.note(withCopy, at: Harness.base), segments: [copied, copy]),
+                Harness.seed(Build.note(alone, at: Harness.base), [only]),
+                Harness.seed(Build.note(withCopy, at: Harness.base), [copied, copy]),
             ])
-        await #expect(throws: KnotError.moveRefusedOnlySegment.with(.init(noteID: alone, segmentID: only.id))) {
-            try await h.store.move(only.id, from: alone)
-        }
-        await #expect(throws: KnotError.moveRefusedOnlySegment.with(.init(noteID: withCopy, segmentID: copied.id))) {
-            try await h.store.move(copied.id, from: withCopy)
-        }
+        await refuses(.moveRefusedOnlySegment) { try await h.store.move(only.id, from: alone) }
+        await refuses(.moveRefusedOnlySegment) { try await h.store.move(copied.id, from: withCopy) }
     }
 
-    /// A return is refused when the note it left is deleted, and the segment stays where it is
-    /// (`return-refused-note-left-is-deleted-fake`).
+    /// A move of another segment of a note while a capture is open in it leaves the open
+    /// capture where it is, and it ends there.
+    public static func aMoveDuringAnOpenCapture(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let first = try await h.store.record(h.typed("First", from: 0, to: 0.2))
+        let second = try await h.store.record(h.typed("Second", from: 0.5, to: 0.7))
+        let draft = h.typedDraft("Still typing", at: 1)
+        let open = try await h.store.record(draft)
+        #expect(open.noteID == first.noteID && second.noteID == first.noteID)
+        guard case .moved = try await h.store.move(second.segmentIDs[0], from: first.noteID) else {
+            Issue.record("Another segment of the note moves.")
+            return
+        }
+        let ended = try await h.store.end(h.endTyped(draft.id, "Still typing, done", at: 2, revision: 2))
+        #expect(ended.noteID == first.noteID, "The open capture ends in its note.")
+        #expect(try await h.store.segment(SegmentID(draft.id))?.segment.noteID == first.noteID)
+    }
+
+    /// A return is refused when the note it left is deleted, or has no live segment left
+    /// (rule 11), and the segment stays where it is (`return-refused-note-left-is-deleted-fake`).
     public static func returnRefusedNoteLeftIsDeleted(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let first = try await h.store.record(h.typed("Keep", from: 0, to: 0.2))
@@ -410,16 +799,92 @@ public enum NoteStoreContract {
             return
         }
         _ = try await h.store.delete(.note(first.noteID))
-        await #expect(
-            throws: KnotError.returnRefusedNoteGone.with(.init(noteID: first.noteID, segmentID: second.segmentIDs[0]))
-        ) {
-            try await h.store.returnToFormerNote(second.segmentIDs[0])
+        await refuses(.returnRefusedNoteGone) {
+            try await h.store.returnToFormerNote(second.segmentIDs[0], from: moved.to.id)
         }
-        #expect(try await h.store.segment(second.segmentIDs[0])?.noteID == moved.to.id)
+        #expect(try await h.store.segment(second.segmentIDs[0])?.segment.noteID == moved.to.id)
+
+        let third = try await h.store.record(h.typed("Stay", from: 30, to: 30.2))
+        let fourth = try await h.store.record(h.typed("Go", from: 31, to: 31.2))
+        guard case .moved(let away) = try await h.store.move(fourth.segmentIDs[0], from: third.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        _ = try await h.store.delete(.segment(third.segmentIDs[0]))
+        await refuses(.returnRefusedNoteGone, "A note with no live segment counts as deleted.") {
+            try await h.store.returnToFormerNote(fourth.segmentIDs[0], from: away.to.id)
+        }
+        #expect(try await h.store.note(third.noteID)?.isShown == false)
     }
 
-    /// A generated title that no longer fits is dropped by a move and put back by its return;
-    /// a typed title is never touched (`dropped-title-put-back-by-return-fake`).
+    /// Returns undo moves in order, each naming the note the caller sees the segment in; a
+    /// return that names a note the segment has left changes nothing; the 30 days hold.
+    public static func returnsUndoMovesInOrder(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let a = try await h.store.record(h.typed("A one", from: 0, to: 0.1))
+        let moving = try await h.store.record(h.typed("Travels", from: 0.5, to: 0.6))
+        let segment = moving.segmentIDs[0]
+        guard case .moved(let toB) = try await h.store.move(segment, from: a.noteID) else {
+            Issue.record("A to B.")
+            return
+        }
+        _ = try await h.store.record(h.typed("B one", from: 1, to: 1.1))
+        guard case .moved(let toC) = try await h.store.move(segment, from: toB.to.id) else {
+            Issue.record("B to C.")
+            return
+        }
+        let cursor = try await h.store.cursor()
+        await refuses(.returnRefusedNoteChanged, "An undo of A to B after B to C changes nothing.") {
+            try await h.store.returnToFormerNote(segment, from: toB.to.id)
+        }
+        #expect(try await h.store.cursor() == cursor)
+        let back = try await h.store.returnToFormerNote(segment, from: toC.to.id)
+        #expect(back.to.id == toB.to.id, "The first return undoes B to C.")
+        let home = try await h.store.returnToFormerNote(segment, from: toB.to.id)
+        #expect(home.to.id == a.noteID, "The second undoes A to B.")
+        await refuses(.returnRefusedNoMove) { try await h.store.returnToFormerNote(segment, from: a.noteID) }
+
+        // The 30 days of the move's history.
+        guard case .moved(let again) = try await h.store.move(segment, from: a.noteID) else {
+            Issue.record("Again.")
+            return
+        }
+        h.clock.advance(by: 31 * 86_400)
+        await refuses(.returnRefusedNoMove, "A move older than 30 days cannot be returned.") {
+            try await h.store.returnToFormerNote(segment, from: again.to.id)
+        }
+    }
+
+    /// A return after the segment's note changed again, by a change sync applied, is refused
+    /// and changes nothing (`return-after-note-changed-again-fake`).
+    public static func returnAfterNoteChangedAgain(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        guard let applySync = h.subject.applySyncedNoteChange else {
+            Issue.record("The factory gives no way to apply a change of note by sync, which this check needs.")
+            return
+        }
+        let first = try await h.store.record(h.typed("Stays", from: 0, to: 0.1))
+        let second = try await h.store.record(h.typed("Moves", from: 0.5, to: 0.6))
+        let segment = second.segmentIDs[0]
+        guard case .moved(let moved) = try await h.store.move(segment, from: first.noteID) else {
+            Issue.record("Moves.")
+            return
+        }
+        // Another device moved the same segment to the same note before the two synced, and its
+        // change won with a higher generation.
+        try await applySync(segment, moved.to.id)
+        let cursor = try await h.store.cursor()
+        await refuses(.returnRefusedNoteChanged) { try await h.store.returnToFormerNote(segment, from: moved.to.id) }
+        #expect(try await h.store.cursor() == cursor, "A refused return changes nothing.")
+        let elsewhere: NoteID = h.ids.make()
+        try await applySync(segment, elsewhere)
+        await refuses(.returnRefusedNoMove) { try await h.store.returnToFormerNote(segment, from: elsewhere) }
+        #expect(try await h.store.segment(segment)?.segment.noteID == elsewhere)
+    }
+
+    /// A generated title that no longer fits is dropped by a move and put back by its return; a
+    /// typed title is never touched; the note a return leaves is held to the title rule too
+    /// (`dropped-title-put-back-by-return-fake`).
     public static func droppedTitlePutBackByReturn(_ make: NoteStoreFactory) async throws {
         let device = DeviceID(uuid: UUID())
         let generated: NoteID = Harness.fixedID(20)
@@ -436,35 +901,87 @@ public enum NoteStoreContract {
         let h = await Harness(
             make, device: device,
             seed: [
-                NoteRecord(
-                    note: Build.note(generated, at: Harness.base, title: "orange cat", titleOrigin: .generated),
-                    segments: try pair(generated, 22)),
-                NoteRecord(
-                    note: Build.note(typed, at: Harness.base, title: "orange cat", titleOrigin: .user),
-                    segments: try pair(typed, 24)),
+                Harness.seed(
+                    Build.note(generated, at: Harness.base, title: "orange cat", titleOrigin: .generated),
+                    try pair(generated, 22)),
+                Harness.seed(
+                    Build.note(typed, at: Harness.base, title: "orange cat", titleOrigin: .user), try pair(typed, 24)),
             ])
         guard case .moved(let moved) = try await h.store.move(Harness.fixedID(23), from: generated) else {
-            Issue.record("The move moves.")
+            Issue.record("Moves.")
             return
         }
         #expect(moved.from.title == nil, "A generated title that no longer fits is dropped.")
         #expect(moved.to.title == nil, "Titles do not move with a segment.")
-        let back = try await h.store.returnToFormerNote(Harness.fixedID(23))
-        #expect(back.to.title == "orange cat", "The return puts the dropped title back.")
-        #expect(back.to.titleOrigin == .generated)
-
+        let back = try await h.store.returnToFormerNote(Harness.fixedID(23), from: moved.to.id)
+        #expect(back.to.title == "orange cat" && back.to.titleOrigin == .generated, "The return puts it back.")
         guard case .moved(let fromTyped) = try await h.store.move(Harness.fixedID(25), from: typed) else {
-            Issue.record("The move moves.")
+            Issue.record("Moves.")
             return
         }
-        #expect(fromTyped.from.title == "orange cat", "A typed title is never touched.")
-        #expect(fromTyped.from.titleOrigin == .user)
+        #expect(fromTyped.from.title == "orange cat" && fromTyped.from.titleOrigin == .user, "A typed title stays.")
+
+        // A recording moved into B gets a generated title there; B gains "apples"; the recording
+        // returns, and B's title, which no longer fits, is dropped.
+        let recording = try await h.store.record(h.watchRecording(from: 100, to: 101, arrival: .live))
+        let next = try await h.store.record(h.typed("pears", from: 101.5, to: 101.6))
+        guard case .moved(let intoB) = try await h.store.move(recording.segmentIDs[0], from: next.noteID) else {
+            Issue.record("Moves.")
+            return
+        }
+        let job = try #require(try await h.store.jobs(for: recording.segmentIDs[0]).first)
+        _ = try await h.store.appendTranscript(
+            h.run("bike", from: .zero, resumeAt: nil), to: recording.segmentIDs[0], job: job.id)
+        let titled = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .declined(.guardRejected), title: "bike", provenance: CleanupProvenance(osBuild: "b"),
+                modelName: "m"), to: recording.segmentIDs[0])
+        #expect(titled.titleSet && titled.note.id == intoB.to.id)
+        _ = try await h.store.record(h.typed("apples", from: 101.7, to: 101.8, placement: .named(intoB.to.id)))
+        let returned = try await h.store.returnToFormerNote(recording.segmentIDs[0], from: intoB.to.id)
+        #expect(returned.from.title == nil, "The note a return leaves is held to the title rule.")
+    }
+
+    /// A segment's conflict copy moves with it and returns with it, and an unrelated sibling
+    /// stays; generations and titles are checked each way.
+    public static func aConflictCopyMovesWithItsSegment(_ make: NoteStoreFactory) async throws {
+        let device = DeviceID(uuid: UUID())
+        let note: NoteID = Harness.fixedID(30)
+        let segment = try Build.typed(
+            Harness.fixedID(31), in: note, from: Harness.base, text: "copied words", origin: .device(device))
+        let copy = try Build.conflictCopy(
+            of: segment, losingDevice: Harness.fixedID(32), text: "copied words, elsewhere")
+        let sibling = try Build.typed(
+            Harness.fixedID(33), in: note, from: Harness.base.addingTimeInterval(20), text: "sibling",
+            origin: .device(device))
+        let h = await Harness(
+            make, device: device,
+            seed: [
+                Harness.seed(
+                    Build.note(note, at: Harness.base, title: "sibling", titleOrigin: .generated),
+                    [segment, copy, sibling])
+            ])
+        guard case .moved(let moved) = try await h.store.move(segment.id, from: note) else {
+            Issue.record("Moves.")
+            return
+        }
+        let away = try #require(try await h.store.note(moved.to.id))
+        #expect(Set(away.segments.map(\.id)) == [segment.id, copy.id], "The copy moves with its segment.")
+        #expect(away.segments.allSatisfy { $0.noteGeneration == 1 })
+        let left = try #require(try await h.store.note(note))
+        #expect(left.segments.map(\.id) == [sibling.id], "The sibling stays.")
+        #expect(left.note.title == "sibling", "A title that still fits stays.")
+        _ = try await h.store.returnToFormerNote(segment.id, from: moved.to.id)
+        let home = try #require(try await h.store.note(note))
+        #expect(Set(home.segments.map(\.id)) == [segment.id, copy.id, sibling.id])
+        #expect(home.segments.first { $0.id == copy.id }?.noteGeneration == 2)
+        #expect(home.segments.first { $0.id == sibling.id }?.noteGeneration == 0)
     }
 
     // MARK: Placement
 
     /// The note a capture surface shows comes from a store query that calls the append rule,
-    /// and agrees with the decision at the same instant
+    /// and agrees with the decision at the same instant, while a capture is open too
     /// (`capture-surface-prediction-agrees-with-decision`).
     public static func predictionAgreesWithDecision(_ make: NoteStoreFactory) async throws {
         for window in [AppendWindow.default, .off] {
@@ -476,10 +993,14 @@ public enum NoteStoreContract {
                 h.typed("Asked for a new note", from: 31, to: 31.2, placement: .newNote),
                 h.tool("From the command line", at: 32),
                 h.watchRecording(from: 1, to: 1.5),
+                h.typedDraft("An open draft", at: 40),
+                h.recordingStart(at: 41, surface: .macPanel),
+                h.tool("While recording", at: 42),
             ]
             for capture in captures {
                 h.clock.set(capture.endedAt ?? capture.startedAt)
-                let predicted = try await h.store.predictPlacement(capture.appendRequest)
+                let predicted = try await h.store.predictPlacement(
+                    capture.appendRequest, kind: capture.kind, surface: capture.origin.surface)
                 let receipt = try await h.store.record(capture)
                 switch predicted {
                 case .join(let note, let reason):
@@ -493,136 +1014,272 @@ public enum NoteStoreContract {
                     Issue.record("A prediction refused \(error.code) where the decision recorded.")
                 }
             }
+            // With a recording open, a typed start is refused, predicted and decided alike.
+            let typing = h.typedDraft("While a recording runs", at: 43)
+            let predicted = try await h.store.predictPlacement(typing.appendRequest, kind: .typed, surface: .app)
+            #expect(predicted.refusedCode == KnotError.captureBlockedByRecording.code, "The prediction sees it.")
+            await refuses(.captureBlockedByRecording) { try await h.store.record(typing) }
         }
     }
 
+    /// "New note" closes the note it leaves (rule 4): a later capture by the window starts a
+    /// new note instead of joining it.
+    public static func newNoteClosesTheNoteItLeaves(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let a = try await h.store.record(h.typed("A", from: 0, to: 0.1))
+        let b = try await h.store.record(h.typed("B", from: 0.5, to: 0.6, placement: .newNote))
+        #expect(b.noteID != a.noteID)
+        #expect(try await h.store.note(a.noteID)?.note.closedAt == h.at(0.5), "New note closes the note it leaves.")
+        let inside = try await h.store.record(h.typed("Into A", from: 0.7, to: 0.8, placement: .named(a.noteID)))
+        #expect(inside.noteID == a.noteID, "Capturing from inside A still appends to it (rule 5).")
+        let byWindow = try await h.store.record(h.typed("By the window", from: 0.9, to: 1.0))
+        #expect(byWindow.noteID != a.noteID, "A capture by the window never joins the closed note.")
+    }
+
+    /// A late capture never joins a deleted note, and never falls back to an older one (rules
+    /// 10 and 14).
+    public static func aLateCaptureNeverJoinsADeletedNote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let older = try await h.store.record(h.typed("Older", from: 0, to: 0.1))
+        let deleted = try await h.store.record(h.typed("Deleted", from: 10, to: 11))
+        _ = try await h.store.delete(.note(deleted.noteID))
+        h.clock.set(h.at(60))
+        let late = try await h.store.record(h.watchRecording(from: 11.5, to: 12))
+        #expect(late.noteID != deleted.noteID, "Never into the deleted note.")
+        #expect(late.noteID != older.noteID, "Never back to an older note.")
+        #expect(!late.joinedExistingNote)
+    }
+
     /// A late capture is marked as arrived, in the capture's own write, until its note is
-    /// opened. The mark is local display state: clearing it changes neither the store's counter
-    /// nor any revision, so opening a note never brings it back into the changes after a
-    /// cursor, and never makes a write that names a revision fail.
+    /// opened, whether it joins a note or starts one. Clearing the mark changes neither the
+    /// counter nor any revision.
     public static func lateArrivalIsMarkedUntilCleared(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let live = try await h.store.record(h.typed("Before the walk", from: 0, to: 0.2))
-        #expect(try await h.store.segment(live.segmentIDs[0])?.arrivedAt == nil, "A live capture is not marked.")
+        #expect(
+            try await h.store.segment(live.segmentIDs[0])?.segment.arrivedAt == nil, "A live capture is not marked.")
         h.clock.set(h.at(45))
         let late = try await h.store.record(h.watchRecording(from: 1, to: 2))
         let marked = try #require(try await h.store.segment(late.segmentIDs[0]))
-        #expect(marked.arrivedAt == h.at(45), "The store marks a late arrival in the capture's own write.")
+        #expect(marked.segment.arrivedAt == h.at(45), "The store marks a late arrival in the capture's own write.")
         #expect(late.cursor == (try await h.store.cursor()), "Marking takes no write of its own.")
-        let noteBefore = try #require(try await h.store.note(late.noteID)).note
+        h.clock.set(h.at(46))
+        let alone = try await h.store.record(h.watchRecording(from: 30, to: 31))
+        #expect(!alone.joinedExistingNote)
+        #expect(try await h.store.segment(alone.segmentIDs[0])?.segment.arrivedAt == h.at(46), "A late new note too.")
 
-        // The note view opens the note.
         let cursor = try await h.store.cursor()
         try await h.store.clearArrivalMarks(in: late.noteID)
         let cleared = try #require(try await h.store.segment(late.segmentIDs[0]))
-        #expect(cleared.arrivedAt == nil, "Opening the note clears the mark.")
+        #expect(cleared.segment.arrivedAt == nil, "Opening the note clears the mark.")
         #expect(try await h.store.cursor() == cursor, "Clearing changes no counter.")
         #expect(cleared.revision == marked.revision, "Clearing changes no segment revision.")
-        #expect(try await h.store.note(late.noteID)?.note.revision == noteBefore.revision, "Nor the note's.")
         #expect(
-            try await h.store.changes(after: cursor, limit: 10).changes.isEmpty,
-            "A cursor taken before the clear sees nothing new after it.")
-
-        // A write that names the revision read before the clear still succeeds.
-        let readBefore = StampedRevision(storeID: cursor.storeID, generation: cursor.generation, value: marked.revision)
+            try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "A cursor from before sees nothing.")
+        let job = try #require(try await h.store.jobs(for: late.segmentIDs[0]).first)
+        _ = try await h.store.appendTranscript(
+            h.run("walk the dog", from: .zero, resumeAt: nil), to: late.segmentIDs[0], job: job.id)
+        let read = try #require(try await h.store.segment(late.segmentIDs[0])).revision
+        try await h.store.clearArrivalMarks(in: late.noteID)
         let edit = try await h.store.replaceText(
             TextReplacement(
                 segment: late.segmentIDs[0], text: "Walk the dog at six", origin: .edited, writer: .commandLine,
-                ifRevision: readBefore))
+                ifRevision: read))
         #expect(edit.isReplaced, "A replace naming the revision from before the clear succeeds.")
     }
 
-    /// Text past the size limit continues in further segments of the same capture, and a
-    /// repeat returns the same segments and counts the capture once.
-    public static func textPastTheLimitContinuesAndRepeats(_ make: NoteStoreFactory) async throws {
-        let h = await Harness(make)
-        let line = String(repeating: "word ", count: 1_000) + "\n"
-        let text = String(repeating: line, count: (Limits.segmentTextBytes * 5 / 2) / line.utf8.count)
+    /// Text past the size limit continues in further segments of the same capture, which come
+    /// back in position; a repeat returns the same segments.
+    public static func textPastTheLimitContinuesInOrder(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make, window: .off)
+        let text = Harness.longText(pieces: 3)
         let capture = h.tool(text, at: 0)
         let receipt = try await h.store.record(capture)
         #expect(receipt.segmentIDs.count == 3, "The text continues in three segments.")
         #expect(receipt.segmentIDs.enumerated().allSatisfy { $1 == .piece($0, of: capture.id) })
-        let record = try #require(try await h.store.note(receipt.noteID))
-        #expect(record.segments.map(\.text).joined() == text, "Nothing is cut.")
         #expect(try await h.store.record(capture) == receipt, "A repeat returns the same segments.")
-        #expect(try await h.store.note(receipt.noteID)?.segments.count == 3)
+        #expect(try await h.store.note(receipt.noteID)?.segments.map(\.text).joined() == text, "Nothing is cut.")
+
+        // Ten different chunks over three capture IDs, all started at the same instant, come
+        // back each capture together and in position.
+        let target = try await h.store.record(h.tool("Start of the note", at: 10))
+        var expected = ["Start of the note"]
+        var captures: [CaptureID] = []
+        for index in 0..<3 {
+            let chunks = Harness.distinctChunks(index: index, count: index == 0 ? 4 : 3)
+            var chunked = h.tool(chunks.joined(), at: 10)
+            chunked.placement = .named(target.noteID)
+            let made = try await h.store.record(chunked)
+            #expect(made.segmentIDs.count == chunks.count)
+            captures.append(chunked.id)
+            expected += chunks
+        }
+        let segments = try #require(try await h.store.note(target.noteID)).segments
+        #expect(segments.count == 11)
+        for capture in captures {
+            let group = segments.filter { ($0.pieceOf ?? $0.id) == SegmentID(capture) }
+            #expect(group.map(\.piece) == Array(0..<group.count), "The pieces of one capture come in position.")
+            let first = try #require(segments.firstIndex { $0.id == SegmentID(capture) })
+            #expect(segments[first..<(first + group.count)].map(\.id) == group.map(\.id), "And together.")
+        }
+        #expect(Set(segments.map(\.text)) == Set(expected), "Every chunk is there, whole.")
     }
 
-    /// A capture started on another surface ends the open one and joins its note; while a
-    /// recording runs nothing typed starts; the command line leaves the open capture open.
+    /// A capture started on another surface ends the open one and joins its note, which lives
+    /// on even when the draft was empty; while a recording runs nothing typed starts; the
+    /// command line leaves the open capture open.
     public static func anotherSurfaceEndsTheOpenCapture(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make, window: .off)
         let draft = h.typedDraft("Typed in the app", at: 0)
         let typed = try await h.store.record(draft)
-        h.clock.set(h.at(1))
         let recording = h.recordingStart(at: 1, surface: .macPanel)
         let voice = try await h.store.record(recording)
         #expect(voice.noteID == typed.noteID, "The new capture joins the open one's note, window off too.")
-        let ended = try await h.store.openCaptures().map(\.id)
-        #expect(ended == [recording.id], "The typed capture ended as it stood.")
-        #expect(try await h.store.segment(SegmentID(draft.id))?.state == .typed(.ready))
-        await #expect(throws: KnotError.captureBlockedByRecording.about(capture: recording.id)) {
-            try await h.store.record(h.typedDraft("While recording", at: 1.5))
-        }
-        let tool = try await h.store.record(h.tool("From an agent", at: 1.6))
+        #expect(try await h.store.openCaptures().map(\.id) == [recording.id], "The typed capture ended as it stood.")
+        #expect(try await h.store.segment(SegmentID(draft.id))?.segment.state == .typed(.ready))
+        let ended = try await h.store.end(h.endTyped(draft.id, "Typed in the app", at: 1, revision: 1))
+        #expect(ended.outcome == .stored && ended.segmentIDs == [SegmentID(draft.id)], "Its receipt is finished too.")
+        await refuses(.captureBlockedByRecording) { try await h.store.record(h.typedDraft("While recording", at: 1.5)) }
+        _ = try await h.store.record(h.tool("From an agent", at: 1.6))
         #expect(try await h.store.openCaptures().map(\.id) == [recording.id], "The command line ends nothing.")
-        #expect(!tool.joinedExistingNote || tool.noteID == voice.noteID)
+
+        // A draft of spaces only, then a recording: the draft is discarded and its note lives on.
+        _ = try await h.store.end(
+            CaptureEnd(captureID: recording.id, endedAt: h.at(2), outcome: .discardedEmpty, revision: 0))
+        let blank = h.typedDraft("   ", at: 30)
+        let blankReceipt = try await h.store.record(blank)
+        let next = try await h.store.record(h.recordingStart(at: 31, surface: .control))
+        #expect(next.noteID == blankReceipt.noteID, "The recording joins the draft's note.")
+        #expect(try await h.store.note(next.noteID) != nil, "That note lives on with it.")
+        #expect(try await h.row(blank.id)?.outcome == .discardedEmpty)
     }
 
     // MARK: Deletes
 
-    /// A note left with no live segment is reported deleted and never marked so; a deletion
-    /// stays reportable after the purge; a segment whose capture is open cannot be deleted.
-    public static func deletionsStayReportableAfterThePurge(_ make: NoteStoreFactory) async throws {
+    /// Deleting marks the note and not its segments, restore brings each back, the purge
+    /// removes what is old and says which files go, and a segment whose capture is open
+    /// cannot be deleted.
+    public static func deletesRestoresAndThePurge(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
-        let receipt = try await h.store.record(h.tool("Short-lived", at: 0))
-        let cursor = try await h.store.cursor()
-        _ = try await h.store.delete(.segment(receipt.segmentIDs[0]))
-        let emptied = try await h.store.changes(after: cursor, limit: 10).changes
-        #expect(emptied.map(\.noteID) == [receipt.noteID] && emptied[0].isDeleted, "An emptied note reads as deleted.")
-        #expect(try await h.store.note(receipt.noteID)?.note.deletedAt == nil, "It is never marked deleted.")
-        #expect(try await h.store.stream(after: nil, limit: 10).notes.isEmpty, "The stream hides it.")
+        let a = try await h.store.record(h.typed("First", from: 0, to: 0.1))
+        let b = try await h.store.record(h.typed("Second", from: 0.2, to: 0.3))
+        _ = try await h.store.delete(.note(a.noteID))
+        let deleted = try #require(try await h.store.note(a.noteID))
+        #expect(deleted.note.deletedAt != nil, "The note is marked.")
+        #expect(deleted.segments.allSatisfy { $0.deletedAt == nil }, "Its segments are not.")
+        _ = try await h.store.restore(.note(a.noteID))
+        #expect(try await h.store.note(a.noteID)?.note.deletedAt == nil, "Restore brings the note back.")
+        _ = try await h.store.delete(.segment(b.segmentIDs[0]))
+        _ = try await h.store.restore(.segment(b.segmentIDs[0]))
+        #expect(try await h.store.segment(b.segmentIDs[0])?.segment.deletedAt == nil, "And the segment.")
 
+        let voice = try await h.store.record(h.watchRecording(from: 10, to: 11, arrival: .live))
+        let assetID = try #require(try await h.store.segment(voice.segmentIDs[0])?.segment.assetID)
+        _ = try await h.store.delete(.note(voice.noteID))
         h.clock.advance(by: 31 * 86_400)
-        _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
-        #expect(try await h.store.note(receipt.noteID) == nil, "The purge removes it.")
-        let purged = try await h.store.changes(after: cursor, limit: 10).changes
-        #expect(purged.map(\.noteID) == [receipt.noteID] && purged[0].isDeleted, "The deletion stays reportable.")
+        let purged = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(purged.assets.map(\.id) == [assetID], "The purge names the files to remove.")
+        #expect(try await h.store.asset(assetID) == nil, "And removes their rows.")
+        #expect(try await h.store.note(voice.noteID) == nil)
+        let reported = try await h.store.changes(after: nil, limit: 100).changes.first { $0.noteID == voice.noteID }
+        #expect(reported?.isDeleted == true, "The deletion stays reportable after the purge.")
 
         let draft = h.typedDraft("Still typing", at: 44_700)
         _ = try await h.store.record(draft)
-        await #expect(throws: KnotError.segmentCaptureOpen.with(.init(segmentID: SegmentID(draft.id)))) {
-            try await h.store.delete(.segment(SegmentID(draft.id)))
-        }
-        await #expect(throws: KnotError.segmentCaptureOpen.with(.init(segmentID: SegmentID(draft.id)))) {
+        await refuses(.segmentCaptureOpen) { try await h.store.delete(.segment(SegmentID(draft.id))) }
+        await refuses(.segmentCaptureOpen) {
             try await h.store.replaceText(
                 TextReplacement(segment: SegmentID(draft.id), text: "x", origin: .edited, writer: .commandLine))
         }
     }
 
+    /// A capture that ends with nothing to keep leaves an emptied note: hidden, never marked
+    /// deleted, reported as removed, and purged later with a tombstone. A note that holds
+    /// other segments is not emptied.
+    public static func anEmptyCaptureLeavesAnEmptiedNote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let tap = h.recordingStart(at: 0, surface: .control)
+        let receipt = try await h.store.record(tap)
+        let cursor = try await h.store.cursor()
+        let ended = try await h.store.end(
+            CaptureEnd(captureID: tap.id, endedAt: h.at(0.01), outcome: .discardedEmpty, revision: 0))
+        #expect(ended.outcome == .discardedEmpty && ended.segmentIDs.isEmpty)
+        let emptied = try #require(try await h.store.note(receipt.noteID), "The note stays.")
+        #expect(!emptied.isShown && emptied.note.deletedAt == nil, "Hidden, and never marked deleted.")
+        #expect(try await h.store.stream(after: nil, limit: 10).notes.isEmpty)
+        let changes = try await h.store.changes(after: cursor, limit: 10).changes
+        #expect(changes.map(\.noteID) == [receipt.noteID] && changes.first?.isDeleted == true, "Reported as removed.")
+        #expect(try await h.store.openCaptures().isEmpty)
+        #expect(
+            try await h.store.end(
+                CaptureEnd(captureID: tap.id, endedAt: h.at(0.02), outcome: .discardedEmpty, revision: 0)) == ended)
+
+        let kept = try await h.store.record(h.typed("Something to keep", from: 5, to: 5.1))
+        let blank = h.typedDraft("   ", at: 5.2)
+        _ = try await h.store.record(blank)
+        _ = try await h.store.end(h.endTyped(blank.id, "  ", at: 5.3, revision: 2))
+        #expect(try await h.store.note(kept.noteID)?.isShown == true, "A note that holds other segments stays shown.")
+
+        h.clock.advance(by: 31 * 86_400)
+        _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(try await h.store.note(receipt.noteID) == nil, "The purge removes the emptied note.")
+        let gone = try await h.store.changes(after: nil, limit: 100).changes.first { $0.noteID == receipt.noteID }
+        #expect(gone?.isDeleted == true && gone?.record == nil, "A tombstone keeps it reportable.")
+    }
+
     // MARK: Processing
 
-    /// A transcript grows run by run with the engine, locale and OS build that made it and the
-    /// job's resume time; a cleanup stores its OS build; a title is proposed only for a note
-    /// whose first segment is the recording and that has none.
+    /// A recording's first job is written with its end; a transcript grows run by run, each
+    /// applied once, with the engine, locale and OS build that made it; the last run marks the
+    /// job done and the segment transcribed together; a cleanup stores its OS build; a title is
+    /// proposed only for a note whose first segment is the recording and that has none.
     public static func transcriptAndCleanupAreStoredWithWhatMadeThem(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
-        let voice = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
-        let segment = voice.segmentIDs[0]
-        let job = Job(id: h.ids.make(), segmentID: segment, kind: .transcribe)
-        try await h.store.saveJob(job)
-        _ = try await h.store.appendTranscript(
-            h.run("pick up the blue bike", resumeAt: .seconds(5)), to: segment, job: job.id)
+        let start = h.recordingStart(at: 0, surface: .control)
+        _ = try await h.store.record(start)
+        let jobID: JobID = h.ids.make()
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: start.id, endedAt: h.at(1),
+                outcome: .stored(.file(h.asset(.audio, for: start.id), duration: .seconds(60))), revision: 0,
+                transcribeJob: jobID))
+        let segment = SegmentID(start.id)
+        let job = try #require(try await h.store.jobs(for: segment).first, "The first job is written with the end.")
+        #expect(job.id == jobID && job.kind == .transcribe && job.state == .queued && job.resumeAt == nil)
+
+        let firstRun = h.run("pick up the blue bike", from: .zero, resumeAt: .seconds(5))
+        _ = try await h.store.appendTranscript(firstRun, to: segment, job: jobID)
+        _ = try await h.store.appendTranscript(firstRun, to: segment, job: jobID)
         #expect(
-            try await h.store.jobs(for: segment).first?.resumeAt == .seconds(5),
-            "The resume time is saved with the run.")
-        var later = h.run("from the shop", resumeAt: nil)
+            try await h.store.segment(segment)?.segment.rawTranscript == "pick up the blue bike", "A run counts once.")
+        #expect(
+            try await h.store.jobs(for: segment).first?.resumeAt == .seconds(5), "The resume time is saved with it.")
+        var later = h.run("from the shop", from: .seconds(5), resumeAt: nil)
         later.provenance.osBuild = "another build"
-        let grown = try await h.store.appendTranscript(later, to: segment, job: job.id)
+        let grown = try await h.store.appendTranscript(later, to: segment, job: jobID)
         #expect(grown.rawTranscript == "pick up the blue bike from the shop", "The raw transcript grows.")
         #expect(grown.text == grown.rawTranscript)
-        #expect(grown.transcription == h.run("", resumeAt: nil).provenance, "The first run's provenance is kept.")
-        #expect(try await h.store.jobs(for: segment).first?.resumeAt == nil)
+        #expect(grown.transcription == firstRun.provenance, "The first run's provenance is kept.")
+        #expect(grown.state == .voice(.transcribed), "The last run marks the segment transcribed.")
+        #expect(try await h.store.jobs(for: segment).first?.state == .done, "And the job done, together.")
+        _ = try await h.store.appendTranscript(
+            h.run("from the shop", from: .zero, resumeAt: nil), to: segment, job: jobID)
+        #expect(
+            try await h.store.segment(segment)?.segment.rawTranscript == "pick up the blue bike from the shop",
+            "A done job takes no run.")
+
+        // A job of another segment cannot write this one's transcript.
+        let otherStart = h.recordingStart(at: 10, surface: .control)
+        _ = try await h.store.record(otherStart)
+        let otherJob: JobID = h.ids.make()
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: otherStart.id, endedAt: h.at(11),
+                outcome: .stored(.file(h.asset(.audio, for: otherStart.id), duration: .seconds(9))), revision: 0,
+                transcribeJob: otherJob))
+        await refuses(.notFound) {
+            try await h.store.appendTranscript(h.run("wrong", from: .zero, resumeAt: nil), to: segment, job: otherJob)
+        }
 
         let cleaned = CleanupResult(
             outcome: .cleaned(body: "Pick up the blue bike from the shop."), title: "blue bike",
@@ -630,25 +1287,24 @@ public enum NoteStoreContract {
         let applied = try await h.store.applyCleanup(cleaned, to: segment)
         #expect(applied.textReplaced && applied.segment.cleanup == CleanupProvenance(osBuild: "build 1"))
         #expect(applied.titleSet && applied.note.title == "blue bike" && applied.note.titleOrigin == .generated)
+        let again = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .declined(.guardRejected), title: "shop", provenance: cleaned.provenance, modelName: "m"),
+            to: segment)
+        #expect(!again.titleSet && again.note.title == "blue bike", "A note that has a title keeps it.")
+        #expect(
+            !again.textReplaced && again.segment.text == "Pick up the blue bike from the shop.", "A decline: no change."
+        )
 
         // A note whose first segment is typed gets no generated title.
         let typedFirst = try await h.store.record(h.typed("Notes on bikes", from: 30, to: 30.2))
         let second = try await h.store.record(h.watchRecording(from: 31, to: 32, arrival: .live))
         #expect(second.noteID == typedFirst.noteID)
-        _ = try await h.store.appendTranscript(
-            h.run("bikes are fun", resumeAt: nil), to: second.segmentIDs[0], job: nil)
         let none = try await h.store.applyCleanup(
             CleanupResult(
-                outcome: .cleaned(body: "Bikes are fun."), title: "bikes", provenance: cleaned.provenance,
-                modelName: "model"), to: second.segmentIDs[0])
+                outcome: .declined(.guardRejected), title: "bikes", provenance: cleaned.provenance, modelName: "model"),
+            to: second.segmentIDs[0])
         #expect(!none.titleSet && none.note.title == nil)
-
-        // A declined cleanup changes nothing.
-        let declined = try await h.store.applyCleanup(
-            CleanupResult(
-                outcome: .declined(.guardRejected), title: nil, provenance: cleaned.provenance, modelName: "m"),
-            to: segment)
-        #expect(!declined.textReplaced && declined.segment.text == "Pick up the blue bike from the shop.")
     }
 
     // MARK: Reading
@@ -672,21 +1328,37 @@ public enum NoteStoreContract {
         #expect(try await h.store.search("milk", limit: 10) == [b.noteID], "A deleted note is never found.")
         #expect(try await h.store.search(#""milk*" ("#, limit: 10) == [b.noteID], "Query syntax is read as text.")
     }
+}
 
-    /// A capture that ends with nothing to keep leaves nothing in the stream, and its row says so.
-    public static func anEmptyCaptureLeavesNothing(_ make: NoteStoreFactory) async throws {
-        let h = await Harness(make)
-        let tap = h.recordingStart(at: 0, surface: .control)
-        let receipt = try await h.store.record(tap)
-        let ended = try await h.store.end(
-            CaptureEnd(captureID: tap.id, endedAt: h.at(0.01), outcome: .discardedEmpty, revision: 0))
-        #expect(ended.outcome == .discardedEmpty && ended.segmentIDs.isEmpty)
-        #expect(try await h.store.stream(after: nil, limit: 10).notes.isEmpty, "Nothing is left in the stream.")
-        #expect(try await h.store.openCaptures().isEmpty, "No row stays open.")
-        #expect(
-            try await h.store.end(
-                CaptureEnd(captureID: tap.id, endedAt: h.at(0.02), outcome: .discardedEmpty, revision: 0)) == ended)
-        _ = receipt
+// MARK: - Checking errors by code
+
+/// Expects `body` to fail with the code of `expected`. The context is not compared: a real
+/// store need not reproduce it where the documents do not fix it.
+func refuses<R>(
+    _ expected: KnotError, _ comment: String = "", sourceLocation: SourceLocation = #_sourceLocation,
+    _ body: () async throws -> R
+) async {
+    do {
+        _ = try await body()
+        Issue.record("Expected \(expected.code), and the call succeeded. \(comment)", sourceLocation: sourceLocation)
+    } catch let error as KnotError {
+        #expect(error.code == expected.code, "\(comment)", sourceLocation: sourceLocation)
+    } catch {
+        Issue.record("Expected \(expected.code), got \(error). \(comment)", sourceLocation: sourceLocation)
+    }
+}
+
+extension AppendDecision {
+    var refusedCode: ErrorCode? {
+        if case .refused(let error) = self { return error.code }
+        return nil
+    }
+}
+
+extension TextReplacementResult {
+    var isReplaced: Bool {
+        if case .replaced = self { return true }
+        return false
     }
 }
 
@@ -695,13 +1367,35 @@ public enum NoteStoreContract {
 /// A store under test with its clock, and builders of captures at minutes past a fixed time.
 struct Harness {
     static let base = Date(timeIntervalSince1970: 1_795_000_000)
+    static let seedStore: StoreID = fixedID(0)
 
     /// An ID that is the same in every run, for seeded notes.
     static func fixedID<Tag>(_ number: Int) -> Identifier<Tag> {
         Identifier(uuid: UUIDv7.make(milliseconds: 1_000 + UInt64(number), random: Array(repeating: 7, count: 10)))
     }
 
-    let store: any NoteStore
+    static func seed(_ note: Note, _ segments: [Segment]) -> NoteRecord {
+        NoteRecord(note: note, segments: segments, storeID: seedStore, generation: 0)
+    }
+
+    /// Text that runs into `pieces` segments.
+    static func longText(pieces: Int) -> String {
+        let line = String(repeating: "word ", count: 1_000) + "\n"
+        let bytes = Limits.segmentTextBytes * (pieces - 1) + Limits.segmentTextBytes / 2
+        return String(repeating: line, count: bytes / line.utf8.count)
+    }
+
+    /// `count` chunks that each fill one segment and end with a line break, each different from
+    /// every other.
+    static func distinctChunks(index: Int, count: Int) -> [String] {
+        (0..<count).map { position in
+            let tag = "chunk \(index)-\(position) "
+            return String(repeating: tag, count: (Limits.segmentTextBytes - 8) / tag.utf8.count) + "\n"
+        }
+    }
+
+    let subject: NoteStoreSubject
+    var store: any NoteStore { subject.store }
     let clock: FakeClock
     let ids: any IDGenerator
     let device: DeviceID
@@ -717,10 +1411,18 @@ struct Harness {
         self.ids = ids
         self.device = device
         self.launch = ids.make()
-        self.store = await make(NoteStoreSetup(clock: clock, ids: ids, deviceID: device, window: window, seed: seed))
+        self.subject = await make(NoteStoreSetup(clock: clock, ids: ids, deviceID: device, window: window, seed: seed))
     }
 
     func at(_ minutes: Double) -> Date { Self.base.addingTimeInterval(minutes * 60) }
+
+    func text(_ segment: SegmentID) async throws -> String {
+        try await store.segment(segment)?.segment.text ?? ""
+    }
+
+    func row(_ capture: CaptureID) async throws -> Capture? {
+        try await store.capture(capture)
+    }
 
     /// A finished typed capture from the app, made now.
     func typed(_ text: String, from start: Double, to end: Double, placement: CapturePlacement = .window)
@@ -741,6 +1443,15 @@ struct Harness {
             launchID: launch, placement: .window, startedAt: at(start), body: .text(text), revision: revision)
     }
 
+    /// A typed capture from `Inbox/`, made in the app while the store did not answer.
+    func inboxText(_ text: String, at minute: Double, revision: Int64) -> NewCapture {
+        clock.set(at(minute + 0.1))
+        return NewCapture(
+            id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .app),
+            launchID: launch, placement: .window, startedAt: at(minute), endedAt: at(minute + 0.05),
+            body: .text(text), revision: revision)
+    }
+
     func endTyped(_ capture: CaptureID, _ text: String, at end: Double, revision: Int64) -> CaptureEnd {
         clock.set(at(end))
         return CaptureEnd(captureID: capture, endedAt: at(end), outcome: .stored(.text(text)), revision: revision)
@@ -757,34 +1468,40 @@ struct Harness {
 
     /// A recording starting on a surface of this device.
     func recordingStart(at minute: Double, surface: CaptureSurface) -> NewCapture {
-        NewCapture(
+        clock.set(at(minute))
+        return NewCapture(
             id: ids.make(), kind: .voice, origin: CaptureOrigin(source: .device(device), surface: surface),
             launchID: launch, placement: .window, startedAt: at(minute), body: .none)
     }
 
-    /// A finished recording from the watch: late by default, as a delivery is.
+    /// A drawing starting in the app.
+    func drawingStart(at minute: Double) -> NewCapture {
+        clock.set(at(minute))
+        return NewCapture(
+            id: ids.make(), kind: .ink, origin: CaptureOrigin(source: .device(device), surface: .app),
+            launchID: launch, placement: .window, startedAt: at(minute), body: .none)
+    }
+
+    func asset(_ kind: AssetKind, for capture: CaptureID) -> Asset {
+        Asset(
+            id: ids.make(), segmentID: SegmentID(capture), kind: kind, byteCount: 4_000,
+            sha256: String(repeating: kind == .audio ? "ab" : "cd", count: 32))
+    }
+
+    /// A finished recording from the watch, late by default as a delivery is, with its first job.
     func watchRecording(from start: Double, to end: Double, arrival: Arrival = .late) -> NewCapture {
         let id: CaptureID = ids.make()
-        let asset = Asset(
-            id: ids.make(), segmentID: SegmentID(id), kind: .audio, byteCount: 4_000,
-            sha256: String(repeating: "ab", count: 32))
         return NewCapture(
             id: id, kind: .voice, origin: CaptureOrigin(source: .device(device), surface: .watch), launchID: launch,
             placement: .window, arrival: arrival, startedAt: at(start), endedAt: at(end),
-            body: .file(asset, duration: .seconds((end - start) * 60)))
+            body: .file(asset(.audio, for: id), duration: .seconds((end - start) * 60)), transcribeJob: ids.make())
     }
 
-    func run(_ text: String, resumeAt: Duration?) -> TranscriptionRun {
+    func run(_ text: String, from start: Duration, resumeAt: Duration?) -> TranscriptionRun {
         TranscriptionRun(
-            pieces: text.isEmpty ? [] : [TranscriptPiece(text: text, range: .zero ..< .seconds(1))],
+            startsAt: start,
+            pieces: text.isEmpty ? [] : [TranscriptPiece(text: text, range: start..<(start + .seconds(1)))],
             resumeAt: resumeAt,
             provenance: TranscriptionProvenance(engine: "engine", locale: "en_GB", osBuild: "build 1"))
-    }
-}
-
-extension TextReplacementResult {
-    var isReplaced: Bool {
-        if case .replaced = self { return true }
-        return false
     }
 }

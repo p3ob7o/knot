@@ -5,32 +5,46 @@ import KnotTestSupport
 import Synchronization
 import Testing
 
+/// A scripted recorder writing through the power-cut layer, with its layer.
+func scriptedRecorder(script: ScriptedRecorder.Script = .init()) throws -> (ScriptedRecorder, PowerCutFileLayer) {
+    let layer = PowerCutFileLayer()
+    try layer.createFolder(URL(fileURLWithPath: "/work", isDirectory: true))
+    try layer.syncFolder(URL(fileURLWithPath: "/", isDirectory: true))
+    let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/work", isDirectory: true))
+    return (ScriptedRecorder(locations: locations, layer: layer, clock: FakeClock(), script: script), layer)
+}
+
+func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
+    RecordingRequest(
+        captureID: Identifier(uuid: UUID()), launchID: launch,
+        origin: CaptureOrigin(source: .device(Identifier(uuid: UUID())), surface: .control))
+}
+
 @Suite struct ScriptedRecorderTests {
     @Test(.tags(.contract)) func theContract() async throws {
-        try await RecorderContract.run { ScriptedRecorder() }
+        try await RecorderContract.run {
+            let (recorder, layer) = try scriptedRecorder()
+            return RecorderSubject(recorder: recorder, locations: recorder.locations) { layer.exists($0) }
+        }
     }
 
     @Test(arguments: [
         KnotError.microphonePermissionRefused, .noInputDevice, .audioSessionBusy, .tooLittleSpace, .writeFailed,
     ])
-    func aStartFailsWithEachCase(error: KnotError) async {
-        let recorder = ScriptedRecorder()
+    func aStartFailsWithEachCaseAndLeavesNoFile(error: KnotError) async throws {
+        let (recorder, layer) = try scriptedRecorder()
         recorder.failNextStarts(with: error)
-        let capture: CaptureID = Identifier(uuid: UUID())
-        await #expect(throws: error.about(capture: capture)) {
-            try await recorder.start(RecordingRequest(captureID: capture, launchID: Identifier(uuid: UUID())))
-        }
-        // The next start goes through.
-        let session = try? await recorder.start(
-            RecordingRequest(captureID: capture, launchID: Identifier(uuid: UUID())))
-        #expect(await session?.stop().ending == .stopped)
+        let request = recordingRequest()
+        await #expect(throws: error.about(capture: request.captureID)) { try await recorder.start(request) }
+        #expect(!layer.exists(recorder.locations.recordingManifest(request.captureID)))
+        let session = try await recorder.start(recordingRequest())
+        #expect(await session.stop().ending == .stopped, "The next start goes through.")
     }
 
     @Test(arguments: RecordingEnding.allCases.filter(\.endedByItself))
     func aRecordingEndsByItselfAndAStopAfterIsSafe(ending: RecordingEnding) async throws {
-        let recorder = ScriptedRecorder(script: .init(buffers: 3, endsBySelf: ending))
-        let session = try await recorder.start(
-            RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID())))
+        let (recorder, layer) = try scriptedRecorder(script: .init(buffers: 3, endsBySelf: ending))
+        let session = try await recorder.start(recordingRequest())
         var last: RecordingEvent?
         for await event in session.events { last = event }
         guard case .ended(let audio) = last else {
@@ -39,27 +53,58 @@ import Testing
         }
         #expect(audio.ending == ending)
         #expect(audio.frames == 3 * 1_600, "Everything written up to the end is kept.")
+        #expect(audio.workingFile.map { layer.exists($0) } == true, "The working file is kept.")
         #expect(await session.stop() == audio, "A stop after the ending returns it.")
     }
 
+    @Test func theWorkingFileHoldsTheInjectedAudioAndSurvivesAPowerCut() async throws {
+        let layer = PowerCutFileLayer()
+        try layer.createFolder(URL(fileURLWithPath: "/work", isDirectory: true))
+        try layer.syncFolder(URL(fileURLWithPath: "/", isDirectory: true))
+        let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/work", isDirectory: true))
+        let fixture = Data("synthetic injected audio".utf8)
+        let recorder = ScriptedRecorder(locations: locations, layer: layer, clock: FakeClock(), audio: fixture)
+        let request = recordingRequest()
+        let session = try await recorder.start(request)
+        let manifest = try CaptureManifest.decode(try layer.read(locations.recordingManifest(request.captureID)))
+        #expect(manifest.captureID == request.captureID && manifest.origin == request.origin)
+        #expect(manifest.placement == request.placement && manifest.shownNoteID == request.shownNote)
+        let audio = await session.stop()
+        layer.cutPower()
+        #expect(try layer.read(try #require(audio.workingFile)) == fixture, "The working file is the injected audio.")
+        let converted = try await recorder.convert(audio)
+        #expect(try layer.read(converted.file) == fixture, "What the engine moves into the asset store is real.")
+    }
+
+    @Test func aConversionThatFailsKeepsTheWorkingFile() async throws {
+        let (recorder, layer) = try scriptedRecorder()
+        let audio = await (try recorder.start(recordingRequest())).stop()
+        recorder.failNextConversions(with: .conversionFailed)
+        await #expect(throws: KnotError.conversionFailed.about(capture: audio.captureID)) {
+            try await recorder.convert(audio)
+        }
+        #expect(layer.exists(try #require(audio.workingFile)), "The working file stays as the recording.")
+        #expect(try await recorder.convert(audio).duration == audio.duration, "The conversion is tried again.")
+    }
+
     @Test func recoveryFindsTheOrphanOfAnEarlierLaunchBesideTheCurrentRecording() async throws {
-        let recorder = ScriptedRecorder()
+        let (recorder, layer) = try scriptedRecorder()
         let earlier: LaunchID = Identifier(uuid: UUID())
         let current: LaunchID = Identifier(uuid: UUID())
         let orphan: CaptureID = Identifier(uuid: UUID())
-        recorder.leaveOrphan(orphan, launch: earlier, frames: 48_000)
-        let session = try await recorder.start(RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: current))
+        try recorder.leaveOrphan(orphan, launch: earlier, frames: 48_000)
+        let session = try await recorder.start(recordingRequest(current))
         let recovered = try await recorder.recoverOrphans(currentLaunch: current)
         #expect(recovered.map(\.captureID) == [orphan])
         #expect(recovered.first?.ending == .recovered)
+        #expect(recovered.first?.workingFile.map { layer.exists($0) } == true, "Its working file is there to convert.")
         #expect(try await recorder.recoverOrphans(currentLaunch: current).isEmpty, "An orphan is recovered once.")
         #expect(await session.stop().ending == .stopped)
     }
 
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {
-        let recorder = ScriptedRecorder(script: .init(buffers: 40, interval: .zero))
-        let session = try await recorder.start(
-            RecordingRequest(captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID())))
+        let (recorder, _) = try scriptedRecorder(script: .init(buffers: 40, interval: .zero))
+        let session = try await recorder.start(recordingRequest())
         var durable: Int64 = 0
         for await event in session.events {
             if case .durable(let frames) = event { durable = frames }
@@ -77,6 +122,7 @@ import Testing
 @Suite struct ScriptedTranscriberTests {
     static let speech = URL(fileURLWithPath: "/fixtures/speech.wav")
     static let silence = URL(fileURLWithPath: "/fixtures/silence.wav")
+    static let long = URL(fileURLWithPath: "/fixtures/long.m4a")
 
     static func scripted() -> ScriptedTranscriber {
         let transcriber = ScriptedTranscriber()
@@ -93,9 +139,12 @@ import Testing
 
     @Test(.tags(.contract)) func theContract() async throws {
         try await TranscriberContract.run {
-            TranscriberSubject(
-                transcriber: Self.scripted(), speech: Self.speech, silence: Self.silence,
-                missing: URL(fileURLWithPath: "/fixtures/missing.wav"), budget: .seconds(5),
+            let transcriber = Self.scripted()
+            transcriber.script(Self.long, pieces: [TranscriptPiece(text: "long", range: .zero ..< .seconds(600))])
+            transcriber.setRunDelay(.seconds(30), for: Self.long)
+            return TranscriberSubject(
+                transcriber: transcriber, speech: Self.speech, long: Self.long, silence: Self.silence,
+                missing: URL(fileURLWithPath: "/fixtures/missing.wav"), budget: .milliseconds(500),
                 liveChunks: Array(repeating: AudioChunk(samples: [0, 0.1], sampleRate: 16_000), count: 4))
         }
     }
@@ -176,7 +225,11 @@ final class ProgressLog: Sendable {
 
 @Suite struct ScriptedCleanerTests {
     @Test(.tags(.contract)) func theContract() async throws {
-        try await CleanerContract.run { ScriptedCleaner() }
+        try await CleanerContract.run {
+            let cleaner = ScriptedCleaner()
+            cleaner.setDelay(.seconds(30), forTranscriptsLongerThan: 1_000)
+            return cleaner
+        }
     }
 
     @Test(arguments: [
@@ -255,5 +308,68 @@ final class ProgressLog: Sendable {
         let clock = FakeClock(Date(timeIntervalSince1970: 1_000))
         clock.advance(by: -180)
         #expect(clock.now() == Date(timeIntervalSince1970: 820))
+    }
+}
+
+@Suite struct ScriptedTranscriberRunTests {
+    /// A first phrase longer than the budget is taken whole, and the runs together cover the
+    /// file and end.
+    @Test func aPhraseLongerThanTheBudgetIsTakenWhole() async throws {
+        let transcriber = ScriptedTranscriber()
+        let file = URL(fileURLWithPath: "/fixtures/long-phrases.wav")
+        transcriber.script(
+            file,
+            pieces: [
+                TranscriptPiece(text: "a long first phrase", range: .zero ..< .seconds(12)),
+                TranscriptPiece(text: "then a short one", range: .seconds(12) ..< .seconds(14)),
+            ])
+        var offset: Duration = .zero
+        var text: [String] = []
+        var runs = 0
+        while runs < 10 {
+            let run = try await transcriber.transcribe(file: file, from: offset, budget: .seconds(3))
+            runs += 1
+            text += run.pieces.map(\.text)
+            guard let next = run.resumeAt else { break }
+            offset = next
+        }
+        #expect(runs == 2 && text == ["a long first phrase", "then a short one"])
+    }
+
+    @Test func theProvenanceNamesTheLocaleItWasGiven() async throws {
+        let transcriber = ScriptedTranscriber(locale: Locale(identifier: "en_GB"))
+        let file = URL(fileURLWithPath: "/fixtures/one.wav")
+        transcriber.script(file, pieces: [TranscriptPiece(text: "hello", range: .zero ..< .seconds(1))])
+        let run = try await transcriber.transcribe(file: file, from: .zero, budget: nil)
+        #expect(run.provenance.locale == "en_GB")
+    }
+}
+
+@Suite struct ScriptedBackgroundRunnerTests {
+    @Test(.tags(.contract)) func theContract() async throws {
+        try await BackgroundRunnerContract.run { ScriptedBackgroundRunner() }
+    }
+
+    /// The time ends in the middle: the running step is cancelled as a yield, and the runner
+    /// says the time ended.
+    @Test func theTimeEndsInTheMiddleAndTheStepYields() async {
+        let runner = ScriptedBackgroundRunner()
+        runner.endTime(afterReports: 2)
+        let stepSawCancellation = ProgressLog()
+        await #expect(throws: KnotError.noBackgroundTime) {
+            try await runner.run(
+                BackgroundWork { report throws(KnotError) in
+                    for step in 1...10 {
+                        report(BackgroundProgress(fraction: Double(step) / 10, step: .transcribe))
+                        if Task.isCancelled {
+                            stepSawCancellation.add(Double(step))
+                            throw KnotError.cancelled
+                        }
+                    }
+                })
+        }
+        #expect(stepSawCancellation.values == [2], "The step stopped at the report that ended the time.")
+        #expect(runner.reports.count == 2)
+        #expect(KnotError.noBackgroundTime.isDeferral)
     }
 }

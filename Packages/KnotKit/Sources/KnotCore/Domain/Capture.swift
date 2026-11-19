@@ -94,13 +94,22 @@ public struct Capture: Hashable, Sendable, Codable, Identifiable {
     /// The placement that was asked for. Local.
     public var placement: CapturePlacement
     /// The content of a finished capture, keyed with a secret of the store, to judge a
-    /// repeated capture ID by its content.
+    /// repeated capture ID by its content. A capture that ended with no content (discarded as
+    /// empty, or failed) has none.
     public var contentHash: ContentHash?
+    /// The note the capture surface showed, which a manifest records too. Local.
+    public var shownNoteID: NoteID?
+    /// The revision of the content the store holds: the producer's own sequence, which rises
+    /// with each save of the capture. It is not stamped with the store's generation.
+    public var revision: Int64
+    /// When the store committed the capture's last durable save, by its own clock. Recovery
+    /// ends a recovered capture there (docs/architecture.md §5).
+    public var lastSavedAt: Date?
 
     public init(
         id: CaptureID, kind: SegmentKind, origin: CaptureOrigin, startedAt: Date, endedAt: Date? = nil,
         outcome: CaptureOutcome = .open, launchID: LaunchID, placement: CapturePlacement,
-        contentHash: ContentHash? = nil
+        contentHash: ContentHash? = nil, shownNoteID: NoteID? = nil, revision: Int64 = 0, lastSavedAt: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -111,6 +120,9 @@ public struct Capture: Hashable, Sendable, Codable, Identifiable {
         self.launchID = launchID
         self.placement = placement
         self.contentHash = contentHash
+        self.shownNoteID = shownNoteID
+        self.revision = revision
+        self.lastSavedAt = lastSavedAt
     }
 
     /// True when recovery at this launch should finish the capture: it is still open and a

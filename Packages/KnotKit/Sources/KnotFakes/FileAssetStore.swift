@@ -30,6 +30,13 @@
 
         public func move(_ source: URL, as asset: AssetID, kind: AssetKind) throws(KnotError) -> StoredFile {
             let url = try destination(asset, kind)
+            if let stored = try find(asset, kind: kind) {
+                // The stored file itself, or a retry after the move committed and its source
+                // went: nothing to do.
+                if source.standardizedFileURL == url.standardizedFileURL || layer.entryKind(source) == nil {
+                    return stored
+                }
+            }
             let data = try layer.read(source)
             let sha = Self.sha256(data)
             if let stored = try find(asset, kind: kind) {

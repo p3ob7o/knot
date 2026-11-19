@@ -126,6 +126,7 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
         switch segment.state {
         case .typed(.draft), .typed(.ready): return .ready
         case .typed(.discarded): return nil
+        case .typed(.failed): return .needsYou
         case .voice(let state):
             switch state {
             case .onWatch: return .savedOnWatch

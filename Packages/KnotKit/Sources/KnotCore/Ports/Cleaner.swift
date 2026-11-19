@@ -10,7 +10,8 @@ public protocol Cleaner: Sendable {
     func availability() async -> CleanupAvailability
 
     /// The availability each time it changes, starting with the current one, so that the
-    /// queue runs deferred jobs again when the model becomes ready.
+    /// queue runs deferred jobs again when the model becomes ready. When the consumer goes
+    /// away, its subscription ends.
     func availabilityChanges() -> AsyncStream<CleanupAvailability>
 
     /// Cleans one raw transcript and, when asked, proposes a title.

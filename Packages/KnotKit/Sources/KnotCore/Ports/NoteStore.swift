@@ -7,6 +7,15 @@ import Foundation
 /// counter value. The append rule runs in one place, the record-a-capture transaction, and the
 /// command line and MCP write through the same operations as the app. No operation throws
 /// anything but a `KnotError`.
+///
+/// Every revision a read or a write returns comes stamped with the store and its generation,
+/// so that no caller joins a number to a generation. A capture's content revision, the
+/// producer's own sequence of saves, is not stamped: it orders the saves of one capture.
+///
+/// At launch, ingest reconciles `Inbox/` (`ingest`) before recovery ends the open rows of
+/// earlier launches (`openCaptures`, then `end`). The two orders give different results: an
+/// inbox item reconciled first ends its open row with the item's content, while a row that
+/// recovery ended first is then judged as an ended row. WP-11 and WP-15 keep this order.
 public protocol NoteStore: Sendable {
     // MARK: The store
 
@@ -15,40 +24,73 @@ public protocol NoteStore: Sendable {
 
     /// A signal after each committed write, with the cursor it reached. Several writes may
     /// arrive as one signal, so a reader reads `changes(after:limit:)` from its last cursor.
+    /// When the consumer goes away, its subscription ends; the store is not affected.
     func changeSignals() -> AsyncStream<StoreCursor>
 
     // MARK: Captures
 
     /// The note a capture surface shows before the first keystroke: the append rule over the
     /// same view of the stream as `record`, so the prediction and the decision agree at the
-    /// same instant (docs/architecture.md §5). It writes nothing.
-    func predictPlacement(_ request: AppendRequest) async throws(KnotError) -> AppendDecision
+    /// same instant (docs/architecture.md §5). It takes what `record` decides by, the kind and
+    /// the surface included, so that the two agree while a capture is open (rule 15): a start
+    /// that rule refuses comes back as `.refused`. It writes nothing.
+    func predictPlacement(_ request: AppendRequest, kind: SegmentKind, surface: CaptureSurface) async throws(KnotError)
+        -> AppendDecision
 
     /// Records a capture in one transaction: checks the captures open on this device (rule 15),
     /// applies the append rule, and writes the capture row and its segment, or its segments
     /// when text runs past the size limit. A capture placed as a late arrival is marked as
     /// arrived (`Segment.arrivedAt`).
     ///
-    /// Idempotent by capture ID: a repeat with the same content changes nothing and returns
-    /// the first receipt; one with different content fails with `capture_id_conflict`. A
-    /// repeat of a capture that is still open returns the first receipt, and its content
-    /// arrives by `checkpoint` and `end`.
+    /// "New note" closes the note the window would have joined, at the capture's start (rule 4),
+    /// so that a later capture by the window does not join it. A segment ID that another
+    /// capture owns, first or derived, is refused as a conflict and nothing is written.
+    ///
+    /// Idempotent by capture ID, and strict: a repeat with the same content changes nothing
+    /// and returns the latest receipt; one with other content fails with
+    /// `capture_id_conflict`, whatever the row's state. An inbox item takes `ingest` instead.
     func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt
+
+    /// Reconciles a finished capture from `Inbox/`, as its manifest gives it, with what the
+    /// store holds, in one transaction (docs/architecture.md §6, rules 2 and 6):
+    ///
+    /// - no row: the row and the segments are made. A capture made live is placed in the note
+    ///   its surface showed, or in a new note when it showed none; a late one by rule 7.
+    /// - an open row: the content is applied by revision, and the capture ends.
+    /// - a failed row: it becomes stored.
+    /// - an ended row with the same content: nothing changes.
+    /// - an ended row at a lower revision: the item's content replaces it, as a later save of
+    ///   the same capture, unless the text was replaced since the capture ended, which is a
+    ///   conflict.
+    /// - an ended row at an equal or higher revision with other content: a conflict.
+    ///
+    /// The result says which content revision is durably stored. Only that lets the caller
+    /// remove the file; on a conflict the file is kept.
+    func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult
 
     /// Saves the text of an open typed capture. Ordered by revision: a checkpoint never
     /// lowers the stored revision, so one that arrives late, from a slow save or from
     /// `Inbox/`, replaces older text and never newer. A checkpoint for a capture that has
-    /// ended changes nothing.
+    /// ended changes nothing. The row keeps the time of each save that was applied.
     func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult
 
     /// Ends an open capture: stored with its final content, discarded as empty, or failed
-    /// with its content kept. Ending a capture that has ended returns its receipt when the
-    /// content is the same, and fails with `capture_id_conflict` when it is not.
+    /// with its content kept. The end is a save, ordered by revision like a checkpoint: the
+    /// winning content is chosen first, then judged empty or not, and that is what is stored
+    /// and hashed. A stale end ends the capture with the stored content; an end at the stored
+    /// revision with other content is a conflict. A recording's or a drawing's end may write
+    /// its first job in the same transaction. Ending a capture that has ended returns its
+    /// receipt when the content is the same, and fails with `capture_id_conflict` when it is
+    /// not.
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt
 
     /// The captures whose rows are open, of every launch. Recovery finishes those of other
     /// launches (`Capture.needsRecovery(currentLaunch:)`).
     func openCaptures() async throws(KnotError) -> [Capture]
+
+    /// A capture's row in the ledger, open or ended: its outcome, its content revision, the
+    /// placement asked for, the note shown and the time of its last durable save.
+    func capture(_ id: CaptureID) async throws(KnotError) -> Capture?
 
     // MARK: Reading
 
@@ -56,7 +98,8 @@ public protocol NoteStore: Sendable {
     /// when there is none or it was purged.
     func note(_ id: NoteID) async throws(KnotError) -> NoteRecord?
 
-    func segment(_ id: SegmentID) async throws(KnotError) -> Segment?
+    /// A segment with its stamped revision.
+    func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead?
 
     func asset(_ id: AssetID) async throws(KnotError) -> Asset?
 
@@ -70,9 +113,10 @@ public protocol NoteStore: Sendable {
 
     /// The notes changed after `cursor`, or from the start, ordered by the counter, in pages
     /// that never split one counter value. Deletions are included, and stay reportable after
-    /// the purge; a note left with no live segment is reported as deleted. A cursor from
-    /// another store or generation fails with `cursor_foreign`, and one ahead of the store
-    /// with `cursor_ahead_of_store`.
+    /// the purge. A note left with no live segment, such as one whose only capture was
+    /// discarded as empty, is hidden and reported as deleted, so that a reader that saw it
+    /// drops it; it is never marked deleted for that reason. A cursor from another store or generation fails with `cursor_foreign`, and one ahead
+    /// of the store with `cursor_ahead_of_store`.
     func changes(after cursor: StoreCursor?, limit: Int) async throws(KnotError) -> ChangePage
 
     // MARK: Editing
@@ -80,7 +124,9 @@ public protocol NoteStore: Sendable {
     /// Replaces a segment's text. Precedence is checked here: edited beats cleaned beats raw
     /// (`TextPrecedence`), so a lower origin leaves the text as it is and says so. With
     /// `ifRevision`, a stale or foreign revision fails. A segment whose capture is open
-    /// cannot be edited. Text replaced by the command line or MCP is kept for 30 days.
+    /// cannot be edited. A typed capture's own text comes only through `checkpoint` and `end`,
+    /// so the origin `.typed`, and an origin this build does not know, are refused with
+    /// `illegal_transition`. Text replaced by the command line or MCP is kept for 30 days.
     func replaceText(_ replacement: TextReplacement) async throws(KnotError) -> TextReplacementResult
 
     /// Sets or clears a note's title as a person's. With `ifRevision`, a stale or foreign
@@ -91,8 +137,14 @@ public protocol NoteStore: Sendable {
     /// segments. A segment whose capture is open cannot be deleted.
     func delete(_ target: StoreTarget) async throws(KnotError) -> StoreCursor
 
-    /// Undoes a delete, or brings back the text that the command line or MCP replaced.
+    /// Undoes a delete, or brings back the text that the command line or MCP replaced, within
+    /// 30 days of the replacement.
     func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor
+
+    /// "Remove recording" (docs/product-spec.md §7): keeps a voice segment's text and removes
+    /// its recording's row. Returns the asset whose file the caller then removes through the
+    /// `AssetStore`. Refused while the capture is open; `not_found` when it has no recording.
+    func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset
 
     /// Clears the marks of late arrivals in one note, which the note view does when it opens.
     /// It is local and changes no revision.
@@ -107,9 +159,12 @@ public protocol NoteStore: Sendable {
     func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult
 
     /// Returns a moved segment to the note it left, for 30 days, on the device that moved it.
-    /// Refused when the segment's note has changed since the move, and when the note it left
-    /// is deleted or gone.
-    func returnToFormerNote(_ segment: SegmentID) async throws(KnotError) -> MoveOutcome
+    /// `note` is the note the caller sees the segment in. Only the latest move of a segment
+    /// can be returned. Refused, changing nothing, when the segment is not in `note` or its
+    /// note has changed since the move, and when the note it left is deleted, gone, or has no
+    /// live segment left (rule 11). The note the segment leaves by the return is held to the
+    /// title rule as a move holds it.
+    func returnToFormerNote(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveOutcome
 
     // MARK: Processing
 
@@ -118,8 +173,10 @@ public protocol NoteStore: Sendable {
 
     /// Adds a transcription run to a voice segment in one transaction: its pieces to the raw
     /// transcript, which only grows, its provenance with the first run, the text where it is
-    /// still the raw transcript, and its resume time to `job`.
-    func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID?) async throws(KnotError)
+    /// still the raw transcript, and its resume time to `job`, the segment's own transcribe
+    /// job. Idempotent: a run is applied only when it starts at the job's stored resume point,
+    /// so the same run applied twice adds its words once.
+    func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
         -> Segment
 
     /// Writes a cleanup result in one transaction: the cleaned body where the text is still
@@ -136,10 +193,11 @@ public protocol NoteStore: Sendable {
 
     // MARK: Housekeeping
 
-    /// Removes notes and segments deleted before `date`, and notes left empty and unchanged
-    /// since then, with their history. A tombstone keeps each deletion reportable. Returns how
-    /// many notes and segments it removed.
-    func purge(before date: Date) async throws(KnotError) -> Int
+    /// Removes notes and segments deleted before `date`, notes left empty and unchanged since
+    /// then, and history older than it. A tombstone keeps each deletion reportable. The asset
+    /// rows of what it removed go too, and the result names their files for the caller to
+    /// remove through the `AssetStore`.
+    func purge(before date: Date) async throws(KnotError) -> PurgeResult
 }
 
 // MARK: - Capturing
@@ -164,10 +222,16 @@ public struct NewCapture: Hashable, Sendable {
     public var body: CaptureBody
     /// The checkpoint revision of the content, which later checkpoints must pass.
     public var revision: Int64
+    /// The note the capture surface showed before the first keystroke, which an `Inbox/`
+    /// manifest records with the placement asked for.
+    public var shownNote: NoteID?
+    /// For a finished recording, the ID of its first job, which the store writes with it.
+    public var transcribeJob: JobID?
 
     public init(
         id: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, placement: CapturePlacement,
-        arrival: Arrival = .live, startedAt: Date, endedAt: Date? = nil, body: CaptureBody, revision: Int64 = 0
+        arrival: Arrival = .live, startedAt: Date, endedAt: Date? = nil, body: CaptureBody, revision: Int64 = 0,
+        shownNote: NoteID? = nil, transcribeJob: JobID? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -179,6 +243,8 @@ public struct NewCapture: Hashable, Sendable {
         self.endedAt = endedAt
         self.body = body
         self.revision = revision
+        self.shownNote = shownNote
+        self.transcribeJob = transcribeJob
     }
 
     /// The question the append rule answers for this capture.
@@ -196,29 +262,41 @@ public enum CaptureBody: Hashable, Sendable {
     /// A recording or a drawing still being made.
     case none
 
-    /// The content a repeated capture ID is judged by, or `nil` when there is none yet.
+    /// The content a repeated capture ID is judged by, or `nil` when there is none: a
+    /// recording or drawing still being made. A file's digest must be 64 hex digits
+    /// (`isWellFormed`); a store refuses a capture whose digest is not.
+    ///
+    /// "The same content" for a capture with none is defined case by case, never by a missing
+    /// hash matching anything:
+    /// - a start with no content yet (`.none`) repeats the same start of the same kind;
+    /// - an end discarded as empty is the same as another discard, and other content than any
+    ///   stored content;
+    /// - a failure is the same as a failure with the same code, and other than another code or
+    ///   any stored content;
+    /// - stored text is judged by its text at its content revision, and a file by its digest.
     public var content: CaptureContent? {
         switch self {
         case .text(let text): .text(text)
-        case .file(let asset, _): .file(sha256: Self.bytes(ofHex: asset.sha256))
+        case .file(let asset, _): Self.digest(asset.sha256).map { .file(sha256: $0) }
         case .none: nil
         }
     }
-}
 
-extension CaptureBody {
-    /// The bytes a hexadecimal digest names. Text that is not hexadecimal is taken as it is,
-    /// so two different texts never read as the same content.
-    static func bytes(ofHex hex: String) -> [UInt8] {
+    /// False for a file whose digest is not 32 bytes written as 64 hex digits.
+    public var isWellFormed: Bool {
+        if case .file(let asset, _) = self { return Self.digest(asset.sha256) != nil }
+        return true
+    }
+
+    /// The 32 bytes that 64 hex digits name, or `nil` for anything else.
+    static func digest(_ hex: String) -> [UInt8]? {
         let digits = Array(hex.utf8)
-        guard digits.count % 2 == 0 else { return Array("text:\(hex)".utf8) }
+        guard digits.count == 64 else { return nil }
         var bytes: [UInt8] = []
-        bytes.reserveCapacity(digits.count / 2)
+        bytes.reserveCapacity(32)
         var index = 0
         while index < digits.count {
-            guard let high = nibble(digits[index]), let low = nibble(digits[index + 1]) else {
-                return Array("text:\(hex)".utf8)
-            }
+            guard let high = nibble(digits[index]), let low = nibble(digits[index + 1]) else { return nil }
             bytes.append(high << 4 | low)
             index += 2
         }
@@ -253,7 +331,8 @@ public struct CaptureCheckpoint: Hashable, Sendable {
 public struct CheckpointResult: Hashable, Sendable {
     /// False when the stored text was newer, or the capture had ended.
     public var applied: Bool
-    /// The revision the store holds after the call.
+    /// The content revision the store holds after the call: the producer's own sequence,
+    /// not stamped, since it orders the saves of one capture and nothing else.
     public var storedRevision: Int64
 
     public init(applied: Bool, storedRevision: Int64) {
@@ -280,12 +359,18 @@ public struct CaptureEnd: Hashable, Sendable {
     public var outcome: Outcome
     /// The engine's final revision of the content.
     public var revision: Int64
+    /// For a recording stored by this end, the ID of its first job, which the store writes in
+    /// the same transaction, so that no recording ends without its job.
+    public var transcribeJob: JobID?
 
-    public init(captureID: CaptureID, endedAt: Date, outcome: Outcome, revision: Int64) {
+    public init(
+        captureID: CaptureID, endedAt: Date, outcome: Outcome, revision: Int64, transcribeJob: JobID? = nil
+    ) {
         self.captureID = captureID
         self.endedAt = endedAt
         self.outcome = outcome
         self.revision = revision
+        self.transcribeJob = transcribeJob
     }
 }
 
@@ -322,18 +407,64 @@ public struct CaptureReceipt: Hashable, Sendable {
     }
 }
 
+/// What an ingest did.
+public struct IngestResult: Hashable, Sendable {
+    /// The capture's receipt as the store now holds it.
+    public var receipt: CaptureReceipt
+    /// The content revision durably stored for the capture, after the call.
+    public var storedRevision: Int64
+    /// False when the store already held this content, or newer content of the capture.
+    public var applied: Bool
+
+    public init(receipt: CaptureReceipt, storedRevision: Int64, applied: Bool) {
+        self.receipt = receipt
+        self.storedRevision = storedRevision
+        self.applied = applied
+    }
+}
+
+/// What a purge removed.
+public struct PurgeResult: Hashable, Sendable {
+    /// How many notes and segments it removed.
+    public var removed: Int
+    /// The assets whose rows it removed, whose files the caller removes.
+    public var assets: [Asset]
+
+    public init(removed: Int, assets: [Asset]) {
+        self.removed = removed
+        self.assets = assets
+    }
+}
+
 // MARK: - Reading
 
-/// A note with its segments, in the order the note shows them.
+/// A note with its segments, in the order the note shows them, read with the store and
+/// generation that stamp its revisions.
 public struct NoteRecord: Hashable, Sendable {
     public var note: Note
-    /// Every segment of the note, deleted ones and conflict copies included, ordered by
-    /// start and then by ID.
+    /// Every segment of the note, deleted ones and conflict copies included, in
+    /// `SegmentOrder`.
     public var segments: [Segment]
+    public var storeID: StoreID
+    public var generation: StoreGeneration
 
-    public init(note: Note, segments: [Segment]) {
+    public init(note: Note, segments: [Segment], storeID: StoreID, generation: StoreGeneration) {
         self.note = note
         self.segments = segments
+        self.storeID = storeID
+        self.generation = generation
+    }
+
+    /// The note's revision, stamped.
+    public var revision: StampedRevision {
+        StampedRevision(storeID: storeID, generation: generation, value: note.revision)
+    }
+
+    /// A segment's revision, stamped, or `nil` when the note does not hold it.
+    public func revision(of segment: SegmentID) -> StampedRevision? {
+        segments.first { $0.id == segment }.map {
+            StampedRevision(storeID: storeID, generation: generation, value: $0.revision)
+        }
     }
 
     /// The segments that are not deleted.
@@ -341,6 +472,17 @@ public struct NoteRecord: Hashable, Sendable {
 
     /// True when the stream shows the note (rule 11).
     public var isShown: Bool { StreamRule.isShown(note, segments: segments) }
+}
+
+/// A segment with its revision, stamped.
+public struct SegmentRead: Hashable, Sendable {
+    public var segment: Segment
+    public var revision: StampedRevision
+
+    public init(segment: Segment, revision: StampedRevision) {
+        self.segment = segment
+        self.revision = revision
+    }
 }
 
 /// Where a page of the stream ended.
@@ -486,12 +628,15 @@ public struct MoveOutcome: Hashable, Sendable {
     public var from: Note
     /// The note it is in now.
     public var to: Note
+    /// The segment's revision, stamped. A move changes no text, so it stays.
+    public var revision: StampedRevision
     public var cursor: StoreCursor
 
-    public init(segment: Segment, from: Note, to: Note, cursor: StoreCursor) {
+    public init(segment: Segment, from: Note, to: Note, revision: StampedRevision, cursor: StoreCursor) {
         self.segment = segment
         self.from = from
         self.to = to
+        self.revision = revision
         self.cursor = cursor
     }
 }

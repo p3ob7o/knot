@@ -27,7 +27,8 @@ public protocol CaptureEngine: Sendable {
     func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState
 
     /// The state of each capture each time it changes. Only `durableRevision` counts as
-    /// acknowledged (§5): tests and the soak treat nothing else as saved.
+    /// acknowledged (§5): tests and the soak treat nothing else as saved. When the consumer
+    /// goes away, its subscription ends; no capture is affected.
     func states() -> AsyncStream<CaptureState>
 }
 

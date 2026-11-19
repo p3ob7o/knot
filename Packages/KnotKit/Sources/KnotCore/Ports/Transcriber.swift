@@ -19,7 +19,9 @@ public protocol Transcriber: Sendable {
     func install(progress: @escaping @Sendable (Double) -> Void) async throws(KnotError)
 
     /// Transcribes `file` from `offset`. With a budget, it reads at most that much audio and
-    /// ends at the last finished phrase, so no word is split between two runs.
+    /// ends at the last finished phrase, so no word is split between two runs. A first phrase
+    /// longer than the budget is taken whole, so every run that is not the last moves on, and
+    /// the runs together cover the file and end.
     ///
     /// A file with no frames, or with no words, gives no pieces and no resume time: it is
     /// ready with empty text, which is not an error. Errors: a deferral while the model is
@@ -31,13 +33,17 @@ public protocol Transcriber: Sendable {
 
     /// Live text for the screen, from chunks of the recording's audio. The stream ends when
     /// the chunks end, or after one `.failed`. When its consumer goes away, the transcriber
-    /// stops within a second; the recording is not affected.
+    /// stops reading the chunks within a second; the recording is not affected, and its
+    /// stream of audio drops what nobody reads.
     func live(_ chunks: AsyncStream<AudioChunk>) -> AsyncStream<LiveTranscriptEvent>
 }
 
 /// One run of a file's transcription (docs/architecture.md §9). The queue saves its pieces
 /// and its resume time together, so an interrupted job goes on from its last run.
 public struct TranscriptionRun: Hashable, Sendable {
+    /// Where the run started in the file: the offset it was asked for. The store applies a
+    /// run only at its stored resume point, so a run applied twice is applied once.
+    public var startsAt: Duration
     /// The phrases this run finished, in order.
     public var pieces: [TranscriptPiece]
     /// Where the next run starts, in the file's own time, or `nil` when the file is done.
@@ -46,7 +52,10 @@ public struct TranscriptionRun: Hashable, Sendable {
     /// it on the segment with the first run.
     public var provenance: TranscriptionProvenance
 
-    public init(pieces: [TranscriptPiece], resumeAt: Duration?, provenance: TranscriptionProvenance) {
+    public init(
+        startsAt: Duration, pieces: [TranscriptPiece], resumeAt: Duration?, provenance: TranscriptionProvenance
+    ) {
+        self.startsAt = startsAt
         self.pieces = pieces
         self.resumeAt = resumeAt
         self.provenance = provenance

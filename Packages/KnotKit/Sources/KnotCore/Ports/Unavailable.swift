@@ -12,15 +12,19 @@ public struct UnavailableNoteStore: NoteStore {
 
     public func cursor() async throws(KnotError) -> StoreCursor { throw missing }
     public func changeSignals() -> AsyncStream<StoreCursor> { AsyncStream { $0.finish() } }
-    public func predictPlacement(_ request: AppendRequest) async throws(KnotError) -> AppendDecision { throw missing }
+    public func predictPlacement(_ request: AppendRequest, kind: SegmentKind, surface: CaptureSurface)
+        async throws(KnotError) -> AppendDecision
+    { throw missing }
+    public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult { throw missing }
     public func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt { throw missing }
     public func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
         throw missing
     }
     public func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt { throw missing }
     public func openCaptures() async throws(KnotError) -> [Capture] { throw missing }
+    public func capture(_ id: CaptureID) async throws(KnotError) -> Capture? { throw missing }
     public func note(_ id: NoteID) async throws(KnotError) -> NoteRecord? { throw missing }
-    public func segment(_ id: SegmentID) async throws(KnotError) -> Segment? { throw missing }
+    public func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead? { throw missing }
     public func asset(_ id: AssetID) async throws(KnotError) -> Asset? { throw missing }
     public func stream(after position: StreamPosition?, limit: Int) async throws(KnotError) -> StreamPage {
         throw missing
@@ -39,11 +43,13 @@ public struct UnavailableNoteStore: NoteStore {
     public func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor { throw missing }
     public func clearArrivalMarks(in note: NoteID) async throws(KnotError) { throw missing }
     public func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult { throw missing }
-    public func returnToFormerNote(_ segment: SegmentID) async throws(KnotError) -> MoveOutcome { throw missing }
+    public func returnToFormerNote(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveOutcome {
+        throw missing
+    }
     public func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> Segment {
         throw missing
     }
-    public func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID?) async throws(KnotError)
+    public func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
         -> Segment
     { throw missing }
     public func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError)
@@ -51,7 +57,8 @@ public struct UnavailableNoteStore: NoteStore {
     { throw missing }
     public func saveJob(_ job: Job) async throws(KnotError) { throw missing }
     public func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] { throw missing }
-    public func purge(before date: Date) async throws(KnotError) -> Int { throw missing }
+    public func purge(before date: Date) async throws(KnotError) -> PurgeResult { throw missing }
+    public func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset { throw missing }
 }
 
 /// An `AssetStore` that is not there yet.
@@ -85,6 +92,12 @@ public struct UnavailableRecorder: Recorder {
     }
     public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
         throw KnotError.portUnavailable
+    }
+    public func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
+        throw KnotError.portUnavailable.about(capture: recording.captureID)
+    }
+    public func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        throw KnotError.portUnavailable.about(capture: capture)
     }
 }
 
@@ -151,6 +164,8 @@ public struct UnavailableProcessingQueue: ProcessingQueue {
     public func enqueue(_ segment: SegmentID) async throws(KnotError) {
         throw KnotError.portUnavailable.with(.init(segmentID: segment))
     }
-    public func runUntilIdle() async {}
+    public func drain(using runner: any BackgroundRunner, progress: @escaping @Sendable (BackgroundProgress) -> Void)
+        async -> DrainResult
+    { .idle }
     public func jobs() -> AsyncStream<Job> { AsyncStream { $0.finish() } }
 }

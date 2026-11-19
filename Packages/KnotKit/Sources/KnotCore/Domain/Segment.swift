@@ -65,6 +65,12 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     public var deletedAt: Date?
     /// Local, never synced: rises each time the text changes.
     public var revision: Int64
+    /// The position of this segment among the pieces of a capture whose text ran past the
+    /// size limit: 0 for the first, which shares the capture's ID.
+    public var piece: Int
+    /// For a later piece, the first piece of its capture. The pieces of one capture share a
+    /// start, so `SegmentOrder` keeps them together and in position.
+    public var pieceOf: SegmentID?
 
     public init(
         id: SegmentID, noteID: NoteID, kind: SegmentKind, noteGeneration: Int = 0, origin: SegmentOrigin,
@@ -72,7 +78,8 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         rawTranscript: String? = nil, transcription: TranscriptionProvenance? = nil,
         cleanup: CleanupProvenance? = nil, processingOwner: DeviceID? = nil, ownerGeneration: Int = 0,
         arrivedAt: Date? = nil, state: SegmentState, assetID: AssetID? = nil, duration: Duration? = nil,
-        conflictOf: SegmentID? = nil, deletedAt: Date? = nil, revision: Int64 = 0
+        conflictOf: SegmentID? = nil, deletedAt: Date? = nil, revision: Int64 = 0, piece: Int = 0,
+        pieceOf: SegmentID? = nil
     ) throws(KnotError) {
         try Limits.checkSegmentText(text)
         if let rawTranscript { try Limits.checkSegmentText(rawTranscript) }
@@ -97,6 +104,8 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.conflictOf = conflictOf
         self.deletedAt = deletedAt
         self.revision = revision
+        self.piece = piece
+        self.pieceOf = pieceOf
     }
 
     /// Replaces the text and its origin. Text past the size limit is refused, never cut.
@@ -150,12 +159,14 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         try container.encodeIfPresent(conflictOf, forKey: .conflictOf)
         try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
         try container.encode(revision, forKey: .revision)
+        if piece != 0 { try container.encode(piece, forKey: .piece) }
+        try container.encodeIfPresent(pieceOf, forKey: .pieceOf)
     }
 
     enum CodingKeys: String, CodingKey {
         case id, noteID, kind, noteGeneration, origin, startedAt, endedAt, text, textOrigin, rawTranscript
         case transcription, cleanup, processingOwner, ownerGeneration, arrivedAt, state, assetID, duration
-        case conflictOf, deletedAt, revision
+        case conflictOf, deletedAt, revision, piece, pieceOf
     }
 
     /// Decodes a segment, and refuses one whose text or raw transcript is past the size
@@ -192,6 +203,8 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.conflictOf = try container.decodeIfPresent(SegmentID.self, forKey: .conflictOf)
         self.deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
         self.revision = try container.decode(Int64.self, forKey: .revision)
+        self.piece = try container.decodeIfPresent(Int.self, forKey: .piece) ?? 0
+        self.pieceOf = try container.decodeIfPresent(SegmentID.self, forKey: .pieceOf)
     }
 
     /// True for a segment that is neither deleted nor a conflict copy: one that counts as a

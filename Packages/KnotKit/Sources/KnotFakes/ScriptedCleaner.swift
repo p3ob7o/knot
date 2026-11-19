@@ -17,6 +17,7 @@
             var results: [Result<CleanupResult.Outcome, KnotError>] = []
             var titles: [String?] = []
             var delay: Duration = .zero
+            var longDelay: (delay: Duration, longerThan: Int)?
             var watchers: [UUID: AsyncStream<CleanupAvailability>.Continuation] = [:]
             var requests = 0
         }
@@ -49,6 +50,11 @@
         /// How long each request takes, so that a test can cancel one while it runs.
         public func setDelay(_ delay: Duration) { state.withLock { $0.delay = delay } }
 
+        /// How long a request takes for a transcript longer than `characters`, as a long one does.
+        public func setDelay(_ delay: Duration, forTranscriptsLongerThan characters: Int) {
+            state.withLock { $0.longDelay = (delay, characters) }
+        }
+
         public var requestCount: Int { state.withLock { $0.requests } }
 
         // MARK: The port
@@ -74,7 +80,8 @@
                 state.requests += 1
                 let result = state.results.isEmpty ? nil : state.results.removeFirst()
                 let title: String?? = state.titles.isEmpty ? .none : .some(state.titles.removeFirst())
-                return (state.availability, result, title, state.delay)
+                let delay = state.longDelay.flatMap { rawTranscript.count > $0.longerThan ? $0.delay : nil }
+                return (state.availability, result, title, delay ?? state.delay)
             }
             switch availability {
             case .available: break

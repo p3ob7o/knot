@@ -50,4 +50,28 @@ import Testing
             (error as? FixtureFailure)?.code == "fixture_missing"
         }
     }
+
+    @Test func aFileTheManifestDoesNotDescribeOrAManifestThatIsGoneFails() throws {
+        let copy = try copiedFixtures()
+        try Data("{}".utf8).write(to: copy.appending(path: "ink/unlisted.json"))
+        #expect {
+            try FixtureFiles.url("ink/unlisted.json", in: copy)
+        } throws: { error in
+            (error as? FixtureFailure)?.code == "fixture_missing"
+        }
+        try Data("not json".utf8).write(to: copy.appending(path: "manifest.json"))
+        #expect {
+            try FixtureFiles.url("ink/line.json", in: copy)
+        } throws: { error in
+            (error as? FixtureFailure)?.path == "Fixtures/manifest.json"
+        }
+        try FileManager.default.createDirectory(
+            at: copy.appending(path: "generated/audio"), withIntermediateDirectories: true)
+        try Data("RIFF".utf8).write(to: copy.appending(path: "generated/audio/clean.wav"))
+        #expect {
+            try FixtureFiles.url("generated/audio/clean.wav", in: copy)
+        } throws: { error in
+            (error as? FixtureFailure)?.path == "Fixtures/generated/manifest.json"
+        }
+    }
 }
