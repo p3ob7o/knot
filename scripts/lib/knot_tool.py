@@ -272,43 +272,54 @@ def cmd_ownership(package, base, allowed):
     paths, or the mechanical edits of a breaking contract change.
     """
     files = changed_files(base)
-    bad = []
     if package != "contract" and not os.path.exists(brief_path(package)):
         print(f"ownership: no brief for {package} in {BRIEFS}")
         return 1
     if package != "contract":
         owned, excluded, parts = owned_paths(package)
-    for path in files:
-        if any(matches(path, p) for p in allowed):
-            print(f"ownership: {path} is allowed by hand for this pull request")
-            continue
+
+    def refusal(path):
+        """Why the package may not change the path, or None when it may."""
         if package == "contract":
-            if not contract_owned(path):
-                bad.append((path, "is not a path that a contract branch changes"))
-            continue
+            return None if contract_owned(path) else "is not a path that a contract branch changes"
         if any(matches(path, p) for p in excluded):
-            bad.append((path, f"is excepted from what {package} owns"))
-            continue
+            return f"is excepted from what {package} owns"
         if any(matches(path, p) for p in owned):
-            continue
+            return None
         part = next((name for part_path, name in parts if part_path == path), None)
         if part:
             ok, why = inside_part(path, part, base)
-            if not ok:
-                bad.append((path, f"is owned by {package} only in its {part} step, and {why}"))
-            continue
+            return None if ok else f"is owned by {package} only in its {part} step, and {why}"
         owners = owners_of(path)
         if package == "WP-00" and not owners:
-            continue
+            return None
         if owners:
-            bad.append((path, f"is owned by {', '.join(owners)}, not {package}"))
-        else:
-            bad.append((path, "is owned by no brief. Ask the orchestrator, who owns it"))
+            return f"is owned by {', '.join(owners)}, not {package}"
+        return "is owned by no brief. Ask the orchestrator, who owns it"
+
+    bad, by_hand, unneeded = [], [], []
+    for path in files:
+        why = refusal(path)
+        allowance = next((p for p in allowed if matches(path, p)), None)
+        if why and allowance:
+            by_hand.append(path)
+        elif why:
+            bad.append((path, why))
+        elif allowance:
+            unneeded.append(path)
+    # An allowance that matched no changed path is a mistake in the gate's command.
+    unmatched = [p for p in allowed if not any(matches(path, p) for path in files)]
+    for path in by_hand:
+        print(f"ownership: allowed by hand: {path}")
+    for path in unneeded:
+        print(f"ownership: {path} needed no allowance: {package} owns it")
+    for pattern in unmatched:
+        print(f"ownership: --allow {pattern} matches no changed path")
     for path, why in bad:
         print(f"ownership: {path} {why}")
     print(f"ownership: {len(files)} changed paths, {len(bad)} outside what {package} owns, "
-          f"{sum(1 for path in files if any(matches(path, p) for p in allowed))} allowed by hand")
-    return 1 if bad else 0
+          f"{len(by_hand)} allowed by hand")
+    return 1 if bad or unmatched else 0
 
 
 # The gate's depth (docs/architecture.md §18). The first table that a changed path meets,

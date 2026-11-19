@@ -777,7 +777,11 @@ for step in $STEPS; do
     elif ((code == 0)); then
         PASSED=$((PASSED + 1))
         printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        [[ $step == ownership ]] && ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
+        if [[ $step == ownership ]]; then
+            ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
+            # The paths the orchestrator allowed by hand show on the console, not only in the log.
+            grep -E '^ownership: allowed by hand: ' "$log" | sed 's/^ownership: /        /' || true
+        fi
         [[ $step == package-test || $step == tsan || $step == soak || $step == ios-hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
