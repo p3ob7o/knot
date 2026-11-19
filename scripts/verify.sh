@@ -121,8 +121,10 @@ else
     [[ -n $TIER || -n $ONLY || -n $MODULE ]] || usage_fail "Name a tier, --only <step> or --module <name>."
     [[ -z $SKIP || $TIER == full ]] || usage_fail "--skip mac-ui belongs to --full. The gate refuses it."
     [[ -z $SEED || $TIER == soak ]] || usage_fail "--seed belongs to --soak."
-    [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || $ONLY == ownership ]] ||
-        usage_fail "--package and --branch belong to --gate, --full and --only ownership."
+    # The steps that read the package and the branch take them alone too, as the gate runs
+    # them.
+    [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || " ownership named-tests core-api " == *" $ONLY "* ]] ||
+        usage_fail "--package and --branch belong to --gate, --full, and --only ownership, named-tests or core-api."
     ((${#ALLOW[@]} == 0)) || [[ $TIER == gate || $ONLY == ownership ]] ||
         usage_fail "--allow belongs to --gate and --only ownership: the orchestrator allows a path by hand there."
     BASE=${BASE:-origin/main}
