@@ -59,6 +59,11 @@ public enum VoiceEvent: Hashable, Sendable {
     case cleaned
     /// The step cannot run now, or its job was found running at launch: back to waiting.
     case deferred
+    /// Speech is unavailable on this device, a final error here: the segment stays recorded,
+    /// kept with no text here, until another device takes the work.
+    case speechUnavailableHere
+    /// The audio cannot be read, a final error: the recording is kept, ready with no text.
+    case audioUnreadable
     /// The step failed for good, after its attempts.
     case stepFailed(ErrorCode)
     /// A person pressed Retry.
@@ -80,6 +85,8 @@ public enum VoiceMachine {
         case (.recorded, .startTranscribing): return .transcribing
         case (.transcribing, .transcribed(let hasWords)): return hasWords ? .transcribed : .ready
         case (.transcribing, .deferred): return .recorded
+        case (.transcribing, .speechUnavailableHere): return .recorded
+        case (.transcribing, .audioUnreadable): return .ready
         case (.transcribing, .stepFailed(let code)): return .failed(.transcribe, code)
         case (.transcribed, .startCleaning): return .cleaning
         case (.transcribed, .keepRawTranscript), (.cleaning, .keepRawTranscript): return .ready

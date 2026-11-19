@@ -129,8 +129,10 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
         let recording = segment(
             1, note: roofNote, kind: .voice, start: at("10:00"), end: at("10:01"), text: "", state: .voice(.recorded),
             owner: otherDevice)
-        #expect(VisibleState.of(recording, thisDevice: thisDevice) == .savedTextBeingMadeElsewhere)
-        #expect(VisibleState.of(recording, thisDevice: otherDevice) == .savedTextOnItsWay)
+        #expect(
+            VisibleState.of(recording, thisDevice: thisDevice, speechAvailableHere: true)
+                == .savedTextBeingMadeElsewhere)
+        #expect(VisibleState.of(recording, thisDevice: otherDevice, speechAvailableHere: true) == .savedTextOnItsWay)
     }
 
     @Test("A20: edited beats cleaned beats raw")

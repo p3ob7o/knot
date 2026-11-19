@@ -232,7 +232,7 @@ private let noteA: NoteID = id(201)
             1, note: noteA, kind: .voice, start: at("09:00"), end: at("09:01"), text: row.text, state: row.state,
             owner: row.owner)
         voice.kind = .voice
-        #expect(VisibleState.of(voice, thisDevice: thisDevice) == row.expected)
+        #expect(VisibleState.of(voice, thisDevice: thisDevice, speechAvailableHere: true) == row.expected)
     }
 
     @Test func theNamesAreThoseOfTheProductSpec() {
@@ -295,10 +295,44 @@ private let noteA: NoteID = id(201)
         var unknownText = base
         unknownText.textOrigin = .unknown("summarised")
         for segment in [unknownState, unknownKind, unknownOrigin, unknownText] {
-            #expect(VisibleState.of(segment, thisDevice: thisDevice) == .madeByNewerKnot)
+            #expect(VisibleState.of(segment, thisDevice: thisDevice, speechAvailableHere: true) == .madeByNewerKnot)
         }
         #expect(VisibleState.madeByNewerKnot.rawValue == "made_by_newer_knot")
         #expect(VisibleState.madeByNewerKnot.name == "Made by a newer Knot")
         #expect(VisibleState.allCases.contains(.madeByNewerKnot))
+    }
+}
+
+@Suite struct NoTextVisibleStateTests {
+    static func voice(_ state: SegmentState, text: String = "", owner: DeviceID? = thisDevice) -> Segment {
+        segment(
+            1, note: id(9), kind: .voice, start: at("09:00"), end: at("09:01"), text: text, state: state, owner: owner)
+    }
+
+    @Test func threeWaysToKeepARecordingWithNoText() throws {
+        // No words recognised: ready with empty text.
+        #expect(try VoiceMachine.reduce(.transcribing, .transcribed(hasWords: false)) == .ready)
+        #expect(
+            VisibleState.of(Self.voice(.voice(.ready)), thisDevice: thisDevice, speechAvailableHere: true)
+                == .keptNoText)
+        // Audio that cannot be read: final, ready with empty text.
+        #expect(try VoiceMachine.reduce(.transcribing, .audioUnreadable) == .ready)
+        // Speech unavailable on this device: the segment stays recorded, kept with no text
+        // here, until another device takes the work.
+        #expect(try VoiceMachine.reduce(.transcribing, .speechUnavailableHere) == .recorded)
+        #expect(
+            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechAvailableHere: false)
+                == .keptNoText)
+        #expect(
+            VisibleState.of(
+                Self.voice(.voice(.recorded), owner: nil), thisDevice: thisDevice, speechAvailableHere: false)
+                == .keptNoText)
+        #expect(
+            VisibleState.of(
+                Self.voice(.voice(.recorded), owner: otherDevice), thisDevice: thisDevice, speechAvailableHere: false)
+                == .savedTextBeingMadeElsewhere)
+        #expect(
+            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechAvailableHere: true)
+                == .savedTextOnItsWay)
     }
 }

@@ -46,7 +46,7 @@ private let failure = KnotError.transcriptionFailed.code
     static let events: [VoiceEvent] = [
         .stop, .discardAccidental, .killed, .recoveryFinished, .transferred, .ingested, .startTranscribing,
         .transcribed(hasWords: true), .transcribed(hasWords: false), .startCleaning, .keepRawTranscript, .cleaned,
-        .deferred, .stepFailed(failure), .retry,
+        .deferred, .stepFailed(failure), .retry, .speechUnavailableHere, .audioUnreadable,
     ]
     static let legal: [(VoiceState, VoiceEvent, VoiceState)] = [
         (.recording, .stop, .recorded),
@@ -60,6 +60,9 @@ private let failure = KnotError.transcriptionFailed.code
         // A recording with no recognised words is ready with empty text.
         (.transcribing, .transcribed(hasWords: false), .ready),
         (.transcribing, .deferred, .recorded),
+        // Final errors: speech unavailable here, and audio that cannot be read.
+        (.transcribing, .speechUnavailableHere, .recorded),
+        (.transcribing, .audioUnreadable, .ready),
         (.transcribing, .stepFailed(failure), .failed(.transcribe, failure)),
         (.transcribed, .startCleaning, .cleaning),
         // No model, or cleanup off: the raw transcript is the text.

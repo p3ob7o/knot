@@ -94,7 +94,11 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
     /// transcript exists the segment is ready, though cleanup may still replace the raw text
     /// once. A recording with no words, or whose audio cannot be read, is kept with no text:
     /// a final state, not an error.
-    public static func of(_ segment: Segment, thisDevice: DeviceID) -> VisibleState? {
+    ///
+    /// A recording whose work belongs to this device, where speech is unavailable, is kept
+    /// with no text here until another device takes the work: no words recognised, audio that
+    /// cannot be read and speech unavailable all show as "Kept, no text".
+    public static func of(_ segment: Segment, thisDevice: DeviceID, speechAvailableHere: Bool) -> VisibleState? {
         if segment.kind.isUnknown || segment.origin.isUnknown || segment.textOrigin.isUnknown
             || segment.state.isUnknown
         {
@@ -109,7 +113,8 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
             case .recording, .delivered: return .savedTextOnItsWay
             case .recovered, .recorded, .transcribing:
                 let elsewhere = segment.processingOwner.map { $0 != thisDevice } ?? false
-                return elsewhere ? .savedTextBeingMadeElsewhere : .savedTextOnItsWay
+                if elsewhere { return .savedTextBeingMadeElsewhere }
+                return speechAvailableHere ? .savedTextOnItsWay : .keptNoText
             case .transcribed, .cleaning:
                 return .ready
             case .ready:
