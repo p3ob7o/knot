@@ -72,6 +72,36 @@ import Testing
         #expect(throws: KnotError.inboxItemUnreadable) { try CaptureManifest.decode(Data(twice.utf8)) }
     }
 
+    @Test(arguments: [
+        "01", #""\q""#, "[1,]", "{\"a\":1,}", "+1", "1.", ".5", "1e", "0x10", "tru", "nul", "NaN", "-", "[1 2]",
+        "{\"a\" 1}", "{1:2}", #""\u12""#, "\"a\u{0001}b\"", "[", "{", "\"open", "1-2",
+    ])
+    func anUnknownValueThatIsNotJSONMakesTheManifestUnreadable(value: String) {
+        do {
+            _ = try CaptureManifest.decode(Self.golden(replacing: "future", with: value))
+            Issue.record("A manifest that is not valid JSON was read.")
+        } catch {
+            #expect(error.code == KnotError.inboxItemUnreadable.code)
+        }
+    }
+
+    @Test(arguments: [
+        "0", "-0", "12345678901234567890123456789012345678901234567890", "1.5e-300", "-2E+5", #""é\n\"""#, "true",
+        "false", "null", "[]", "{}", "[1, {\"a\": [null, \"x\"]}]", " { \"b\" : [ 1 , 2 ] } ",
+    ])
+    func anUnknownValueThatIsJSONIsKept(value: String) throws {
+        let manifest = try CaptureManifest.decode(Self.golden(replacing: "future", with: value))
+        #expect(manifest.unknownFields["future"] == value.trimmingCharacters(in: .whitespaces))
+        #expect(try CaptureManifest.decode(manifest.encoded()) == manifest)
+    }
+
+    @Test func nestingPastTheCapIsRefusedNotRecursedThrough() throws {
+        let deep = String(repeating: "[", count: 1_000) + String(repeating: "]", count: 1_000)
+        #expect(throws: KnotError.self) { try CaptureManifest.decode(Self.golden(replacing: "future", with: deep)) }
+        let shallow = String(repeating: "[", count: 10) + String(repeating: "]", count: 10)
+        _ = try CaptureManifest.decode(Self.golden(replacing: "future", with: shallow))
+    }
+
     @Test func anUnknownPlacementIsANewerKnotsAndTheFileIsKept() {
         let data = Self.golden(replacing: "placement", with: #""pinned:top""#)
         #expect(throws: KnotError.inboxItemNewerVersion.about(capture: Self.capture)) {
