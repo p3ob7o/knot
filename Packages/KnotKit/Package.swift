@@ -63,6 +63,9 @@ let package = Package(
         .library(name: "KnotAgent", targets: ["KnotAgent"]),
         .library(name: "KnotApp", targets: ["KnotApp"]),
         .library(name: "KnotFakes", targets: ["KnotFakes"]),
+        // For the contract suites that run only hosted in the app in the iOS Simulator
+        // (docs/architecture.md §5): the Knot-iOS-Tests target links it. No app links it.
+        .library(name: "KnotTestSupport", targets: ["KnotTestSupport"]),
         .library(name: "KnotUIPreviews", targets: ["KnotUIPreviews"]),
         .executable(name: "knot", targets: ["knot"]),
         .executable(name: "knot-eval", targets: ["knot-eval"]),

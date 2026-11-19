@@ -351,6 +351,15 @@ SOAK = [
     "Packages/KnotKit/Sources/KnotApp/", "Packages/KnotKit/Sources/KnotSoakChild/",
     "Packages/KnotKit/Tests/KnotSoak/", "Packages/KnotKit/Package.resolved",
 ]
+# The tests hosted in the iOS app run where the diff reaches a module whose contract suite
+# runs only there (docs/architecture.md §5): KnotAudio for RecordingStateStore, KnotInk for
+# InkRecogniser, and the iOS app for RecordingActivity.
+HOSTED = [
+    "Packages/KnotKit/Sources/KnotAudio/", "Packages/KnotKit/Sources/KnotInk/",
+    "Packages/KnotKit/Sources/KnotTestSupport/", "Packages/KnotKit/Sources/KnotFakes/",
+    "Packages/KnotKit/Tests/KnotAudioTests/", "Packages/KnotKit/Tests/KnotInkTests/",
+    "Apps/iOS/", "Packages/KnotKit/Package.swift", "project.yml",
+]
 # Mac UI tests run where the diff reaches the Mac app or KnotUI.
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
@@ -388,13 +397,15 @@ def classify(files, base="origin/main"):
         if "grdb" in git("diff", "--unified=0", merge_base, "--", "Packages/KnotKit/Package.swift").lower():
             soak = True
     mac_ui = any(any(path.startswith(p) or path == p for p in MAC_UI) for path in files)
-    return depth, reasons, soak, mac_ui
+    hosted = any(any(path.startswith(p) or path == p for p in HOSTED) for path in files)
+    return depth, reasons, soak, mac_ui, hosted
 
 
 def cmd_depth(base):
     files = changed_files(base)
-    depth, reasons, soak, mac_ui = classify(files, base)
+    depth, reasons, soak, mac_ui, hosted = classify(files, base)
     print(f"depth={depth}")
+    print(f"hosted={'1' if hosted else '0'}")
     print(f"soak={'1' if soak else '0'}")
     print(f"mac_ui={'1' if mac_ui else '0'}")
     print(f"changed={len(files)}")

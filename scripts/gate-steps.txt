@@ -29,6 +29,7 @@ contract-two-targets	required	WP-01	A contract suite in KnotTestSupport runs fro
 self-test	required	WP-01	The scripts' self-test.
 apps	required	WP-01	Every app builds: the iOS app with the Watch app and both extensions, and the Mac app with knot-dev.
 packaging	required	WP-01	The packaging proofs of docs/plan/WP-01.md, with Release binaries free of KnotFakes.
+ios-hosted	required	WP-01	The tests hosted in the iOS app in the iPhone simulator: the contract suites that run only there. At the leaf depth, where the diff reaches KnotAudio, KnotInk or the iOS app.
 launch	required	WP-01	The UI tests on the iPhone, iPad and Watch simulators, and the Mac app's window.
 mac-ui	pending	G1: the owner enables Automation Mode	Mac UI tests, on the exclusive slot, where the diff reaches the Mac app or KnotUI.
 soak	pending	WP-06	The capture ledger soak, where docs/architecture.md §17 asks for it.

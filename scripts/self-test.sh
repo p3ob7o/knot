@@ -117,6 +117,8 @@ assert k.classify(["Something/New.txt"])[0] == "everything"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[2] is True       # the soak
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[2] is False
 assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True                  # Mac UI tests
+assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
+assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[4] is False
 assert k.matches("scripts/verify.sh", "scripts/") and not k.matches("scriptsx/a", "scripts/")
 # Every row of a brief's start table is a pull request, notes included (blocker 1 of PR 20).
 assert k.plan_rows("WP-14") == ["Proof step", "1"], k.plan_rows("WP-14")

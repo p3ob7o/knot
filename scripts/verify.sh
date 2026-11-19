@@ -43,15 +43,15 @@ done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging launch mac-ui soak perf tsan model-report"
+contract-two-targets self-test apps packaging ios-hosted launch mac-ui soak perf tsan model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging launch mac-ui"
+contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
         package-build | package-test | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
-        launch) echo "--simulators" ;;
+        launch | ios-hosted) echo "--simulators" ;;
         mac-ui) echo "--mac-ui" ;;
         perf) echo "--all" ;;
         *) echo "none" ;;
@@ -469,6 +469,23 @@ step_packaging() {
     ((failed == 0))
 }
 
+# The tests hosted in the iOS app, in the worktree's iPhone simulator: the contract suites
+# that can run only there (docs/architecture.md §5). It holds a simulator slot.
+step_ios_hosted() {
+    local log="$KNOT_LOGS/verify-ios-hosted-tests.log" iphone
+    : >"$log"
+    "$KNOT_SCRIPTS/sim.sh" ensure
+    iphone="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
+    trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
+    knot_generate_project
+    xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -only-testing:Knot-iOS-Tests test
+    grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5
+    grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
+        echo "No hosted test ran."
+        return 1
+    }
+}
+
 # The three apps launch and show the placeholder: the UI tests on the iPhone, the iPad and
 # the Watch simulators, a screenshot of each, and the Mac app's window. It holds a
 # simulator slot, which limits how many sets are booted at once.
@@ -658,12 +675,15 @@ else
             DEPTH="$(printf '%s\n' "$depth_out" | sed -n 's/^depth=//p')"
             gate_soak="$(printf '%s\n' "$depth_out" | sed -n 's/^soak=//p')"
             gate_mac_ui="$(printf '%s\n' "$depth_out" | sed -n 's/^mac_ui=//p')"
+            gate_hosted="$(printf '%s\n' "$depth_out" | sed -n 's/^hosted=//p')"
             reason="$(printf '%s\n' "$depth_out" | sed -n 's/^reason=//p')"
             common="doctor plan format ownership core-api package-build named-tests pins lint team-id links fixtures"
             case $DEPTH in
                 documents) STEPS="doctor plan links ownership named-tests" ;;
-                leaf) STEPS="$common package-test contract-two-targets self-test apps launch" ;;
-                everything) STEPS="$common package-test contract-two-targets self-test apps packaging launch" ;;
+                leaf)
+                    STEPS="$common package-test contract-two-targets self-test apps launch"
+                    [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
+                everything) STEPS="$common package-test contract-two-targets self-test apps packaging ios-hosted launch" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
@@ -739,7 +759,7 @@ for step in $STEPS; do
         PASSED=$((PASSED + 1))
         printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
         [[ $step == ownership ]] && ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
-        [[ $step == package-test || $step == tsan || $step == soak ]] && count_tests "$log"
+        [[ $step == package-test || $step == tsan || $step == soak || $step == ios-hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else
