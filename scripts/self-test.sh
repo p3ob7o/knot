@@ -15,6 +15,8 @@ FAILED=0
 pass() { printf 'ok    %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAILED=1; }
 scratch="$(mktemp -d)"
+# The folder is this script's own, from mktemp, so it removes it at the end.
+trap 'rm -rf "$scratch"' EXIT
 
 # 1. A slot is released when its holder is killed.
 slots="$scratch/slots"
@@ -142,11 +144,38 @@ else
     fail "the gate's helper does not read the plan as it states it"
 fi
 
-# 5. A copied file whose name ends in " 2" is caught by the lint's rule.
-if python3 -I -c 'import re, sys; sys.exit(0 if re.search(r" 2(\.[^/.]+)?$", "Store 2.swift") else 1)'; then
-    pass "the lint's rule matches a file whose name ends in \" 2\""
+# 5. The lint catches every case of its fixture, scripts/lint-cases/Cases.swift: each
+#    "expect: <rule>" line must be answered by a finding of that rule on the next line. The
+#    fixture is linted from a folder named "Copies 2", as if it sat in the iOS widget
+#    extension, whose manifest declares no file timestamps, so the folder's name and the
+#    required-reason rule are tested too.
+copies="$scratch/Copies 2"
+mkdir -p "$copies"
+cp "$KNOT_ROOT/scripts/lint-cases/Cases.swift" "$copies/Cases.swift"
+python3 -I -B "$KNOT_ROOT/scripts/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
+    --as Apps/Extensions/Widgets-iOS/Sources/ >"$scratch/lint.out" || true
+if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
+import re, sys
+fixture, output = sys.argv[1], open(sys.argv[2]).read()
+found = {(int(m.group(1)), m.group(2)) for m in re.finditer(r":(\d+): \[([\w-]+)\]", output)}
+expected = []
+for number, line in enumerate(open(fixture), 1):
+    m = re.match(r"^// expect: ([\w-]+)$", line.strip())
+    if m:
+        expected.append((number + 1, m.group(1)))
+missed = [case for case in expected if case not in found]
+copy = "[copy-file]" in output
+for number, rule in missed:
+    print(f"      missed: line {number}, {rule}")
+if not copy:
+    print('      missed: the folder named "Copies 2"')
+print(f"      caught {len(expected) - len(missed) + (1 if copy else 0)} of {len(expected) + 1} cases")
+sys.exit(1 if missed or not copy else 0)
+PY
+then
+    pass "the lint catches every case of its fixture"
 else
-    fail "the lint's rule misses a file whose name ends in \" 2\""
+    fail "the lint misses cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
 fi
 
 if ((FAILED)); then

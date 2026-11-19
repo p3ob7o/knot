@@ -102,6 +102,18 @@ A failed step names its log in `.build/logs/` and the command that reruns only t
 
 **The nightly run.** `scripts/nightly.sh`, on a checkout of `main`, runs `--full`, the package tests under Thread Sanitizer, the soak with a fresh seed, the launches on the iOS 27.0 runtime, and a report of models that changed with an update of the system. `.github/workflows/nightly.yml` runs the Thread Sanitizer part on a hosted runner too.
 
+**What the lint catches, and what it does not.** A pass of the lint is not proof that Knot logs no note text and reaches no host. It reads the Swift sources line by line, joining a call that runs over several lines, and it catches:
+
+- a log call, on any receiver, with an interpolated value that states no `privacy:`, checked for each value; `os_log` and `NSLog`; `print` in a library;
+- `privacy: .public` on a value whose name is not an ID, a count, a code, a duration or a state;
+- `UserDefaults.standard`, `UserDefaults()` and a `UserDefaults` typed as `.standard`; `@AppStorage` without a store; an autosave name without `v1.`;
+- `URLSession`, `URLRequest`, the `NW` connection, listener, browser and endpoint types, `CFStream`, `CFSocket` and any `http://` or `https://` in code;
+- `eraseDatabaseOnSchemaChange`; a concurrency escape beyond `scripts/concurrency-escapes.txt`;
+- a required-reason API, among them the file-timestamp resource keys, `stat`, `fstat` and `lstat`, without its reason in the manifest of each target that links it;
+- a file or folder whose name ends in " 2".
+
+It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. `knot-lint: allow network` or `knot-lint: allow logged-text` on a line lets that line pass, and the review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule, and the self-test fails when the lint misses one.
+
 ## The other scripts
 
 | Command | Does |

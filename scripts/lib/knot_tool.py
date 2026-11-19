@@ -8,7 +8,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
-    python3 scripts/lib/knot_tool.py lint
+    python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/]
     python3 scripts/lib/knot_tool.py team-id --team-config <path>
     python3 scripts/lib/knot_tool.py links
     python3 scripts/lib/knot_tool.py status [--write]
@@ -480,7 +480,8 @@ REQUIRED_REASON = {
     "NSPrivacyAccessedAPICategoryUserDefaults": r"\bUserDefaults\b|@AppStorage\b|\bNSUserDefaults\b",
     "NSPrivacyAccessedAPICategoryFileTimestamp":
         r"\bcreationDate\b|\bmodificationDate\b|contentModificationDate|attributesOfItem|\bfileModificationDate\b"
-        r"|\bgetattrlist\(|(?<![\w.])l?stat\(",
+        r"|\b(?:creation|contentModification|attributeModification|contentAccess)DateKey\b"
+        r"|\bgetattrlist\(|(?<![\w.])[fl]?stat\(",
     "NSPrivacyAccessedAPICategorySystemBootTime": r"\bsystemUptime\b|\bmach_absolute_time\(",
     "NSPrivacyAccessedAPICategoryDiskSpace":
         r"volumeAvailableCapacity|volumeTotalCapacity|systemFreeSize|\bsystemSize\b|\bstatv?fs\(",
@@ -502,15 +503,72 @@ MANIFESTS = {
 
 
 def code_lines(path):
-    """The lines of a Swift file, with comments blanked, as (number, line)."""
+    """The statements of a Swift file, with comments blanked, as (first line number, text). A
+    call that runs over several lines is joined into one statement, by its parentheses."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
+    start, parts, depth = None, [], 0
     for number, line in enumerate(text.splitlines(), 1):
-        stripped = line.strip()
-        if stripped.startswith("//"):
-            continue
-        yield number, re.sub(r"\s//.*$", "", line)
+        if line.strip().startswith("//"):
+            line = ""
+        line = re.sub(r"\s//.*$", "", line)
+        if start is None:
+            if not line.strip():
+                continue
+            start = number
+        parts.append(line.strip())
+        depth += line.count("(") - line.count(")")
+        if depth <= 0:
+            yield start, " ".join(parts)
+            start, parts, depth = None, [], 0
+    if start is not None:
+        yield start, " ".join(parts)
+
+
+LOG_CALL = re.compile(r"\.\s*(?:debug|info|notice|error|fault|warning|trace|critical|log)\s*\(\s*(?:level:[^,]*,\s*)?\"")
+# A value that `privacy: .public` may show: an ID, a count, a code, a duration or a state.
+PUBLIC_VALUE = re.compile(r"(?i)(?:id|ids|count|code|codes|duration|seconds|milliseconds|kind|state|status|version"
+                          r"|build|step|attempts?|deaths|index|number|bytes|size|reason|rawValue)$")
+
+
+def interpolations(text):
+    """The expressions of every \\( … ) in a statement, with balanced parentheses."""
+    found, i = [], 0
+    while True:
+        i = text.find("\\(", i)
+        if i < 0:
+            return found
+        depth, j = 1, i + 2
+        while j < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[j], 0)
+            j += 1
+        found.append(text[i + 2:j - 1])
+        i = j
+
+
+def log_problems(statement):
+    """Why a statement logs too much, or nothing. The lint cannot know what a value holds: it
+    checks that every interpolated value of a log line states its privacy, and that a value
+    shown as public is named like an ID, a count or a code."""
+    found = []
+    if re.search(r"(?<![\w.])os_log\s*\(|(?<![\w.])NSLog\s*\(", statement):
+        found.append("os_log and NSLog cannot state each value's privacy: use Logger")
+    if LOG_CALL.search(statement):
+        for expression in interpolations(statement):
+            if "privacy:" not in expression:
+                found.append(f"the logged value \\({expression.strip()}) states no privacy")
+            elif re.search(r"privacy:\s*\.public\b", expression):
+                value = expression.split(",")[0].strip()
+                last = re.split(r"[.\s]", value)[-1]
+                if not PUBLIC_VALUE.search(last):
+                    found.append(f"\\({value}) is shown as public, and its name is not an ID, a count or a code")
+    return found
+
+
+def copy_problem(path):
+    """A path with a component whose name ends in " 2", the mark of a cloud provider's copy."""
+    return any(re.search(r" 2(\.[^/.]+)?$", part) for part in path.split("/"))
 
 
 def swift_files():
@@ -546,20 +604,24 @@ def cmd_team_id(team_config):
     return 1 if found else 0
 
 
-def cmd_lint():
+def cmd_lint(only=None, as_prefix=None):
+    """The gate's lint (docs/architecture.md §18). With `only`, it reads those files alone;
+    with `as_prefix`, it judges each of them as if it sat in that folder, which is how the
+    self-test runs it on its fixture."""
     problems = []
 
     def problem(path, number, rule, message):
         problems.append(f"lint: {path}:{number}: [{rule}] {message}")
 
-    files = swift_files()
+    files = only if only else swift_files()
     escapes = {}
     used = {}
     for path in files:
-        library = path.startswith("Packages/KnotKit/Sources/") and not path.startswith(LIBRARY_EXEMPT)
+        place = (as_prefix + os.path.basename(path)) if as_prefix else path
+        library = place.startswith("Packages/KnotKit/Sources/") and not place.startswith(LIBRARY_EXEMPT)
         for number, line in code_lines(path):
             allowed = re.findall(r"knot-lint: allow ([\w-]+)", line)
-            if re.search(r"UserDefaults\s*\.\s*standard|UserDefaults\(\)", line):
+            if re.search(r"UserDefaults\s*\.\s*standard|UserDefaults\(\)|:\s*UserDefaults\s*=\s*\.standard\b", line):
                 problem(path, number, "standard-defaults", "v1 keeps its settings in a named defaults suite")
             if "@AppStorage(" in line and "store:" not in line:
                 problem(path, number, "app-storage", "@AppStorage needs a named store")
@@ -568,19 +630,19 @@ def cmd_lint():
                     problem(path, number, "autosave-name", f'the autosave name "{name}" needs the v1. prefix')
             if "eraseDatabaseOnSchemaChange" in line:
                 problem(path, number, "erase-database", "eraseDatabaseOnSchemaChange erases the store")
-            if re.search(r"\bURLSession\b|\bNWConnection\b|\bURLRequest\b|\bCFStream|https?://", line) \
-                    and "network" not in allowed:
+            if re.search(r"\bURLSession\b|\bURLRequest\b|\bNW(?:Connection|Listener|Browser|Endpoint)\b|\bnw_(?:connection|listener)_"
+                         r"|\bCFStream|\bCFSocket|https?://", line) and "network" not in allowed:
                 problem(path, number, "network", "Knot contacts no host but CloudKit and Apple's model downloads")
-            if re.search(r"\b(?:logger|log|Logger\([^)]*\))\s*\.\s*(?:debug|info|notice|error|fault|warning|trace|critical|log)\(", line) \
-                    and "\\(" in line and "privacy:" not in line and "logged-text" not in allowed:
-                problem(path, number, "logged-text", "every interpolated value in a log line states its privacy")
-            if library and re.search(r"(?<![\w.])(?:print|NSLog|debugPrint)\(", line) and "logged-text" not in allowed:
-                problem(path, number, "logged-text", "a library logs through Logger, never print or NSLog")
+            if "logged-text" not in allowed:
+                for why in log_problems(line):
+                    problem(path, number, "logged-text", why)
+                if library and re.search(r"(?<![\w.])(?:print|debugPrint)\(", line):
+                    problem(path, number, "logged-text", "a library logs through Logger, never print")
             for escape in ("@unchecked Sendable", "nonisolated(unsafe)", "@preconcurrency"):
                 escapes[(path, escape)] = escapes.get((path, escape), 0) + line.count(escape)
             for category, pattern in REQUIRED_REASON.items():
                 if re.search(pattern, line):
-                    used.setdefault(category, []).append((path, number))
+                    used.setdefault(category, []).append((path, place, number))
 
     # Concurrency escapes stay on a reviewed list: path, escape, count, reason.
     reviewed = {}
@@ -602,17 +664,18 @@ def cmd_lint():
             declared = {entry["NSPrivacyAccessedAPIType"] for entry in plistlib.load(f).get("NSPrivacyAccessedAPITypes", [])
                         if entry.get("NSPrivacyAccessedAPITypeReasons")}
         for category, places in used.items():
-            for path, number in places:
-                module = module_of(path)
-                in_reach = any(path.startswith(r) for r in reach if r.endswith("/")) or \
-                    (module is not None and not path.startswith(LIBRARY_EXEMPT) and ("*" in reach or module in reach))
+            for path, place, number in places:
+                module = module_of(place)
+                in_reach = any(place.startswith(r) for r in reach if r.endswith("/")) or \
+                    (module is not None and not place.startswith(LIBRARY_EXEMPT) and ("*" in reach or module in reach))
                 if in_reach and category not in declared:
                     problem(path, number, "required-reason", f"{category} has no reason in {manifest}")
 
-    # A file whose name ends in " 2", the mark of a cloud provider's copy.
-    for path in lines(git("ls-files")) + lines(git("ls-files", "--others", "--exclude-standard")):
-        if re.search(r" 2(\.[^/.]+)?$", os.path.basename(path)):
-            problem(path, "-", "copy-file", 'a file whose name ends in " 2"')
+    # A path with a component whose name ends in " 2", the mark of a cloud provider's copy.
+    paths = only if only else lines(git("ls-files")) + lines(git("ls-files", "--others", "--exclude-standard"))
+    for path in paths:
+        if copy_problem(path):
+            problem(path, "-", "copy-file", 'a file or folder whose name ends in " 2"')
 
     for line in problems:
         print(line)
@@ -764,7 +827,8 @@ def main(argv):
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
     if command == "lint":
-        return cmd_lint()
+        only = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--files"]
+        return cmd_lint(only or None, option(args, "--as"))
     if command == "team-id":
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
