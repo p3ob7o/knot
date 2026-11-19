@@ -1,0 +1,23 @@
+# The `knot` command-line tool, embedded in the Mac app. A development build names it
+# knot-dev. Its source is the package's `knot` executable target, compiled here so that
+# the tool can carry its own sandbox entitlements and an Info.plist embedded in its
+# binary, which a tool started from Terminal needs (docs/architecture.md §15, SP-3).
+targets:
+  knot-tool:
+    type: tool
+    platform: macOS
+    templates: [KnotProduct]
+    sources:
+      - path: ../../../Packages/KnotKit/Sources/knot/main.swift
+    settings:
+      base:
+        PRODUCT_NAME: $(KNOT_TOOL_NAME)
+        PRODUCT_MODULE_NAME: knot
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).cli
+        INFOPLIST_FILE: Apps/macOS/Tool/Info.plist
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_ENTITLEMENTS: Apps/macOS/Tool/knot-$(KNOT_SIGNING).entitlements
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: KnotKit
+        products: [KnotAgent, KnotCore, KnotExport, KnotStore]

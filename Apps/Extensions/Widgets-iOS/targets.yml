@@ -1,0 +1,23 @@
+# The iOS widget extension.
+targets:
+  Widgets-iOS:
+    type: app-extension
+    platform: iOS
+    templates: [KnotProduct]
+    sources:
+      - Sources
+      - Assets.xcassets
+      - PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_NAME: Widgets-iOS
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).widgets
+        INFOPLIST_FILE: Apps/Extensions/Widgets-iOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/Extensions/Widgets-iOS/Widgets-iOS-$(KNOT_SIGNING).entitlements
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: KnotKit
+        products: [KnotCore, KnotIntents, KnotUI]
+      - sdk: SwiftUI.framework
+      - sdk: WidgetKit.framework

@@ -1,0 +1,7 @@
+# The Xcode for the merge gate and the archive: its version and its build, on the first
+# line that is not a comment. Every script sets DEVELOPER_DIR from this file and checks it.
+#
+# "pending" until the owner installs the release Xcode 27 beside the beta at gate G1.
+# Then run: scripts/bootstrap.sh --pin-xcode /Applications/Xcode.app
+# Until then, name an Xcode for each run: KNOT_XCODE=/Applications/Xcode-beta.app
+pending

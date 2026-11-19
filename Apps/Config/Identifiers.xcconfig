@@ -1,0 +1,42 @@
+// Every identifier Knot uses, in one place (docs/plan/WP-01.md).
+//
+// The milestone set reuses the retired app's bundle ID, by the owner's decision of
+// 2026-11-19 (docs/architecture.md §7). Every build that is not a milestone build uses the
+// development set: agent builds, PR builds, spikes and tests. So a development build can
+// open neither the owner's store nor the real iCloud container.
+//
+// Code reads the group and container identifiers from the Info.plist (KnotAppGroup,
+// KnotCloudContainer), never from a constant of its own.
+
+KNOT_BUNDLE_ID_milestone = com.p3ob7o.knot
+KNOT_BUNDLE_ID_dev = com.p3ob7o.knot.dev
+
+KNOT_APP_GROUP_milestone = group.com.p3ob7o.knot
+KNOT_APP_GROUP_dev = group.com.p3ob7o.knot.dev
+
+// The Mac's app-group form stays open until SP-3 reports: a bare executable cannot carry
+// the provisioning profile that a `group.` app group needs, so the Team-ID form
+// ($(TeamIdentifierPrefix)com.p3ob7o.knot) may be the only route for the `knot` tool.
+KNOT_MAC_APP_GROUP_milestone = $(KNOT_APP_GROUP_milestone)
+KNOT_MAC_APP_GROUP_dev = $(KNOT_APP_GROUP_dev)
+
+KNOT_CLOUD_CONTAINER_milestone = iCloud.com.p3ob7o.knot
+KNOT_CLOUD_CONTAINER_dev = iCloud.com.p3ob7o.knot.dev
+
+// A development build installs the tool as knot-dev (docs/architecture.md §15).
+KNOT_TOOL_NAME_milestone = knot
+KNOT_TOOL_NAME_dev = knot-dev
+
+KNOT_DISPLAY_NAME_milestone = Knot
+KNOT_DISPLAY_NAME_dev = Knot Dev
+
+KNOT_BUNDLE_ID = $(KNOT_BUNDLE_ID_$(KNOT_FLAVOUR))
+KNOT_APP_GROUP = $(KNOT_APP_GROUP_$(KNOT_FLAVOUR))
+KNOT_MAC_APP_GROUP = $(KNOT_MAC_APP_GROUP_$(KNOT_FLAVOUR))
+KNOT_CLOUD_CONTAINER = $(KNOT_CLOUD_CONTAINER_$(KNOT_FLAVOUR))
+KNOT_TOOL_NAME = $(KNOT_TOOL_NAME_$(KNOT_FLAVOUR))
+KNOT_DISPLAY_NAME = $(KNOT_DISPLAY_NAME_$(KNOT_FLAVOUR))
+
+// A milestone build carries a version above 0.2.0, which is the retired app's.
+KNOT_MARKETING_VERSION = 0.3.0
+KNOT_BUILD_NUMBER = 1

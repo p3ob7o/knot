@@ -1,0 +1,39 @@
+# The Mac app, with the `knot` tool embedded in it.
+targets:
+  Knot-macOS:
+    type: application
+    platform: macOS
+    templates: [KnotProduct]
+    sources:
+      - Sources
+      - ../Shared
+      - Assets.xcassets
+      - PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_NAME: Knot
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
+        INFOPLIST_FILE: Apps/macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/macOS/Knot-macOS-$(KNOT_SIGNING).entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: KnotKit
+        products: [KnotApp, KnotCore, KnotIntents, KnotUI]
+      - target: knot-tool
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+
+  Knot-macOS-UITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: Knot-macOS
+    dependencies:
+      - target: Knot-macOS
