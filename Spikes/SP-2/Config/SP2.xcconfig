@@ -1,0 +1,42 @@
+// SP-2's own settings. The spike is a project of its own, so it touches nothing of the
+// main project. It never merges (docs/plan/SP-2.md).
+//
+// Identifiers: the development set of Apps/Config/Identifiers.xcconfig, never the milestone
+// set. The spike needs no app group and no iCloud container, so it signs with nothing but
+// the bundle IDs.
+
+#include "../../../Apps/Config/Identifiers.xcconfig"
+
+// `local` builds for the simulators and needs no team. `team` signs for the owner's devices
+// with DEVELOPMENT_TEAM, which Local.xcconfig sets. scripts/bootstrap.sh links that file
+// into .build/config from the file KNOT_LOCAL_CONFIG names; a team ID never enters the
+// repository.
+KNOT_SIGNING = local
+#include? "../../../.build/config/Local.xcconfig"
+
+SP2_BUNDLE_ID = $(KNOT_BUNDLE_ID_dev)
+SP2_DISPLAY_NAME = Knot SP-2
+
+SP2_CODE_SIGN_STYLE_local = Manual
+SP2_CODE_SIGN_STYLE_team = Automatic
+SP2_CODE_SIGN_IDENTITY_local = -
+SP2_CODE_SIGN_IDENTITY_team = Apple Development
+CODE_SIGN_STYLE = $(SP2_CODE_SIGN_STYLE_$(KNOT_SIGNING))
+CODE_SIGN_IDENTITY = $(SP2_CODE_SIGN_IDENTITY_$(KNOT_SIGNING))
+
+MARKETING_VERSION = 0.0.2
+CURRENT_PROJECT_VERSION = 1
+
+IPHONEOS_DEPLOYMENT_TARGET = 27.0
+WATCHOS_DEPLOYMENT_TARGET = 27.0
+
+// The project's rules hold for spike code too: Swift 6, strict concurrency, warnings are
+// errors.
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+GENERATE_INFOPLIST_FILE = YES
+DEAD_CODE_STRIPPING = YES
