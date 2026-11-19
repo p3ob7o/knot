@@ -143,13 +143,24 @@ private let noteA: NoteID = id(201)
     @Test func aNoteSettlesWhenItsWindowCloses() {
         let ready = segment(1, note: noteA, start: at("09:00"), end: at("09:01"))
         #expect(
-            SettledRule.evaluate(note: note, segments: [ready], window: .default, now: at("09:03"))
+            SettledRule.evaluate(
+                note: note, segments: [ready], window: .default, now: at("09:03"), thisDevice: thisDevice,
+                speechAvailableHere: true)
                 == .unsettled(settlesAt: at("09:06")))
-        #expect(SettledRule.evaluate(note: note, segments: [ready], window: .default, now: at("09:06")) == .settled)
-        #expect(SettledRule.evaluate(note: note, segments: [ready], window: .off, now: at("09:01")) == .settled)
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [ready], window: .default, now: at("09:06"), thisDevice: thisDevice,
+                speechAvailableHere: true) == .settled)
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [ready], window: .off, now: at("09:01"), thisDevice: thisDevice,
+                speechAvailableHere: true) == .settled)
         var closed = note
         closed.closedAt = at("09:02")
-        #expect(SettledRule.evaluate(note: closed, segments: [ready], window: .default, now: at("09:02")) == .settled)
+        #expect(
+            SettledRule.evaluate(
+                note: closed, segments: [ready], window: .default, now: at("09:02"), thisDevice: thisDevice,
+                speechAvailableHere: true) == .settled)
     }
 
     @Test func pendingWorkKeepsANoteUnsettledWithNoTime() {
@@ -160,7 +171,9 @@ private let noteA: NoteID = id(201)
         for state in pending {
             let busy = segment(2, note: noteA, kind: .voice, start: at("09:00"), end: at("09:01"), state: state)
             #expect(
-                SettledRule.evaluate(note: note, segments: [busy], window: .default, now: at("12:00"))
+                SettledRule.evaluate(
+                    note: note, segments: [busy], window: .default, now: at("12:00"), thisDevice: thisDevice,
+                    speechAvailableHere: true)
                     == .unsettled(settlesAt: nil), "\(state)")
         }
         // A download in progress holds it too.
@@ -168,7 +181,8 @@ private let noteA: NoteID = id(201)
         withAsset.assetID = id(4)
         #expect(
             SettledRule.evaluate(
-                note: note, segments: [withAsset], downloadingAssets: [id(4)], window: .default, now: at("12:00"))
+                note: note, segments: [withAsset], downloadingAssets: [id(4)], window: .default, now: at("12:00"),
+                thisDevice: thisDevice, speechAvailableHere: true)
                 == .unsettled(settlesAt: nil))
         // A failed segment waits for a person, and a deleted one does not count.
         let failed = segment(
@@ -177,7 +191,9 @@ private let noteA: NoteID = id(201)
         let deletedBusy = segment(
             6, note: noteA, kind: .voice, start: at("09:00"), end: nil, state: .voice(.recording), deleted: at("09:30"))
         #expect(
-            SettledRule.evaluate(note: note, segments: [failed, deletedBusy], window: .default, now: at("12:00"))
+            SettledRule.evaluate(
+                note: note, segments: [failed, deletedBusy], window: .default, now: at("12:00"), thisDevice: thisDevice,
+                speechAvailableHere: true)
                 == .settled)
     }
 }
@@ -334,5 +350,31 @@ private let noteA: NoteID = id(201)
         #expect(
             VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechAvailableHere: true)
                 == .savedTextOnItsWay)
+    }
+}
+
+@Suite struct SettledFinalErrorTests {
+    @Test func aRecordingThisDeviceCannotTranscribeDoesNotKeepItsNoteUnsettled() {
+        let note = Note(id: id(9), createdAt: at("10:00"), lastCaptureEndedAt: at("10:01"))
+        let recording = segment(
+            1, note: id(9), kind: .voice, start: at("10:00"), end: at("10:01"), text: "", state: .voice(.recorded),
+            owner: thisDevice)
+        // Speech is unavailable here: the work ended on a final error, so nothing is awaited here.
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [recording], window: .default, now: at("10:06"), thisDevice: thisDevice,
+                speechAvailableHere: false) == .settled)
+        // Where speech is available, the recording still waits for its transcript.
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [recording], window: .default, now: at("10:06"), thisDevice: thisDevice,
+                speechAvailableHere: true) == .unsettled(settlesAt: nil))
+        // Work that belongs to another device is still awaited.
+        var elsewhere = recording
+        elsewhere.processingOwner = otherDevice
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [elsewhere], window: .default, now: at("10:06"), thisDevice: thisDevice,
+                speechAvailableHere: false) == .unsettled(settlesAt: nil))
     }
 }

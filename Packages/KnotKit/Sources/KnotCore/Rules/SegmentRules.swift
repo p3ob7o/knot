@@ -42,14 +42,23 @@ public enum SettledRule {
     ///
     /// A note's window is closed when appending is off, when "New note" closed it, or when X
     /// minutes have passed since its latest capture. A failed segment waits for a person, not
-    /// for work, so it does not hold the note open. A settled note can still gain a late
-    /// capture, and then it is unsettled again.
+    /// for work, so it does not hold the note open, and nor does a recording this device
+    /// cannot transcribe. A settled note can still gain a late capture, and then it is
+    /// unsettled again.
     public static func evaluate(
-        note: Note, segments: [Segment], downloadingAssets: Set<AssetID> = [], window: AppendWindow, now: Date
+        note: Note, segments: [Segment], downloadingAssets: Set<AssetID> = [], window: AppendWindow, now: Date,
+        thisDevice: DeviceID, speechAvailableHere: Bool
     ) -> Settledness {
         let live = segments.filter { $0.noteID == note.id && $0.deletedAt == nil }
         let working = live.contains { segment in
-            segment.state.isPending || segment.assetID.map(downloadingAssets.contains) == true
+            // A segment whose work ended on a final error here, kept with no text, waits for
+            // nothing on this device. If another device takes the work later, the note
+            // changes and is reported again.
+            let awaited =
+                segment.state.isPending
+                && VisibleState.of(segment, thisDevice: thisDevice, speechAvailableHere: speechAvailableHere)
+                    != .keptNoText
+            return awaited || segment.assetID.map(downloadingAssets.contains) == true
         }
         if working { return .unsettled(settlesAt: nil) }
         if note.closedAt != nil || window.isOff { return .settled }

@@ -225,9 +225,14 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
     func a34() {
         let note = Note(id: roofNote, createdAt: at("10:00"), lastCaptureEndedAt: at("10:01"))
         let ready = segment(1, note: roofNote, start: at("10:00"), end: at("10:01"))
-        #expect(SettledRule.evaluate(note: note, segments: [ready], window: .default, now: at("10:06")) == .settled)
         #expect(
-            SettledRule.evaluate(note: note, segments: [ready], window: .default, now: at("10:05"))
+            SettledRule.evaluate(
+                note: note, segments: [ready], window: .default, now: at("10:06"), thisDevice: thisDevice,
+                speechAvailableHere: true) == .settled)
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [ready], window: .default, now: at("10:05"), thisDevice: thisDevice,
+                speechAvailableHere: true)
                 == .unsettled(settlesAt: at("10:06")))
     }
 

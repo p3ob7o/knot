@@ -37,7 +37,9 @@ import Testing
         // A note whose latest capture is ahead of now is unsettled until its window closes.
         let stored = Note(id: note, createdAt: at("09:59"), lastCaptureEndedAt: at("10:00"))
         #expect(
-            SettledRule.evaluate(note: stored, segments: [], window: .default, now: at("09:58"))
+            SettledRule.evaluate(
+                note: stored, segments: [], window: .default, now: at("09:58"), thisDevice: thisDevice,
+                speechAvailableHere: true)
                 == .unsettled(settlesAt: at("10:05")))
 
         // The one-second discard is measured between the presses: a stop press that the
