@@ -397,3 +397,49 @@ private let storeRoot = URL(fileURLWithPath: "/store", isDirectory: true)
         #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty, "A link was followed.")
     }
 }
+
+/// The store's folders are Knot's alone, so what a `DurableFile` remembers stays true. If a
+/// remembered folder is gone anyway, a save never claims what a power cut could undo.
+@Suite struct RememberedFolderTests {
+    let root = URL(fileURLWithPath: "/store", isDirectory: true)
+    let data = Data("x".utf8)
+
+    @Test func aRememberedFolderRemovedBehindTheBackIsMadeAgainWithItsNamesSynced() throws {
+        let layer = PowerCutFileLayer()
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.place(data, at: root.appending(path: "A/first"))
+        layer.removeFolderBehindTheStoresBack(root.appending(path: "A"))
+        try durable.place(data, at: root.appending(path: "A/second"))
+        layer.cutPower()
+        #expect((try? layer.read(root.appending(path: "A/second"))) == data, "An acknowledged save was lost.")
+    }
+
+    @Test func aRememberedFolderThatBecameAFileMakesTheSaveFail() throws {
+        let layer = PowerCutFileLayer()
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.place(data, at: root.appending(path: "A/first"))
+        layer.removeFolderBehindTheStoresBack(root.appending(path: "A"))
+        try layer.write(data, to: root.appending(path: "A"))
+        do {
+            try durable.place(data, at: root.appending(path: "A/second"))
+            Issue.record("A save into a file was acknowledged.")
+        } catch {
+            #expect(error.code == KnotError.writeFailed.code)
+        }
+    }
+
+    @Test func onDiskAFolderRemovedIsMadeAgainAndAFileInItsPlaceFails() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "knot-remembered-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = base.appending(path: "KnotStore", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let durable = DurableFile(layer: PosixFileLayer(), root: store)
+        try durable.place(data, at: store.appending(path: "A/first"))
+        try FileManager.default.removeItem(at: store.appending(path: "A"))
+        try durable.place(data, at: store.appending(path: "A/second"))
+        #expect(try Data(contentsOf: store.appending(path: "A/second")) == data)
+        try FileManager.default.removeItem(at: store.appending(path: "A"))
+        try data.write(to: store.appending(path: "A"))
+        #expect(throws: KnotError.self) { try durable.place(data, at: store.appending(path: "A/third")) }
+    }
+}

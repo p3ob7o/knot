@@ -65,6 +65,19 @@ public final class PowerCutFileLayer: FileLayer {
         state.withLock { _ = $0.forgotten.insert($0.syncs + index) }
     }
 
+    /// Removes a folder and everything in it, synced, as something other than Knot might.
+    /// Tests use it to change the store behind a `DurableFile`'s back; `FileLayer` itself has
+    /// no way to remove a folder.
+    public func removeFolderBehindTheStoresBack(_ url: URL) {
+        state.withLock { state in
+            let path = Self.path(url)
+            let parent = Self.path(url.deletingLastPathComponent())
+            state.folders[parent]?.current[url.lastPathComponent] = nil
+            state.folders[parent]?.synced[url.lastPathComponent] = nil
+            state.folders = state.folders.filter { $0.key != path && !$0.key.hasPrefix(path + "/") }
+        }
+    }
+
     /// Cuts the power: every name and every file content that was not synced is lost.
     /// Afterwards the layer works again, as after a restart.
     public func cutPower() {

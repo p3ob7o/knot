@@ -60,6 +60,10 @@ public struct DurableFile: Sendable {
     /// Places `data` at `url`, replacing what was there.
     public func place(_ data: Data, at url: URL) throws(KnotError) {
         let folder = url.deletingLastPathComponent()
+        try retryingOnce(below: folder) { () throws(KnotError) in try placeOnce(data, at: url, in: folder) }
+    }
+
+    private func placeOnce(_ data: Data, at url: URL, in folder: URL) throws(KnotError) {
         try makeFolder(folder)
         let partial = folder.appending(
             path: ".\(url.lastPathComponent).\(UUID().uuidString.lowercased())\(Self.partialSuffix)",
@@ -78,8 +82,14 @@ public struct DurableFile: Sendable {
     /// Moves a file that is already written, such as one the watch link received, into place.
     /// The file is synced first, then renamed, then both folders are synced.
     public func move(_ source: URL, to destination: URL) throws(KnotError) {
-        let sourceFolder = source.deletingLastPathComponent()
         let destinationFolder = destination.deletingLastPathComponent()
+        try retryingOnce(below: destinationFolder) { () throws(KnotError) in
+            try moveOnce(source, to: destination, in: destinationFolder)
+        }
+    }
+
+    private func moveOnce(_ source: URL, to destination: URL, in destinationFolder: URL) throws(KnotError) {
+        let sourceFolder = source.deletingLastPathComponent()
         try makeFolder(destinationFolder)
         try layer.syncFile(source)
         try layer.rename(source, to: destination)
@@ -100,7 +110,10 @@ public struct DurableFile: Sendable {
     /// if it is missing and syncs its parent, whether this call made the folder or found it.
     /// A folder this value has synced before is not synced again, so a save into known
     /// folders costs no extra syncs. That memory lasts as long as the value and its copies,
-    /// and is this process's own. Each of these folders must be a folder: a file or a
+    /// and is this process's own. It stays true because the store's folders are Knot's alone:
+    /// nothing else creates them, nothing removes or replaces one while the store is in use,
+    /// and `DurableFile` has no way to remove a folder. If a remembered folder is gone anyway,
+    /// a save forgets it and goes the whole way again once, and is never acknowledged falsely. Each of these folders must be a folder: a file or a
     /// symbolic link in its place is refused, and a link is never followed.
     public func makeFolder(_ url: URL) throws(KnotError) {
         for folder in try chain(to: url) {
@@ -115,6 +128,24 @@ public struct DurableFile: Sendable {
             }
             try layer.syncFolder(folder.deletingLastPathComponent())
             synced.insert(key)
+        }
+    }
+
+    /// Runs `operation`, and if it fails because a folder on the way to `folder` is missing or
+    /// is not a folder, forgets what was remembered for that folder and everything below it
+    /// and runs it once more, with every check and every sync. Only the second pass's success
+    /// is acknowledged; its failure is thrown.
+    private func retryingOnce(below folder: URL, _ operation: () throws(KnotError) -> Void) throws(KnotError) {
+        do {
+            try operation()
+        } catch {
+            guard error.code == KnotError.writeFailed.code,
+                error.context.posixError == ENOENT || error.context.posixError == ENOTDIR,
+                let chain = try? chain(to: folder)
+            else { throw error }
+            let vanished = chain.first { layer.entryKind($0) != .folder } ?? folder
+            synced.forget(vanished.path)
+            try operation()
         }
     }
 
@@ -150,4 +181,9 @@ private final class SyncedFolders: Sendable {
     func contains(_ path: String) -> Bool { paths.withLock { $0.contains(path) } }
 
     func insert(_ path: String) { paths.withLock { _ = $0.insert(path) } }
+
+    /// Forgets `path` and everything below it.
+    func forget(_ path: String) {
+        paths.withLock { paths in paths = paths.filter { $0 != path && !$0.hasPrefix(path + "/") } }
+    }
 }
