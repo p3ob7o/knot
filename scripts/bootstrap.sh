@@ -3,7 +3,8 @@
 #
 #   scripts/bootstrap.sh                     check the prerequisites, write the worktree's
 #                                            configuration, generate Knot.xcodeproj,
-#                                            resolve the packages, create the simulators
+#                                            resolve the packages, create the simulators,
+#                                            and speak the fixtures' audio
 #   scripts/bootstrap.sh --first-test        the same, then run the first module test and
 #                                            print how long a fresh worktree took to reach it
 #   scripts/bootstrap.sh --pin-xcode <app>   write .xcode-version from a release Xcode.app
@@ -85,6 +86,16 @@ xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" -scheme Knot-iOS -re
 step "resolved GRDB for SwiftPM and for Xcode"
 
 "$KNOT_ROOT/scripts/sim.sh" ensure | sed 's/^/bootstrap: simulator /'
+
+# The fixtures' audio. The system voices speak it on this Mac, because their licence does
+# not allow committing it (Fixtures/README.md). It goes to Fixtures/generated/, which git
+# ignores.
+mkdir -p "$KNOT_LOGS"
+"$KNOT_ROOT/Fixtures/tools/generate.sh" --audio >"$KNOT_LOGS/bootstrap-fixtures.log" 2>&1 ||
+    knot_fail "bootstrap-fixtures" "Fixtures/tools/generate.sh --audio failed. Its log is $KNOT_LOGS/bootstrap-fixtures.log." \
+        "Read the log. The audio needs the macOS system voices that Fixtures/README.md names." "safe" \
+        "part of Fixtures/generated/, which git ignores"
+step "spoke the fixtures' audio into Fixtures/generated/"
 
 step "done in $(knot_duration $(($(knot_now) - START)))"
 

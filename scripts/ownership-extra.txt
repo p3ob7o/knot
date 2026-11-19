@@ -1,0 +1,3 @@
+# Paths a package owns beyond what its brief's "Owns" section names, for the ownership check
+# of scripts/verify.sh. One line each, three fields separated by one tab: the package, the
+# path (a folder ends in /), and the decision that gave it. Only the orchestrator edits it.

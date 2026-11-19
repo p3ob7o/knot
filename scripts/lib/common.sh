@@ -10,6 +10,9 @@ source "$KNOT_ROOT/scripts/lib/fail.sh"
 
 # This worktree's own build products (docs/architecture.md §18). `.build/` is git-ignored.
 KNOT_WORKTREE="$(basename "$KNOT_ROOT")"
+# The worktree's ID on this Mac: its folder name and a short hash of its root path, so two
+# clones in folders of the same name never share simulators or a development store.
+KNOT_WORKTREE_ID="$KNOT_WORKTREE-$(printf '%s' "$KNOT_ROOT" | shasum -a 256 | cut -c1-6)"
 KNOT_BUILD="$KNOT_ROOT/.build"
 KNOT_CONFIG="$KNOT_BUILD/config"
 KNOT_LOGS="$KNOT_BUILD/logs"
@@ -155,8 +158,8 @@ knot_swiftpm_flags() {
 # KNOT_LOCAL_CONFIG names, if any.
 knot_write_worktree_config() {
     mkdir -p "$KNOT_CONFIG"
-    printf '// Written by scripts/bootstrap.sh. Not committed.\nKNOT_WORKTREE = %s\n' "$KNOT_WORKTREE" \
-        >"$KNOT_CONFIG/Worktree.xcconfig"
+    printf '// Written by scripts/bootstrap.sh. Not committed.\nKNOT_WORKTREE = %s\nKNOT_WORKTREE_ID = %s\n' \
+        "$KNOT_WORKTREE" "$KNOT_WORKTREE_ID" >"$KNOT_CONFIG/Worktree.xcconfig"
     if [[ -n ${KNOT_LOCAL_CONFIG:-} ]]; then
         [[ -f $KNOT_LOCAL_CONFIG ]] ||
             knot_fail "bootstrap-local-config-missing" "KNOT_LOCAL_CONFIG names $KNOT_LOCAL_CONFIG, which does not exist." \
