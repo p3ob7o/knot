@@ -99,6 +99,7 @@ struct Segment { id; noteID; kind: typed | voice | ink
                  rawTranscript: String?             // voice only, never modified
                  transcription: (engine, locale, osBuild)?   // voice only: what produced the transcript
                  cleanup: (osBuild)?                // voice only: the OS build whose model cleaned the text
+                 recognition: (engineVersion, language, osBuild)?   // ink only: what produced the recognised text
                  processingOwner: DeviceID?         // voice only, synced: the device that runs its jobs
                  ownerGeneration: Int               // voice only, synced: rises each time the work moves
                  arrivedAt: Date?                   // local, not synced: set when a late capture is placed, cleared when its note is opened
@@ -123,10 +124,10 @@ A segment can leave its note for a new note of its own (product spec §7). The m
 Job states are queued, running, done and failed. Five things can stop a job, and they are told apart:
 
 - **An attempt** is an error the step returned. After five, the job is failed and its segment shows a retry action.
-- **A deferral** is a step that cannot run now: the model is not ready, the system limits requests, there is no background time left, or the device is locked. Deferrals are never counted. The job runs again when the app comes forward or the model's availability changes.
+- **A deferral** is a step that cannot run now: the model is not ready, the system limits requests, there is no background time left, the device is locked, or, for recognition, the app is not in the foreground. Deferrals are never counted. The job runs again when the app comes forward or the model's availability changes.
 - **A death** is a job found running at launch. When background time runs out the queue yields the job cleanly, so a job still marked running means the process died. The job goes back to queued once. After two deaths it fails with its own code, so a recording that crashes the transcriber cannot kill the app at every launch.
 - **A yield** is a step that was cancelled, because background time ran out or the queue was asked to stop. It is not counted, and the job stays queued.
-- **A final error** is one that no retry on this device can fix: speech is unavailable here, the audio cannot be read, or the cleanup model cannot be used here. The job ends at once as done, with the error's code, and is not tried again. What its segment shows is the error's own: a recording kept without text, or the raw transcript as its text.
+- **A final error** is one that no retry on this device can fix: speech is unavailable here, the audio cannot be read, the drawing cannot be read, or the cleanup model cannot be used here. The job ends at once as done, with the error's code, and is not tried again. What its segment shows is the error's own: a recording or a drawing kept without text, shown as "Kept, no text", or the raw transcript as its text.
 
 Sizes are bounded in the domain types, and WP-02 fixes the numbers. First values, all estimates: a segment's text holds at most 256 KiB of UTF-8, so that a record stays under CloudKit's limit with its raw transcript beside it; a title at most 200 characters; a manifest at most 64 KiB. Typed or piped text beyond the limit continues in a new segment of the same note, and nothing is cut. A file's place on disk is derived from its ID, never from a name inside a manifest or a record.
 
@@ -152,6 +153,7 @@ voice   recording ──stop──► recorded ──► transcribing ──► 
 ink     drawing ──end──► recognising ──► ready     (empty canvas ──► discarded)
         drawing ──killed──► recognising at relaunch
         recognition fails ──► failed(recognise, code): the drawing is kept and a retry is offered
+        the drawing cannot be read ──► the job ends, and the drawing is kept, shown as "Kept, no text"
 
 watch   onWatch ──transfer──► delivered ──► continues as "recorded" on the iPhone
 ```
@@ -168,7 +170,7 @@ KnotCore declares these protocols. KnotFakes ships a fake for each, except `Capt
 | `Recorder` | Get ready without opening the microphone. Start a recording, which returns a session once the recording is live. The session streams levels, how much of the audio is durable, and the live audio, and it ends with its reason, whether it was stopped or stopped by itself. Stop, which cannot fail or be cancelled and returns once the file is on the drive. Discard. Recover the orphaned recordings of earlier launches, never one of the current launch. |
 | `Transcriber` | Report readiness in five states: ready, not installed, installing, unsupported locale, unavailable. Install the model with progress, which only the app does. Transcribe a file in resumable runs: a run reads at most a budget of audio from an offset, ends at the last finished phrase, and returns its pieces with their time ranges and where the next run starts. Stream live text for `Sendable` chunks of samples. |
 | `Cleaner` | Report availability in three states: available, not ready, unavailable with its reason. Publish its changes. Turn a raw transcript into a body and, when asked, a title, in one call that returns the whole result. A decline is a result, not an error. |
-| `InkRecogniser` | Turn drawing data into text. |
+| `InkRecogniser` | Report whether it can read handwriting in a language: available, or unsupported language. Recognise one finished drawing, given as the bytes the canvas saved, into its text and the text's provenance, in one call with no stream. Empty text means the drawing holds no words, and a refusal is never read as no words. |
 | `ProcessingQueue` | Run and resume transcribe, clean and recognise jobs. Each drain takes a `BackgroundRunner` and a progress sink from its caller. |
 | `SyncEngine` | Start, stop and report status. |
 | `WatchLink` | Send a capture: write it to the outbox and queue it, which says nothing about delivery. Receive acknowledgements. Publish how many captures wait and how many failed, counted from the outbox and its acknowledgements, never from the session's queue. Resume at launch and on the system's events (§12). Run the Watch's background task until the session has no content pending, within a time limit. |
@@ -214,15 +216,17 @@ Three rules keep a fallback or a retry from undoing newer work:
 
 A recovered capture ends at its last durable write.
 
-WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. One code covers a cursor from another store and one from another generation of this store, and one code does the same for a revision. The recorder tells a full disk from another failed write by the volume's free space, because the audio file's error does not say. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked, and, for the watch link, link not ready, counterpart missing and counterpart full. The watch link has two more cases: delivery failed, an attempt after which the capture is queued again, and outbox file missing, which fails the capture at once and keeps its manifest. A cancelled step is a yield: it is not an attempt, not a decline and not an error. Speech unavailable on this device, audio unreadable and cleanup model unavailable are final: the job ends and is not tried again on this device (§4). A job that died twice fails with a code of its own. A recording that is empty or silent is not an error either: it is ready with empty text.
+WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; drawing unreadable; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. One code covers a cursor from another store and one from another generation of this store, and one code does the same for a revision. The recorder tells a full disk from another failed write by the volume's free space, because the audio file's error does not say. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked, app not in the foreground, and, for the watch link, link not ready, counterpart missing and counterpart full. The watch link has two more cases: delivery failed, an attempt after which the capture is queued again, and outbox file missing, which fails the capture at once and keeps its manifest. A cancelled step is a yield: it is not an attempt, not a decline and not an error. Speech unavailable on this device, audio unreadable, drawing unreadable and cleanup model unavailable are final: the job ends and is not tried again on this device (§4). A job that died twice fails with a code of its own. A recording that is empty or silent is not an error either: it is ready with empty text, and so is a drawing that holds no words.
 
 Each real implementation runs its contract suite where it can run:
 
 | Suite | Runs |
 |---|---|
 | `NoteStore`, `AssetStore`, `SettingsStore`, `Recorder` on injected audio, `AudioPlayer`, `Transcriber`, `Cleaner`, and `SyncEngine` on the merge core | The Mac, in the package tests |
-| `RecordingStateStore` across two processes, `RecordingActivity`, and `InkRecogniser` if WP-18's proof finds it needs the Simulator | The iOS Simulator |
+| `RecordingStateStore` across two processes, `RecordingActivity`, and the real `InkRecogniser` | The iOS Simulator |
 | `WatchLink` | The fake transport on the Mac. The real one on hardware, at M3. |
+
+The real `InkRecogniser` runs its suite in tests hosted in the app, because the recognition service refuses a process that is not an app, whether `swift test` or the package tests under `xcodebuild`. The fake's half of that suite runs in the package tests on the Mac, as every fake's does.
 
 ## 6. One writer, many producers
 
@@ -321,6 +325,8 @@ In v1 the only producer outside the app process is the watch link. Extensions th
 
 - `PKCanvasView` wrapped for SwiftUI. Drawing data is saved at the end of every stroke.
 - `PKStrokeRecognizer` produces the recognised text. It is stored on the segment, so every device can search it without recognising again.
+- The segment records the text's provenance beside it: the engine's `recognitionVersion`, the language it used and the OS build. In v1 no device recognises a stored drawing again, and a higher `recognitionVersion` triggers nothing. The provenance is kept so that a later version can decide which drawings to recognise again. Recognised text that the user has edited is never replaced.
+- Recognition runs only while the app is in the foreground. The recognition service refuses a process that is not an app, and an iOS app about a second after it leaves the foreground, even one that holds background time. The queue never runs a recognise job from background time or a background task, and a job deferred there runs when the app comes forward. A finished drawing is recognised as its capture ends, while the app is in front, so the usual case is unaffected.
 - A Pencil-capability check decides whether the canvas is offered: iPad, and iPhone Duo. WP-18 finds the right API for that check on iPhone.
 
 ## 11. Sync
@@ -439,7 +445,8 @@ Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the
 | Contract suites | One shared suite per port, run against both the fake and the real implementation | Mac, and the iOS Simulator for what runs only there (§5): those suites are hosted in the iOS app, in the `Knot-iOS-Tests` target, and the gate's `ios-hosted` step runs them |
 | Store | Migrations, search, concurrency, a kill in mid-transaction, a second process | Mac |
 | Recorder | File-driven input, the kill test, interruptions | Mac and iOS Simulator |
-| Speech, cleanup, ink | Fixtures, with accuracy reported | A Mac with the models installed |
+| Speech, cleanup | Fixtures, with accuracy reported | A Mac with the models installed |
+| Ink | Fixtures, with accuracy reported | Tests hosted in the app in the iOS Simulator, never `swift test` |
 | Sync | Mapping, conflicts and the change log, with constructed records; a two-replica simulation | Mac |
 | End to end | Fixture audio through to a finished note; kill and relaunch | Mac and Simulator |
 | UI smoke | Type, record with injected audio, search, delete and undo | XCUITest on iOS Simulator and Mac |
@@ -562,6 +569,14 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | The notes schema offers `createNote`, `updateNote` and `appendText`. It is unavailable on watchOS. | SDK |
 | Xcode warns when an app lists a statically linked package in `AppIntentsPackage.includedPackages`, because that package's metadata is already included. Warnings are errors, so the apps declare no `AppIntentsPackage` of their own. | Found by WP-01's build with Xcode 27.2. |
 | `PKStrokeRecognizer` exists on iOS and macOS, with an async `search`. | SDK |
+| `PKStrokeRecognizer` works inside an app in the iOS 27.2 simulator, unlike `SpeechTranscriber`. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer` refuses a process that is not an app, with Code -1003 in the system log, and an iOS app about a second after it leaves the foreground, even with background time. It returns `nil` and does not throw. | WP-18's probe on 2026-11-19. |
+| A Mac app is served by `PKStrokeRecognizer` even when it is not active. | WP-18's probe on 2026-11-19. |
+| `PKDrawing(strokes:)` traps in a process with no bundle ID. `PKDrawing(data:)` does not. | WP-18's probe on 2026-11-19. |
+| Cancelling the task does not stop a `PKStrokeRecognizer` query. A call from a task that is already cancelled returns `nil` on the Mac and recognises in full on iOS. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer.search(_:)` returns a type that is not `Sendable`. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer.supportedLanguages` has 33 entries on the Mac and 20 in the iOS 27.2 simulator. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer.recognitionVersion` is 9 on macOS 27.3 and in the iOS 27.2 simulator. | WP-18's probe on 2026-11-19. |
 | `SystemLanguageModel` exposes `availability`, `contextSize`, `tokenCount(for:)` and `supportedLanguages`. | SDK |
 | `SpeechTranscriber` exposes `isAvailable`, `supportedLocales` and `installedLocales`. `AssetInventory` exposes `assetInstallationRequest(supporting:)`. | SDK |
 | A recording started by intent needs both protocols and a Live Activity for its whole length. | Apple docs |
