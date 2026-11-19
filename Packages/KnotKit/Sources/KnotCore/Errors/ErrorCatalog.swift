@@ -40,6 +40,11 @@ extension KnotError {
     public static let agentRefusedMilestoneStore = KnotError(
         code: "agent_refused_milestone_store", next: .useDevelopmentBuild, retry: .notSafe, written: .nothing,
         exitStatus: .needsOwner)
+    /// A development build on the Mac names no worktree folder for its store, or one that is
+    /// not safe as a folder name. Development builds from two worktrees never share a store.
+    public static let devStoreFolderInvalid = KnotError(
+        code: "dev_store_folder_invalid", next: .buildFromWorktree, retry: .notSafe, written: .nothing,
+        exitStatus: .needsOwner)
 
     // MARK: Recording
 
@@ -255,7 +260,7 @@ extension KnotError {
     /// Every case of the taxonomy, in the order of docs/errors.md.
     public static let catalog: [KnotError] = [
         diskFull, storeBusy, storeDamaged, storeNewerThanBuild, storeOlderThanTool, storeNotCreatedByKnot,
-        storeNotOpen, writeFailed, groupContainerMissing, agentRefusedMilestoneStore,
+        storeNotOpen, writeFailed, groupContainerMissing, agentRefusedMilestoneStore, devStoreFolderInvalid,
         microphonePermissionRefused, noInputDevice, audioSessionBusy, tooLittleSpace, captureStoppedDiskFull,
         conversionFailed, captureBlockedByRecording,
         speechModelNotInstalled, audioUnreadable, transcriptionFailed, cleanupModelNotReady,

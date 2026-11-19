@@ -13,7 +13,8 @@ import Testing
             for flavour in [StoreLocations.Flavour.dev, .milestone] {
                 #expect(throws: KnotError.groupContainerMissing) {
                     try StoreLocations.resolve(
-                        flavour: flavour, platform: platform, appContainer: app, groupContainer: nil, environment: [:])
+                        flavour: flavour, platform: platform, appContainer: app, groupContainer: nil,
+                        devStoreFolder: "wp-02", environment: [:])
                 }
             }
         }
@@ -46,11 +47,14 @@ import Testing
             flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
             environment: [:])
         #expect(dev.database.path == "/containers/group/wp-02/KnotStore/knot.sqlite")
-        for unsafe in ["", "..", "a/b", "."] {
-            let plain = try StoreLocations.resolve(
-                flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, devStoreFolder: unsafe,
-                environment: [:])
-            #expect(plain.database.path == "/containers/group/KnotStore/knot.sqlite")
+    }
+
+    @Test func aMacDevelopmentBuildWithNoWorktreeFolderIsRefused() {
+        // Development builds from two worktrees never share a store (docs/architecture.md §7),
+        // so there is no shared fallback.
+        #expect(throws: KnotError.devStoreFolderInvalid) {
+            try StoreLocations.resolve(
+                flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, environment: [:])
         }
     }
 
@@ -63,7 +67,8 @@ import Testing
             }
         }
         _ = try StoreLocations.resolve(
-            flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, environment: ["KNOT_AGENT": "1"])
+            flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
+            environment: ["KNOT_AGENT": "1"])
     }
 
     @Test func everythingV1WritesIsUnderKnotStoreNeverTheRetiredFolder() throws {
@@ -71,7 +76,8 @@ import Testing
         let capture: CaptureID = id(1)
         for platform in [StoreLocations.Platform.iOS, .macOS, .watchOS] {
             let locations = try StoreLocations.resolve(
-                flavour: .dev, platform: platform, appContainer: app, groupContainer: group, environment: [:])
+                flavour: .dev, platform: platform, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
+                environment: [:])
             let paths = [
                 locations.database, locations.assets, locations.recording, locations.inbox, locations.recordingState,
                 locations.outbox, locations.asset(id(2), kind: .audio), locations.inboxManifest(capture),
@@ -124,11 +130,16 @@ import Testing
     ])
     func aWorktreeFolderNameNeverLeavesTheGroup(name: String, used: Bool) throws {
         let group = URL(fileURLWithPath: "/containers/group", isDirectory: true)
-        let locations = try StoreLocations.resolve(
-            flavour: .dev, platform: .macOS, appContainer: root, groupContainer: group, devStoreFolder: name,
-            environment: [:])
-        let expected = used ? "/containers/group/\(name)/KnotStore" : "/containers/group/KnotStore"
-        #expect(locations.storeRoot.standardizedFileURL.path == expected)
+        let resolve = {
+            try StoreLocations.resolve(
+                flavour: .dev, platform: .macOS, appContainer: root, groupContainer: group, devStoreFolder: name,
+                environment: [:])
+        }
+        if used {
+            #expect(try resolve().storeRoot.standardizedFileURL.path == "/containers/group/\(name)/KnotStore")
+        } else {
+            #expect(throws: KnotError.devStoreFolderInvalid) { try resolve() }
+        }
     }
 
     @Test func everyPathOfAStoreStaysUnderItsRoot() {

@@ -76,6 +76,8 @@ public enum NextAction: String, Hashable, Sendable, Codable {
     case stopRecording = "stop_recording"
     /// Use the development build, `knot-dev`, and its own store.
     case useDevelopmentBuild = "use_development_build"
+    /// Build the development app from its worktree, which names the worktree's store folder.
+    case buildFromWorktree = "build_from_worktree"
     /// Reinstall Knot, whose installation lacks its shared container.
     case reinstallKnot = "reinstall_knot"
     /// Report the problem with its request ID.

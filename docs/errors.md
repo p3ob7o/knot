@@ -114,6 +114,16 @@ The app group's container is missing, so `StoreLocations` has no place for `Inbo
 - Written: nothing
 - Exit code: 7
 
+### `dev_store_folder_invalid`
+
+A development build on the Mac names no worktree folder for its store, or one that is not safe as a folder name. Development builds from two worktrees never share a store.
+
+- Class: failure
+- Next: build_from_worktree
+- Retry: not safe
+- Written: nothing
+- Exit code: 7
+
 ## Recording
 
 ### `microphone_permission_refused`

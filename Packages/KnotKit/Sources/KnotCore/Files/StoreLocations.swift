@@ -72,8 +72,9 @@ public struct StoreLocations: Hashable, Sendable {
     ///   - appContainer: the app's own folder for its data, such as Application Support.
     ///   - groupContainer: the app group's container, or `nil` when the system gave none.
     ///   - devStoreFolder: on the Mac, the worktree's folder in the development container,
-    ///     which only debug builds honour. Development builds from two worktrees never share
-    ///     a store.
+    ///     which only debug builds honour. A development build on the Mac must name one, or it
+    ///     is refused with `dev_store_folder_invalid`: development builds from two worktrees
+    ///     never share a store. A milestone build ignores it.
     ///   - environment: the process environment. With `KNOT_AGENT=1`, the milestone store
     ///     is refused, so an agent cannot open the owner's notes by accident.
     public static func resolve(
@@ -97,7 +98,12 @@ public struct StoreLocations: Hashable, Sendable {
             // In the app group, so that the `knot` command opens the same store.
             guard let groupContainer else { throw KnotError.groupContainerMissing }
             var base = groupContainer
-            if flavour == .dev, let folder = devStoreFolder, let name = safeFolderName(folder) {
+            if flavour == .dev {
+                // Development builds from two worktrees never share a store, so a build that
+                // names no usable worktree folder is refused, never given a shared one.
+                guard let folder = devStoreFolder, let name = safeFolderName(folder) else {
+                    throw KnotError.devStoreFolderInvalid
+                }
                 base = base.appending(path: name, directoryHint: .isDirectory)
             }
             let root = base.appending(path: rootFolderName, directoryHint: .isDirectory)
@@ -151,7 +157,7 @@ public struct StoreLocations: Hashable, Sendable {
     }
 
     /// A worktree's folder name, as one path component: letters, digits, `.`, `_` and `-`,
-    /// not starting with a dot, at most 128 characters. Any other name is not used.
+    /// not starting with a dot, at most 128 characters. Any other name is refused.
     private static func safeFolderName(_ name: String) -> String? {
         let allowed = name.unicodeScalars.allSatisfy { scalar in
             scalar.isASCII
