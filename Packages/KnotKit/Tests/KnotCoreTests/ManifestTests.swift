@@ -66,6 +66,17 @@ import Testing
         #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
     }
 
+    @Test func anUnknownPlacementIsANewerKnotsAndTheFileIsKept() {
+        let data = Self.golden(replacing: "placement", with: #""pinned:top""#)
+        #expect(throws: KnotError.inboxItemNewerVersion.about(capture: Self.capture)) {
+            try CaptureManifest.decode(data)
+        }
+        let broken = Self.golden(replacing: "placement", with: #""named:not-an-id""#)
+        #expect(throws: KnotError.inboxItemUnreadable.about(capture: Self.capture)) {
+            try CaptureManifest.decode(broken)
+        }
+    }
+
     @Test func bothWaysInRefuseAFormatThisBuildDoesNotSupport() throws {
         for format in ["0", "-1", "2"] {
             let data = Self.golden(replacing: "format", with: format)

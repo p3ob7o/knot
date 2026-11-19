@@ -89,6 +89,13 @@ public struct CaptureManifest: Hashable, Sendable {
         let context = ErrorContext(captureID: header.captureID)
         guard let format = header.format, format >= 1 else { throw KnotError.inboxItemUnreadable.with(context) }
         guard format <= currentFormat else { throw KnotError.inboxItemNewerVersion.with(context) }
+        // A placement this build does not know comes from a newer Knot: it cannot be applied,
+        // so the item waits, kept, for an update. A named placement with a broken ID is damaged.
+        if let placement = header.placement, CapturePlacement(rawValue: placement) == nil,
+            !placement.hasPrefix("named:")
+        {
+            throw KnotError.inboxItemNewerVersion.with(context)
+        }
         do {
             return try decoder.decode(CaptureManifest.self, from: data)
         } catch {
@@ -96,21 +103,24 @@ public struct CaptureManifest: Hashable, Sendable {
         }
     }
 
-    /// The two fields read before the rest, each on its own, so that a damaged manifest
-    /// still names its capture.
+    /// The fields read before the rest, each on its own, so that a damaged manifest still
+    /// names its capture.
     private struct FormatHeader: Decodable {
         let format: Int?
         let captureID: CaptureID?
+        let placement: String?
 
         enum CodingKeys: String, CodingKey {
             case format
             case captureID = "capture_id"
+            case placement
         }
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             format = try? container.decode(Int.self, forKey: .format)
             captureID = (try? container.decode(String.self, forKey: .captureID)).flatMap(CaptureID.init)
+            placement = try? container.decode(String.self, forKey: .placement)
         }
     }
 }
