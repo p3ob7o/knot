@@ -141,7 +141,7 @@ func segment(
     }
 
     @Test func domainValuesRoundTrip() throws {
-        let note = Note(id: id(1), createdAt: at("09:00"), title: "Roof", titleOrigin: .generated, revision: 12)
+        let note = try Note(id: id(1), createdAt: at("09:00"), title: "Roof", titleOrigin: .generated, revision: 12)
         #expect(try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note)) == note)
         var voice = segment(2, note: id(1), kind: .voice, start: at("09:00"), end: at("09:01"), owner: thisDevice)
         voice.transcription = TranscriptionProvenance(engine: "SpeechTranscriber", locale: "en_GB", osBuild: "27C100")
@@ -208,5 +208,32 @@ func segment(
         #expect(segment.rawTranscript == "raw")
         // What encodes also decodes.
         #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+}
+
+@Suite struct NoteTitleBoundTests {
+    static let tooLong = String(repeating: "t", count: 10_000)
+
+    @Test func aTitlePastItsBoundIsNotDecoded() throws {
+        let note = Note(id: id(1), createdAt: at("09:00"))
+        let json = String(decoding: try JSONEncoder().encode(note), as: UTF8.self)
+            .replacingOccurrences(
+                of: #""titleOrigin":"none""#, with: #""title":"\#(Self.tooLong)","titleOrigin":"user""#)
+        #expect(json.contains(Self.tooLong))
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(Note.self, from: Data(json.utf8)) }
+    }
+}
+
+@Suite struct NoteTitleSetterTests {
+    @Test func theTitleChangesOnlyWithinItsBound() throws {
+        var note = Note(id: id(1), createdAt: at("09:00"))
+        #expect(throws: KnotError.textTooLong) { try note.setTitle(NoteTitleBoundTests.tooLong, origin: .user) }
+        #expect(note.title == nil)
+        try note.setTitle(String(repeating: "t", count: 200), origin: .user)
+        #expect(note.titleOrigin == .user)
+        #expect(throws: KnotError.textTooLong) {
+            try Note(id: id(2), createdAt: at("09:00"), title: NoteTitleBoundTests.tooLong, titleOrigin: .user)
+        }
+        #expect(try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note)) == note)
     }
 }
