@@ -265,3 +265,20 @@ private let noteA: NoteID = id(201)
             small.joined().unicodeScalars.elementsEqual(("x" + String(repeating: "\u{0301}", count: 5)).unicodeScalars))
     }
 }
+
+@Suite struct TitleWordBoundaryTests {
+    @Test(arguments: [
+        ("can", ["can't"], false),
+        ("can't", ["I can't stop"], true),
+        ("Can’t stop", ["I can't stop"], true),
+        ("東京", ["東京で会う"], true),
+        ("京都", ["東京で会う"], false),
+        ("会う", ["東京で会う"], true),
+        ("3.5 litres", ["Buy 3.5 litres of paint"], true),
+        ("3 litres", ["Buy 3.5 litres of paint"], false),
+        ("e-mail Anna", ["Send an e-mail to Anna"], true),
+    ])
+    func wordsFollowUnicodeWordBoundaries(title: String, note: [String], fits: Bool) {
+        #expect(TitleRule.fits(title, noteTexts: note) == fits)
+    }
+}

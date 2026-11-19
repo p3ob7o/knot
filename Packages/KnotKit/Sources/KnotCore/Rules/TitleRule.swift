@@ -8,8 +8,8 @@ public enum TitleRule {
     /// True when a generated title fits its note: one line of plain text, at most 60
     /// characters, not empty, and made only of words that occur in the note's text.
     ///
-    /// Words are compared without regard to case, and are the runs of letters and digits,
-    /// so punctuation never counts as a word.
+    /// Words are found by Unicode's word boundaries and compared without regard to case, so
+    /// punctuation never counts as a word and "can" is not a word of "can't".
     public static func fits(_ title: String, noteTexts: [String]) -> Bool {
         guard title.count <= Limits.generatedTitleCharacters,
             !title.contains(where: \.isNewline),
@@ -21,11 +21,19 @@ public enum TitleRule {
         return titleWords.allSatisfy(noteWords.contains)
     }
 
-    /// The words of a text, folded to lower case.
+    /// The words of a text, by Unicode's word boundaries, folded to lower case.
+    ///
+    /// "can't" is one word, and so is "3.5", while "東京で会う" is three. The boundaries are the
+    /// default ones and never the user's locale, so the same title and note give the same
+    /// answer on every device. A typographic apostrophe counts as a straight one, and a
+    /// stretch with no letter or digit is not a word.
     public static func words(of text: String) -> [String] {
-        text.lowercased()
-            .split { !($0.isLetter || $0.isNumber) }
-            .map(String.init)
+        var words: [String] = []
+        text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: .byWords) { word, _, _, _ in
+            guard let word, word.contains(where: { $0.isLetter || $0.isNumber }) else { return }
+            words.append(word.lowercased().replacingOccurrences(of: "\u{2019}", with: "'"))
+        }
+        return words
     }
 
     /// True when the clean job may propose a title for the note that holds its recording
