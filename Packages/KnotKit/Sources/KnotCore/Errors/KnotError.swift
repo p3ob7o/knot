@@ -22,7 +22,7 @@ public struct ErrorCode: RawRepresentable, Hashable, Sendable, Codable, Expressi
 
     /// True for the form every code has: lower-case ASCII letters, digits and underscores,
     /// starting with a letter, at most 64 characters. A code read from elsewhere, such as a
-    /// file or a newer Knot, may not have it, and then it is never written to a log as it is.
+    /// file or a newer Knot, may not have it. The log writes only catalogued codes as they are.
     public var isWellFormed: Bool {
         let bytes = Array(rawValue.utf8)
         guard let first = bytes.first, (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(first), bytes.count <= 64

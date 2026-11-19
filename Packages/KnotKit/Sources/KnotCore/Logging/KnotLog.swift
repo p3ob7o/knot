@@ -79,13 +79,18 @@ public enum LogField: Sendable, Hashable {
         case .segment(let id): "segment=\(id)"
         case .asset(let id): "asset=\(id)"
         case .job(let id): "job=\(id)"
-        case .code(let code): "code=\(code.isWellFormed ? code.rawValue : "malformed_code")"
+        case .code(let code): "code=\(Self.catalogued.contains(code) ? code.rawValue : "unlisted_code")"
         case .detail(let detail): "detail=\(detail.rawValue)"
         case .number(let name, let value): "\(name)=\(value)"
         case .duration(let name, let value): "\(name)_ms=\(Self.milliseconds(value))"
         case .flag(let name, let value): "\(name)=\(value)"
         }
     }
+
+    /// The codes of the catalogue. A code from elsewhere, such as a file or a newer Knot, may
+    /// be any word, even one from a note, so only these are written as they are; any other is
+    /// written as one fixed token, and nothing of its value reaches the line.
+    private static let catalogued = Set(KnotError.catalog.map(\.code))
 
     private static func milliseconds(_ duration: Duration) -> Int64 {
         let (seconds, attoseconds) = duration.components
