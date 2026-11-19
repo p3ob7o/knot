@@ -179,3 +179,16 @@ func segment(
         #expect(throws: DecodingError.self) { try JSONDecoder().decode(Segment.self, from: Data(json.utf8)) }
     }
 }
+
+@Suite struct ContentHashNormalisationTests {
+    @Test func textSwiftCallsEqualHashesEqual() {
+        let secret = StoreSecret(bytes: Array(repeating: 3, count: 32))
+        let composed = "caf\u{00E9}"
+        let decomposed = "cafe\u{0301}"
+        #expect(composed == decomposed)
+        #expect(Array(composed.utf8) != Array(decomposed.utf8))
+        #expect(
+            ContentHash(kind: .typed, content: .text(composed), secret: secret)
+                == ContentHash(kind: .typed, content: .text(decomposed), secret: secret))
+    }
+}

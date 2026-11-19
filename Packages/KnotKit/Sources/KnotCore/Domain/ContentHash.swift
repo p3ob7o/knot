@@ -44,7 +44,9 @@ public struct ContentHash: Hashable, Sendable, Codable, CustomStringConvertible 
         case .text(let text):
             message.append(contentsOf: Array("text".utf8))
             message.append(0)
-            message.append(contentsOf: Array(text.utf8))
+            // Text that Swift calls equal hashes equal: the hash reads its NFC form, while
+            // the stored text stays as it was given.
+            message.append(contentsOf: Array(text.precomposedStringWithCanonicalMapping.utf8))
         case .file(let sha256):
             message.append(contentsOf: Array("file".utf8))
             message.append(0)
