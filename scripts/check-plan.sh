@@ -18,14 +18,20 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Every failure is reported through scripts/lib/fail.sh, after the check's own lines.
+source scripts/lib/fail.sh
 
 PYTHON="$(command -v python3 || true)"
 if [ -z "$PYTHON" ]; then
-  echo "check-plan: python3 not found. It comes with Xcode: run 'xcode-select --install'." >&2
-  exit 2
+  knot_fail "infra-python-missing" "check-plan: python3 not found." \
+    "It comes with Xcode: run 'xcode-select --install'." "safe" "nothing"
 fi
 
-exec "$PYTHON" - "$@" <<'PY'
+WROTE="nothing"
+case " $* " in *" --write "*) WROTE="the generated parts of PLAN.md and of the briefs, if they were out of date" ;; esac
+
+status=0
+"$PYTHON" - "$@" <<'PY' || status=$?
 import os
 import re
 import sys
@@ -470,3 +476,11 @@ count = sum(len(tests[p]) for p in PACKAGES)
 print("check-plan: ok. %d briefs, %d start rows, %d named tests, %d amendment items, %d replaced texts"
       % (len(PACKAGES), rows, count, len(expected), len(replaced)))
 PY
+
+if [ "$status" -eq 1 ]; then
+  knot_fail "plan-check" "The plan check found the problems listed above." \
+    "Fix each one. For a generated part that is out of date, run scripts/check-plan.sh --write." "safe" "$WROTE"
+elif [ "$status" -ne 0 ]; then
+  knot_fail "infra-plan-check-crashed" "The plan check stopped with status $status before it finished." \
+    "Read the Python error above." "safe" "$WROTE"
+fi

@@ -1,0 +1,4 @@
+# The Xcode for the merge gate and the archive: its version and its build.
+# Every script sets DEVELOPER_DIR from this file and checks it. Written by
+# scripts/bootstrap.sh --pin-xcode.
+27.2 27B52

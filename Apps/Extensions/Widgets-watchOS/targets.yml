@@ -1,0 +1,23 @@
+# The watchOS widget extension.
+targets:
+  Widgets-watchOS:
+    type: app-extension
+    platform: watchOS
+    templates: [KnotProduct]
+    sources:
+      - Sources
+      - Assets.xcassets
+      - PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_NAME: Widgets-watchOS
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).watchkitapp.widgets
+        INFOPLIST_FILE: Apps/Extensions/Widgets-watchOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/Extensions/Widgets-watchOS/Widgets-watchOS-$(KNOT_SIGNING).entitlements
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "4"
+    dependencies:
+      - package: KnotKit
+        products: [KnotCore, KnotIntents, KnotUI]
+      - sdk: SwiftUI.framework
+      - sdk: WidgetKit.framework

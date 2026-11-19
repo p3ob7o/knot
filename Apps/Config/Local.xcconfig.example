@@ -1,0 +1,8 @@
+// A contributor's own signing, for device builds. Copy this file outside the repository,
+// fill in your team, and point KNOT_LOCAL_CONFIG at it; scripts/bootstrap.sh links it into
+// .build/config/Local.xcconfig. Never commit a team ID.
+//
+// Builds for tests and agents ignore it: scripts/verify.sh passes KNOT_SIGNING=local.
+
+KNOT_SIGNING = team
+DEVELOPMENT_TEAM = YOUR_TEAM_ID

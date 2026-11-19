@@ -1,0 +1,49 @@
+# Runs scripts/verify.sh --quick on a GitHub-hosted runner that offers Xcode 27.
+#
+# The repository gets no self-hosted runner. This workflow holds no secrets, never uses
+# pull_request_target, has read-only permissions, and pins its actions by revision.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    # The `xcode-27` image (a preview on 2026-11-19) carries the release Xcode 27.0, 27.1
+    # and 27.2. scripts/verify.sh finds the one that .xcode-version pins, and fails at once
+    # when the image does not have it.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      XCODEGEN_VERSION: "2.47.0"
+      XCODEGEN_SHA256: "6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen at its pinned version
+        run: |
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: scripts/verify.sh --quick
+        run: scripts/verify.sh --quick
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-logs
+          path: .build/logs/
+          retention-days: 7
