@@ -354,3 +354,46 @@ private let storeRoot = URL(fileURLWithPath: "/store", isDirectory: true)
         #expect((try? layer.read(root.appending(path: "A/x"))) == new, "An acknowledged save was lost.")
     }
 }
+
+@Suite struct FolderCheckTests {
+    let root = URL(fileURLWithPath: "/store", isDirectory: true)
+
+    @Test func aFileWhereAFolderShouldBeIsRefused() throws {
+        let layer = PowerCutFileLayer()
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.makeFolder(root)
+        try durable.place(Data("x".utf8), at: root.appending(path: "Inbox"))
+        do {
+            try DurableFile(layer: layer, root: root).makeFolder(root.appending(path: "Inbox"))
+            Issue.record("makeFolder accepted a file as a folder.")
+        } catch {
+            #expect(error.context.posixError == ENOTDIR)
+        }
+    }
+
+    @Test func theFakeRefusesToRenameAFileOverAFolder() throws {
+        let layer = PowerCutFileLayer()
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.makeFolder(root.appending(path: "Assets"))
+        try layer.write(Data("x".utf8), to: root.appending(path: "f"))
+        #expect(throws: KnotError.self) {
+            try layer.rename(root.appending(path: "f"), to: root.appending(path: "Assets"))
+        }
+        #expect(layer.exists(root.appending(path: "Assets")))
+    }
+
+    @Test func onDiskAFileOrALinkInThePathIsRefused() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "knot-folders-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = base.appending(path: "KnotStore", directoryHint: .isDirectory)
+        let elsewhere = base.appending(path: "Elsewhere", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: store.appending(path: "Inbox"))
+        try FileManager.default.createSymbolicLink(at: store.appending(path: "Assets"), withDestinationURL: elsewhere)
+        let durable = DurableFile(layer: PosixFileLayer(), root: store)
+        #expect(throws: KnotError.self) { try durable.makeFolder(store.appending(path: "Inbox")) }
+        #expect(throws: KnotError.self) { try durable.makeFolder(store.appending(path: "Assets/ab")) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path).isEmpty, "A link was followed.")
+    }
+}

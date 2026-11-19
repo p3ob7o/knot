@@ -145,6 +145,10 @@ public final class PowerCutFileLayer: FileLayer {
             let id = try Self.file(source, in: state)
             let (from, name) = try Self.locate(source, in: state)
             let (to, newName) = try Self.locate(destination, in: state)
+            // As rename(2): a file never replaces a folder.
+            if state.folders[to]!.current[newName] == .folder {
+                throw KnotError.writeFailed.with(.init(posixError: EISDIR))
+            }
             state.folders[from]!.current[name] = nil
             state.folders[to]!.current[newName] = .file(id)
         }
@@ -181,6 +185,19 @@ public final class PowerCutFileLayer: FileLayer {
             let path = Self.path(url)
             if state.folders[path] != nil { return true }
             return (try? Self.file(url, in: state)) != nil
+        }
+    }
+
+    public func entryKind(_ url: URL) -> FileEntryKind? {
+        state.withLock { state in
+            let path = Self.path(url)
+            if path == "/" { return .folder }
+            guard let (folder, name) = try? Self.locate(url, in: state) else { return nil }
+            switch state.folders[folder]!.current[name] {
+            case .folder: return .folder
+            case .file: return .file
+            case nil: return nil
+            }
         }
     }
 

@@ -84,6 +84,18 @@ public struct PosixFileLayer: FileLayer {
         FileManager.default.fileExists(atPath: url.path)
     }
 
+    public func entryKind(_ url: URL) -> FileEntryKind? {
+        var info = stat()
+        let result = url.withUnsafeFileSystemRepresentation { lstat($0!, &info) }
+        guard result == 0 else { return nil }
+        switch info.st_mode & S_IFMT {
+        case S_IFDIR: return .folder
+        case S_IFREG: return .file
+        case S_IFLNK: return .symbolicLink
+        default: return .other
+        }
+    }
+
     public func contents(of folder: URL) throws(KnotError) -> [String] {
         do {
             return try FileManager.default.contentsOfDirectory(atPath: folder.path)

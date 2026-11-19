@@ -1,6 +1,14 @@
 import Foundation
 import Synchronization
 
+/// What an entry on disk is, read without following a symbolic link.
+public enum FileEntryKind: Hashable, Sendable {
+    case file
+    case folder
+    case symbolicLink
+    case other
+}
+
 /// The file-system operations that `DurableFile` places files with.
 ///
 /// The live layer is `PosixFileLayer`. KnotTestSupport has a layer that keeps what was
@@ -21,6 +29,8 @@ public protocol FileLayer: Sendable {
     func remove(_ url: URL) throws(KnotError)
     func read(_ url: URL) throws(KnotError) -> Data
     func exists(_ url: URL) -> Bool
+    /// What the entry at `url` is, without following a link, or `nil` when there is none.
+    func entryKind(_ url: URL) -> FileEntryKind?
     /// The names of the entries of a folder.
     func contents(of folder: URL) throws(KnotError) -> [String]
 }
@@ -90,12 +100,19 @@ public struct DurableFile: Sendable {
     /// if it is missing and syncs its parent, whether this call made the folder or found it.
     /// A folder this value has synced before is not synced again, so a save into known
     /// folders costs no extra syncs. That memory lasts as long as the value and its copies,
-    /// and is this process's own.
+    /// and is this process's own. Each of these folders must be a folder: a file or a
+    /// symbolic link in its place is refused, and a link is never followed.
     public func makeFolder(_ url: URL) throws(KnotError) {
         for folder in try chain(to: url) {
             let key = folder.path
             if synced.contains(key) { continue }
-            if !layer.exists(folder) { try layer.createFolder(folder) }
+            if layer.entryKind(folder) == nil { try layer.createFolder(folder) }
+            // Checked after creating too, since another writer may have put something else
+            // there first: each folder the store owns must be a folder, never a file and never
+            // a link that leads somewhere else.
+            guard layer.entryKind(folder) == .folder else {
+                throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
+            }
             try layer.syncFolder(folder.deletingLastPathComponent())
             synced.insert(key)
         }
