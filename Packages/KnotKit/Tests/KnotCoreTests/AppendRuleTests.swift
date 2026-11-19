@@ -222,6 +222,18 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
         AppendRow(
             "rule 7: a late capture far from any other", request("07:00", .window, .late),
             [prior(1, noteA, "06:00", "06:01"), prior(2, noteB, "10:02", "10:02")], .newNote(.outsideWindow)),
+        // The orchestrator's ruling: inside a note that "New note" closed, rule 5 still appends,
+        // and the note stays closed, so the next capture that follows the window starts a new note.
+        AppendRow(
+            "rule 5: a capture from inside a note closed by New note joins it", request("09:03", .named(noteA)),
+            [prior(1, noteA, "09:00", "09:01", noteClosed: "09:02")], .join(noteA, .namedNote)),
+        AppendRow(
+            "rule 5: and it does not reopen it: the next capture by the window starts a new note", request("09:05"),
+            [
+                prior(1, noteA, "09:00", "09:01", noteClosed: "09:02"),
+                prior(2, noteA, "09:03", "09:04", noteClosed: "09:02"),
+            ],
+            .newNote(.latestNoteClosed)),
         // Rule 9: placing a capture never depends on edits.
         AppendRow(
             "rule 9: an edited old note is not the most recent capture", request("12:00"),
