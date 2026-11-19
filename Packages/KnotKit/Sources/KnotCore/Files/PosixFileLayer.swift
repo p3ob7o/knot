@@ -7,15 +7,21 @@ import Foundation
 /// The live file layer, on POSIX calls.
 ///
 /// A sync is `F_FULLFSYNC`, because on Apple's systems `fsync` alone can leave data in the
-/// drive's cache (docs/architecture.md §6, rule 7). On iOS and watchOS every file it writes
-/// takes the protection class `completeUntilFirstUserAuthentication`, so recording and
-/// ingest work while the device is locked (docs/architecture.md §7).
+/// drive's cache (docs/architecture.md §6, rule 7). On iOS and watchOS every folder it
+/// creates, and so every file created in one, takes the protection class
+/// `completeUntilFirstUserAuthentication`, so recording and ingest work while the device is
+/// locked (docs/architecture.md §7).
 public struct PosixFileLayer: FileLayer {
     public init() {}
 
     public func createFolder(_ url: URL) throws(KnotError) {
         let result = url.withUnsafeFileSystemRepresentation { mkdir($0!, 0o755) }
         guard result == 0 || errno == EEXIST else { throw Self.error(errno: errno) }
+        #if os(iOS) || os(watchOS)
+            // A file takes its folder's class when it is created, so it never sits on disk
+            // under another one. Swift cannot call open_dprotected_np, which is variadic.
+            if result == 0 { try Self.protect(url) }
+        #endif
     }
 
     public func write(_ data: Data, to url: URL) throws(KnotError) {
@@ -39,12 +45,8 @@ public struct PosixFileLayer: FileLayer {
         }
         if let failure { throw Self.error(errno: failure) }
         #if os(iOS) || os(watchOS)
-            do {
-                try FileManager.default.setAttributes(
-                    [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
-            } catch {
-                throw Self.error(for: error)
-            }
+            // A file in a folder that Knot did not create gets the class here too.
+            try Self.protect(url)
         #endif
     }
 
@@ -89,6 +91,19 @@ public struct PosixFileLayer: FileLayer {
             throw Self.error(for: error)
         }
     }
+
+    #if os(iOS) || os(watchOS)
+        /// Gives a file or a folder the protection class `completeUntilFirstUserAuthentication`,
+        /// so that recording and ingest work while the device is locked.
+        private static func protect(_ url: URL) throws(KnotError) {
+            do {
+                try FileManager.default.setAttributes(
+                    [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+            } catch {
+                throw Self.error(for: error)
+            }
+        }
+    #endif
 
     private static func fullSync(_ url: URL, flags: Int32) throws(KnotError) {
         let descriptor = url.withUnsafeFileSystemRepresentation { open($0!, flags | O_CLOEXEC) }
