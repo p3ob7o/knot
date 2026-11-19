@@ -418,16 +418,46 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
         Row(
             name: "drawing in the app, then drawing from the Sketch control", open: open(.ink, .app),
             start: start(.ink, .control), expected: ends),
+        // The exception: while a recording runs, no surface of the device takes typing or Pencil.
+        Row(
+            name: "a recording in the app, then typing on the same surface", open: open(.voice, .app),
+            start: start(.typed, .app), expected: .refused(blocked)),
+        Row(
+            name: "a recording from a control, then typing in the app", open: open(.voice, .control),
+            start: start(.typed, .app), expected: .refused(blocked)),
+        Row(
+            name: "a recording in the app, then the Pencil on the same surface", open: open(.voice, .app),
+            start: start(.ink, .app), expected: .refused(blocked)),
+        Row(
+            name: "a hold in the Mac panel, then typing in the Mac window", open: open(.voice, .macPanel),
+            start: start(.typed, .macWindow), expected: .refused(blocked)),
+        // Text from the command line does not end an open capture.
+        Row(
+            name: "typing in the app, then text from the command line", open: open(.typed, .app),
+            start: start(.typed, .commandLine, source: .cli), expected: .leaveOpen(id(1))),
+        Row(
+            name: "a recording, then text from MCP", open: open(.voice, .app), start: start(.typed, .mcp, source: .mcp),
+            expected: .leaveOpen(id(1))),
     ]
+
+    static let blocked = KnotError.captureBlockedByRecording.about(capture: id(1))
 
     @Test("capture-on-another-surface-ends-open-one", .tags(.named), arguments: rows)
     func anotherSurfaceOrKindEndsTheOpenOne(row: Row) {
         #expect(OpenCaptureRule.decide(open: row.open, start: row.start) == row.expected)
-        // The new capture is the next segment of the same note, whatever the window says.
         let decision = AppendRule.decide(
             AppendRequest(startedAt: at("12:00"), source: row.start.origin.source),
             in: AppendContext(window: .off, captures: [], openCapture: prior(1, noteA, "09:00", nil)))
-        #expect(decision == .join(noteA, .openCaptureOnDevice))
+        switch row.expected {
+        case .endOpenAndAppend:
+            // The new capture is the next segment of the same note, whatever the window says.
+            #expect(decision == .join(noteA, .openCaptureOnDevice))
+        case .leaveOpen:
+            // Placed by the window like any capture: with appending off, a note of its own.
+            #expect(decision == .newNote(.appendingOff))
+        default:
+            break
+        }
     }
 
     static let otherRows: [Row] = [
