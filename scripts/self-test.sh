@@ -100,9 +100,10 @@ fi
 
 # 4. The gate's helper reads the plan as it states it.
 cd "$KNOT_ROOT"
-if python3 -I -B - <<'PY'
+# The helper comes from the scripts' own folder; the plan it reads, from the tree.
+if python3 -I -B - "$KNOT_SCRIPTS/lib" <<'PY'
 import sys
-sys.path.insert(0, "scripts/lib")
+sys.path.insert(0, sys.argv[1])
 import knot_tool as k
 owned, excluded, parts = k.owned_paths("WP-01")
 assert "scripts/" in owned and "scripts/release.sh" in excluded, (owned, excluded)

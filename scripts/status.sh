@@ -21,6 +21,7 @@ esac
 command -v gh >/dev/null ||
     knot_fail "infra-gh-missing" "The GitHub command-line tool, gh, is missing." "brew install gh, then gh auth login." "safe" "nothing"
 cd "$KNOT_ROOT"
-KNOT_BUILD_FOLDER="$KNOT_BUILD_FOLDER" python3 -I scripts/lib/knot_tool.py status ${1:+"$1"} ||
+# The helper comes from the scripts' own folder; the briefs it reads, from the tree.
+KNOT_BUILD_FOLDER="$KNOT_BUILD_FOLDER" python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" status ${1:+"$1"} ||
     knot_fail "infra-status" "The status table could not be built." "Read the error above. gh must be signed in." "safe" \
         "$( [[ ${1:-} == --write ]] && echo "docs/status.md may be half written" || echo nothing)"
