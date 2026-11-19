@@ -713,7 +713,11 @@ def check_committed(report):
             report.fail("fixture_changed: Fixtures/%s differs from Fixtures/manifest.json" % relative)
     out = tempfile.mkdtemp(prefix="knot-fixtures-check-")
     try:
-        fresh = generate_committed(out, quiet=True)
+        try:
+            fresh = generate_committed(out, quiet=True)
+        except (IOError, OSError) as error:
+            missing_input(report, error)
+            return
         paths = ["manifest.json", "audio/long.txt"]
         for entry in fresh["ink"]:
             paths += [entry["file"], entry["preview"]]
@@ -726,6 +730,18 @@ def check_committed(report):
                     % (len(paths), ", ".join(paths), len(checks)))
 
 
+def missing_input(report, error):
+    """Reports a committed input that a regeneration could not read, once, as fixture_missing."""
+    path = getattr(error, "filename", None) or str(error)
+    path = os.path.abspath(path)
+    if path.startswith(REPO + os.sep):
+        message = "fixture_missing: %s" % os.path.relpath(path, REPO)
+    else:
+        message = "fixture_missing: %s (%s)" % (path, error.strerror or error)
+    if message not in report.failures:
+        report.fail(message)
+
+
 def check_audio(report):
     """Speaks every clip into a temporary folder and checks its format and length.
 
@@ -733,7 +749,11 @@ def check_audio(report):
     out = tempfile.mkdtemp(prefix="knot-fixtures-audio-")
     before = len(report.failures)
     try:
-        local = generate_audio(out, quiet=True)
+        try:
+            local = generate_audio(out, quiet=True)
+        except (IOError, OSError) as error:
+            missing_input(report, error)
+            return
         by_name = dict((spec["name"], spec) for spec in AUDIO)
         for entry in local["audio"]:
             spec = by_name[entry["name"]]
@@ -1034,13 +1054,13 @@ def check_no_owner_files(report):
 
 def check(skip_audio):
     report = Report()
-    check_committed(report)
-    if not skip_audio:
-        check_audio(report)
-    check_cleanup(report)
-    check_read_aloud(report)
-    check_checklists(report)
-    check_no_owner_files(report)
+    steps = [check_committed] + ([] if skip_audio else [check_audio])
+    steps += [check_cleanup, check_read_aloud, check_checklists, check_no_owner_files]
+    for step in steps:
+        try:
+            step(report)
+        except (IOError, OSError) as error:
+            missing_input(report, error)  # a file the step needs is gone: report it, never a traceback
     for note in report.notes:
         print("fixtures: " + note)
     for failure in report.failures:
