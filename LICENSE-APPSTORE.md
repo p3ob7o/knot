@@ -8,7 +8,7 @@ This file adds one permission to that licence. Section 7 of the GPL lets a copyr
 
 ## Why
 
-App stores deliver apps under their own terms. Apple's terms add usage rules and copy protection to every app, and those can be read as "further restrictions", which section 10 of the GPL forbids. Without this permission it would be unclear whether Knot may be distributed through the App Store or TestFlight at all, by its author or by anyone else.
+App stores deliver apps under their own terms. Apple's terms add usage rules and copy protection to every app, and those can be read as "further restrictions", which section 10 of the GPL forbids. Without this permission it would be unclear whether anyone but its copyright holders may distribute Knot through the App Store or TestFlight, and whether a build that holds a contributor's code may be distributed there at all.
 
 ## The permission
 

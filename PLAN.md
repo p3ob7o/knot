@@ -1122,14 +1122,14 @@ PR <url>, head <sha>, checks <state>.
 <!-- /autoplan-accepted:eng -->
 
 <!-- owner-answers:g0-assumptions -->
-- These items come from the owner's answers on the assumptions of docs/product-spec.md §16. He gave them on 2026-11-19, after approving the plan, as gate G0 asks. They add to the items above, and where one of them contradicts an earlier item, the later one wins. No review has read them yet: the fold's item-by-item review reads them with the rest.
+- These items come from the owner's answers on the assumptions of docs/product-spec.md §16. He gave them on 2026-11-19, after approving the plan, as gate G0 asks. They add to the items above, and where one of them contradicts an earlier item, the later one wins. No review has read them yet: the fold's item-by-item review reads them with the rest. The fold treats this list as it treats the four before it. `docs/plan/amendments.md` has one row for each of its items, and `scripts/check-plan.sh` fails while PLAN.md still holds it.
 - He confirmed 32 of the 34 assumptions as written. They are decisions now. Their marks are gone from docs/product-spec.md, and §16 lists each with his answer. WP-02 turns them into tests, as planned.
-- A6, changed. His words: "Watch doesn't show content, it's only a capture device." The Watch shows no note content: no stream, no text of a recording and no preview of one. docs/product-spec.md §6 and §15 say so. The back channel of docs/architecture.md §12 carries no note text and nothing about a transcript. It carries only what the Watch needs for the indicator of rule 4: when the most recent capture ended, and the window. WP-17 builds it that way and gives its payload no field that can hold note text. WP-32's recent recordings show a time, a length and a delivery state. The Watch states of docs/design/brief.md §6 lose "transcribed with a short preview" and "transcription failed on the phone". WP-04 adds one row to the M3 checklist: no text of a note or of a recording appears anywhere on the Watch.
+- A6, changed. His words: "Watch doesn't show content, it's only a capture device." The Watch shows no note content: no stream, no text of a recording and no preview of one. docs/product-spec.md §6 and §15 say so. The back channel of docs/architecture.md §12 carries no note text and nothing about a transcript. It carries only what the Watch needs for the indicator of rule 4: the end of the capture that a new recording would join, if there is one, and the window. The phone works that out by the rules of §3, so a note closed by "New note" and a deleted note give none. WP-17 builds it that way and gives its payload no field that can hold note text. WP-32's recent recordings show a time, a length and a delivery state. The Watch states of docs/design/brief.md §6 lose "transcribed with a short preview" and "transcription failed on the phone". WP-04 adds one row to the M3 checklist: no text of a note or of a recording appears anywhere on the Watch.
 - A27, changed. His words: "It should be possible to select multiple segments at once." This replaces one part of the design review's item on the editing model: the rule that a selection does not cross from one segment into the next. Several segments can be selected at once, as whole segments, and copied, shared or deleted together, as docs/product-spec.md §7 and §8 state. The rest of that item stands. Each segment is edited on its own, undo covers the segment being edited, and the capture field is the last element of every open note. A text selection made inside a segment stays inside it, so D20 stands, and so does the design review's decision against selecting text across segments.
-- What A27 asks of the packages. WP-02 adds the delete and the restore of several segments of one note, each in one transaction, to the `NoteStore` contract and to the in-memory fake, as docs/architecture.md §5 states, and WP-10 implements them. The contract suite covers a selection deleted and restored, a selection that holds every live segment of its note, and a process killed inside the delete. WP-21 adds the selection and its three actions to the note's view model, with tests for the order of the copied text and for one undo. WP-30 and WP-33 build it into the note view on the iPhone and the Mac, the iPad inherits it, and it can be reached from the keyboard on the Mac and the iPad. The state matrix of docs/design/brief.md §6 gains the row "Note, several segments selected", 49 rows in all. The command line does not change.
-- Two readings wait for the owner, and they are the only assumptions left in docs/product-spec.md §16. A38: the Watch still lists its own recent recordings, by time, length and delivery state. The other reading is a Watch with no list at all. A39: "select multiple segments" means whole segments, with copy, share and delete, and "Move to its own note" still takes one segment at a time. The other reading is a text selection that runs from one segment into the next, which needs the rich-text editor D20 rules out. Moving several selected segments together into one new note is left out too, because it would change the move operation that the engineering review fixed. A39 is costly to change, so he answers it before WP-02's contracts merge.
+- What A27 asks of the packages. WP-02 adds the delete and the restore of several segments of one note, each in one transaction, to the `NoteStore` contract and to the in-memory fake, as docs/architecture.md §5 states, and WP-10 implements them. The contract suite covers a selection deleted and restored, a selection that holds every live segment of its note, and a process killed inside the delete, which docs/architecture.md §17 requires by name. WP-20 renders a selection of segments as text and as Markdown with the code that renders a note, and its golden files gain one selection. WP-21 adds the selection and its three actions to the note's view model, with tests for the order of the copied text and for one undo. WP-30 and WP-33 build it into the note view on the iPhone and the Mac, the iPad inherits it, and it can be reached from the keyboard on the Mac and the iPad. The state matrix of docs/design/brief.md §6 gains the row "Note, several segments selected", 49 rows in all. The command line does not change.
+- Two readings wait for the owner, and they are the only assumptions left in docs/product-spec.md §16. A38: the Watch still lists its own recent recordings, by time, length and delivery state. The other reading is a Watch with no list at all. A39: "select multiple segments" means whole segments, with copy, share and delete, and "Move to its own note" still takes one segment at a time. The other reading is a text selection that runs from one segment into the next, which needs the rich-text editor D20 rules out. Moving several selected segments together into one new note is left out too, because it would change the move operation that the engineering review fixed. The first list already says that WP-02 does not start before the owner has confirmed the assumptions still open in §16. That holds for both, and A39 is the costly one.
 - A35, confirmed for v1. His words: "For v1 yes. Later we'll expand cleanup abilities." Nothing changes in v1. `TODOS.md` gains one deferred item, "Let cleanup do more", sixteen in all.
-- G0 has one thing left for the owner: how many sittings a week he can give.
+- G0 has three things left for the owner: A38, A39, and how many sittings a week he can give.
 <!-- /owner-answers:g0-assumptions -->
 ## Review record
 
@@ -1319,7 +1319,7 @@ Decision ledger:
 
 #### 0H. Spec review loop
 
-The CEO scope summary is saved at `~/.gstack/projects/p3ob7o-knot/ceo-plans/2026-11-19-knot-v1-rebuild.md`.
+The CEO scope summary is saved on the build Mac, in gstack's folder for this project, as `ceo-plans/2026-11-19-knot-v1-rebuild.md`.
 
 Launch 1 scored the plan 6 out of 10 and passed no dimension. It raised 20 issues, 4 of them blocking: the capture ledger had nothing to count (1.1), C1's test could not be written inside WP-02 (2.1), "Done when" lists mixed merge criteria with hardware gates (2.2), and re-transcription contradicted the data model (2.3). Every finding was checked against the documents and held. All 20 were resolved: 18 by amendments to the four documents, and 2 routed to later phases (the merge queue to the Eng review, the CLI and MCP contract to the DX review).
 
@@ -1362,7 +1362,7 @@ Effort, as estimates and not measurements:
 - A human team: 30 packages and 4 spikes, 10 of the packages L. About 16 to 20 engineer-months for a team of four.
 - CC and gstack: about 120 to 200 agent-hours of implementation with five threads at a time, so the build work fits in days. What is serial sets the calendar: about 50 merges through one gate, and about 13 hours of the owner's time across seven milestones, one spike sitting and two design steps. A realistic span is 2 to 4 weeks if each gate is answered within a day.
 
-Spec review metrics, saved to `~/.gstack/analytics/spec-review.jsonl`: 3 launches, 55 issues found, 36 fixed (none found again by a later launch), 19 remaining (15 amended after the last launch and not yet read by a reviewer, 3 routed, 1 for the final gate), latest score 7.
+Spec review metrics, saved to gstack's analytics log on the build Mac: 3 launches, 55 issues found, 36 fixed (none found again by a later launch), 19 remaining (15 amended after the last launch and not yet read by a reviewer, 3 routed, 1 for the final gate), latest score 7.
 
 #### CEO dual voices
 
@@ -1851,7 +1851,7 @@ Still short of the 12-month ideal:
 
 #### Scope expansion decisions
 
-The full record is the CEO scope summary at `~/.gstack/projects/p3ob7o-knot/ceo-plans/2026-11-19-knot-v1-rebuild.md`.
+The full record is the CEO scope summary on the build Mac, in gstack's folder for this project, as `ceo-plans/2026-11-19-knot-v1-rebuild.md`.
 
 - Accepted: C1 to C7, C10 to C46, and X2.
 - Deferred to TODOS.md: X1, X3, X4, X5, X6, X7, X8, X9.
@@ -3121,7 +3121,7 @@ Legend: ★★★ behavior + edge + error  |  ★★ happy path  |  ★ smoke ch
 
 **Tests made obsolete by this plan.** All 15 retired test files. They leave with the retired app and stay on the archive branch. No retirement card is needed for a deleted app.
 
-**Test plan artifact.** `~/.gstack/projects/p3ob7o-knot/paolo-main-eng-review-test-plan-20261119-042642.md`.
+**Test plan artifact.** Saved on the build Mac, in gstack's folder for this project, as the engineering review's test plan of 2026-11-19, 04:26.
 
 Dispositions: all 13 listed findings and all 37 gaps accepted (audit rows 190 to 199). No test requirement is pending.
 
@@ -3749,7 +3749,7 @@ Legend: ★★★ behavior + edge + error  |  ★★ happy path  |  ★ smoke ch
 
 **Evals.** The cleanup evaluation gains punctuation-only cases in its meaning-critical set. No prompt or instruction text changes in this pass.
 
-**Test plan.** Written for the second pass to `~/.gstack/projects/p3ob7o-knot/paolo-main-eng-review-test-plan-20261119-101226.md`. The first pass's test plan stands beside it.
+**Test plan.** Written for the second pass on the build Mac, in gstack's folder for this project, as the engineering review's test plan of 2026-11-19, 10:12. The first pass's test plan stands beside it.
 
 Dispositions: all 32 gaps accepted. Audit rows 257 to 262.
 
@@ -3938,7 +3938,7 @@ Applying A6 and A27 took a reading of each, and the two readings wait for him as
 
 No review ran on these changes. They sit in the fifth list of the implementation plan, between the markers `owner-answers:g0-assumptions`, and the fold's review reads them. The plan as approved is the one with SHA-256 `c5b522d326598f994df952d3e8d936d575199a3f5b488b080a3f5f18a272e463`. Since then the fifth list was added and one sentence of the approval note names it. Audit rows 264 and 265.
 
-One thing is still open at G0: how many sittings a week he can give.
+Three things are still open at G0: A38, A39, and how many sittings a week he can give. WP-02 does not start before he has answered A38 and A39.
 
 <!-- AUTONOMOUS DECISION LOG -->
 ## Decision Audit Trail

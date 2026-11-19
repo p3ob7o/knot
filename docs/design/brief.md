@@ -198,7 +198,7 @@ Design for the Ultra 2 first, then the smaller sizes.
 | Recording, typing and Pencil not accepted | Yes | Yes | – | – | – | – |
 | Recording, continues a note or starts a new one | – | – | Yes | – | Yes | Yes |
 | Recording, display dimmed | – | – | – | – | Yes | – |
-| Just stopped: saved, text arriving | Yes | iPhone | Yes | Mac panel | Yes | Yes |
+| Just stopped: saved, with text arriving except on the Watch | Yes | iPhone | Yes | Mac panel | Yes | Yes |
 | Short recording discarded | Yes | iPhone | – | – | Yes | Yes |
 | Stopped at the limit, or by a call | Yes | iPhone | Yes | Mac panel | Yes | Yes |
 | Could not start, with the reason | Yes | iPhone | Yes | Mac panel | Yes | Yes |

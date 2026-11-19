@@ -38,6 +38,6 @@ The earlier app was published under version 2 of the GPL. Its tags and archive b
 
 > Draft for Paolo's approval.
 
-Knot is built for one person to begin with, by a team of coding agents that works from [PLAN.md](PLAN.md). A pull request from outside is welcome, and it is read before it is built or merged.
+Knot is built for one person to begin with, by a team of coding agents that works from [PLAN.md](PLAN.md). While v1 is being built, the repository is limited to its collaborators, so it takes no pull requests from outside yet. Once it does, each one is read before it is built or merged.
 
 By submitting a contribution you agree that it is licensed on the same terms as Knot: GPL-3.0-or-later, with the additional permission in [LICENSE-APPSTORE.md](LICENSE-APPSTORE.md). You keep the copyright in your contribution. That permission is what lets a build that contains your code be distributed through the App Store.

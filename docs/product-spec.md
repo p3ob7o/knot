@@ -63,7 +63,7 @@ A note is a series of captures made close together.
 ### 4.2 Speaking
 
 - Recording starts at once. The audio is written to disk continuously, in a form that survives the app being killed. At most the last second is lost.
-- Where a screen is showing, the words appear as you speak.
+- Where a screen is showing, the words appear as you speak. The Watch is the exception: it shows no words.
 - You stop with the control that started the recording. A recording also stops when a phone call interrupts it, or after 30 minutes. Reaching that limit gives the same cue as stopping, and the segment says why it ended.
 - A recording started by a tap and stopped within one second of that tap is treated as an accidental press and discarded. The second is measured between the two presses, not in audio. A press while a recording is still starting or stopping is ignored. Hold-to-record on the Mac is exempt, because the hold already filters accidents. Every other recording is kept, even if it is silent or cannot be transcribed. A recording with no recognised words shows as a recording with no text.
 - The recording stays attached to its segment until you delete it.
@@ -308,7 +308,7 @@ This is the complete list.
 ## 13. Accessibility, language and privacy
 
 - The interface is in English. Strings live in a catalog so that other languages can follow.
-- VoiceOver announces when a recording starts and stops, and stays silent while it runs. The text is read afterwards. New text arriving never moves focus, and focus returns to where it was when a surface closes. Every segment action can be reached from the keyboard on the Mac and the iPad. Each capture path is checked with VoiceOver at its milestone.
+- VoiceOver announces when a recording starts and stops, and stays silent while it runs. The text is read afterwards, except on the Watch, which has none. New text arriving never moves focus, and focus returns to where it was when a surface closes. Every segment action can be reached from the keyboard on the Mac and the iPad. Each capture path is checked with VoiceOver at its milestone.
 - Every control has a VoiceOver label and action. Text scales with Dynamic Type up to the largest sizes. The Mac and iPad are fully usable from the keyboard. Reduce Motion is respected.
 - There is no account, no server and no analytics. The one third-party library, GRDB, is an on-device database layer that makes no network calls. The only network use is iCloud sync and Apple's own model downloads.
 - Logs and diagnostics hold IDs, categories and timings. They never hold note text, transcripts or audio.
