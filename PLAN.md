@@ -213,7 +213,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-14 | 1 | The whole package | WP-05 |
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
-| WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
+| WP-15 | 2 | The hooks for background execution on iOS | SP-1; WP-02 PR 3 |
 | WP-16 | 1 | The whole package | WP-10 PR 2 |
 | WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 2 |
 | WP-17 | 2 | The transport | SP-2; WP-02 PR 3 |
