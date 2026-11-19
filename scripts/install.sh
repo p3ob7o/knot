@@ -62,9 +62,14 @@ fi
 
 knot_select_xcode
 work="$(mktemp -d)"
-xcrun devicectl list devices --quiet --json-output "$work/devices.json" >/dev/null 2>&1 ||
+# KNOT_DEVICECTL_JSON names a saved device list to read in place of devicectl's, for a test.
+if [[ -n ${KNOT_DEVICECTL_JSON:-} ]]; then
+    cp "$KNOT_DEVICECTL_JSON" "$work/devices.json"
+else
+    xcrun devicectl list devices --quiet --json-output "$work/devices.json" >/dev/null 2>&1 ||
     knot_fail "infra-devicectl" "devicectl could not list the devices." \
         "Check that Xcode $KNOT_XCODE_VERSION has finished its first launch, then rerun." "safe" "nothing"
+fi
 
 # One line per paired physical device: identifier, name, platform, connection state.
 python3 -I - "$work/devices.json" >"$work/devices.txt" <<'PY'
@@ -97,12 +102,18 @@ PY
 
 installed=0
 skipped=0
+MATCHED=""
 missed=()
 count=0
 while IFS=$'\t' read -r identifier name platform state udid; do
     if ((${#WANTED[@]})); then
         keep=0
-        for want in "${WANTED[@]}"; do [[ $want == "$name" || $want == "$identifier" || $want == "$udid" ]] && keep=1; done
+        for want in "${WANTED[@]}"; do
+            if [[ $want == "$name" || $want == "$identifier" || $want == "$udid" ]]; then
+                keep=1
+                MATCHED="$MATCHED|$want|"
+            fi
+        done
         ((keep)) || continue
     fi
     count=$((count + 1))
@@ -127,12 +138,24 @@ while IFS=$'\t' read -r identifier name platform state udid; do
     fi
 done <"$work/devices.txt"
 
+# A device asked for by name that matched no paired device is named, and the run fails.
+unmatched=()
+if ((${#WANTED[@]})); then
+    for want in "${WANTED[@]}"; do [[ $MATCHED == *"|$want|"* ]] || unmatched+=("$want"); done
+fi
+for want in ${unmatched[@]+"${unmatched[@]}"}; do echo "install: no paired device is named $want"; done
+
 if ((count == 0)); then
     knot_fail "install-no-device" "No paired device$( ((${#WANTED[@]})) && printf ' named %s' "${WANTED[*]}") to install on." \
         "Pair the devices for development builds (gate G1): connect each once, or pair it over the network in Xcode's Devices window." \
         "safe" "nothing"
 fi
 echo "install: $installed installed, $skipped already held the build, ${#missed[@]} missed"
+if ((${#unmatched[@]})); then
+    knot_fail "install-device-unknown" "No paired device is named: ${unmatched[*]}." \
+        "Check the names with xcrun devicectl list devices, then rerun with names that match." "safe" \
+        "the build is installed on the $installed devices above"
+fi
 if ((${#missed[@]})); then
     knot_fail "infra-install-missed" "Could not install on: ${missed[*]}." \
         "Unlock each device, keep it near this Mac and on the same network, then rerun: devices that hold the build are skipped." \
