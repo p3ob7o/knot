@@ -51,7 +51,7 @@ The full design round does not wait for SP-2. The design brief asks for both bra
 - The latencies also bear on the first targets of `docs/product-spec.md` §14 for a complication tap to a live microphone: 700 ms warm and 1.5 s cold. The spikes and WP-42 calibrate those targets.
 - Record the install procedure that worked on the iPhone and on the Watch. The orchestrator corrects `scripts/install.sh` from it.
 - The report, `docs/spikes/SP-2.md`, has timings over at least 30 transfers and a decision.
-- The report updates `docs/architecture.md` where the answer changes it.
+- Where the answer changes `docs/architecture.md`, the report lists the changes it asks for. The orchestrator owns that file and makes them in a pull request of its own (PLAN.md §7).
 
 ## Merge criteria
 

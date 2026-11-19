@@ -98,6 +98,7 @@ struct Segment { id; noteID; kind: typed | voice | ink
                  textOrigin: typed | rawTranscript | cleaned | edited | recognised
                  rawTranscript: String?             // voice only, never modified
                  transcription: (engine, locale, osBuild)?   // voice only: what produced the transcript
+                 cleanup: (osBuild)?                // voice only: the OS build whose model cleaned the text
                  processingOwner: DeviceID?         // voice only, synced: the device that runs its jobs
                  ownerGeneration: Int               // voice only, synced: rises each time the work moves
                  arrivedAt: Date?                   // local, not synced: when a late capture reached this device
@@ -381,7 +382,7 @@ Shortcuts get StartRecording and StopRecording on every platform, and each is sa
 
 Knot's URL scheme only navigates: it opens the capture surface or a note. It never writes text and never starts a recording.
 
-Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad, so its macOS 27.3 availability does not raise the Mac's minimum. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication.
+Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad. The pinned SDK marks it unavailable on macOS (§20), so a type that adopts it, or that uses ActivityKit, is compiled for iOS only, inside `#if os(iOS)`. `canImport(ActivityKit)` does not tell the two apart, because it is true on the Mac too. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication.
 
 ## 15. Mac specifics
 
@@ -454,14 +455,15 @@ Rules:
 - `scripts/bootstrap.sh` checks the prerequisites first (Xcode, XcodeGen at its pinned version, the simulator runtimes) and then generates the Xcode project. A missing prerequisite stops it with the command that installs it.
 - `scripts/doctor.sh` runs first in every verify run and fails at once on a machine setting no agent can change, such as Automation Mode for Mac UI tests. It also refuses to run below a floor of free disk space. It refuses a repository, a build folder or a fixtures folder that a cloud file provider syncs, which is where the stray "… 2" copies in the retired tree came from. It probes that the gate's signed step can sign without a prompt.
 - `scripts/verify.sh` has five tiers, and one run takes one tier: `--quick` checks formatting, builds the package and runs its tests; `--full` adds every app build and the UI smoke tests; `--soak` runs the capture ledger soak test, with `--seed` to repeat a run; `--perf` measures the timed targets and takes every build slot; `--gate` is what the orchestrator runs before a merge. `--only <step>` and `--module <name>` run one part, and `--skip mac-ui` is for implementers. The gate chooses its own depth from the diff, by the table below, prints the depth and the reason, and refuses `--only`, `--module` and `--skip`, so a partial run can never be called a gate.
-- Every run ends with one summary line: counts, skips, duration, the Xcode version and the macOS build. The orchestrator posts that line as a commit status. A failed step names itself, its log file and the command that reruns only that step.
+- Every run ends with one summary line: counts, skips, duration, the Xcode version and the macOS build. The orchestrator posts that line as a commit status. A failed step names itself, its log file and the command that reruns only that step. A failed soak also prints its seed, its kill point and where its store was kept.
 - Every script reports failure through one function in `scripts/lib/fail.sh`: a stable code, what failed, the fix, whether a retry is safe, and what was changed.
 - Each worktree builds into its own `.build/` and DerivedData, uses simulators named after the worktree, and gives its development builds a store of their own (§7). `scripts/worktree-remove.sh` removes all three, with the worktree's folder in the Mac development container. Agent builds turn the index store off, and each worktree keeps a small fixed set of simulators.
-- `scripts/build-slot.sh` limits concurrent heavy builds on the machine. The default is 3. A slot is a lock the system releases when its holder dies. It uses `/usr/bin/lockf`, which ships with macOS; `flock` does not. One of the three slots is kept for the gate. A waiting script prints a line each minute and gives up after a set time, naming the holders.
+- `scripts/build-slot.sh` limits concurrent heavy builds on the machine. The default is 3. A slot is a lock the system releases when its holder dies. It uses `/usr/bin/lockf`, which ships with macOS; `flock` does not. One of the three slots is kept for the gate. A waiting script prints a line each minute and gives up after a set time, naming the holders. Mac UI tests queue on one exclusive slot, and the script also limits how many simulators are booted at once.
 - Builds for tests use a local configuration that keeps the sandbox and leaves out the entitlements that need the owner's signing profile, with sync switched off. Device builds, milestone builds and the spikes use registered identifiers and the owner's signing: the development set for device builds and spikes, and `com.p3ob7o.knot` with its group and container for milestone builds only (§7).
 - The owner's recordings live in one folder outside every worktree, named by `KNOT_LOCAL_FIXTURES`. `knot-eval --set synthetic` runs on committed fixtures and `--set local` on that folder. Either one exits with a code when its input or its model is missing. It never waits.
 - `scripts/install.sh` exits non-zero when it missed a device, and a rerun skips the devices that already hold the build. `devicectl` does not install onto a Mac, so for a Mac the script writes the build to a folder the owner names, and he opens it there. From the M4 milestone build on, no milestone build is installed or run on the build Mac.
 - A milestone build is made with a level, M1 to M7. A feature whose milestone has not passed is switched off in it by a gate, and a test lists the gates for each level: sync and the command line open at M4, and ink at M5. A fix for an earlier milestone is built at that milestone's level, so it carries no feature that has not had its sitting.
+- `scripts/release.sh` takes the App Store Connect key as a file path only. In a dry run it prints the names of its variables and never their values. After a failed upload it says to check App Store Connect before a retry. It belongs to WP-43.
 - `scripts/sdk-path.sh <platform> <framework>` prints where the Swift interfaces of the pinned Xcode are (§21).
 - Formatting uses `swift format` from the toolchain with the checked-in configuration. After WP-01 merges, `scripts/` belongs to the orchestrator.
 
@@ -479,13 +481,14 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 
 - One pull request at a time. The order is contract PRs, then fixes for a red `main`, then the chain to the next milestone, then the rest by dependency.
 - A PR enters when its review verdict is recorded, the `--quick` summary is on its head and the ownership check passes. From then on its branch is frozen.
-- The orchestrator rebases the branch on `main` in its own gate worktree and pushes it. A conflict goes back to the implementer. It runs the gate on that exact head, posts the status `knot/gate` with the summary line, and merges with `gh pr merge --squash --match-head-commit`. The candidate is three hashes: the base, the head and the tree. If `main` or the head moved, the result is void. After the merge it checks that the tree on `main` is the tree it tested.
+- The orchestrator brings the branch up to date in its own gate worktree. When `main` has moved, it merges `main` into the branch, and once the gate has passed on that merge it pushes it as an ordinary push. It never rebases a branch that was pushed and never forces a push. A conflict goes back to the implementer. It runs the gate on that exact head, posts the status `knot/gate` with the summary line, and merges with `gh pr merge --squash --match-head-commit`. The candidate is three hashes: the base, the head and the tree. If `main` or the head moved, the result is void. After the merge it checks that the tree on `main` is the tree it tested.
 - The ruleset on `main` requires a pull request, squash merges, the status `knot/gate` and a branch that is up to date. The owner applies it at G1.
 - A failed step is rerun once, and only for an infrastructure code from `fail.sh`. A test that passes on a rerun is logged with an owner. The soak is never rerun to green, and storage, capture and sync tests are never set aside.
 - A red night stops the queue. The cause is found by bisecting the squash merges, and it is reverted unless the fix is plain.
 - A contract PR is additive where it can be: a new requirement comes with a default that throws the typed unavailable error, so open branches still compile. A breaking one carries the mechanical edits to every conformer and call site, as a stated exception to path ownership. A contract PR that only adds merges in the normal queue. One that breaks merges at one of two fixed times a day.
-- Stacking happens only inside one package. The thread records its fork point and rebases with `--onto` after the base is squashed.
-- After the queue has rebased a branch, its thread resets to the remote branch before it changes anything else.
+- Each pull request has a branch of its own. A branch whose pull request was squashed gets no further commits: the thread starts the package's next pull request on a new branch from `main`.
+- Stacking happens only inside one package, and a stacked branch stays local until its base has merged. The thread records its fork point, rebases with `--onto` after the base is squashed, and only then pushes the branch for the first time.
+- After the queue has updated a branch, its thread fast-forwards to the remote branch before it changes anything else.
 - A pull request that did not come from one of the project's own threads is never run through the gate before its diff has been read, because the gate runs its code on the owner's Mac. The scripts that drive the gate come from `main`, not from the branch.
 - macOS and Xcode on the build Mac are updated between milestones, never while one is being closed.
 
@@ -493,7 +496,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 
 - The briefs in `docs/plan/` carry what does not change: what each package owns, what it starts after and how many PRs it has, in a header a script can read.
 - GitHub carries what changes: a branch name gives the package, labels give the queue state and a blocked code, and commit statuses carry the `--quick` and gate summaries. `scripts/status.sh` prints the table from those. `docs/status.md` is that output, written to `main` only at milestones.
-- A journal in the build folder outside every worktree records each operation before it starts and when it ends, with the base, the head and the tree: a thread launched, a PR queued, a rebase pushed, a gate run, a merge, a worktree removed, a milestone build, an install. After a reset the orchestrator reads `docs/orchestrator.md`, runs `scripts/status.sh`, compares the journal with GitHub and the worktrees, and finishes or undoes an operation that was cut short before it does anything new. A release step that was cut short is never resumed. It goes back to the owner.
+- A journal in the build folder outside every worktree records each operation before it starts and when it ends, with the base, the head and the tree: a thread launched, a PR queued, a branch update pushed, a gate run, a merge, a worktree removed, a milestone build, an install. After a reset the orchestrator reads `docs/orchestrator.md`, runs `scripts/status.sh`, compares the journal with GitHub and the worktrees, and finishes or undoes an operation that was cut short before it does anything new. A release step that was cut short is never resumed. It goes back to the owner.
 - At M1 a fresh thread takes over from the runbook alone, as a drill.
 
 **What stays out of the repository.** The signing team's ID is not a secret, since it is in every signed app, but it ties the project to one account. It lives in a git-ignored `Local.xcconfig` in the build folder outside every worktree, named by `KNOT_LOCAL_CONFIG`, which `scripts/bootstrap.sh` links into a fresh worktree. Entitlements use the team prefix variable, code reads group identifiers from the Info.plist, and the lint fails when the local file's value appears in a tracked file. The repository is public, so it never gets a self-hosted runner. Its workflows hold no secrets, never use `pull_request_target`, have read-only permissions and pin their actions by revision. GRDB's revision is pinned as well as its version, and `scripts/verify.sh` checks it for SwiftPM and for Xcode, because the generated project's lock file is not committed.
@@ -516,7 +519,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 
 ## 20. Platform facts
 
-"SDK" means the declaration was read in the 27.3 SDK on this Mac on 2026-11-18. "Apple docs" and "reported" come from the research of the same day and were not re-checked.
+"SDK" means the declaration was read in the 27.3 beta SDK on this Mac on 2026-11-18. The code is built against the SDK of the pinned Xcode, and `scripts/sdk-facts.sh` is the check of those rows against it. Where the pinned SDK and the beta's differ, the row says so. "Apple docs" and "reported" come from the research of the same day and were not re-checked.
 
 | Fact | Status |
 |---|---|
@@ -526,8 +529,9 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | watchOS has CloudKit with `CKSyncEngine`, SwiftData, WidgetKit, AppIntents, WatchConnectivity and FoundationModels. | SDK |
 | `ControlWidget` is available on iOS 18, macOS 26 and watchOS 26. `handGestureShortcut` is available on watchOS 11. | SDK |
 | `LongRunningIntent` exists from OS 27, with `performBackgroundTask`. | SDK |
-| `LiveActivityIntent` is available on macOS 27.3. | SDK |
-| The notes schema offers `createNote`, `updateNote` and `appendText`. | SDK |
+| `LiveActivityIntent` and ActivityKit's `ActivityAttributes` are marked unavailable on macOS in the 27.2 SDK. The 27.3 beta SDK offers both from macOS 27.3. `canImport(ActivityKit)` is true on macOS with either. | SDK, both read on 2026-11-19 |
+| The notes schema offers `createNote`, `updateNote` and `appendText`. It is unavailable on watchOS. | SDK |
+| Xcode warns when an app lists a statically linked package in `AppIntentsPackage.includedPackages`, because that package's metadata is already included. Warnings are errors, so the apps declare no `AppIntentsPackage` of their own. | Found by WP-01's build with Xcode 27.2. |
 | `PKStrokeRecognizer` exists on iOS and macOS, with an async `search`. | SDK |
 | `SystemLanguageModel` exposes `availability`, `contextSize`, `tokenCount(for:)` and `supportedLanguages`. | SDK |
 | `SpeechTranscriber` exposes `isAvailable`, `supportedLocales` and `installedLocales`. `AssetInventory` exposes `assetInstallationRequest(supporting:)`. | SDK |
@@ -543,7 +547,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | Carbon hot keys work in the Mac sandbox without extra permission. | Reported. SP-5 proves it. |
 | The Mac Studio has no built-in microphone. | Apple's specifications. Hold-to-record needs an external one there. |
 | A sandboxed command-line tool cannot write to an arbitrary folder passed as an argument. | Expected from the sandbox rules. SP-3 confirms. |
-| TestFlight may refuse a build made with a beta Xcode, and only Xcode 27.3 beta is installed. | Unconfirmed. The owner installs a release Xcode at G1, and the merge gate and the archive use it. |
+| TestFlight may refuse a build made with a beta Xcode. | Unconfirmed, and no longer in the way. The owner installed the release Xcode 27.2 (27B52) on 2026-11-19, `.xcode-version` pins it, and the merge gate and the archive use it. The 27.3 beta stays installed and is used only by name. |
 | The system turns Pencil writing in a text field into typed text by default. | From memory of OS 26, not checked in the 27 SDK. WP-35 checks before relying on it. |
 | An iPhone Live Activity also appears in the Watch Smart Stack and the Mac menu bar. | From memory of OS 26, not checked. WP-31 checks, and decides what a tap there does. |
 | Mac UI tests need Automation Mode, and enabling it on this Mac asks for a password. Developer mode is off. | Checked with `automationmodetool` and `DevToolsSecurity` on 2026-11-19. The owner enables both once at G1. |
