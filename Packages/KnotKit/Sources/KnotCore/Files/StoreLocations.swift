@@ -196,19 +196,17 @@ public struct StoreLocations: Hashable, Sendable {
     }
 }
 
-/// The formats a recording in progress may be written in (docs/architecture.md §8). WP-12
-/// picks one of the two candidates and proves it with a kill test. A closed set, so that no
-/// text from outside becomes part of a path.
+/// The format a recording in progress is written in (docs/architecture.md §8): Core Audio
+/// Format holding 16-bit linear PCM, which a reader takes to its last complete frame after a
+/// kill. Fragmented MPEG-4 is not used. A closed set, so that no text from outside becomes
+/// part of a path. The stored copy is AAC in `.m4a` (`AssetKind.audio`).
 public enum RecordingFormat: String, Hashable, Sendable, CaseIterable {
     /// Core Audio Format.
     case caf
-    /// Fragmented MPEG-4.
-    case fragmentedMP4 = "fragmented_mp4"
 
     public var fileExtension: String {
         switch self {
         case .caf: "caf"
-        case .fragmentedMP4: "mp4"
         }
     }
 }
