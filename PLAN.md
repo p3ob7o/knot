@@ -184,6 +184,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-00 | 2 | The fold | WP-00 PR 1 |
 | WP-01 | 1 | The scaffold that unblocks WP-02 and the spikes | WP-00 PR 2 |
 | WP-01 | 2 | The tooling, beside WP-02 | WP-01 PR 1 |
+| WP-01 | 3 | The Mac UI step, run and made required | WP-01 PR 2 |
 | WP-02 | 1 | The domain types, rules and reducers | WP-01 PR 1 |
 | WP-02 | 2 | The ports, fakes and suites the tracer needs | WP-02 PR 1; WP-12 proof step; WP-13 proof step; WP-14 proof step |
 | WP-02 | 3 | The remaining ports, fakes and suites | WP-02 PR 2; WP-18 proof step; SP-1 notes; SP-2 notes; SP-4 notes |

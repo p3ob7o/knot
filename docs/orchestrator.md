@@ -22,7 +22,7 @@ After a reset, read the last lines of the journal, list the open pull requests a
 What the build Mac has today, for every first message:
 
 - The pinned Xcode is the one `.xcode-version` names. The beta is used only by name, through `KNOT_XCODE`.
-- A recursive delete and a forced push each wait for Paolo's approval, and a thread that sends one stalls there. A thread takes a new folder from `mktemp -d` in place of a delete, and never rewrites a branch it has pushed.
+- A recursive delete, a forced push and a forced removal of a worktree (`git worktree remove --force`) each wait for Paolo's approval, and a thread that sends one stalls there. A thread takes a new folder from `mktemp -d` in place of a delete, never rewrites a branch it has pushed, and never chains a command that removes something with one that must run.
 - When a tool call comes back as declined together with a message on another subject, Paolo answered while the call waited for approval. The thread acts on the message, and sends the call again if it was already allowed.
 - The owner's recordings, when he has made them, are in the folder that `KNOT_LOCAL_FIXTURES` names. Nothing derived from them enters a commit, a pull request, a log or a test.
 - `KNOT_AGENT=1` is exported in every shell before a script runs.
@@ -74,6 +74,8 @@ The gate depends on what has merged:
 | WP-01's first pull request merges | `scripts/check-plan.sh` and the package's own merge criteria, because `scripts/verify.sh` does not exist yet |
 | WP-01's second pull request merges | `scripts/verify.sh --quick` |
 | Afterwards | `scripts/verify.sh --gate` |
+
+The gate's Mac UI step stays pending until WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode.
 
 ## What needs Paolo
 
