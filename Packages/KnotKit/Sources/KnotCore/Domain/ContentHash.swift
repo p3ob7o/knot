@@ -45,7 +45,11 @@ public struct ContentHash: Hashable, Sendable, Codable, CustomStringConvertible 
             message.append(contentsOf: Array("text".utf8))
             message.append(0)
             // Text that Swift calls equal hashes equal: the hash reads its NFC form, while
-            // the stored text stays as it was given.
+            // the stored text stays as it was given. NFC follows the OS's Unicode tables, so a
+            // retry of one capture made across an OS upgrade could hash differently for text
+            // with a character that gained a composition. That is accepted: the hash is
+            // compared only inside one store, a retry sends the same bytes within minutes, and
+            // the worst outcome is a refused retry.
             message.append(contentsOf: Array(text.precomposedStringWithCanonicalMapping.utf8))
         case .file(let sha256):
             message.append(contentsOf: Array("file".utf8))
