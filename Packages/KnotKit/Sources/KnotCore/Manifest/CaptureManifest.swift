@@ -1,56 +1,23 @@
 import Foundation
 
-/// A JSON value this build does not read, kept so that it can be written back untouched.
-public indirect enum JSONValue: Hashable, Sendable, Codable {
-    case null
-    case bool(Bool)
-    case number(Double)
-    case string(String)
-    case array([JSONValue])
-    case object([String: JSONValue])
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-        } else if let value = try? container.decode(Double.self) {
-            self = .number(value)
-        } else if let value = try? container.decode(String.self) {
-            self = .string(value)
-        } else if let value = try? container.decode([JSONValue].self) {
-            self = .array(value)
-        } else {
-            self = .object(try container.decode([String: JSONValue].self))
-        }
-    }
-
-    public func encode(to encoder: any Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .null: try container.encodeNil()
-        case .bool(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .string(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
-        }
-    }
-}
-
 /// The one versioned format for a capture in a file: a recording in progress, an item in
 /// `Inbox/` and a file in the watch's outbox (docs/architecture.md §3).
 ///
 /// It holds no content: the text, the recording or the drawing is a payload beside it, whose
-/// path comes from the capture's ID. A field this build does not know is kept and written
-/// back, and a manifest of a newer format is refused with `inbox_item_newer_version` and
-/// kept, so that an update can ingest it.
+/// path comes from the capture's ID. A manifest of a format this build does not support is
+/// refused, a newer one with `inbox_item_newer_version`, and the caller keeps the file so that
+/// an update can ingest it.
+///
+/// A field this build does not know is read past and not written back. Writing it back could
+/// change it, as a number past a Double's precision would, and nothing in this build reads
+/// it: a field that older builds must not lose comes with a new format, which they refuse.
+/// A value this build does not know in a field it knows, such as a new kind, is kept.
 public struct CaptureManifest: Hashable, Sendable {
     /// The format this build writes and reads.
     public static let currentFormat = 1
 
-    public var format: Int
+    /// The format the manifest was read in. A manifest is always written in `currentFormat`.
+    public private(set) var format: Int
     public var captureID: CaptureID
     public var kind: SegmentKind
     public var origin: CaptureOrigin
@@ -72,8 +39,6 @@ public struct CaptureManifest: Hashable, Sendable {
     /// The payload's SHA-256 in lower-case hexadecimal, which the phone checks a watch file
     /// against before it acknowledges it.
     public var payloadSHA256: String?
-    /// Fields of a newer format of the same version, kept untouched.
-    public var unknownFields: [String: JSONValue]
 
     public init(
         captureID: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, startedAt: Date,
@@ -93,7 +58,6 @@ public struct CaptureManifest: Hashable, Sendable {
         self.revision = revision
         self.payloadByteCount = payloadByteCount
         self.payloadSHA256 = payloadSHA256
-        self.unknownFields = [:]
     }
 
     /// The manifest as bytes: JSON with sorted keys, so the same manifest always gives the
@@ -193,6 +157,10 @@ extension CaptureManifest: Codable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: AnyKey.self)
         format = try container.decode(Int.self, forKey: AnyKey(.format))
+        guard (1...Self.currentFormat).contains(format) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: AnyKey(.format), in: container, debugDescription: "A format this build does not support.")
+        }
         captureID = try container.decode(CaptureID.self, forKey: AnyKey(.captureID))
         kind = try container.decode(SegmentKind.self, forKey: AnyKey(.kind))
         origin = CaptureOrigin(
@@ -227,20 +195,11 @@ extension CaptureManifest: Codable {
                 forKey: AnyKey(.revision), in: container, debugDescription: "A negative revision or size.")
         }
         payloadSHA256 = try container.decodeIfPresent(String.self, forKey: AnyKey(.payloadSHA256))
-        let known = Set(Key.allCases.map(\.rawValue))
-        var unknown: [String: JSONValue] = [:]
-        for key in container.allKeys where !known.contains(key.stringValue) {
-            unknown[key.stringValue] = try container.decode(JSONValue.self, forKey: key)
-        }
-        unknownFields = unknown
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: AnyKey.self)
-        for (key, value) in unknownFields {
-            try container.encode(value, forKey: AnyKey(key))
-        }
-        try container.encode(format, forKey: AnyKey(.format))
+        try container.encode(Self.currentFormat, forKey: AnyKey(.format))
         try container.encode(captureID, forKey: AnyKey(.captureID))
         try container.encode(kind, forKey: AnyKey(.kind))
         try container.encode(origin.source, forKey: AnyKey(.source))

@@ -42,16 +42,36 @@ import Testing
         }
     }
 
-    @Test func aFieldThisBuildDoesNotKnowIsKeptAndWrittenBack() throws {
+    @Test func aValueThisBuildDoesNotKnowIsKeptAndAFieldIsReadPast() throws {
         let golden = Data(CaptureManifestGolden.formatOneWithUnknownFields.utf8)
         let manifest = try CaptureManifest.decode(golden)
         #expect(manifest.kind == .unknown("photo"))
         #expect(manifest.origin.surface == .unknown("car_play"))
-        #expect(manifest.unknownFields["lens"] == .object(["focal_mm": .number(24), "front": .bool(false)]))
-        #expect(manifest.unknownFields["tags"] == .array([.string("x"), .null]))
-        #expect(
-            String(decoding: try manifest.encoded(), as: UTF8.self)
-                == String(decoding: golden, as: UTF8.self))
+        let written = String(decoding: try manifest.encoded(), as: UTF8.self)
+        #expect(written.contains(#""kind":"photo""#))
+        #expect(written.contains(#""surface":"car_play""#))
+        #expect(!written.contains("lens"))
+        #expect(!written.contains("tags"))
+        #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
+    }
+
+    @Test func anUnknownFieldNeverComesBackChanged() throws {
+        // 9007199254740993 does not fit a Double. A field this build does not know is not
+        // written back at all, so it cannot come back changed.
+        let data = Self.golden(replacing: "future_count", with: "9007199254740993")
+        let manifest = try CaptureManifest.decode(data)
+        let written = String(decoding: try manifest.encoded(), as: UTF8.self)
+        #expect(!written.contains("9007199254740992"))
+        #expect(!written.contains("future_count"))
+        #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
+    }
+
+    @Test func bothWaysInRefuseAFormatThisBuildDoesNotSupport() throws {
+        for format in ["0", "-1", "2"] {
+            let data = Self.golden(replacing: "format", with: format)
+            #expect(throws: KnotError.self) { try CaptureManifest.decode(data) }
+            #expect(throws: DecodingError.self) { try JSONDecoder().decode(CaptureManifest.self, from: data) }
+        }
     }
 
     @Test func aNewerFormatIsRefusedAndNamesItsCapture() throws {
@@ -96,7 +116,7 @@ import Testing
             try CaptureManifest.decode(Data(repeating: 0x20, count: Limits.manifestBytes + 1))
         }
         var manifest = Self.manifest
-        manifest.unknownFields["padding"] = .string(String(repeating: "p", count: Limits.manifestBytes))
+        manifest.payloadSHA256 = String(repeating: "p", count: Limits.manifestBytes)
         #expect(throws: KnotError.manifestTooLarge.about(capture: Self.capture)) { try manifest.encoded() }
     }
 }
