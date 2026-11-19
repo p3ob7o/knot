@@ -56,10 +56,14 @@ public struct PriorCapture: Hashable, Sendable {
     public var isConflictCopy: Bool
     public var noteDeletedAt: Date?
     public var noteClosedAt: Date?
+    /// Whether the note still has a segment that is not deleted. A note with none is treated
+    /// as deleted (rule 11). The store knows it; one capture's row cannot show it.
+    public var noteHasLiveSegment: Bool
 
     public init(
         segmentID: SegmentID, noteID: NoteID, startedAt: Date, endedAt: Date?, isDeleted: Bool = false,
-        isConflictCopy: Bool = false, noteDeletedAt: Date? = nil, noteClosedAt: Date? = nil
+        isConflictCopy: Bool = false, noteDeletedAt: Date? = nil, noteClosedAt: Date? = nil,
+        noteHasLiveSegment: Bool = true
     ) {
         self.segmentID = segmentID
         self.noteID = noteID
@@ -69,15 +73,19 @@ public struct PriorCapture: Hashable, Sendable {
         self.isConflictCopy = isConflictCopy
         self.noteDeletedAt = noteDeletedAt
         self.noteClosedAt = noteClosedAt
+        self.noteHasLiveSegment = noteHasLiveSegment
     }
 
     /// Builds the append rule's view of a segment in its note.
-    public init(_ segment: Segment, in note: Note) {
+    public init(_ segment: Segment, in note: Note, noteHasLiveSegment: Bool) {
         self.init(
             segmentID: segment.id, noteID: note.id, startedAt: segment.startedAt, endedAt: segment.endedAt,
             isDeleted: segment.deletedAt != nil, isConflictCopy: segment.conflictOf != nil,
-            noteDeletedAt: note.deletedAt, noteClosedAt: note.closedAt)
+            noteDeletedAt: note.deletedAt, noteClosedAt: note.closedAt, noteHasLiveSegment: noteHasLiveSegment)
     }
+
+    /// True when the note is deleted, or treated as deleted because no segment is left in it.
+    public var noteCountsAsDeleted: Bool { noteDeletedAt != nil || !noteHasLiveSegment }
 }
 
 /// How a capture reaches the store.
@@ -227,11 +235,26 @@ public enum AppendRule {
         latest(for: request, in: context) == nil ? .newNote(.noEarlierCapture) : nil
     }
 
-    /// Rules 10 and 14: if the most recent capture's note is deleted, a new note starts. A
-    /// late capture never joins a deleted note.
+    /// Rules 10, 11 and 14: if the most recent note is deleted, or has no segment left, a new
+    /// note starts. A late capture never joins a deleted note.
     public static let latestNoteDeleted = Step(name: "latest-note-deleted") { request, context in
-        guard let latest = latest(for: request, in: context), latest.noteDeletedAt != nil else { return nil }
+        guard let latest = mostRecentNote(for: request, in: context), latest.noteCountsAsDeleted else { return nil }
         return .newNote(.latestNoteDeleted)
+    }
+
+    /// The capture whose note is "the most recent note" of rule 14.
+    ///
+    /// For a live capture, by the orchestrator's ruling on rules 11 and 14, it is the most
+    /// recent capture with deleted captures counted, and the rule does not fall back to an
+    /// older note when that note is deleted or has no live segment. For a late capture it is
+    /// the capture the window looks at (rule 10).
+    public static func mostRecentNote(for request: AppendRequest, in context: AppendContext) -> PriorCapture? {
+        guard request.arrival == .live else { return latest(for: request, in: context) }
+        var candidates = context.captures
+        if let open = context.openCapture, !candidates.contains(where: { $0.segmentID == open.segmentID }) {
+            candidates.append(open)
+        }
+        return candidates.filter { !$0.isConflictCopy }.max(by: isOlder)
     }
 
     /// Rules 4 and 10: a note closed by "New note" takes no more captures, except a late one

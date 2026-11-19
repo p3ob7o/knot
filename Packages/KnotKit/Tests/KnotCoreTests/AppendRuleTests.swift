@@ -14,11 +14,12 @@ private let fiveMinutes = AppendWindow.default
 
 private func prior(
     _ number: Int, _ note: NoteID, _ start: String, _ end: String?, deleted: Bool = false, copy: Bool = false,
-    noteDeleted: String? = nil, noteClosed: String? = nil
+    noteDeleted: String? = nil, noteClosed: String? = nil, noteEmpty: Bool = false
 ) -> PriorCapture {
     PriorCapture(
         segmentID: id(number), noteID: note, startedAt: at(start), endedAt: end.map(at), isDeleted: deleted,
-        isConflictCopy: copy, noteDeletedAt: noteDeleted.map(at), noteClosedAt: noteClosed.map(at))
+        isConflictCopy: copy, noteDeletedAt: noteDeleted.map(at), noteClosedAt: noteClosed.map(at),
+        noteHasLiveSegment: !noteEmpty)
 }
 
 private func request(
@@ -241,9 +242,20 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
             "rule 13: the destination is fixed at the first keystroke", request("09:05:30"),
             [prior(1, noteA, "09:00", "09:01")], .join(noteA, .insideWindow)),
         // Rule 14.
+        // The orchestrator's ruling on rules 11 and 14: the most recent note is the note of
+        // the most recent capture, deleted captures counted.
         AppendRow(
-            "rule 14: the most recent capture was deleted, the one before is inside", request("09:04"),
+            "rule 14: B's only segment is deleted, so the most recent note counts as deleted",
+            request("09:05"),
+            [prior(1, noteA, "09:00", "09:01"), prior(2, noteB, "09:02", "09:03", deleted: true, noteEmpty: true)],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "rule 14: a deleted capture in a note that keeps a live segment elsewhere", request("09:05"),
             [prior(1, noteA, "09:00", "09:01"), prior(2, noteB, "09:02", "09:03", deleted: true)],
+            .join(noteA, .insideWindow)),
+        AppendRow(
+            "rule 14: N keeps n1 when n2 is deleted, and the capture joins N through n1", request("09:03"),
+            [prior(1, noteA, "09:00", "09:00"), prior(2, noteA, "09:02", "09:02", deleted: true)],
             .join(noteA, .insideWindow)),
         AppendRow(
             "rule 14: the most recent note was deleted", request("09:04"),
