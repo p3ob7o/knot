@@ -1,0 +1,26 @@
+# WP-13's proof step: SpeechTranscriber probed inside an app in the iOS Simulator.
+# It lives on wp/13-proof only and never merges. Generate with `xcodegen generate` here;
+# the generated project is not committed. See README.md.
+name: SpeechProbe
+options:
+  bundleIdPrefix: com.p3ob7o.knot.dev.spike
+  deploymentTarget:
+    iOS: "27.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "The probe checks whether on-device transcription is available."
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  SpeechProbe:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.p3ob7o.knot.dev.spike.speechprobe

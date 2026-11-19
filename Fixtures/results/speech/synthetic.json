@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "set": "synthetic",
+  "fixturesManifestSha256": "01a1eba3bb823d3ce2192e33438a4472bcbd779a30fbfbfa4863cd236ca3d365",
+  "engine": {
+    "name": "SpeechTranscriber",
+    "locale": "en-US",
+    "osBuild": "26C5047e",
+    "assets": null
+  },
+  "audio": {
+    "osBuild": "26C5047e",
+    "voices": [
+      "Eddy (English (US))",
+      "Flo (English (US))",
+      "Reed (English (UK))",
+      "Reed (English (US))",
+      "Sandy (English (US))",
+      "Shelley (English (US))"
+    ]
+  },
+  "normalisation": "knot-wer-1",
+  "date": "2026-11-19",
+  "results": [
+    {
+      "name": "clean",
+      "audioSha256": "89897b22a86987dd0b17c7d733f5e583414df71efd9144b49fe820caf4adb126",
+      "referenceWords": 52,
+      "hypothesisWords": 50,
+      "substitutions": 1,
+      "deletions": 2,
+      "insertions": 0,
+      "wer": 0.058,
+      "transcript": "I want to remember three days from this morning, the library closes early on Fridays, so the books go back by Thursday evening. The bakery on the corner now opens at 7. And the bus station leaves from the other side of the square while the road is being repaired.",
+      "transcribeSeconds": 0.89
+    },
+    {
+      "name": "fillers",
+      "audioSha256": "1109d7f50eb29de75d7a8a84591ddc052092a05b40442485ca62de58b9c2199f",
+      "referenceWords": 52,
+      "hypothesisWords": 51,
+      "substitutions": 2,
+      "deletions": 1,
+      "insertions": 0,
+      "wer": 0.058,
+      "transcript": "Um, so the plan for Saturday is, uh, we leave at 9. No, attend, and we, we pick up the bites from the shop on Carver Street. Uh, I think it closes at four. I mean, I'm pretty sure it closes at 4 so, um, we should be back before then.",
+      "transcribeSeconds": 0.41
+    },
+    {
+      "name": "list",
+      "audioSha256": "9931a055e31c58d3525e1d4251091dc4c7424119f2df55a9cfa246f827e236b4",
+      "referenceWords": 13,
+      "hypothesisWords": 13,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "wer": 0.077,
+      "transcript": "Shopping list, X, milk, bread, 2 lemons, a bag of rice, and coffee.",
+      "transcribeSeconds": 0.19
+    },
+    {
+      "name": "numbers-names",
+      "audioSha256": "bcb399aa38f5ced4311e23e37ed6b6fe6eb5dce0d97c253d3ab7b9fb7682fa9a",
+      "referenceWords": 41,
+      "hypothesisWords": 37,
+      "substitutions": 7,
+      "deletions": 4,
+      "insertions": 0,
+      "wer": 0.268,
+      "transcript": "Call Dr. Baraco for 415 on March 3rd, pay prearrangement $240.50 for the repairs. Sivan flight BA 117 and the lands gate 22 tell Matthias the room is 1204 on the 12th floor.",
+      "transcribeSeconds": 0.76
+    },
+    {
+      "name": "short",
+      "audioSha256": "2e2cec1cddae4376eaf3f034231beb0426f648b9d1e6aa8d04653e2964ac87e2",
+      "referenceWords": 2,
+      "hypothesisWords": 1,
+      "substitutions": 1,
+      "deletions": 1,
+      "insertions": 0,
+      "wer": 1.0,
+      "transcript": "Bystands.",
+      "transcribeSeconds": 0.13
+    },
+    {
+      "name": "canary",
+      "audioSha256": "3657b07edcb31231f31b82eb2e4fc1c01094ffb1fbe8a486170c3d96b1b4066f",
+      "referenceWords": 20,
+      "hypothesisWords": 19,
+      "substitutions": 5,
+      "deletions": 1,
+      "insertions": 0,
+      "wer": 0.3,
+      "transcript": "Remember the water, the plants on the balcony, and elk, well, the stair keys are under the blue pods?",
+      "transcribeSeconds": 0.25
+    },
+    {
+      "name": "noisy",
+      "audioSha256": "8c098d1ea95496c5195122cf2bf1df4b720f0e97fd51ecc43c85715e9ab14c1b",
+      "referenceWords": 34,
+      "hypothesisWords": 31,
+      "substitutions": 9,
+      "deletions": 4,
+      "insertions": 1,
+      "wer": 0.412,
+      "transcript": "meeting with Wilbert moved for Wednesday afternoon. At home, for example, for the kitchen island, and check whether the window rains can be delivered for the whole end of the month.",
+      "transcribeSeconds": 0.47
+    },
+    {
+      "name": "silence",
+      "audioSha256": "1a594feb4774d0948cbe93379fb12a6a6afd316c12c591c49e0c563525f4c0be",
+      "referenceWords": 0,
+      "hypothesisWords": 0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "wer": null,
+      "transcript": "",
+      "transcribeSeconds": 0.18
+    },
+    {
+      "name": "long",
+      "audioSha256": "cfbf8dccbd0a7f5488e3c3d187982e86104b7d118e3e3263601e3412a38465f7",
+      "referenceWords": 1701,
+      "hypothesisWords": 1676,
+      "substitutions": 168,
+      "deletions": 31,
+      "insertions": 6,
+      "wer": 0.121,
+      "transcript": "This is a long note about the weekend, the outside of a few things for work, so that nothing gets lost while I walk. I will start with the house because that is where most of the open questions are and then move on to the garden. The treatment may and the work items that keep slipping from one week to the next. The kitchen first. The builder say, your cabinets can come out on Monday, but only if the electrician does move the sockets by then. The electrician can come on Friday morning, which leaves the weekend to empty the cupboards. Everything in the top cupboards can go into the boxes in the hall, but every pan should go to the shed because they will not fit anywhere else and nobody needs them for a month. But isles are still undecided. The pale gray ones were good in the shop, but in the sample, but at home, they were almost blew under the evening light. The warmer sand color might be safer. The shop will name us a larger panel of Egypt, we lost before Wednesday, and that seems well doing, before we all, the 14, 12 meters or something, we only saw around the shop lights. For the floor, the plan is to keep the old boards and all lonely replace the kitchen part. The carpenter, things, the boards under the cigar soft, which would explain the smell last winter. If they are rotten, it will cut out the section with new boards, and the cost goes up by roughly a whip. He will know on the 1st day, so we will not decide anything about the floor finish until then. Now the garden. The tomatoes need staking before the wind picks up again, and the netting over the strawberries has a tear on the side, facing the fence. The hose by the shed is linking the tap, which probably only needs the new washer. The neighbors asked whether they could borrow the long ladder on Sunday, which is fine, as long as it comes back before the gutters are clear. The edge along the lane is grown into the pods again. Cutting is an upstage job with two people, and the green waist beans are already grown to the next collection. It might be easier to book the councilman for a single large pickup, which costs a small fee, but saves 3 weekends. The swimming means a little at a time. The tripment may is mostly booked. The train leaves early on the Thursday, and the connection in the city is only 20 minutes, which is tied with luggage. There is a later connection to that is an hour, but leaves more room for delays. The hotel can hold the room delayed. So the later train is probably the calmer choice, and it means breakfast at home instead of at the station. For the trip, we still need a power adapter, a light rain jacket inch, and a walking map for the coastal path. The guide put on the shelf at 16 years old, so some of the very times in it will be wrong. The tourist office has a page with the summer time table, and it is worth printing it, because the phone signal on that coast was catching last time. Well, next, the quote we reported during the end of the month, and the section of the support numbers is still missing. Those numbers come with a shared sheet with someone reorganized last week, so the formulas in the summaries app may point at the wrong columns, checking that is the 1st job on Monday before anyone copies the totals in the slides. The team may move from Tuesday to Wednesday at the same time, the agenda has 3 items. The new holiday calendar, the training budget, and to cover the front desk during the move. The holiday calendar is easy. The training budget needs a number of finance 1st and the front desk question needs a short list of names. Ideally, people who have done it before. There was also the question of the old laptops. Four of them are still in the cupboard, and they showed me wiped and recycled rather than kept the spares because nobody has used them in 2 ears. The recycling company collects on the 1st Friday of each month and the form needs serial numbers, which are printed on the bottom of each machine. Back to early days. The car is due for its service next month, and the tires were close to the limited lost check. It makes sense to book most of the same garage on the same morning, and to ask for a courtesy car. The garage closes for a week in the middle of the month, so the booking should go in before then, or it lives in the next month. The bathrooms app still drops. It is the same kind of washer as the garden oats. So buying a small mixed bag would fix both. Like that, the hardware shop, a new filter for the cooker would be good, and it all looks for the shed, so that the bikes can end on the wall instead of leaning against the lawnmower. A real call to make. The bank wants a signed form for the new account, which needs a stamp from the post office. The dentist moved the checkup by a week, and the new time clashes with the team meeting, so that needs moving again, and the library send a reminder about 2 books that are overdue, which are probably in the car. Finally, I thought about the shed itself. It is all of things that nobody has touched in ears, maintains all curtain rails, a broken chair, and a box of cables. When clear Saturday will empty most of it. The paint can grow to the tip on the West Sunday of the month, the rails and the chairs to the charity shop, and the cables to the same recycling collection as the laptops. There's everything for now. The order for the weekend is the cupboards, then the tomatoes and the oats, then the shadow there is time. Monday is the electrician, the summary sheet and the call to the garage. The rest can wait until the tiles are chosen because most of the other decisions follow from that one. One more thing about the kitchen. The new one needs its own circuit and the electrician wants to know the model before Friday so that he can bring the right cable. The model number is on the delivery note in the door by the front door. If the note is gone, the shop can send it again, but they only answer the phone in the mornings. About the windows, the frames on the north side are swelling on the seat every time it rains. The joint a city could clean them down and remain much less the new frames would cost. It is 3 seconds out of the month. It would be good to have that done before, you know, when the rain comes in sideways off the hill. The heating engineer sent a quote for the boiler service. It is a little higher than last year, but it now includes the radiator valves, which has been since the spring. The earliest slot is a Thursday morning, and someone needs to be home from mainland till noon. That might be the day to work from the kitchen table, if the kitchen still has a table by then. A note for the weekend shopping. We are out of olive oil, rice and coffee, and the dishwasher tablets are nearly gone. The market on Saturday has a good bread, but it sells out by 10. The big supermarket is open late on Friday, which might be a better time for the heavy things, because the car park is empty at Friday in the evening. For the birthday at the end of the month, the restaurant can take a table for 8 on the Saturday, offered, and if we move to the room with the bag. They need the final number a week before, and the deposit when we confirm. Two people have not replied yet. So it is worth sending one short reminder on Monday and then booking for whoever has answered. The bikes need some attention before the trip. The black tire on the blue bike loses air over a few days, which usually means a slow puncture. The chain of the other bike is dry and noisy. Both are small jobs, and the shop on the corner does a quick service likely waited to arrive before 11. Otherwise, it takes 2 days, and we need the bites of the weekend. At work, the new starter begins on the 1st Monday of next month. Their laptop was been ordered, but the desk by the window still has someone's boxes on it from the move. The welcome plan is mostly written. It needs a body for the 1st 2 weeks, a list of the systems they need access to, and lunch on the 1st day, which should be put somewhere close. The training budget question will come up again. It's amazing. Last year, most of it went on one conference, and several people said they would rather have smaller courses right across the year. A simple way to decide would be to ask everyone for one course they would choose, with its price, and then see how a lot of budget goes before anyone argues about it. Last of all, the photos from the summer are still on the old phone. They should go after the shared drive before the phone is wiped and sold. There are about 2000 of them. So it is a job for an evening with a cable rather than a slow upload over the air. After that, the phone can go back to its stocks with the charger ready for whoever buys it.",
+      "transcribeSeconds": 8.06
+    }
+  ],
+  "summary": {
+    "words": 1915,
+    "wer": 0.128,
+    "werWithoutLong": 0.187,
+    "silenceWords": 0
+  }
+}
