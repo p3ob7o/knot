@@ -48,8 +48,11 @@ status() {
     if [[ -n $out ]]; then printf '%s\n' "$out"; else echo "build-slot: every slot is free"; fi
 }
 
-# Tries to run the command holding every lock in $@ before `--`, without waiting. Returns 75
-# when a lock was taken by someone else, else the command's status.
+# Tries to run the command holding every lock in $@ before `--`, without waiting. Sets
+# SLOT_BUSY to 1 when a lock was taken by someone else and the command did not run, else to
+# 0, and returns the command's status. Which of the two happened is told by a marker that
+# the command's wrapper writes once it holds every lock, never by the status, because a
+# command may itself exit with lockf's 75.
 try_run() {
     local locks=() marker
     while [[ $1 != -- ]]; do locks+=("$1"); shift; done
@@ -69,9 +72,11 @@ try_run() {
         exec "$@"' _ "$marker" "$LABEL" "${#locks[@]}" "${locks[@]}" "$@" || status=$?
     if [[ -e $marker ]]; then
         rm -f "$marker"
+        SLOT_BUSY=0
         return "$status"
     fi
-    return 75
+    SLOT_BUSY=1
+    return 0
 }
 
 run() {
@@ -128,7 +133,7 @@ run() {
                 locks+=(${extras[@]+"${extras[@]}"})
                 status=0
                 try_run "${locks[@]}" -- "$@" || status=$?
-                if ((status != 75)); then
+                if ((SLOT_BUSY == 0)); then
                     ((waited)) && echo "build-slot: got a slot after $(knot_duration $(($(knot_now) - start)))" >&2
                     return "$status"
                 fi

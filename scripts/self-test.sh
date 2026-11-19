@@ -45,6 +45,17 @@ else
 fi
 kill "$runner" 2>/dev/null || true
 
+# 1b. A command that itself exits with lockf's status 75 runs once, and its status comes back.
+count="$scratch/count-75"
+status=0
+KNOT_SLOT_DIR="$slots" KNOT_SLOT_TIMEOUT=5 KNOT_COUNT="$count" "$KNOT_ROOT/scripts/build-slot.sh" run -- \
+    sh -c 'echo ran >>"$KNOT_COUNT"; exit 75' 2>/dev/null || status=$?
+if [[ $status == 75 && "$(wc -l <"$count" | tr -d ' ')" == 1 ]]; then
+    pass "a command that exits with 75 runs once, and its 75 comes back"
+else
+    fail "a command that exits with 75: status $status, ran $(wc -l <"$count" 2>/dev/null | tr -d ' ') times"
+fi
+
 # 2. A failure prints the agreed fields: a code, what failed, the fix, whether a retry is
 #    safe, and what was changed, and exits 1.
 status=0
