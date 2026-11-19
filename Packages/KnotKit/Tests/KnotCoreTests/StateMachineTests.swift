@@ -90,9 +90,11 @@ private let failure = KnotError.transcriptionFailed.code
 
     @Test func aFailureNeverRemovesTheRecording() {
         // No transition leads from a kept recording to discarded: only the accidental press
-        // of a recording still running does.
-        for (from, _, to) in Self.legal where to == .discarded {
-            #expect(from == .recording)
+        // of a recording still running does. Asked of the reducer, for every state and event.
+        for state in Self.states {
+            for event in Self.events where (try? VoiceMachine.reduce(state, event)) == .discarded {
+                #expect(state == .recording && event == .discardAccidental, "\(state) + \(event) discards it.")
+            }
         }
     }
 }
@@ -140,9 +142,11 @@ private let failure = KnotError.transcriptionFailed.code
         for event in Self.events {
             #expect((try? InkMachine.reduce(.ready, event)) != .drawing)
         }
-        // Nothing but a drawing leads to drawing.
-        for (from, _, to) in Self.legal where to == .drawing {
-            #expect(from == .drawing)
+        // Nothing but a drawing leads to drawing, asked of the reducer for every state and event.
+        for state in Self.states {
+            for event in Self.events where (try? InkMachine.reduce(state, event)) == .drawing {
+                #expect(state == .drawing, "\(state) + \(event) reopens a drawing.")
+            }
         }
     }
 }
