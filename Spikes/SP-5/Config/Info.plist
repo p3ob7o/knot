@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Knot SP-5</string>
+	<key>KnotFlavour</key>
+	<string>$(KNOT_FLAVOUR)</string>
+	<key>KnotSigning</key>
+	<string>$(KNOT_SIGNING)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Knot SP-5 records short test clips while you hold its key, to measure how fast the microphone opens. The clips stay in memory and are never saved.</string>
+</dict>
+</plist>

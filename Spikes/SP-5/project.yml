@@ -1,0 +1,51 @@
+# SP-5's throwaway app: the Mac hotkey in a sandboxed build (docs/plan/SP-5.md). It lives on
+# the branch spike/mac-hotkey and is never merged. Generate and build it with
+# Spikes/SP-5/build.sh, never by hand. The generated SP5.xcodeproj is git-ignored.
+#
+# It shares Apps/Config/Base.xcconfig with the real apps, so it takes the development
+# identifiers (com.p3ob7o.knot.dev) and the same signing switch: KNOT_SIGNING=local signs ad
+# hoc and keeps the sandbox, team signs with the owner's team. It never names a milestone
+# identifier, and it has no app group: it needs none.
+
+name: SP5
+
+options:
+  bundleIdPrefix: com.p3ob7o
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  defaultConfig: Debug
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: ../../Apps/Config/Base.xcconfig
+  Release: ../../Apps/Config/Base.xcconfig
+
+targets:
+  SP5:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    settings:
+      base:
+        PRODUCT_NAME: SP5
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
+        INFOPLIST_FILE: Config/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/SP5-$(KNOT_SIGNING).entitlements
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - sdk: Carbon.framework
+      - sdk: AVFAudio.framework
+      - sdk: CoreAudio.framework
+      - sdk: IOKit.framework
+
+schemes:
+  SP5:
+    build:
+      targets:
+        SP5: all
