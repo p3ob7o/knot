@@ -185,6 +185,8 @@ KnotCore declares these protocols. KnotFakes ships a fake for each, except `Capt
 
 Implementers: `AudioPlayer` and `RecordingStateStore` in KnotAudio; `SettingsStore` in KnotStore; `AssetFetcher` in KnotSync, with a local-only version in KnotStore for when sync is off; `RecordingActivity` in the iOS app target; `InstallIdentity` and `ProcessNotifier` in KnotStore, by WP-10's second PR; `FreeSpaceProbe` in KnotAudio, by WP-12's second PR, because the Watch's recorder needs it and the Watch composes no KnotStore; `BackgroundRunner` in KnotCapture: the runner that runs work straight through, for the foreground and the Mac, by WP-05, and the iOS runners by WP-15's second PR; `SurfaceRouter` in the iOS and Mac app targets, by the second PRs of WP-30 and WP-33; `CueEmitter` in the iOS, Watch and Mac app targets, by the second PRs of WP-30, WP-32 and WP-33, for what plays, while the recorder decides when a cue may play, so that a start cue is not recorded; `Lifecycle` in KnotApp, by WP-22's second PR, with an adapter for iOS and one for macOS, and in the Watch app target, by WP-32's second PR, if anything there takes the port.
 
+No module takes the `Lifecycle` port itself. WP-13's transcriber, WP-15's first PR and the queue all react to the app coming forward, and all may start before the port exists. So the modules expose a call for the app coming forward, the composition makes that call, and WP-22's second PR wires `Lifecycle` to those calls.
+
 SP-1's code half fixed three of these ports:
 
 - `RecordingActivity` holds no `Activity`, because ActivityKit's `Activity` is not `Sendable`. Its implementation finds the activity by the capture ID in its attributes each time, so a new launch ends the activity that a dead one left, through `endAll(except:)`.
