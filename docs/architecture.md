@@ -68,6 +68,8 @@ scripts/                bootstrap, verify, build-slot, sim, release
 
 Modules depend on KnotCore's ports, not on each other. Only KnotApp knows the concrete types. KnotSync is the one exception: it uses KnotStore directly, because it needs database-level access. It never issues SQL itself. KnotStore gives it one interface: read the pending changes, apply a fetched batch together with the engine's state in one transaction, and save a record's system fields. That interface keeps revisions, the change counter, history and the search index right for a remote change as for a local one. KnotAgent is written against the `NoteStore` port, so its commands can be built and tested on the fake before the store exists, and the `knot` executable is where the real store is wired in.
 
+KnotExport never downloads. It exports the recordings and drawings that are on this device, writes a line in the note's Markdown for a file that is on another device, and returns the list of what it left out. It can also say what an export would leave out before it writes anything. KnotExport takes a drawing's image from its caller, through a provider of KnotCore types that the caller passes in: with an image it exports the drawing as that image, and without one it writes the drawing's stored data file under its ID and names it in the list it returns. Export therefore never drops a drawing, and `knot export`, which cannot reach KnotInk, still exports everything (§10). The app's export first downloads those files through `AssetFetcher`, then exports, and shows that list (product spec §8). `knot export` downloads nothing and asks KnotExport first: when a file is on another device it refuses and writes nothing, or with `--skip-missing` it exports the rest and prints the list (product spec §10).
+
 Three things in KnotCore exist so that a rule has one home. `CaptureManifest` is the one file format for a recording in progress, an item in `Inbox/` and a file in the watch outbox, with one version number and one set of golden files. `StoreLocations` is the only code that computes where a store, `Inbox/` or the recording state lives. It takes the flavour from the app shell or the tool, and no library target has a default path. `DurableFile` is the only code that places a file: write, sync, rename, sync the folder (§6, rule 7). A fourth joined them in the second engineering pass: the rule that a generated title uses only words from its note is one function here, which KnotCleanup calls when it proposes a title and the store calls when a segment leaves a note.
 
 The module table is enforced. The gate builds with `--explicit-target-dependency-import-check error`, so an import the table does not allow fails the build. On a branch that is not a contract branch, the gate also fails when KnotCore's public API differs from `main`. WP-02's own pull requests are the exception until the last of them has merged, because they are the ones that write that API. Its third only adds: once the tracer has started on the API of the second, a change that breaks it goes in a contract branch like any other. The review holds WP-02 to that, because the gate's check lets its branches through.
@@ -99,6 +101,7 @@ struct Segment { id; noteID; kind: typed | voice | ink
                  rawTranscript: String?             // voice only, never modified
                  transcription: (engine, locale, osBuild)?   // voice only: what produced the transcript
                  cleanup: (osBuild)?                // voice only: the OS build whose model cleaned the text
+                 recognition: (engineVersion, language, osBuild)?   // ink only: what produced the recognised text
                  processingOwner: DeviceID?         // voice only, synced: the device that runs its jobs
                  ownerGeneration: Int               // voice only, synced: rises each time the work moves
                  arrivedAt: Date?                   // local, not synced: set when a late capture is placed, cleared when its note is opened
@@ -123,10 +126,10 @@ A segment can leave its note for a new note of its own (product spec §7). The m
 Job states are queued, running, done and failed. Five things can stop a job, and they are told apart:
 
 - **An attempt** is an error the step returned. After five, the job is failed and its segment shows a retry action.
-- **A deferral** is a step that cannot run now: the model is not ready, the system limits requests, there is no background time left, or the device is locked. Deferrals are never counted. The job runs again when the app comes forward or the model's availability changes.
+- **A deferral** is a step that cannot run now: the model is not ready, the system limits requests, there is no background time left, the device is locked, or, for recognition, the app is not in the foreground. Deferrals are never counted. The job runs again when the app comes forward or the model's availability changes.
 - **A death** is a job found running at launch. When background time runs out the queue yields the job cleanly, so a job still marked running means the process died. The job goes back to queued once. After two deaths it fails with its own code, so a recording that crashes the transcriber cannot kill the app at every launch.
 - **A yield** is a step that was cancelled, because background time ran out or the queue was asked to stop. It is not counted, and the job stays queued.
-- **A final error** is one that no retry on this device can fix: speech is unavailable here, the audio cannot be read, or the cleanup model cannot be used here. The job ends at once as done, with the error's code, and is not tried again. What its segment shows is the error's own: a recording kept without text, or the raw transcript as its text.
+- **A final error** is one that no retry on this device can fix: speech is unavailable here, the audio cannot be read, the drawing cannot be read, the recogniser does not support the handwriting's language, or the cleanup model cannot be used here. The job ends at once as done, with the error's code, and is not tried again. What its segment shows is the error's own: a recording or a drawing kept without text, shown as "Kept, no text", or the raw transcript as its text.
 
 Sizes are bounded in the domain types, and WP-02 fixes the numbers. First values, all estimates: a segment's text holds at most 256 KiB of UTF-8, so that a record stays under CloudKit's limit with its raw transcript beside it; a title at most 200 characters; a manifest at most 64 KiB. Typed or piped text beyond the limit continues in a new segment of the same note, and nothing is cut. A file's place on disk is derived from its ID, never from a name inside a manifest or a record.
 
@@ -152,6 +155,7 @@ voice   recording ──stop──► recorded ──► transcribing ──► 
 ink     drawing ──end──► recognising ──► ready     (empty canvas ──► discarded)
         drawing ──killed──► recognising at relaunch
         recognition fails ──► failed(recognise, code): the drawing is kept and a retry is offered
+        the drawing cannot be read, or its language is not supported ──► the job ends, and the drawing is kept, shown as "Kept, no text"
 
 watch   onWatch ──transfer──► delivered ──► continues as "recorded" on the iPhone
 ```
@@ -168,20 +172,30 @@ KnotCore declares these protocols. KnotFakes ships a fake for each, except `Capt
 | `Recorder` | Get ready without opening the microphone. Start a recording, which returns a session once the recording is live. The session streams levels, how much of the audio is durable, and the live audio, and it ends with its reason, whether it was stopped or stopped by itself. Stop, which cannot fail or be cancelled and returns once the file is on the drive. Discard. Recover the orphaned recordings of earlier launches, never one of the current launch. |
 | `Transcriber` | Report readiness in five states: ready, not installed, installing, unsupported locale, unavailable. Install the model with progress, which only the app does. Transcribe a file in resumable runs: a run reads at most a budget of audio from an offset, ends at the last finished phrase, and returns its pieces with their time ranges and where the next run starts. Stream live text for `Sendable` chunks of samples. |
 | `Cleaner` | Report availability in three states: available, not ready, unavailable with its reason. Publish its changes. Turn a raw transcript into a body and, when asked, a title, in one call that returns the whole result. A decline is a result, not an error. |
-| `InkRecogniser` | Turn drawing data into text. |
-| `ProcessingQueue` | Run and resume transcribe, clean and recognise jobs. |
+| `InkRecogniser` | Report whether it can read handwriting in a language: available, or unsupported language. Recognise one finished drawing, given as the bytes the canvas saved, into its text and the text's provenance, in one call with no stream. Empty text means the drawing holds no words, and a refusal is never read as no words. |
+| `ProcessingQueue` | Run and resume transcribe, clean and recognise jobs. Each drain takes a `BackgroundRunner` and a progress sink from its caller. |
 | `SyncEngine` | Start, stop and report status. |
-| `WatchLink` | Send a capture, receive acknowledgements, publish how many captures wait and how many failed. |
+| `WatchLink` | Send a capture: write it to the outbox and queue it, which says nothing about delivery. Receive acknowledgements. Publish how many captures wait and how many failed, counted from the outbox and its acknowledgements, never from the session's queue. Resume at launch and on the system's events (§12). Run the Watch's background task until the session has no content pending, within a time limit. |
 | `AudioPlayer` | Play, pause and seek a recording. |
 | `AssetFetcher` | Bring a recording or drawing made on another device onto this one, with progress. |
-| `RecordingStateStore` | Publish whether a recording is running, for controls and widgets in other processes. |
-| `RecordingActivity` | Start, update and end the Live Activity that keeps an intent-started recording alive. iPhone and iPad only. |
+| `RecordingStateStore` | Publish whether a recording is running, for controls and widgets in other processes: a synchronous read and write of one value in the app group's defaults. |
+| `RecordingActivity` | Start, update and end the Live Activity that keeps an intent-started recording alive, keyed by capture ID, and at launch end every activity that has no recorder. Its errors name ActivityKit's refusal. iPhone and iPad only. |
 | `SettingsStore`, `FeatureGates`, `Clock`, `IDGenerator` | Small supporting ports. |
 | `SurfaceRouter`, `CueEmitter`, `BackgroundRunner`, `FreeSpaceProbe`, `InstallIdentity`, `ProcessNotifier`, `Lifecycle` | Supporting ports that the second engineering pass named, each with a fake: where an Open intent lands, the cues of product spec §4.5, background time, free space, the Keychain install ID, the notice between processes, and the app's foreground and background events. |
 
-Implementers: `AudioPlayer` and `RecordingStateStore` in KnotAudio; `SettingsStore` in KnotStore; `AssetFetcher` in KnotSync, with a local-only version in KnotStore for when sync is off; `RecordingActivity` in the iOS app target.
+Implementers: `AudioPlayer` and `RecordingStateStore` in KnotAudio; `SettingsStore` in KnotStore; `AssetFetcher` in KnotSync, with a local-only version in KnotStore for when sync is off; `RecordingActivity` in the iOS app target; `InstallIdentity` and `ProcessNotifier` in KnotStore, by WP-10's second PR; `FreeSpaceProbe` in KnotAudio, by WP-12's second PR, because the Watch's recorder needs it and the Watch composes no KnotStore; `BackgroundRunner` in KnotCapture: the runner that runs work straight through, for the foreground and the Mac, by WP-05, and the iOS runners by WP-15's second PR; `SurfaceRouter` in the iOS and Mac app targets, by the second PRs of WP-30 and WP-33; `CueEmitter` in the iOS, Watch and Mac app targets, by the second PRs of WP-30, WP-32 and WP-33, for what plays, while the recorder decides when a cue may play, so that a start cue is not recorded; `Lifecycle` in KnotApp, by WP-22's second PR, with an adapter for iOS and one for macOS, and in the Watch app target, by WP-32's second PR, if anything there takes the port.
+
+No module takes the `Lifecycle` port itself. WP-13's transcriber, WP-15's first PR and the queue all react to the app coming forward, and all may start before the port exists. So the modules expose a call for the app coming forward, the composition makes that call, and WP-22's second PR wires `Lifecycle` to those calls.
+
+SP-1's code half fixed three of these ports:
+
+- `RecordingActivity` holds no `Activity`, because ActivityKit's `Activity` is not `Sendable`. Its implementation finds the activity by the capture ID in its attributes each time, so a new launch ends the activity that a dead one left, through `endAll(except:)`.
+- `BackgroundRunner` is not a service the queue calls. Background time from an intent exists only inside that intent's `perform()`, through a method of the intent itself, and every mechanism that gives minutes requires progress reports. So the runner is passed in by whoever holds the time, is scoped to one call, and runs work that reports its progress. `ProcessingQueue` takes a runner and a progress sink for each drain and owns no background time. Which mechanism gives the time waits for SP-1's report.
+- Reloading the controls when the recording phase changes belongs to the app shell, with `ControlCenter.shared.reloadControls(ofKind:)`, and not to `RecordingStateStore`, so that KnotAudio needs no WidgetKit.
 
 KnotCore also declares two seams that are not ports of `AppEnvironment`: `FileLayer`, under `DurableFile`, which the power-cut layer of KnotTestSupport replaces in tests, and `LogSink`, under the logging facade, for tests that check that no text reaches a log.
+
+KnotLink declares one more seam of that kind, `LinkTransport`, and WP-17 writes it with its fake. Everything in §12 sits behind it. It activates the session and reports its state; queues, lists and cancels file transfers by capture ID; receives a file through a synchronous handler that runs before the system deletes the file and returns the acknowledgement to send; sends acknowledgements; and updates the context. It streams the session's events: a change of state, a file finished, a file cancelled, an acknowledgement and a context. A file finished is not a delivery. The fake transport can lose, repeat and reorder each kind of event, and finish a file that never arrives.
 
 Two operations carry the "nothing is lost" promise and are part of the contracts:
 
@@ -206,15 +220,17 @@ Three rules keep a fallback or a retry from undoing newer work:
 
 A recovered capture ends at its last durable write.
 
-WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. One code covers a cursor from another store and one from another generation of this store, and one code does the same for a revision. The recorder tells a full disk from another failed write by the volume's free space, because the audio file's error does not say. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked. A cancelled step is a yield: it is not an attempt, not a decline and not an error. Speech unavailable on this device, audio unreadable and cleanup model unavailable are final: the job ends and is not tried again on this device (§4). A job that died twice fails with a code of its own. A recording that is empty or silent is not an error either: it is ready with empty text.
+WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; drawing unreadable; handwriting language unsupported; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. One code covers a cursor from another store and one from another generation of this store, and one code does the same for a revision. The recorder tells a full disk from another failed write by the volume's free space, because the audio file's error does not say. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked, app not in the foreground, and, for the watch link, link not ready, counterpart missing and counterpart full. The watch link has two more cases: delivery failed, an attempt after which the capture is queued again, and outbox file missing, which fails the capture at once and keeps its manifest. A cancelled step is a yield: it is not an attempt, not a decline and not an error. Speech unavailable on this device, audio unreadable, drawing unreadable, handwriting language unsupported and cleanup model unavailable are final: the job ends and is not tried again on this device (§4). A job that died twice fails with a code of its own. A recording that is empty or silent is not an error either: it is ready with empty text, and so is a drawing that holds no words.
 
 Each real implementation runs its contract suite where it can run:
 
 | Suite | Runs |
 |---|---|
 | `NoteStore`, `AssetStore`, `SettingsStore`, `Recorder` on injected audio, `AudioPlayer`, `Transcriber`, `Cleaner`, and `SyncEngine` on the merge core | The Mac, in the package tests |
-| `RecordingStateStore` across two processes, `RecordingActivity`, and `InkRecogniser` if WP-18's proof finds it needs the Simulator | The iOS Simulator |
+| `RecordingStateStore` across two processes, `RecordingActivity`, and the real `InkRecogniser` | The iOS Simulator |
 | `WatchLink` | The fake transport on the Mac. The real one on hardware, at M3. |
+
+The real `InkRecogniser` runs its suite in tests hosted in the app, because the recognition service refuses a process that is not an app, whether `swift test` or the package tests under `xcodebuild`. The fake's half of that suite runs in the package tests on the Mac, as every fake's does.
 
 ## 6. One writer, many producers
 
@@ -313,6 +329,10 @@ In v1 the only producer outside the app process is the watch link. Extensions th
 
 - `PKCanvasView` wrapped for SwiftUI. Drawing data is saved at the end of every stroke.
 - `PKStrokeRecognizer` produces the recognised text. It is stored on the segment, so every device can search it without recognising again.
+- The segment records the text's provenance beside it: the engine's `recognitionVersion`, the language it used and the OS build. In v1 no device recognises a stored drawing again, and a higher `recognitionVersion` triggers nothing. The provenance is kept so that a later version can decide which drawings to recognise again. Recognised text that the user has edited is never replaced.
+- Recognition uses the English variant set in Settings, as speech does (§9). A language that the recogniser does not support is a final error, and the drawing shows "Kept, no text" (§4).
+- Recognition runs only while the app is in the foreground. That is a choice of design: Knot defers recognition outside the foreground on every device. WP-18's probe saw the recognition service refuse a process that is not an app, and an app in the iOS 27.2 simulator about a second after it left the foreground, even one that held background time. The queue never runs a recognise job from background time or a background task, and a job deferred there runs when the app comes forward. A finished drawing is recognised as its capture ends, while the app is in front, so the usual case is unaffected.
+- A port of KnotCore gives a stored drawing's image, for the ink segment view and the app shells. It comes with WP-02's third PR, with a fake that returns a fixture image, and KnotInk implements it in WP-18. Until WP-18 merges, `.live` answers that it is unavailable: the ink segment view shows its placeholder with the recognised text, and nobody has an image to pass to KnotExport, which then writes the drawing's stored data file under its ID and names it in its list (§3). Ink is gated off until M5, so no milestone build holds a drawing before then.
 - A Pencil-capability check decides whether the canvas is offered: iPad, and iPhone Duo. WP-18 finds the right API for that check on iPhone.
 
 ## 11. Sync
@@ -348,13 +368,13 @@ This section is the proposal that spike SP-4 tests.
 ## 12. Watch link
 
 - **Watch outbox:** `<captureID>.m4a` and `<captureID>.json`. The manifest holds the capture ID, start, end, duration, device and checksum.
-- **Send:** `WCSession.transferFile`, with the manifest as metadata. The watch keeps the file until the phone acknowledges that capture ID.
+- **Send:** `WCSession.transferFile`, with the manifest as metadata. The watch keeps the file until the phone acknowledges that capture ID. The session's `didFinish` without an error is not a delivery: in the simulator it came for files that never reached the iPhone app. Only the acknowledgement moves a capture out of the outbox.
 - **Receive:** the phone's delegate must move the received file before it returns, because the system deletes the file afterwards. It moves the file into `Inbox/` with `DurableFile`, checks it against its manifest, and acknowledges with `transferUserInfo` once it is durably there. Ingest follows and does not hold the acknowledgement, so a phone whose store will not open cannot fill the watch.
 - **Coordinator:** the watch's sequence of record, convert and send lives in KnotLink beside the outbox, and the watch app only hosts it. It is tested on the Mac with kill points, and it finishes a conversion that a kill interrupted at the next launch.
-- **Retry:** the watch re-sends unacknowledged captures when the session activates, when reachability changes, when either app comes forward, after each new capture, and on its background refresh. A transfer that shows no progress for a set time is cancelled and queued again. Duplicates are harmless, because ingest is idempotent.
+- **Retry:** the watch re-sends each capture that is neither acknowledged nor still outstanding, on every trigger: when the session activates, when reachability changes, when either app comes forward, after each new capture, and on its background refresh. A capture that is still outstanding is never queued again. At launch the watch first waits for the session's activation callback and adopts `outstandingFileTransfers` by the capture ID in their metadata, before it queues anything again, so a relaunch makes no duplicate. Cancelling a transfer gives no delegate call, so the transport reports the cancel itself. A capture queued for longer than a set time with no `didFinish` and no acknowledgement, while the session is activated and reachable, is cancelled and queued again. That stall rule rests on the time since queueing until SP-2's sitting shows that a transfer's progress moves. Duplicates are harmless, because ingest is idempotent.
 - **Checksums:** the phone checks each file against its manifest and acknowledges only a file that matches. On a mismatch the watch sends the file again. On the third mismatch the phone ingests what it received as a failed capture and keeps it, and it still does not acknowledge. The watch keeps its own copy, shows it as not delivered, and tries again when the session next activates. An intact delivery later replaces the damaged copy and makes the capture stored.
-- **Back channel:** the phone sends the watch no note text and nothing about a transcript, because the watch is a capture device only (product spec §6). The watch learns that a recording arrived from the acknowledgement above. `updateApplicationContext` carries only what the watch needs to say whether a recording continues a note or starts a new one (product spec §3, rule 4): the end of the capture that a new recording would join, if there is one, and the window. The phone works that out by the rules of product spec §3, so a note closed by "New note" and a deleted note give none. What the watch shows is a forecast. The phone decides at ingest, by the recording's own timestamps.
-- **Testing:** file transfer does not work in the Simulator. The logic is tested against a fake transport. Delivery is tested on hardware.
+- **Back channel:** the phone sends the watch no note text and nothing about a transcript, because the watch is a capture device only (product spec §6). The watch learns that a recording arrived from the acknowledgement above. `updateApplicationContext` carries only what the watch needs to say whether a recording continues a note or starts a new one (product spec §3, rule 4): the end of the capture that a new recording would join, if there is one, and the window. The phone works that out by the rules of product spec §3, so a note closed by "New note" and a deleted note give none. What the watch shows is a forecast. The phone decides at ingest, by the recording's own timestamps. The Watch reads `receivedApplicationContext` at activation and does not wait for a callback at launch.
+- **Testing:** in the 27.2 simulators files from the Watch to the iPhone, and user info in either direction, do not reach the other app, while application context, from iPhone to Watch, and `sendMessage`, from Watch to iPhone, do. The logic is tested against a fake transport, and the real transport has no simulator test. Delivery is tested on hardware.
 
 ## 13. Processes and extensions
 
@@ -388,13 +408,15 @@ Rules taken from Apple's documentation, to be confirmed by SP-1:
 - The Live Activity must start with the recording and last as long as it does, or the system stops the recording.
 - If Live Activities are off or the microphone permission is missing, the intent must open the app.
 
-Intents reach the environment through the App Intents dependency manager, which the app registers at launch. The widget extension links KnotIntents for the types only, and no intent runs there. An intent reads the environment through one accessor that fails with a typed error when nothing is registered, so an intent that the system runs in the wrong process fails safely. The Live Activity's attributes type lives in KnotIntents and belongs to WP-19. WP-01 proves the packaging with one trivial intent that appears in both the app and the widget extension.
+Intents reach the environment through the App Intents dependency manager, which the app registers at launch. The widget extension links KnotIntents for the types only, and no intent runs there. An intent reads the environment through one accessor that fails with a typed error when nothing is registered, so an intent that the system runs in the wrong process fails safely. That accessor is `@Dependency(default:)` with the unavailable environment as its default, because `AppDependencyManager` has no lookup that can fail: in a process that registered nothing, the intent gets the unavailable environment and throws the typed error. Every intent that writes declares `allowedExecutionTargets = [.main]` (OS 27), so the system cannot run it in the extension. The Live Activity's attributes type lives in KnotIntents and belongs to WP-19. WP-01 proves the packaging with one trivial intent that appears in both the app and the widget extension.
 
 Shortcuts get StartRecording and StopRecording on every platform, and each is safe to repeat. ToggleRecording is for buttons: the Action Button and the controls.
 
+On iPhone and iPad the intents that start a recording declare `supportedModes = [.background, .foreground(.dynamic)]`. They start in the background and call `continueInForeground` only when Live Activities are off or the microphone is refused, which is how the intent opens the app. StopRecording never needs the app in front and declares `[.background]`.
+
 Knot's URL scheme only navigates: it opens the capture surface or a note. It never writes text and never starts a recording.
 
-Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad. The pinned SDK marks it unavailable on macOS (§20), so a type that adopts it, or that uses ActivityKit, is compiled for iOS only, inside `#if os(iOS)`. `canImport(ActivityKit)` does not tell the two apart, because it is true on the Mac too. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication.
+Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the watch recorder. None contains storage code. `LiveActivityIntent` is used only on iPhone and iPad. The pinned SDK marks it unavailable on macOS (§20), so a type that adopts it, or that uses ActivityKit, is compiled for iOS only, inside `#if os(iOS)`. `canImport(ActivityKit)` does not tell the two apart, because it is true on the Mac too. The note entity is not indexed, so nothing about a note appears in Spotlight. Intents that only write may run on a locked device. Intents that read or pick a note require authentication, and declare `authenticationPolicy = .requiresAuthentication`, because the default is `.alwaysAllowed` (§20).
 
 ## 15. Mac specifics
 
@@ -429,7 +451,8 @@ Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the
 | Contract suites | One shared suite per port, run against both the fake and the real implementation | Mac, and the iOS Simulator for what runs only there (§5): those suites are hosted in the iOS app, in the `Knot-iOS-Tests` target, and the gate's `ios-hosted` step runs them |
 | Store | Migrations, search, concurrency, a kill in mid-transaction, a second process | Mac |
 | Recorder | File-driven input, the kill test, interruptions | Mac and iOS Simulator |
-| Speech, cleanup, ink | Fixtures, with accuracy reported | A Mac with the models installed |
+| Speech, cleanup | Fixtures, with accuracy reported | A Mac with the models installed |
+| Ink | Fixtures, with accuracy reported | Tests hosted in the app in the iOS Simulator, never the package tests |
 | Sync | Mapping, conflicts and the change log, with constructed records; a two-replica simulation | Mac |
 | End to end | Fixture audio through to a finished note; kill and relaunch | Mac and Simulator |
 | UI smoke | Type, record with injected audio, search, delete and undo | XCUITest on iOS Simulator and Mac |
@@ -542,10 +565,24 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | watchOS has CloudKit with `CKSyncEngine`, SwiftData, WidgetKit, AppIntents, WatchConnectivity and FoundationModels. | SDK |
 | `ControlWidget` is available on iOS 18, macOS 26 and watchOS 26. `handGestureShortcut` is available on watchOS 11. | SDK |
 | `LongRunningIntent` exists from OS 27, with `performBackgroundTask`. | SDK |
+| `AppIntent.allowedExecutionTargets` exists from OS 27. With `[.main]` the system runs an intent only in the app, though its type is compiled into the widget extension too, and the metadata of both bundles records it. | SDK, Apple docs and the metadata, read by SP-1 on 2026-11-19. |
+| An intent's `authenticationPolicy` defaults to `.alwaysAllowed`. | SDK and the metadata, read by SP-1 on 2026-11-19. |
+| `IntentSystemContext.preciseTimestamp` is recorded only for the Action Button of an Apple Watch Ultra. | Apple docs, read by SP-1 on 2026-11-19. |
+| `BGContinuedProcessingTaskRequest` is submitted from the foreground, as a result of a person's action, and its task must report progress. In the iOS simulator it fails as unavailable, `BGTaskSchedulerErrorDomain` 1. | Apple docs, and observed by SP-1 in the iOS 27.2 simulator on 2026-11-19. |
+| `BGTaskScheduler.submit(_:)` is deprecated in OS 27 for `submitTaskRequest(_:)`. | SDK, read by SP-1 on 2026-11-19. |
+| ActivityKit's `Activity` is not `Sendable`. | SDK, read by SP-1 on 2026-11-19. |
 | `LiveActivityIntent` and ActivityKit's `ActivityAttributes` are marked unavailable on macOS in the 27.2 SDK. The 27.3 beta SDK offers both from macOS 27.3. `canImport(ActivityKit)` is true on macOS with either. | SDK, both read on 2026-11-19 |
 | The notes schema offers `createNote`, `updateNote` and `appendText`. It is unavailable on watchOS. | SDK |
 | Xcode warns when an app lists a statically linked package in `AppIntentsPackage.includedPackages`, because that package's metadata is already included. Warnings are errors, so the apps declare no `AppIntentsPackage` of their own. | Found by WP-01's build with Xcode 27.2. |
 | `PKStrokeRecognizer` exists on iOS and macOS, with an async `search`. | SDK |
+| `PKStrokeRecognizer` works inside an app in the iOS 27.2 simulator, unlike `SpeechTranscriber`. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer` refuses a process that is not an app, with Code -1003 in the system log, and an app in the iOS 27.2 simulator about a second after it leaves the foreground, even with background time. It returns `nil` and does not throw. | WP-18's probe, on the Mac and in the iOS 27.2 simulator, on 2026-11-19. |
+| A Mac app is served by `PKStrokeRecognizer` even when it is not active. | WP-18's probe on 2026-11-19. |
+| `PKDrawing(strokes:)` traps in a process with no bundle ID. `PKDrawing(data:)` does not. | WP-18's probe on 2026-11-19. |
+| Cancelling the task does not stop a `PKStrokeRecognizer` query. A call from a task that is already cancelled returns `nil` on the Mac and recognises in full in an app in the iOS 27.2 simulator. | WP-18's probe, on the Mac and in the iOS 27.2 simulator, on 2026-11-19. |
+| `PKStrokeRecognizer.search(_:)` returns a type that is not `Sendable`. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer.supportedLanguages` has 33 entries on the Mac and 20 in the iOS 27.2 simulator. | WP-18's probe on 2026-11-19. |
+| `PKStrokeRecognizer.recognitionVersion` is 9 on macOS 27.3 and in the iOS 27.2 simulator. | WP-18's probe on 2026-11-19. |
 | `SystemLanguageModel` exposes `availability`, `contextSize`, `tokenCount(for:)` and `supportedLanguages`. | SDK |
 | `SpeechTranscriber` exposes `isAvailable`, `supportedLocales` and `installedLocales`. `AssetInventory` exposes `assetInstallationRequest(supporting:)`. | SDK |
 | A recording started by intent needs both protocols and a Live Activity for its whole length. | Apple docs |
@@ -554,6 +591,13 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | Starting a recording from a locked iPhone works for third-party apps. | Unconfirmed. One developer reports a failure. SP-1. |
 | A watch app cannot open text input straight into dictation. | Reported |
 | `WCSession.transferFile` can stall with no error until Bluetooth is toggled. | Reported. SP-2. |
+| A file transfer's `didFinish` comes without an error for a file that the iPhone app never received. It is not a delivery. | Simulator, 2026-11-19 |
+| Cancelling a file transfer acts at once, and no delegate call ever comes for it. | Simulator, 2026-11-19 |
+| A file transfer's progress counts 100 units, a percentage, whatever the file's size. | Simulator, 2026-11-19 |
+| Transfers that finish while the Watch app is not running report their `didFinish` at its next launch, straight after activation, in queue order. | Simulator, 2026-11-19 |
+| `transferFile` is accepted before the session's activation completes, and the transfer waits in the queue. | Simulator, 2026-11-19 |
+| `sendMessage` from the Watch launches an iPhone app that is not running, in the background. | Simulator, 2026-11-19 |
+| Installing the iPhone app does not install its Watch app. A Watch app installed apart counts as not installed on the iPhone for several seconds, and the iPhone drops what arrives meanwhile. | Simulator, 2026-11-19 |
 | A watch recording continues with the wrist down once started in the foreground. | Reported by an Apple engineer in 2024. SP-2. |
 | CKSyncEngine downloads assets eagerly and offers no way to fetch selected fields. | Reported. SP-4. |
 | iCloud Drive is unavailable on watchOS. | Apple Q&A from 2017 |
@@ -593,7 +637,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | The errors of Foundation Models can hold generated text in their descriptions. `LanguageModelError`, from OS 27, replaces `LanguageModelSession.GenerationError` and is not exhaustive. | SDK and WP-14's probe, 2026-11-19. |
 | `/usr/bin/lockf` ships with macOS. `flock` is on this Mac only through Homebrew. | Checked on 2026-11-19. |
 | `swift build` accepts `--explicit-target-dependency-import-check`, and `swift package diagnose-api-breaking-changes` exists. | Checked with Swift 6.4.4 on 2026-11-19. |
-| A CloudKit record holds at most about 1 MB apart from its assets. | From memory. SP-4 confirms it before WP-02 fixes the text limit. |
+| A CloudKit record holds at most about 1 MB apart from its assets. | From memory. SP-4's short note measures it before WP-02 fixes the text limit, and SP-4's report confirms it. If the code half cannot reach CloudKit before its note, the note says so, WP-02 keeps the first values of §4, which leave about half of this limit free, and the report confirms the limit or a contract PR changes the sizes. |
 | GRDB's observation does not see changes made by another process, and its guide recommends a notification between processes. | GRDB's sharing guide, read through a mirror on 2026-11-19. WP-10 reads the original. |
 
 ## 21. APIs newer than your training data
