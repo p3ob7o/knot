@@ -184,6 +184,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-00 | 2 | The fold | WP-00 PR 1 |
 | WP-01 | 1 | The scaffold that unblocks WP-02 and the spikes | WP-00 PR 2 |
 | WP-01 | 2 | The tooling, beside WP-02 | WP-01 PR 1 |
+| WP-01 | 3 | The Mac UI step, run and made required | WP-01 PR 2 |
 | WP-02 | 1 | The domain types, rules and reducers | WP-01 PR 1 |
 | WP-02 | 2 | The ports, fakes and suites the tracer needs | WP-02 PR 1; WP-12 proof step; WP-13 proof step; WP-14 proof step |
 | WP-02 | 3 | The remaining ports, fakes and suites | WP-02 PR 2; WP-18 proof step; SP-1 notes; SP-2 notes; SP-4 notes |
@@ -349,7 +350,7 @@ A spike counts as finished when its report has merged and the owner has confirme
 
 WP-12, WP-13, WP-14 and WP-18 each begin with a proof step. It is the first thing the package does, and its brief says what it must show.
 
-Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
+Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The code of a proof step stays on a branch of its own, `wp/<number>-proof`, with no pull request, and the package's first PR starts from it. The note merges from a second branch that holds only that file. A spike's code half does the same from the spike's branch. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
 
 ### Prior art
 
@@ -393,7 +394,7 @@ A thread that finds its brief wrong or blocked stops and says so. It does not wi
 
 1. The implementer runs `scripts/bootstrap.sh` and `scripts/verify.sh --quick` before it changes anything, and stops if that baseline is red. The first PR of WP-01 is the exception (Appendix B).
 2. The implementer runs `scripts/verify.sh --quick` before opening the PR.
-3. A reviewer thread runs gstack `/review` on the PR. WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from a different model through `/codex`.
+3. A fresh reviewer reads the PR against its brief and AGENTS.md, from a list of points that the orchestrator writes for that PR. WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from a different model. The orchestrator reads a short note itself.
 4. The implementer fixes the findings. After two rounds, the orchestrator decides what is left. Every finding the orchestrator sets aside is written in the PR and in the journal.
 5. The orchestrator takes the PR into its merge queue. When `main` has moved, it merges `main` into the branch. It never rebases a branch that was pushed and never forces a push. It runs the merge gate, `scripts/verify.sh --gate`, on that head, and squash-merges. Until the second PR of WP-01 merges, the gate is `--quick` (§9). After the queue has updated a branch, its thread fast-forwards to the remote branch before it changes anything else.
 6. The orchestrator removes the worktree, unless the thread goes straight on with the package's next PR. That PR starts on a new branch from `main`, in the same worktree.
