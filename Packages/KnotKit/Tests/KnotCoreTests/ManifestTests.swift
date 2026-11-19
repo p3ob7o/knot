@@ -91,6 +91,18 @@ import Testing
         }
     }
 
+    @Test func theEncoderHoldsTheBoundsTheDecoderHolds() {
+        var negative = Self.manifest
+        negative.duration = .seconds(-1)
+        #expect(throws: KnotError.self) { try negative.encoded() }
+        var revision = Self.manifest
+        revision.revision = -1
+        #expect(throws: KnotError.self) { try revision.encoded() }
+        var size = Self.manifest
+        size.payloadByteCount = -1
+        #expect(throws: KnotError.self) { try size.encoded() }
+    }
+
     @Test func aNewerFormatIsRefusedAndNamesItsCapture() throws {
         let json = #"{"capture_id":"\#(Self.capture)","format":2,"something":"new"}"#
         do {

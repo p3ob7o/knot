@@ -68,6 +68,12 @@ public struct CaptureManifest: Hashable, Sendable {
     /// the golden files compare exactly.
     public func encoded() throws(KnotError) -> Data {
         let context = ErrorContext(captureID: captureID)
+        // Held to the bounds the reader holds, so that nothing is written that could not be
+        // read again.
+        let durationIsValid = duration.map { (0...Self.longestDurationSeconds).contains(Self.seconds($0)) } ?? true
+        guard durationIsValid, revision >= 0, (payloadByteCount ?? 0) >= 0 else {
+            throw KnotError.writeFailed.with(context)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data: Data

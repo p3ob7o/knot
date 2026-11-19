@@ -40,11 +40,12 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     public var origin: SegmentOrigin
     public var startedAt: Date
     public var endedAt: Date?
-    /// The text that is shown, edited, searched and exported.
-    public var text: String
+    /// The text that is shown, edited, searched and exported. It changes only through
+    /// `replaceText(_:origin:)`, which holds it to the size limit.
+    public private(set) var text: String
     public var textOrigin: TextOrigin
-    /// Voice only. Never modified once written.
-    public var rawTranscript: String?
+    /// Voice only. Never modified once written. Set through `setRawTranscript(_:)`.
+    public private(set) var rawTranscript: String?
     /// Voice only.
     public var transcription: TranscriptionProvenance?
     /// Voice only: the OS build whose model cleaned the text.
@@ -95,6 +96,51 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.conflictOf = conflictOf
         self.deletedAt = deletedAt
         self.revision = revision
+    }
+
+    /// Replaces the text and its origin. Text past the size limit is refused, never cut.
+    public mutating func replaceText(_ text: String, origin: TextOrigin) throws(KnotError) {
+        try Limits.checkSegmentText(text)
+        self.text = text
+        self.textOrigin = origin
+    }
+
+    /// Sets the raw transcript. One past the size limit is refused.
+    public mutating func setRawTranscript(_ transcript: String?) throws(KnotError) {
+        if let transcript { try Limits.checkSegmentText(transcript) }
+        self.rawTranscript = transcript
+    }
+
+    /// Encodes a segment, held to the bounds its decoder holds, so that nothing is written
+    /// that could not be read again.
+    public func encode(to encoder: any Encoder) throws {
+        guard text.utf8.count <= Limits.segmentTextBytes, (rawTranscript?.utf8.count ?? 0) <= Limits.segmentTextBytes
+        else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Text past the size limit."))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(noteID, forKey: .noteID)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(noteGeneration, forKey: .noteGeneration)
+        try container.encode(origin, forKey: .origin)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encodeIfPresent(endedAt, forKey: .endedAt)
+        try container.encode(text, forKey: .text)
+        try container.encode(textOrigin, forKey: .textOrigin)
+        try container.encodeIfPresent(rawTranscript, forKey: .rawTranscript)
+        try container.encodeIfPresent(transcription, forKey: .transcription)
+        try container.encodeIfPresent(cleanup, forKey: .cleanup)
+        try container.encodeIfPresent(processingOwner, forKey: .processingOwner)
+        try container.encode(ownerGeneration, forKey: .ownerGeneration)
+        try container.encodeIfPresent(arrivedAt, forKey: .arrivedAt)
+        try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(assetID, forKey: .assetID)
+        try container.encodeIfPresent(duration, forKey: .duration)
+        try container.encodeIfPresent(conflictOf, forKey: .conflictOf)
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
+        try container.encode(revision, forKey: .revision)
     }
 
     enum CodingKeys: String, CodingKey {

@@ -192,3 +192,21 @@ func segment(
                 == ContentHash(kind: .typed, content: .text(decomposed), secret: secret))
     }
 }
+
+@Suite struct SegmentSetterTests {
+    static let tooLong = String(repeating: "x", count: Limits.segmentTextBytes + 1)
+
+    @Test func textAndTranscriptChangeOnlyWithinTheLimit() throws {
+        var segment = try SegmentLimitTests.build(text: "x")
+        #expect(throws: KnotError.textTooLong) { try segment.replaceText(Self.tooLong, origin: .edited) }
+        #expect(throws: KnotError.textTooLong) { try segment.setRawTranscript(Self.tooLong) }
+        #expect(segment.text == "x")
+        try segment.replaceText("edited", origin: .edited)
+        try segment.setRawTranscript("raw")
+        #expect(segment.text == "edited")
+        #expect(segment.textOrigin == .edited)
+        #expect(segment.rawTranscript == "raw")
+        // What encodes also decodes.
+        #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+}
