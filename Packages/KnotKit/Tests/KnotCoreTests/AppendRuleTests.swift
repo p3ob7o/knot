@@ -262,6 +262,53 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
         #expect(AppendRule.decide(row.request, in: row.context) == row.expected)
     }
 
+    /// Rule 7 for a late capture, read with rule 3: a capture still running when the late one
+    /// started keeps its note open (the orchestrator's ruling on pull request 22).
+    static let lateCaptureRows: [AppendRow] = [
+        AppendRow(
+            "B records from 09:58 to 10:20; a Watch capture made at 10:00 joins B's note",
+            request("10:00", .window, .late), [prior(1, noteB, "09:58", "10:20")], .join(noteB, .insideWindow)),
+        AppendRow(
+            "a capture still open when the late one started", request("10:00", .window, .late),
+            [prior(1, noteB, "09:58", nil)], .join(noteB, .insideWindow)),
+        AppendRow(
+            "of two running, the one that started last", request("10:00", .window, .late),
+            [prior(1, noteA, "09:50", "10:30"), prior(2, noteB, "09:58", "10:20")], .join(noteB, .insideWindow)),
+        AppendRow(
+            "a running capture wins over one that ended since it began", request("10:00", .window, .late),
+            [prior(1, noteB, "09:40", "10:20"), prior(2, noteC, "09:55", "09:59")], .join(noteB, .insideWindow)),
+        AppendRow(
+            "a capture that ends exactly at the start is not running, and its gap is zero",
+            request("10:00", .window, .late), [prior(1, noteB, "09:58", "10:00")], .join(noteB, .insideWindow)),
+        AppendRow(
+            "none running: the latest end, inside the window", request("10:00", .window, .late),
+            [prior(1, noteA, "09:50", "09:58"), prior(2, noteC, "09:40", "09:59")], .join(noteC, .insideWindow)),
+        AppendRow(
+            "none running: the latest end, outside the window", request("10:00", .window, .late),
+            [prior(1, noteA, "09:00", "09:30")], .newNote(.outsideWindow)),
+        AppendRow(
+            "a capture that started at the same instant is not earlier", request("10:00", .window, .late),
+            [prior(1, noteB, "10:00", "10:20")], .newNote(.noEarlierCapture)),
+        AppendRow(
+            "rule 10: the running capture's note was closed before the late one started",
+            request("10:00", .window, .late), [prior(1, noteB, "09:58", "10:20", noteClosed: "09:59")],
+            .newNote(.latestNoteClosed)),
+        AppendRow(
+            "rule 10: the running capture's note was closed after the late one started",
+            request("10:00", .window, .late), [prior(1, noteB, "09:58", "10:20", noteClosed: "10:05")],
+            .join(noteB, .insideWindow)),
+        AppendRow(
+            "rule 10: the running capture's note is deleted", request("10:00", .window, .late),
+            [prior(1, noteB, "09:58", "10:20", noteDeleted: "11:00")], .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "a live capture keeps the negative gap of rule 3", request("09:40"),
+            [prior(1, noteB, "09:58", "10:20")], .newNote(.outsideWindow)),
+    ]
+
+    @Test(arguments: lateCaptureRows) func lateCapture(row: AppendRow) {
+        #expect(AppendRule.decide(row.request, in: row.context) == row.expected)
+    }
+
     static let ruleSixteenRows: [AppendRow] = [
         // docs/product-spec.md §16, A37: the roof note R, the stamps line moved out to note S.
         AppendRow(

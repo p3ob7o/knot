@@ -248,27 +248,48 @@ public enum AppendRule {
     /// new one. An open capture's gap is zero. Inside the window the capture joins the note.
     public static let window = Step(name: "window") { request, context in
         guard let latest = latest(for: request, in: context) else { return .newNote(.noEarlierCapture) }
-        let gap = request.startedAt.timeIntervalSince(latest.endedAt ?? request.startedAt)
-        return context.window.contains(gap: gap) ? .join(latest.noteID, .insideWindow) : .newNote(.outsideWindow)
+        return context.window.contains(gap: gap(for: request, after: latest))
+            ? .join(latest.noteID, .insideWindow) : .newNote(.outsideWindow)
+    }
+
+    /// The gap from `latest` to the start of the request.
+    ///
+    /// For a live capture it runs from the end of the previous capture, and an open one gives
+    /// zero; it comes out negative only when a clock moved back (rule 3). For a late capture,
+    /// one that was still running when the late capture started gives zero.
+    public static func gap(for request: AppendRequest, after latest: PriorCapture) -> TimeInterval {
+        guard let end = latest.endedAt else { return 0 }
+        if request.arrival == .late, end > request.startedAt { return 0 }
+        return request.startedAt.timeIntervalSince(end)
     }
 
     /// The capture the window looks at.
     ///
     /// For a live capture, the most recent capture in this device's copy of the stream that
-    /// is not deleted (rules 1 and 14), in whichever note now holds it (rule 16). For a late
-    /// one, the last capture that started before it (rule 7). Most recent means the latest
-    /// end, and an open capture is the most recent of all; equal ends fall back to the later
-    /// start and then to the ID, as a fixed tie-break.
+    /// is not deleted (rules 1 and 14), in whichever note now holds it (rule 16). Most recent
+    /// means the latest end, and an open capture is the most recent of all.
+    ///
+    /// For a late capture that started at t, the captures that started before t (rule 7). If
+    /// one of them was still running at t, with no end yet or an end after t, it is the one
+    /// that started last of those, because a capture keeps its note open while it runs
+    /// (rule 3). Otherwise it is the one with the latest end.
+    ///
+    /// Ties fall back to the later start and then to the ID, as a fixed tie-break.
     public static func latest(for request: AppendRequest, in context: AppendContext) -> PriorCapture? {
         var candidates = context.captures
         if let open = context.openCapture, !candidates.contains(where: { $0.segmentID == open.segmentID }) {
             candidates.append(open)
         }
-        return
-            candidates
-            .filter { !$0.isDeleted && !$0.isConflictCopy }
-            .filter { request.arrival == .live || $0.startedAt < request.startedAt }
-            .max(by: isOlder)
+        candidates = candidates.filter { !$0.isDeleted && !$0.isConflictCopy }
+        guard request.arrival == .late else { return candidates.max(by: isOlder) }
+        let earlier = candidates.filter { $0.startedAt < request.startedAt }
+        let running = earlier.filter { capture in capture.endedAt.map { $0 > request.startedAt } ?? true }
+        if !running.isEmpty {
+            return running.max { lhs, rhs in
+                lhs.startedAt != rhs.startedAt ? lhs.startedAt < rhs.startedAt : lhs.segmentID < rhs.segmentID
+            }
+        }
+        return earlier.max(by: isOlder)
     }
 
     private static func isOlder(_ lhs: PriorCapture, _ rhs: PriorCapture) -> Bool {
