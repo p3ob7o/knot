@@ -101,7 +101,10 @@ fi
 runtime_for() {
     local platform=$1 sdk=$2 version runtime
     version="$(xcrun --sdk "$sdk" --show-sdk-version 2>/dev/null || true)"
-    runtime="$(xcrun simctl list runtimes 2>/dev/null | grep "^$platform ${version%%.*}\." | tail -n 1 | sed 's/ - com\.apple.*//' || true)"
+    # The runtime of the SDK's own version first, else any of the same major version.
+    runtime="$(xcrun simctl list runtimes 2>/dev/null | grep "^$platform $version " | head -n 1 | sed 's/ - com\.apple.*//' || true)"
+    [[ -n $runtime ]] ||
+        runtime="$(xcrun simctl list runtimes 2>/dev/null | grep "^$platform ${version%%.*}\." | tail -n 1 | sed 's/ - com\.apple.*//' || true)"
     if [[ -n $runtime ]]; then
         ok "$platform" "$runtime, for SDK $version"
     elif [[ $TIER == quick ]]; then
