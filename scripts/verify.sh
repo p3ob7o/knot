@@ -17,6 +17,8 @@
 #                                              module or test target
 #   scripts/verify.sh --status-line            print the last run's status line, which fits
 #                                              in a commit status (140 characters)
+#   … --tree <path>                            check another tree with these scripts, as the
+#                                              gate does: main's scripts on the candidate
 #
 # Steps: doctor, plan, links, fixtures, format, pins, lint, ownership, core-api, named-tests,
 # package-build, package-test, contract-two-targets, self-test, apps, packaging, launch,
@@ -32,6 +34,12 @@
 # with --package or the branch with --branch; it compares with --base, origin/main by
 # default. scripts/gate-steps.txt lists its steps and which are still pending.
 
+# --tree <path> checks another tree with these scripts, as KNOT_TREE does. It is read
+# before anything else, because every path of the run depends on it.
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}"; fi
+done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
@@ -50,7 +58,7 @@ slot_options() {
     esac
 }
 
-usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "verify-usage" "$1" "Run scripts/verify.sh --help." "safe" "nothing"; }
 
 STATUS_FILE="$KNOT_LOGS/verify-status.txt"
@@ -94,6 +102,7 @@ else
             --package) PACKAGE=${2:-}; [[ $PACKAGE =~ ^(WP|SP)-[0-9]+$|^contract$ ]] || usage_fail "--package needs an ID such as WP-10."; shift 2 ;;
             --branch) BRANCH=${2:-}; [[ -n $BRANCH ]] || usage_fail "--branch needs a branch name."; shift 2 ;;
             --allow) [[ -n ${2:-} ]] || usage_fail "--allow needs a path."; ALLOW+=("$2"); shift 2 ;;
+            --tree) [[ -n ${2:-} ]] || usage_fail "--tree needs the folder of the tree to check."; shift 2 ;;
             --base) BASE=${2:-}; [[ -n $BASE ]] || usage_fail "--base needs a ref."; shift 2 ;;
             --status-line)
                 [[ -f $STATUS_FILE ]] || knot_fail "verify-no-status" "No run has written $STATUS_FILE yet." \
@@ -128,7 +137,7 @@ xcb() {
     xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" >>"$log" 2>&1
 }
 
-tool() { python3 -I "$KNOT_ROOT/scripts/lib/knot_tool.py" "$@"; }
+tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
 
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
@@ -165,7 +174,7 @@ main_executable() {
 }
 
 # The state of a step in scripts/gate-steps.txt: required, pending, or nothing.
-gate_state() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3; exit }' "$KNOT_ROOT/scripts/gate-steps.txt"; }
+gate_state() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3; exit }' "$KNOT_SCRIPTS/gate-steps.txt"; }
 
 # ------------------------------------------------------------------ steps
 
@@ -173,10 +182,10 @@ step_doctor() {
     local options=(--tier "${TIER:-quick}")
     [[ ${RUN_MAC_UI:-0} == 1 ]] && options+=(--mac-ui)
     [[ $TIER == gate ]] && options+=(--models)
-    "$KNOT_ROOT/scripts/doctor.sh" "${options[@]}"
+    "$KNOT_SCRIPTS/doctor.sh" "${options[@]}"
 }
 
-step_plan() { "$KNOT_ROOT/scripts/check-plan.sh"; }
+step_plan() { "$KNOT_SCRIPTS/check-plan.sh"; }
 
 step_links() { tool links; }
 
@@ -370,7 +379,7 @@ step_contract_two_targets() {
 }
 
 # The named test scripts-self-test.
-step_self_test() { "$KNOT_ROOT/scripts/self-test.sh"; }
+step_self_test() { "$KNOT_SCRIPTS/self-test.sh"; }
 
 # Every app, Debug: the iOS app with the Watch app and both widget extensions in it, and
 # the Mac app with the `knot` tool in it.
@@ -466,12 +475,12 @@ step_packaging() {
 step_launch() {
     local log="$KNOT_LOGS/verify-launch-tests.log" iphone ipad watch
     : >"$log"
-    "$KNOT_ROOT/scripts/sim.sh" ensure
-    iphone="$("$KNOT_ROOT/scripts/sim.sh" udid iphone)"
-    ipad="$("$KNOT_ROOT/scripts/sim.sh" udid ipad)"
-    watch="$("$KNOT_ROOT/scripts/sim.sh" udid watch)"
+    "$KNOT_SCRIPTS/sim.sh" ensure
+    iphone="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
+    ipad="$("$KNOT_SCRIPTS/sim.sh" udid ipad)"
+    watch="$("$KNOT_SCRIPTS/sim.sh" udid watch)"
     # Shut the set down whatever happens, so that a failed run leaves nothing booted.
-    trap '"$KNOT_ROOT/scripts/sim.sh" shutdown' EXIT
+    trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
     knot_generate_project
     echo "UI tests on $KNOT_WORKTREE_ID-iphone and -ipad"
     xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -destination "id=$ipad" \
@@ -483,7 +492,7 @@ step_launch() {
     ios="$(products Debug-iphonesimulator)/Knot.app"
     bundle="$(plist_value "$ios/Info.plist" CFBundleIdentifier)"
     for role in iphone ipad watch; do
-        udid="$("$KNOT_ROOT/scripts/sim.sh" udid $role)"
+        udid="$("$KNOT_SCRIPTS/sim.sh" udid $role)"
         xcrun simctl bootstatus "$udid" -b >/dev/null
         if [[ $role == watch ]]; then
             xcrun simctl install "$udid" "$(find "$ios/Watch" -maxdepth 1 -name '*.app' | head -n 1)"
@@ -505,7 +514,7 @@ step_launch() {
     pid=$!
     for i in 1 2 3 4 5 6 7 8 9 10; do
         sleep 1
-        windows="$(xcrun swift "$KNOT_ROOT/scripts/lib/windows.swift" "$pid" 2>/dev/null || true)"
+        windows="$(xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" "$pid" 2>/dev/null || true)"
         [[ -n $windows ]] && break
     done
     kill "$pid" 2>/dev/null || true
@@ -569,7 +578,7 @@ step_tsan() {
 step_model_report() {
     local last="$KNOT_BUILD_FOLDER/models-last.txt" now
     mkdir -p "$KNOT_BUILD_FOLDER"
-    now="$(xcrun swift "$KNOT_ROOT/scripts/lib/models.swift")"
+    now="$(xcrun swift "$KNOT_SCRIPTS/lib/models.swift")"
     echo "$now"
     if [[ -f $last ]] && ! diff -u "$last" <(printf '%s\n' "$now") >/dev/null; then
         echo "model-report: the models or the system changed since the last report:"
@@ -671,6 +680,10 @@ else
             done
             STEPS=$kept
             echo "verify: gate for $PACKAGE against $BASE: depth $DEPTH, because of $reason"
+            echo "verify: scripts from $KNOT_SCRIPTS at $(git -C "$KNOT_SCRIPTS" rev-parse --short HEAD), tree $KNOT_ROOT at $(git -C "$KNOT_ROOT" rev-parse --short HEAD)"
+            if [[ "$(cd "$KNOT_SCRIPTS/.." && pwd -P)" == "$KNOT_ROOT" ]]; then
+                echo "verify: the scripts are the tree's own. The gate runs main's scripts, except for a pull request that changes scripts/."
+            fi
             [[ -n $PENDING ]] && echo "verify: pending, not run:$PENDING" ;;
     esac
     LABEL="--$TIER"
@@ -713,8 +726,8 @@ for step in $STEPS; do
     else
         # A heavy step runs in its own process, holding a build slot.
         # shellcheck disable=SC2086
-        "$KNOT_ROOT/scripts/build-slot.sh" run $( [[ $TIER == gate ]] && echo --gate ) $options --label "$step" \
-            -- "$KNOT_ROOT/scripts/verify.sh" --in-step "$step" >"$log" 2>&1 &
+        "$KNOT_SCRIPTS/build-slot.sh" run $( [[ $TIER == gate ]] && echo --gate ) $options --label "$step" \
+            -- "$KNOT_SCRIPTS/verify.sh" --in-step "$step" >"$log" 2>&1 &
     fi
     code=0
     wait $! || code=$?

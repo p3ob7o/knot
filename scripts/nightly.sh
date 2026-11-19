@@ -36,13 +36,13 @@ run() {
     shift
     echo "nightly: $name"
     if "$@"; then :; else failed+=("$name"); fi
-    summary+=("$name: $("$KNOT_ROOT/scripts/verify.sh" --status-line 2>/dev/null || echo "no status line")")
+    summary+=("$name: $("$KNOT_SCRIPTS/verify.sh" --status-line 2>/dev/null || echo "no status line")")
 }
-run full "$KNOT_ROOT/scripts/verify.sh" "${FULL[@]}"
-run tsan "$KNOT_ROOT/scripts/verify.sh" --only tsan
-run soak "$KNOT_ROOT/scripts/verify.sh" --soak
-run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_ROOT/scripts/verify.sh" --only launch
-run models "$KNOT_ROOT/scripts/verify.sh" --only model-report
+run full "$KNOT_SCRIPTS/verify.sh" "${FULL[@]}"
+run tsan "$KNOT_SCRIPTS/verify.sh" --only tsan
+run soak "$KNOT_SCRIPTS/verify.sh" --soak
+run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_SCRIPTS/verify.sh" --only launch
+run models "$KNOT_SCRIPTS/verify.sh" --only model-report
 grep -e 'changed since' "$KNOT_LOGS/verify-model-report.log" 2>/dev/null || true
 
 printf 'nightly: %s\n' "${summary[@]}"

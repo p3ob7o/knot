@@ -4,9 +4,23 @@
 
 set -euo pipefail
 
-KNOT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# The scripts come from one checkout, KNOT_SCRIPTS, and work on one tree, KNOT_ROOT. They
+# are the same folder unless KNOT_TREE names another tree: then the scripts of this
+# checkout, such as main's, check that tree, such as a candidate in the gate worktree
+# (docs/architecture.md §18). Everything a script reads of the code, the plan, the fixtures
+# and the pinned Xcode comes from the tree; the scripts, their helpers and the lists only the
+# orchestrator edits come from KNOT_SCRIPTS.
+KNOT_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=fail.sh
-source "$KNOT_ROOT/scripts/lib/fail.sh"
+source "$KNOT_SCRIPTS/lib/fail.sh"
+KNOT_ROOT="$(cd "$KNOT_SCRIPTS/.." && pwd -P)"
+if [[ -n ${KNOT_TREE:-} ]]; then
+    KNOT_ROOT="$(cd "$KNOT_TREE" 2>/dev/null && pwd -P)" ||
+        knot_fail "knot-tree-missing" "KNOT_TREE names $KNOT_TREE, which is not a folder." \
+            "Name the tree to check, such as the gate worktree, or unset KNOT_TREE." "safe" "nothing"
+fi
+# Children, such as a step that runs in its own process, check the same tree.
+export KNOT_TREE="$KNOT_ROOT" KNOT_SCRIPTS
 
 # This worktree's own build products (docs/architecture.md §18). `.build/` is git-ignored.
 KNOT_WORKTREE="$(basename "$KNOT_ROOT")"

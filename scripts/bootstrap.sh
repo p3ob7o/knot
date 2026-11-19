@@ -85,7 +85,7 @@ knot_xcodebuild_settings
 xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" -scheme Knot-iOS -resolvePackageDependencies >/dev/null
 step "resolved GRDB for SwiftPM and for Xcode"
 
-"$KNOT_ROOT/scripts/sim.sh" ensure | sed 's/^/bootstrap: simulator /'
+"$KNOT_SCRIPTS/sim.sh" ensure | sed 's/^/bootstrap: simulator /'
 
 # The fixtures' audio. The system voices speak it on this Mac, because their licence does
 # not allow committing it (Fixtures/README.md). It goes to Fixtures/generated/, which git

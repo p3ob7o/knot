@@ -169,7 +169,7 @@ fi
 # 8. The on-device models, which the gate requires (docs/architecture.md §17): the speech
 #    model for English and the system language model.
 if ((MODELS)); then
-    models="$(knot_with_timeout 120 xcrun swift "$KNOT_ROOT/scripts/lib/models.swift" 2>&1 || true)"
+    models="$(knot_with_timeout 120 xcrun swift "$KNOT_SCRIPTS/lib/models.swift" 2>&1 || true)"
     if printf '%s\n' "$models" | grep -e '^speech-english: en' >/dev/null &&
         printf '%s\n' "$models" | grep -e '^cleanup: available' >/dev/null; then
         ok models "$(printf '%s\n' "$models" | grep -E '^(speech-english|cleanup):' | tr '\n' ' ')"

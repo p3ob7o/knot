@@ -20,7 +20,7 @@ trap 'rm -rf "$scratch"' EXIT
 
 # 1. A slot is released when its holder is killed.
 slots="$scratch/slots"
-KNOT_SLOT_DIR="$slots" KNOT_BUILD_SLOTS=2 "$KNOT_ROOT/scripts/build-slot.sh" run --label self-test -- sleep 120 &
+KNOT_SLOT_DIR="$slots" KNOT_BUILD_SLOTS=2 "$KNOT_SCRIPTS/build-slot.sh" run --label self-test -- sleep 120 &
 runner=$!
 holder=""
 for _ in $(seq 1 50); do
@@ -50,7 +50,7 @@ kill "$runner" 2>/dev/null || true
 # 1b. A command that itself exits with lockf's status 75 runs once, and its status comes back.
 count="$scratch/count-75"
 status=0
-KNOT_SLOT_DIR="$slots" KNOT_SLOT_TIMEOUT=5 KNOT_COUNT="$count" "$KNOT_ROOT/scripts/build-slot.sh" run -- \
+KNOT_SLOT_DIR="$slots" KNOT_SLOT_TIMEOUT=5 KNOT_COUNT="$count" "$KNOT_SCRIPTS/build-slot.sh" run -- \
     sh -c 'echo ran >>"$KNOT_COUNT"; exit 75' 2>/dev/null || status=$?
 if [[ $status == 75 && "$(wc -l <"$count" | tr -d ' ')" == 1 ]]; then
     pass "a command that exits with 75 runs once, and its 75 comes back"
@@ -62,14 +62,14 @@ fi
 #    safe, and what was changed, and exits 1.
 status=0
 output="$(bash -c 'source "$1"; knot_fail "self-test-code" "what it was" "how to fix it" "safe" "nothing"' _ \
-    "$KNOT_ROOT/scripts/lib/fail.sh" 2>&1)" || status=$?
+    "$KNOT_SCRIPTS/lib/fail.sh" 2>&1)" || status=$?
 expected=$'FAIL self-test-code\n  what:    what it was\n  fix:     how to fix it\n  retry:   safe\n  changed: nothing'
 if [[ $status == 1 && $output == "$expected" ]]; then
     pass "a failure prints the agreed fields and exits 1"
 else
     fail "a failure prints the agreed fields: got status $status and: $output"
 fi
-output="$(bash -c 'source "$1"; knot_report "only-two" "fields" || true' _ "$KNOT_ROOT/scripts/lib/fail.sh" 2>&1)"
+output="$(bash -c 'source "$1"; knot_report "only-two" "fields" || true' _ "$KNOT_SCRIPTS/lib/fail.sh" 2>&1)"
 if [[ $output == "FAIL infra-fail-usage"* ]]; then
     pass "a failure with fields missing is reported as infra-fail-usage"
 else
@@ -81,16 +81,16 @@ plan="$scratch/plan"
 mkdir -p "$plan/docs" "$plan/scripts/lib"
 cp "$KNOT_ROOT/PLAN.md" "$plan/"
 cp -R "$KNOT_ROOT/docs/plan" "$plan/docs/"
-cp "$KNOT_ROOT/scripts/check-plan.sh" "$plan/scripts/"
-cp "$KNOT_ROOT/scripts/lib/fail.sh" "$plan/scripts/lib/"
-if "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
+cp "$KNOT_SCRIPTS/check-plan.sh" "$plan/scripts/"
+cp "$KNOT_SCRIPTS/lib/fail.sh" "$plan/scripts/lib/"
+if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
     pass "the plan check passes on the plan as it is"
 else
     fail "the plan check fails on an unchanged copy of the plan: $(tail -n 3 "$scratch/plan-ok.log")"
 fi
 sed -i '' 's/^## Prior art$/## Prior work/' "$plan/docs/plan/WP-10.md"
 status=0
-"$plan/scripts/check-plan.sh" >"$scratch/plan-bad.log" 2>&1 || status=$?
+KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-bad.log" 2>&1 || status=$?
 if [[ $status == 1 ]] && grep -e "WP-10.md: its '##' headings must be exactly" "$scratch/plan-bad.log" >/dev/null &&
     grep -e "^FAIL plan-check" "$scratch/plan-bad.log" >/dev/null; then
     pass "the plan check catches a brief with a missing heading"
@@ -151,8 +151,8 @@ fi
 #    required-reason rule are tested too.
 copies="$scratch/Copies 2"
 mkdir -p "$copies"
-cp "$KNOT_ROOT/scripts/lint-cases/Cases.swift" "$copies/Cases.swift"
-python3 -I -B "$KNOT_ROOT/scripts/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
+cp "$KNOT_SCRIPTS/lint-cases/Cases.swift" "$copies/Cases.swift"
+python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
     --as Apps/Extensions/Widgets-iOS/Sources/ >"$scratch/lint.out" || true
 if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
 import re, sys

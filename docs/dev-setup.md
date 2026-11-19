@@ -98,6 +98,16 @@ One run takes one tier. Each run starts with `scripts/doctor.sh`, and ends with 
 
 A failed step names its log in `.build/logs/` and the command that reruns only that step.
 
+**Which scripts drive the gate.** The scripts that drive the gate come from `main`, not from the candidate (`docs/architecture.md` §18). Every script reads the code, the plan, the fixtures and the pinned Xcode from the tree that `KNOT_TREE` or `--tree` names, and its own helpers and the orchestrator's lists from the checkout it runs from. So the orchestrator, with the candidate checked out in its gate worktree, runs main's scripts on it:
+
+```sh
+KNOT_TREE=<gate worktree> ~/knot/scripts/bootstrap.sh
+~/knot/scripts/verify.sh --gate --tree <gate worktree> --branch wp/10-store
+~/knot/scripts/verify.sh --tree <gate worktree> --status-line
+```
+
+The build products, the logs and the status line go to the tree's own `.build/`. A pull request that changes `scripts/` is the stated exception: the orchestrator then runs the candidate's own scripts, `<gate worktree>/scripts/verify.sh --gate --branch …`, and says so in the journal. The gate prints which scripts checked which tree, by commit.
+
 **The status line.** GitHub cuts a commit status's description at 140 characters, and the summary line is longer. So every run also writes a status line of at most 140 characters, such as `gate everything ok: 18/18 steps, 27 tests, 1 pending · 9m12s · Xcode 27.2 27B52 · macOS 26C5047e`, to `.build/logs/verify-status.txt`. `scripts/verify.sh --status-line` prints the last one, for the orchestrator to post as `knot/gate`. A `*` after the Xcode means it was named by `KNOT_XCODE`.
 
 **Build slots.** A heavy step waits for a build slot (`scripts/build-slot.sh`): three on this Mac, one of them kept for the gate, an exclusive one for the Mac UI tests, and two for booted simulator sets. A slot is a `lockf` lock, so a killed build frees it at once. A waiting run prints the holders each minute. `scripts/build-slot.sh status` shows who holds what. `KNOT_SLOT_DIR`, `KNOT_BUILD_SLOTS`, `KNOT_SIMULATOR_SLOTS` and `KNOT_SLOT_TIMEOUT` change the defaults.
