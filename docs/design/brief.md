@@ -81,7 +81,7 @@ Our reading of these, for him to correct:
 - The behaviour in the product spec.
 - The platforms: iOS, iPadOS, macOS and watchOS 27, with their system conventions (Dynamic Island, Control Center, complications, the menu bar).
 - No account, no walkthrough, no marketing moments inside the app.
-- The editing model. A note is a stack of segments, each edited on its own, and the capture field is the last element of every open note. Several segments can be selected at once, as whole segments, and copied, shared or deleted together. "A page" describes how a note reads. If the design needs a different editing model, say so in the direction step, because code is built on it.
+- The editing model. A note is a stack of segments, each edited on its own, and the capture field is the last element of every open note. "A page" describes how a note reads. If the design needs a different editing model, say so in the direction step, because code is built on it.
 - Earlier segments stay visible while capturing. Where they sit is open.
 
 **Open**
@@ -121,7 +121,6 @@ Each list names the states a surface must be designed in. The matrix at the end 
   - a note mixing typed, voice and ink segments;
   - a title: none, generated, typed, and being edited;
   - a segment being edited;
-  - several segments selected, with what can be done to the selection;
   - capturing inside an older note, with the capture field as its last element;
   - a voice segment in each of its states: saved on the Watch, text on its way, text being made on another device, ready, needs you, kept with no text;
   - a voice segment playing;
@@ -172,9 +171,8 @@ Each list names the states a surface must be designed in. The matrix at the end 
 
 Design for the Ultra 2 first, then the smaller sizes.
 
-- **Recording:** idle with one control; recording, with a timer and a level; recording with the display dimmed; saved; a short recording discarded; the limit reached; could not start, with the reason; storage nearly full. Design both a start that needs the app in front and one that does not, which a spike still decides.
-- **Recent recordings:** waiting on the watch for the phone, sent, delivery failed. A row shows a time, a length and a state. The watch is a capture device only: it never shows the text of a note or of a recording, and it says nothing about a transcript.
-- **Complications** in each family, the Smart Stack widget, and the control glyph, each idle, recording, and with captures waiting.
+- **Recording,** the watch app's one screen: idle with one control; recording, with a timer and a level; recording with the display dimmed; saved; a short recording discarded; the limit reached; could not start, with the reason; storage nearly full. Design both a start that needs the app in front and one that does not, which a spike still decides. There is no list of recordings. The watch is a capture device only: it never shows the text of a note or of a recording, and it says nothing about a transcript.
+- **Complications** in each family, the Smart Stack widget, and the control glyph, each idle, recording, and with captures waiting. The complication's count of waiting recordings is how the watch tells that a recording has not reached the phone yet.
 
 ### Across devices
 
@@ -217,7 +215,6 @@ Design for the Ultra 2 first, then the smaller sizes.
 | Note, mixed segments | Yes | Yes | – | Yes | – | – |
 | Note, title: none, generated, typed, editing | Yes | iPhone | – | iPhone | – | – |
 | Note, a segment being edited | Yes | iPhone | – | Yes | – | – |
-| Note, several segments selected | Yes | iPhone | – | Yes | – | – |
 | Voice segment, each of its six states | Yes | iPhone | – | iPhone | – | – |
 | Voice segment: playing, show original, recording removed | Yes | iPhone | – | iPhone | – | – |
 | Ink segment: shown, being recognised, failed, nothing recognised | Yes | Yes | – | iPhone | – | – |
@@ -226,7 +223,6 @@ Design for the Ultra 2 first, then the smaller sizes.
 | Attachment waiting, downloading, unavailable | Yes | iPhone | – | iPhone | – | – |
 | Delete with undo; share | Yes | iPhone | – | Yes | – | – |
 | A segment moved to its own note, with undo | Yes | iPhone | – | Yes | – | – |
-| Recent recordings: waiting, sent, delivery failed | – | – | – | – | Yes | – |
 | Storage nearly full | – | – | – | – | Yes | – |
 | Launchers: idle, recording, waiting, failed | – | – | – | – | Yes | Yes |
 | Menu bar icon: idle, recording; its menu | – | – | – | – | – | Yes |

@@ -116,6 +116,22 @@ Items deferred from Knot v1 by the plan review of 2026-11-19, and by the owner's
 **Priority:** P3
 **Depends on:** Knot v1 (WP-10, WP-16), and the move counts from the keep-gate week.
 
+### Select several segments at once
+
+**What:** Select several segments of a note at once, as whole segments, to copy, share or delete them together, and to move them together into one new note.
+
+**Why:** Taking a few segments out of a long note, or sending them somewhere, should not mean repeating the same action on each one.
+
+**Pros:** Copy, share, delete and the move work on any part of a note in one action, and one undo puts it all back.
+
+**Cons:** The store needs a delete and a restore of several segments in one transaction. The design needs a selected state for the note on every device. A move of several segments changes an operation the engineering review fixed.
+
+**Context:** The owner asked for it on 2026-11-19 and dropped it from v1 the same day: "Segments: drop multi-segment selection for now" and "Moving takes one segment at a time for now." In v1 a selection does not cross from one segment into the next (product spec §7, assumption A27). A text selection that runs from one segment into the next needs the rich-text editor that decision D20 rules out, so this item selects whole segments. Moving several segments together into one new note would change the move operation of architecture §5. Start with `NoteStore` and the note's view model in KnotUI.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Knot v1 (WP-10, WP-21).
+
 ### Let cleanup do more
 
 **What:** Widen what cleanup may change in a transcript after v1.

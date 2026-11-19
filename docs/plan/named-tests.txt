@@ -39,8 +39,6 @@ WP-02	rule-sixteen-capture-inside-window-of-moved-segment	WP-02's table for rule
 WP-02	capture-on-another-surface-ends-open-one	A capture started on another surface ends the open one, whatever its kind.
 WP-02	negative-gap-less-than-window-counts-inside	A gap that is negative by less than the window counts as inside it, and a larger one starts a new note.
 WP-02	text-only-spaces-and-line-breaks-is-empty	Text that is only spaces and line breaks is empty.
-WP-02	selection-deleted-and-restored	A selection deleted and restored.
-WP-02	selection-holds-every-live-segment-of-note	A selection that holds every live segment of its note.
 WP-05	capture-before-open-migration-or-write-lock-tracer	A capture begun before the store is open, during a migration and while another process holds the write lock.
 WP-05	store-call-commits-after-inbox-fallback-tracer	A store call that commits after its capture fell back to `Inbox/`.
 WP-05	tracer-end-to-end-typed-and-recording	One end-to-end test, in which a typed capture and a fixture recording go through the engine, the queue, the in-memory `NoteStore` and the scripted `Recorder`, `Transcriber` and `Cleaner`, and the assertions read the stream page that `NoteStore` publishes.
@@ -59,7 +57,6 @@ WP-10	disk-fills-during-migration	A disk that fills during a migration.
 WP-10	long-typing-sync-off-change-log-rows	A long typing session with sync off that leaves no more `change_log` rows than records.
 WP-10	kill-inside-a-move	A kill inside a move.
 WP-10	container-holds-retired-app-files	A container that still holds the retired app's files.
-WP-10	kill-inside-delete-of-selection	A kill inside the delete of a selection.
 WP-10	move-repeated-after-capture-joined-new-note-real	A move repeated after a capture joined the new note.
 WP-10	return-after-note-changed-again-real	A return after the segment's note changed again.
 WP-10	tool-dies-before-its-notification	A tool that dies before its notification.
@@ -126,15 +123,12 @@ WP-17	watch-manifest-on-watch-or-acknowledged	WP-17 proves the watch half of the
 WP-19	repeating-start-or-stop-recording-changes-nothing	Shortcuts get StartRecording and StopRecording on every platform, each safe to repeat, with a test that repeating either changes nothing.
 WP-19	intent-accessor-fails-typed-when-nothing-registered	An intent reads the environment through one accessor that fails with a typed error when nothing is registered, and WP-19 tests that.
 WP-20	export-names-from-hostile-titles	Export names made from hostile titles.
-WP-20	golden-file-for-selection-of-segments	WP-20 renders a selection of segments as text and as Markdown with the code that renders a note, and its golden files gain one selection.
 WP-21	accessibility-audit-in-every-ui-smoke-test	Every UI smoke test runs the system's accessibility audit from WP-21's first PR.
 WP-21	preview-for-every-designed-matrix-cell	KnotUIPreviews holds one named preview for every cell of the state matrix marked as designed, and a test that reads that matrix from the brief's own table fails when a cell has none.
 WP-21	capture-window-runs-out-while-field-empty	A view-model test covers the window running out while the field is empty.
 WP-21	voice-segment-six-states-view-model	A view-model test for each of the six states of a voice segment.
 WP-21	move-action-when-offered	WP-21 adds the move action and its undo to the note's view model, with a test for when the action is offered.
 WP-21	move-undo-after-note-it-left-deleted	WP-21 adds the move action and its undo to the note's view model, with a test for an undo after the note it left was deleted.
-WP-21	selection-order-of-copied-text	WP-21 adds the selection and its three actions to the note's view model, with a test for the order of the copied text.
-WP-21	selection-one-undo	WP-21 adds the selection and its three actions to the note's view model, with a test for one undo.
 WP-22	capture-before-open-migration-or-write-lock-composition	A capture begun before the store is open, during a migration and while another process holds the write lock.
 WP-22	live-smoke-type-kill-relaunch-read-composition	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
 WP-22	end-to-end-log-canary	The end-to-end suite carries a canary: its fixtures hold a made-up word, and the test fails if that word appears in any log line, error or diagnostics file.
