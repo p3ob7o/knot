@@ -355,7 +355,7 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
             [prior(1, noteA, "09:56", "09:57"), prior(2, noteC, "09:57", "09:58", deleted: true, noteEmpty: true)],
             .newNote(.latestNoteDeleted)),
         AppendRow(
-            "a deleted capture whose note keeps a live segment is skipped", request("10:00", .window, .late),
+            "a deleted capture whose note keeps a live segment does not decide", request("10:00", .window, .late),
             [prior(1, noteA, "09:56", "09:57"), prior(2, noteC, "09:57", "09:58", deleted: true)],
             .join(noteA, .insideWindow)),
         AppendRow(
