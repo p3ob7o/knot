@@ -130,9 +130,9 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
             1, note: roofNote, kind: .voice, start: at("10:00"), end: at("10:01"), text: "", state: .voice(.recorded),
             owner: otherDevice)
         #expect(
-            VisibleState.of(recording, thisDevice: thisDevice, speechAvailableHere: true)
+            VisibleState.of(recording, thisDevice: thisDevice, speechNeverRunsHere: false)
                 == .savedTextBeingMadeElsewhere)
-        #expect(VisibleState.of(recording, thisDevice: otherDevice, speechAvailableHere: true) == .savedTextOnItsWay)
+        #expect(VisibleState.of(recording, thisDevice: otherDevice, speechNeverRunsHere: false) == .savedTextOnItsWay)
     }
 
     @Test("A20: edited beats cleaned beats raw")
@@ -228,11 +228,11 @@ private func capture(_ number: Int, _ note: NoteID, _ start: String, _ end: Stri
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [ready], window: .default, now: at("10:06"), thisDevice: thisDevice,
-                speechAvailableHere: true) == .settled)
+                speechNeverRunsHere: false) == .settled)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [ready], window: .default, now: at("10:05"), thisDevice: thisDevice,
-                speechAvailableHere: true)
+                speechNeverRunsHere: false)
                 == .unsettled(settlesAt: at("10:06")))
     }
 

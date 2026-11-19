@@ -145,22 +145,22 @@ private let noteA: NoteID = id(201)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [ready], window: .default, now: at("09:03"), thisDevice: thisDevice,
-                speechAvailableHere: true)
+                speechNeverRunsHere: false)
                 == .unsettled(settlesAt: at("09:06")))
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [ready], window: .default, now: at("09:06"), thisDevice: thisDevice,
-                speechAvailableHere: true) == .settled)
+                speechNeverRunsHere: false) == .settled)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [ready], window: .off, now: at("09:01"), thisDevice: thisDevice,
-                speechAvailableHere: true) == .settled)
+                speechNeverRunsHere: false) == .settled)
         var closed = note
         closed.closedAt = at("09:02")
         #expect(
             SettledRule.evaluate(
                 note: closed, segments: [ready], window: .default, now: at("09:02"), thisDevice: thisDevice,
-                speechAvailableHere: true) == .settled)
+                speechNeverRunsHere: false) == .settled)
     }
 
     @Test func pendingWorkKeepsANoteUnsettledWithNoTime() {
@@ -173,7 +173,7 @@ private let noteA: NoteID = id(201)
             #expect(
                 SettledRule.evaluate(
                     note: note, segments: [busy], window: .default, now: at("12:00"), thisDevice: thisDevice,
-                    speechAvailableHere: true)
+                    speechNeverRunsHere: false)
                     == .unsettled(settlesAt: nil), "\(state)")
         }
         // A download in progress holds it too.
@@ -182,7 +182,7 @@ private let noteA: NoteID = id(201)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [withAsset], downloadingAssets: [id(4)], window: .default, now: at("12:00"),
-                thisDevice: thisDevice, speechAvailableHere: true)
+                thisDevice: thisDevice, speechNeverRunsHere: false)
                 == .unsettled(settlesAt: nil))
         // A failed segment waits for a person, and a deleted one does not count.
         let failed = segment(
@@ -193,7 +193,7 @@ private let noteA: NoteID = id(201)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [failed, deletedBusy], window: .default, now: at("12:00"), thisDevice: thisDevice,
-                speechAvailableHere: true)
+                speechNeverRunsHere: false)
                 == .settled)
     }
 }
@@ -248,7 +248,7 @@ private let noteA: NoteID = id(201)
             1, note: noteA, kind: .voice, start: at("09:00"), end: at("09:01"), text: row.text, state: row.state,
             owner: row.owner)
         voice.kind = .voice
-        #expect(VisibleState.of(voice, thisDevice: thisDevice, speechAvailableHere: true) == row.expected)
+        #expect(VisibleState.of(voice, thisDevice: thisDevice, speechNeverRunsHere: false) == row.expected)
     }
 
     @Test func theNamesAreThoseOfTheProductSpec() {
@@ -311,7 +311,7 @@ private let noteA: NoteID = id(201)
         var unknownText = base
         unknownText.textOrigin = .unknown("summarised")
         for segment in [unknownState, unknownKind, unknownOrigin, unknownText] {
-            #expect(VisibleState.of(segment, thisDevice: thisDevice, speechAvailableHere: true) == .madeByNewerKnot)
+            #expect(VisibleState.of(segment, thisDevice: thisDevice, speechNeverRunsHere: false) == .madeByNewerKnot)
         }
         #expect(VisibleState.madeByNewerKnot.rawValue == "made_by_newer_knot")
         #expect(VisibleState.madeByNewerKnot.name == "Made by a newer Knot")
@@ -329,7 +329,7 @@ private let noteA: NoteID = id(201)
         // No words recognised: ready with empty text.
         #expect(try VoiceMachine.reduce(.transcribing, .transcribed(hasWords: false)) == .ready)
         #expect(
-            VisibleState.of(Self.voice(.voice(.ready)), thisDevice: thisDevice, speechAvailableHere: true)
+            VisibleState.of(Self.voice(.voice(.ready)), thisDevice: thisDevice, speechNeverRunsHere: false)
                 == .keptNoText)
         // Audio that cannot be read: final, ready with empty text.
         #expect(try VoiceMachine.reduce(.transcribing, .audioUnreadable) == .ready)
@@ -337,18 +337,18 @@ private let noteA: NoteID = id(201)
         // here, until another device takes the work.
         #expect(try VoiceMachine.reduce(.transcribing, .speechUnavailableHere) == .recorded)
         #expect(
-            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechAvailableHere: false)
+            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechNeverRunsHere: true)
                 == .keptNoText)
         #expect(
             VisibleState.of(
-                Self.voice(.voice(.recorded), owner: nil), thisDevice: thisDevice, speechAvailableHere: false)
+                Self.voice(.voice(.recorded), owner: nil), thisDevice: thisDevice, speechNeverRunsHere: true)
                 == .keptNoText)
         #expect(
             VisibleState.of(
-                Self.voice(.voice(.recorded), owner: otherDevice), thisDevice: thisDevice, speechAvailableHere: false)
+                Self.voice(.voice(.recorded), owner: otherDevice), thisDevice: thisDevice, speechNeverRunsHere: true)
                 == .savedTextBeingMadeElsewhere)
         #expect(
-            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechAvailableHere: true)
+            VisibleState.of(Self.voice(.voice(.recorded)), thisDevice: thisDevice, speechNeverRunsHere: false)
                 == .savedTextOnItsWay)
     }
 }
@@ -363,18 +363,34 @@ private let noteA: NoteID = id(201)
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [recording], window: .default, now: at("10:06"), thisDevice: thisDevice,
-                speechAvailableHere: false) == .settled)
+                speechNeverRunsHere: true) == .settled)
         // Where speech is available, the recording still waits for its transcript.
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [recording], window: .default, now: at("10:06"), thisDevice: thisDevice,
-                speechAvailableHere: true) == .unsettled(settlesAt: nil))
+                speechNeverRunsHere: false) == .unsettled(settlesAt: nil))
         // Work that belongs to another device is still awaited.
         var elsewhere = recording
         elsewhere.processingOwner = otherDevice
         #expect(
             SettledRule.evaluate(
                 note: note, segments: [elsewhere], window: .default, now: at("10:06"), thisDevice: thisDevice,
-                speechAvailableHere: false) == .unsettled(settlesAt: nil))
+                speechNeverRunsHere: true) == .unsettled(settlesAt: nil))
+    }
+}
+
+@Suite struct SpeechStillComingTests {
+    @Test func aModelStillInstallingKeepsTheRecordingPendingAndItsNoteOpen() {
+        // Missing or installing is not "never": the caller passes false, and the recording
+        // stays on its way, as docs/product-spec.md §5 has it.
+        let note = Note(id: id(9), createdAt: at("10:00"), lastCaptureEndedAt: at("10:01"))
+        let recording = segment(
+            1, note: id(9), kind: .voice, start: at("10:00"), end: at("10:01"), text: "", state: .voice(.recorded),
+            owner: thisDevice)
+        #expect(VisibleState.of(recording, thisDevice: thisDevice, speechNeverRunsHere: false) == .savedTextOnItsWay)
+        #expect(
+            SettledRule.evaluate(
+                note: note, segments: [recording], window: .default, now: at("12:00"), thisDevice: thisDevice,
+                speechNeverRunsHere: false) == .unsettled(settlesAt: nil))
     }
 }
