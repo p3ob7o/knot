@@ -7,6 +7,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py owns <ID>
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
+    python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
     python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/]
     python3 scripts/lib/knot_tool.py team-id --team-config <path>
@@ -422,6 +423,40 @@ def cmd_depth(base):
     print(f"changed={len(files)}")
     print("reason=" + ", ".join(reasons))
     return 0
+
+
+# ---------------------------------------------------------------- KnotCore's API
+
+
+# The package that writes KnotCore's public API. Its brief: "After WP-02 merges, the public
+# API of KnotCore changes only through a contract PR".
+CORE_API_WRITER = "WP-02"
+
+
+def core_api_exemption(package, merged):
+    """Why a pull request of `package` may change KnotCore's public API, or None when it is
+    held to the base's API.
+
+    A contract branch may, by design. WP-02 may, as long as its last pull request has not
+    merged; `merged` lists the merged pull requests as (package, is_note), and the pull
+    request under test is not among them, so WP-02's last pull request may too. After that,
+    a branch of WP-02 is held like any other."""
+    if package == "contract":
+        return "a contract branch changes KnotCore's public API by design (PLAN.md §8.5)"
+    if package == CORE_API_WRITER and not has_merged(package, merged):
+        done, total = merge_state(package, merged)
+        return (f"{package} writes KnotCore's public API until its last pull request has merged, "
+                f"and {done} of its {total} have")
+    return None
+
+
+def cmd_core_api_rule(package, source):
+    reason = core_api_exemption(package, merged_prs(source)) if package else None
+    if reason:
+        print(f"core-api: {reason}")
+        return 0
+    print(f"core-api: {package or 'this branch'} is held to the base's KnotCore API")
+    return 1
 
 
 # ---------------------------------------------------------------- named tests
@@ -861,6 +896,8 @@ def main(argv):
         return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"), allowed)
     if command == "depth":
         return cmd_depth(option(args, "--base", "origin/main"))
+    if command == "core-api-rule":
+        return cmd_core_api_rule(option(args, "--package"), option(args, "--merged-from", "github"))
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))

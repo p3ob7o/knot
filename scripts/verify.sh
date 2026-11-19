@@ -232,8 +232,8 @@ step_named_tests() {
     (cd "$KNOT_ROOT" && tool named-tests ${options[@]+"${options[@]}"})
 }
 
-# KnotCore's public API: on a branch that is not a contract branch, it must equal the base's
-# (docs/architecture.md §3). It compares the public symbols and relationships of the two
+# KnotCore's public API must equal the base's (docs/architecture.md §3), except on a contract
+# branch, and on WP-02's branches until WP-02's last pull request has merged. It compares the public symbols and relationships of the two
 # symbol graphs. The base's is kept in .build/core-api/, by commit.
 core_api_digest() {
     # core_api_digest <package folder> <scratch folder> <output file>
@@ -251,8 +251,9 @@ PY
     sort -o "$3" "$3"
 }
 step_core_api() {
-    if [[ $PACKAGE == contract ]]; then
-        echo "core-api: a contract branch changes KnotCore's API by design"
+    # A contract branch, and WP-02 until its last pull request has merged, may change the
+    # API; scripts/lib/knot_tool.py decides, and says why.
+    if (cd "$KNOT_ROOT" && tool core-api-rule --package "$PACKAGE"); then
         return 0
     fi
     local base changed

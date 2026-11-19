@@ -138,6 +138,13 @@ owned, excluded, parts = k.owned_paths("WP-06")
 assert ("scripts/verify.sh", "soak") in parts and "scripts/verify.sh" not in owned, (owned, parts)
 text = "a\n# ---- The soak step. It belongs to WP-06\nb\n# ---- End of the soak step.\nc\n"
 assert k.part_markers(text, "soak") == (2, 4), k.part_markers(text, "soak")
+# Who may change KnotCore's public API (item 8 of the run on pull request 22).
+assert len(k.plan_rows("WP-02")) == 3, k.plan_rows("WP-02")
+assert k.core_api_exemption("WP-02", [("WP-02", False)]), "WP-02 with one of three merged"
+assert k.core_api_exemption("WP-02", [("WP-02", False)] * 2), "WP-02's last pull request under test"
+assert k.core_api_exemption("WP-02", [("WP-02", False)] * 3) is None, "WP-02 with all three merged"
+assert k.core_api_exemption("WP-10", []) is None, "another package"
+assert k.core_api_exemption("contract", [("WP-02", False)] * 3), "a contract branch"
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
