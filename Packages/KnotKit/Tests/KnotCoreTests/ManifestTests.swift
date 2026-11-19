@@ -70,6 +70,27 @@ import Testing
         #expect(throws: KnotError.inboxItemUnreadable) { try CaptureManifest.decode(Data(json.utf8)) }
     }
 
+    /// The golden manifest with one field replaced by `value`, as raw JSON.
+    static func golden(replacing key: String, with value: String) -> Data {
+        var object =
+            try! JSONSerialization.jsonObject(with: Data(CaptureManifestGolden.formatOne.utf8)) as! [String: Any]
+        object[key] = "VALUE"
+        let text = String(
+            decoding: try! JSONSerialization.data(withJSONObject: object, options: .sortedKeys), as: UTF8.self)
+        return Data(text.replacingOccurrences(of: "\"VALUE\"", with: value).utf8)
+    }
+
+    @Test(arguments: [
+        ("duration_seconds", "1e300"), ("duration_seconds", "-1e300"), ("duration_seconds", "9.3e15"),
+        ("duration_seconds", "-1"), ("revision", "-1"), ("revision", "1e300"), ("payload_bytes", "-5"),
+        ("payload_bytes", "9223372036854775808"), ("format", "1e300"),
+    ])
+    func aNumberOutOfRangeIsRefusedNotATrap(key: String, value: String) {
+        #expect(throws: KnotError.inboxItemUnreadable.about(capture: Self.capture)) {
+            try CaptureManifest.decode(Self.golden(replacing: key, with: value))
+        }
+    }
+
     @Test func aManifestOverItsBoundIsRefused() throws {
         #expect(throws: KnotError.manifestTooLarge) {
             try CaptureManifest.decode(Data(repeating: 0x20, count: Limits.manifestBytes + 1))

@@ -122,25 +122,31 @@ public struct CaptureManifest: Hashable, Sendable {
         } catch {
             throw KnotError.inboxItemUnreadable
         }
-        guard header.format <= currentFormat else {
-            var error = KnotError.inboxItemNewerVersion
-            error.context.captureID = header.captureID.flatMap(CaptureID.init)
-            throw error
-        }
+        let context = ErrorContext(captureID: header.captureID)
+        guard let format = header.format, format >= 1 else { throw KnotError.inboxItemUnreadable.with(context) }
+        guard format <= currentFormat else { throw KnotError.inboxItemNewerVersion.with(context) }
         do {
             return try decoder.decode(CaptureManifest.self, from: data)
         } catch {
-            throw KnotError.inboxItemUnreadable.with(.init(captureID: header.captureID.flatMap(CaptureID.init)))
+            throw KnotError.inboxItemUnreadable.with(context)
         }
     }
 
+    /// The two fields read before the rest, each on its own, so that a damaged manifest
+    /// still names its capture.
     private struct FormatHeader: Decodable {
-        let format: Int
-        let captureID: String?
+        let format: Int?
+        let captureID: CaptureID?
 
         enum CodingKeys: String, CodingKey {
             case format
             case captureID = "capture_id"
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            format = try? container.decode(Int.self, forKey: .format)
+            captureID = (try? container.decode(String.self, forKey: .captureID)).flatMap(CaptureID.init)
         }
     }
 }
@@ -197,8 +203,15 @@ extension CaptureManifest: Codable {
         endedAt = try container.decodeIfPresent(String.self, forKey: AnyKey(.endedAt)).map {
             try Self.date($0, key: .endedAt)
         }
-        duration = try container.decodeIfPresent(Double.self, forKey: AnyKey(.durationSeconds)).map {
-            Duration.milliseconds(Int64(($0 * 1000).rounded()))
+        if let seconds = try container.decodeIfPresent(Double.self, forKey: AnyKey(.durationSeconds)) {
+            // Checked before the conversion, which would trap on a number out of range.
+            guard seconds.isFinite, (0...Self.longestDurationSeconds).contains(seconds) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: AnyKey(.durationSeconds), in: container, debugDescription: "A duration out of range.")
+            }
+            duration = .milliseconds(Int64((seconds * 1000).rounded()))
+        } else {
+            duration = nil
         }
         let placementText = try container.decode(String.self, forKey: AnyKey(.placement))
         guard let placement = CapturePlacement(rawValue: placementText) else {
@@ -209,6 +222,10 @@ extension CaptureManifest: Codable {
         shownNoteID = try container.decodeIfPresent(NoteID.self, forKey: AnyKey(.shownNoteID))
         revision = try container.decode(Int64.self, forKey: AnyKey(.revision))
         payloadByteCount = try container.decodeIfPresent(Int64.self, forKey: AnyKey(.payloadByteCount))
+        guard revision >= 0, (payloadByteCount ?? 0) >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: AnyKey(.revision), in: container, debugDescription: "A negative revision or size.")
+        }
         payloadSHA256 = try container.decodeIfPresent(String.self, forKey: AnyKey(.payloadSHA256))
         let known = Set(Key.allCases.map(\.rawValue))
         var unknown: [String: JSONValue] = [:]
@@ -238,6 +255,10 @@ extension CaptureManifest: Codable {
         try container.encodeIfPresent(payloadByteCount, forKey: AnyKey(.payloadByteCount))
         try container.encodeIfPresent(payloadSHA256, forKey: AnyKey(.payloadSHA256))
     }
+
+    /// The longest duration a manifest may carry: far beyond any recording, and well inside
+    /// what milliseconds in an `Int64` can hold.
+    static let longestDurationSeconds: Double = 1_000_000_000
 
     /// Dates are ISO 8601 in UTC with milliseconds, such as `2026-11-19T09:58:00.000Z`.
     private static func text(_ date: Date) -> String {
