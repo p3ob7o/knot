@@ -9,7 +9,8 @@ import Testing
 
     @Test("store-locations-missing-group-container", .tags(.named))
     func aMissingGroupContainerIsRefused() {
-        for platform in [StoreLocations.Platform.iOS, .macOS] {
+        // No default path stands in, on any platform: the Watch has a group too.
+        for platform in [StoreLocations.Platform.iOS, .macOS, .watchOS] {
             for flavour in [StoreLocations.Flavour.dev, .milestone] {
                 #expect(throws: KnotError.groupContainerMissing) {
                     try StoreLocations.resolve(
@@ -18,11 +19,14 @@ import Testing
                 }
             }
         }
-        // No default path stands in: the watch, which has no group, is the only platform
-        // that resolves without one.
-        #expect(
-            (try? StoreLocations.resolve(
-                flavour: .dev, platform: .watchOS, appContainer: app, groupContainer: nil, environment: [:])) != nil)
+    }
+
+    @Test func onTheWatchTheRecordingStateIsInTheGroupAndTheOutboxIsNot() throws {
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .watchOS, appContainer: app, groupContainer: group, environment: [:])
+        #expect(locations.recordingState.path == "/containers/group/KnotStore/RecordingState")
+        #expect(locations.outbox.path == "/containers/app/Library/Application Support/KnotStore/Outbox")
+        #expect(locations.recording.path == "/containers/app/Library/Application Support/KnotStore/Recording")
     }
 
     @Test func onIOSTheDatabaseStaysInTheAppsOwnContainer() throws {

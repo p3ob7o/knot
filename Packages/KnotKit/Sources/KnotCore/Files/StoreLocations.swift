@@ -36,8 +36,8 @@ public struct StoreLocations: Hashable, Sendable {
 
     /// The folder that holds the database and the stored assets.
     public let storeRoot: URL
-    /// The folder that holds `Inbox/` and the recording state: the app group on iOS, so that
-    /// the watch link and the widget extension reach them.
+    /// The folder that holds `Inbox/` and the recording state: the app group on iOS and on the
+    /// Watch, so that the watch link and the widget extensions reach them.
     public let sharedRoot: URL
 
     public var database: URL { storeRoot.appending(path: "knot.sqlite", directoryHint: .notDirectory) }
@@ -85,9 +85,12 @@ public struct StoreLocations: Hashable, Sendable {
         let ownRoot = appContainer.appending(path: rootFolderName, directoryHint: .isDirectory)
         switch platform {
         case .watchOS:
-            // The watch has no database and no app group of its own: its recordings, its
-            // outbox and its recording state stay in its own container.
-            return StoreLocations(storeRoot: ownRoot, sharedRoot: ownRoot)
+            // The Watch has no database. Its recording state sits in the group, which the
+            // Watch app shares with its widget extension for the complication; its recordings
+            // and its outbox stay in its own container.
+            guard let groupContainer else { throw KnotError.groupContainerMissing }
+            let shared = groupContainer.appending(path: rootFolderName, directoryHint: .isDirectory)
+            return StoreLocations(storeRoot: ownRoot, sharedRoot: shared)
         case .iOS:
             // The database stays in the app's own container: iOS kills a process suspended
             // while it holds a lock on a database in a shared container.
