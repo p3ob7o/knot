@@ -123,3 +123,34 @@ public struct UnavailableCleaner: Cleaner {
         throw KnotError.portUnavailable
     }
 }
+
+/// A `CaptureEngine` that is not there yet: no capture begins.
+public struct UnavailableCaptureEngine: CaptureEngine {
+    public init() {}
+
+    public func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+        throw KnotError.portUnavailable
+    }
+    public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        throw KnotError.portUnavailable.about(capture: capture)
+    }
+    public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+        throw KnotError.portUnavailable.about(capture: capture)
+    }
+    public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+        throw KnotError.portUnavailable.about(capture: capture)
+    }
+    public func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+}
+
+/// A `ProcessingQueue` that is not there yet: nothing is queued or run.
+public struct UnavailableProcessingQueue: ProcessingQueue {
+    public init() {}
+
+    public func resume() async throws(KnotError) { throw KnotError.portUnavailable }
+    public func enqueue(_ segment: SegmentID) async throws(KnotError) {
+        throw KnotError.portUnavailable.with(.init(segmentID: segment))
+    }
+    public func runUntilIdle() async {}
+    public func jobs() -> AsyncStream<Job> { AsyncStream { $0.finish() } }
+}

@@ -30,6 +30,41 @@ import Testing
         #expect(await live.next() == .failed(.portUnavailable))
     }
 
+    /// The capture engine and the processing queue of `.unavailable` answer as the other
+    /// ports do: every call that can fail throws `port_unavailable`, and their streams end.
+    @Test func theEngineAndTheQueueSayTheyAreNotThereYet() async {
+        let environment = AppEnvironment.unavailable
+        let capture: CaptureID = id(1)
+        let segment: SegmentID = id(2)
+        for kind in [SegmentKind.typed, .voice, .ink] {
+            await #expect(throws: KnotError.portUnavailable) {
+                try await environment.engine.begin(CaptureRequest(kind: kind, surface: .app, text: "x"))
+            }
+        }
+        await #expect(throws: KnotError.portUnavailable.about(capture: capture)) {
+            try await environment.engine.update(capture, with: .text("x"))
+        }
+        await #expect(throws: KnotError.portUnavailable.about(capture: capture)) {
+            try await environment.engine.update(capture, with: .drawing(Data([1])))
+        }
+        await #expect(throws: KnotError.portUnavailable.about(capture: capture)) {
+            try await environment.engine.end(capture)
+        }
+        await #expect(throws: KnotError.portUnavailable.about(capture: capture)) {
+            try await environment.engine.discard(capture)
+        }
+        var states = environment.engine.states().makeAsyncIterator()
+        #expect(await states.next() == nil, "No capture state is published.")
+
+        await #expect(throws: KnotError.portUnavailable) { try await environment.queue.resume() }
+        await #expect(throws: KnotError.portUnavailable.with(.init(segmentID: segment))) {
+            try await environment.queue.enqueue(segment)
+        }
+        await environment.queue.runUntilIdle()
+        var jobs = environment.queue.jobs().makeAsyncIterator()
+        #expect(await jobs.next() == nil, "No job is published.")
+    }
+
     @Test(.tags(.contract)) func theLiveClockAndIDsKeepTheirContracts() {
         let clock = SystemWallClock()
         IDGeneratorContract.run(SystemIDGenerator(clock: clock), clock: clock)
