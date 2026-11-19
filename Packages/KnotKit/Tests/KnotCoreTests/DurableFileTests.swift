@@ -5,18 +5,23 @@ import Testing
 
 @testable import KnotCore
 
+/// The store's root in the tests on the power-cut layer.
+private let storeRoot = URL(fileURLWithPath: "/store", isDirectory: true)
+
 @Suite struct DurableFileTests {
     let folder = URL(fileURLWithPath: "/store/Inbox", isDirectory: true)
     var target: URL { folder.appending(path: "capture.json") }
     let old = Data("old content".utf8)
     let new = Data("new content, longer".utf8)
 
-    /// A layer whose folder exists and whose target holds `old`, all synced.
-    func layerWithOldFile() throws -> PowerCutFileLayer {
+    /// A layer whose folder exists and whose target holds `old`, all synced, with the
+    /// `DurableFile` that placed it, which remembers the folders it synced.
+    func withOldFile() throws -> (PowerCutFileLayer, DurableFile) {
         let layer = PowerCutFileLayer()
-        try DurableFile(layer: layer).makeFolder(folder)
-        try DurableFile(layer: layer).place(old, at: target)
-        return layer
+        let durable = DurableFile(layer: layer, root: storeRoot)
+        try durable.makeFolder(folder)
+        try durable.place(old, at: target)
+        return (layer, durable)
     }
 
     @Test("file-layer-drops-unsynced-writes", .tags(.named))
@@ -24,7 +29,7 @@ import Testing
         // The layer drops what was not synced: a plain write, and a synced file whose name
         // the folder never synced.
         let plain = PowerCutFileLayer()
-        try DurableFile(layer: plain).makeFolder(folder)
+        try DurableFile(layer: plain, root: storeRoot).makeFolder(folder)
         try plain.write(new, to: target)
         plain.cutPower()
         #expect(!plain.exists(target))
@@ -34,25 +39,25 @@ import Testing
         #expect(!plain.exists(target))
 
         // A file placed by DurableFile survives.
-        let placed = try layerWithOldFile()
-        try DurableFile(layer: placed).place(new, at: target)
+        let (placed, placer) = try withOldFile()
+        try placer.place(new, at: target)
         placed.cutPower()
         #expect(try placed.read(target) == new)
 
         // Cut the power after each operation of a placement in turn. The target holds the old
         // content or the new, whole, and once the call returned, and the row that points to
         // the file could be committed, it holds the new.
-        let probe = try layerWithOldFile()
+        let (probe, prober) = try withOldFile()
         let start = probe.operationCount
-        try DurableFile(layer: probe).place(new, at: target)
+        try prober.place(new, at: target)
         let steps = probe.operationCount - start
-        #expect(steps == 4, "write, sync, rename, sync the folder")
+        #expect(steps == 4, "write, sync, rename, sync the folder: folders already synced cost nothing")
         for cut in 0...steps {
-            let layer = try layerWithOldFile()
+            let (layer, durable) = try withOldFile()
             layer.die(afterOperations: cut)
             var rowCommitted = false
             do {
-                try DurableFile(layer: layer).place(new, at: target)
+                try durable.place(new, at: target)
                 rowCommitted = true
             } catch {
                 #expect(error == .writeFailed)
@@ -62,7 +67,7 @@ import Testing
             #expect(content == old || content == new, "Cut after \(cut) operations: a part of a file.")
             if rowCommitted { #expect(content == new, "Cut after \(cut) operations: a committed row lost its file.") }
             // What a crash left beside the target is cleared at relaunch.
-            try DurableFile(layer: layer).removePartials(in: folder)
+            try durable.removePartials(in: folder)
             #expect(try layer.contents(of: folder) == ["capture.json"])
         }
 
@@ -70,10 +75,21 @@ import Testing
         // only when every new level's parent was synced.
         let bare = PowerCutFileLayer()
         let bareFolder = URL(fileURLWithPath: "/store/KnotStore/Assets/ab", isDirectory: true)
-        try DurableFile(layer: bare).makeFolder(bareFolder)
-        try DurableFile(layer: bare).place(new, at: bareFolder.appending(path: "x.m4a"))
+        try DurableFile(layer: bare, root: storeRoot).makeFolder(bareFolder)
+        try DurableFile(layer: bare, root: storeRoot).place(new, at: bareFolder.appending(path: "x.m4a"))
         bare.cutPower()
         #expect(try bare.read(bareFolder.appending(path: "x.m4a")) == new)
+
+        // Two writers: A makes a folder and is paused before it syncs the folder's parent; B
+        // finds the folder, saves into it and is acknowledged. The save survives a power cut,
+        // because B syncs the name of every folder down to the file, made or found.
+        let shared = PowerCutFileLayer()
+        try DurableFile(layer: shared, root: storeRoot).makeFolder(storeRoot)
+        try shared.createFolder(storeRoot.appending(path: "A"))
+        let writerB = DurableFile(layer: shared, root: storeRoot)
+        try writerB.place(new, at: storeRoot.appending(path: "A/x"))
+        shared.cutPower()
+        #expect((try? shared.read(storeRoot.appending(path: "A/x"))) == new, "B's acknowledged save was lost.")
 
         // And the test notices a DurableFile that forgets any one of its syncs: with each
         // sync of each operation forgotten in turn, what the operation promised is lost.
@@ -107,7 +123,7 @@ import Testing
         switch scenario {
         case .placeIntoNewFolders:
             layer = PowerCutFileLayer()
-            durable = DurableFile(layer: layer)
+            durable = DurableFile(layer: layer, root: storeRoot)
             let assets = URL(fileURLWithPath: "/store/KnotStore/Assets/ab", isDirectory: true)
             before = layer.syncCount
             if let index { layer.forgetSync(index) }
@@ -118,7 +134,7 @@ import Testing
             return (syncs, (try? layer.read(assets.appending(path: "x.m4a"))) == new)
         case .moveReceivedFile:
             layer = PowerCutFileLayer()
-            durable = DurableFile(layer: layer)
+            durable = DurableFile(layer: layer, root: storeRoot)
             let received = URL(fileURLWithPath: "/store/Received", isDirectory: true)
             let source = received.appending(path: "file.m4a")
             let destination = folder.appending(path: "file.m4a")
@@ -133,8 +149,7 @@ import Testing
             layer.cutPower()
             return (syncs, (try? layer.read(destination)) == new && !layer.exists(source))
         case .remove:
-            layer = try layerWithOldFile()
-            durable = DurableFile(layer: layer)
+            (layer, durable) = try withOldFile()
             before = layer.syncCount
             if let index { layer.forgetSync(index) }
             try durable.remove(target)
@@ -153,7 +168,7 @@ import Testing
         let destination = folder.appending(path: "file.m4a")
         for cut in 0...4 {
             let layer = PowerCutFileLayer()
-            let durable = DurableFile(layer: layer)
+            let durable = DurableFile(layer: layer, root: storeRoot)
             try durable.makeFolder(folder)
             try durable.makeFolder(received)
             try layer.write(new, to: source)
@@ -175,16 +190,16 @@ import Testing
     }
 
     @Test func aFullDiskLeavesTheOldFile() throws {
-        let layer = try layerWithOldFile()
+        let (layer, durable) = try withOldFile()
         layer.failNextWrite(with: .diskFull)
-        #expect(throws: KnotError.diskFull) { try DurableFile(layer: layer).place(new, at: target) }
+        #expect(throws: KnotError.diskFull) { try durable.place(new, at: target) }
         layer.cutPower()
         #expect(try layer.read(target) == old)
     }
 
     @Test func aRemovalStays() throws {
-        let layer = try layerWithOldFile()
-        try DurableFile(layer: layer).remove(target)
+        let (layer, durable) = try withOldFile()
+        try durable.remove(target)
         layer.cutPower()
         #expect(!layer.exists(target))
     }
@@ -192,7 +207,7 @@ import Testing
     @Test func thePosixLayerPlacesReadsMovesAndRemoves() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "knot-durable-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let durable = DurableFile(layer: PosixFileLayer())
+        let durable = DurableFile(layer: PosixFileLayer(), root: root)
         let inbox = root.appending(path: "Inbox", directoryHint: .isDirectory)
         try durable.makeFolder(inbox)
         let file = inbox.appending(path: "a.json")
@@ -207,12 +222,15 @@ import Testing
         try durable.remove(moved)
         #expect(!durable.layer.exists(moved))
         try durable.remove(moved)
-        #expect(throws: KnotError.self) { try durable.place(new, at: root.appending(path: "missing/c.json")) }
+        // A folder below the root that is missing is made; a path outside the root is refused.
+        try durable.place(new, at: root.appending(path: "missing/c.json"))
+        #expect(try durable.layer.read(root.appending(path: "missing/c.json")) == new)
         do {
-            try durable.place(new, at: root.appending(path: "missing/c.json"))
+            try durable.place(new, at: root.deletingLastPathComponent().appending(path: "outside.json"))
+            Issue.record("A path outside the store's root was written.")
         } catch {
             #expect(error.code == KnotError.writeFailed.code)
-            #expect(error.context.posixError == ENOENT)
+            #expect(error.context.posixError == EINVAL)
         }
     }
 }
@@ -301,5 +319,38 @@ import Testing
         let fallback = Calls(full: [ENOTSUP], plain: [EINTR, 0])
         try PosixFileLayer.flush(3, calls: fallback.flushCalls)
         #expect(fallback.plainCount == 2)
+    }
+}
+
+@Suite struct DurableAncestorTests {
+    let new = Data("new".utf8)
+
+    @Test func aSaveIntoAFolderAnotherWriterHasNotSyncedYetSurvives() throws {
+        let layer = PowerCutFileLayer()
+        let root = URL(fileURLWithPath: "/store", isDirectory: true)
+        try DurableFile(layer: layer, root: root).makeFolder(root)
+        // Writer A creates /store/A and is paused before it syncs /store.
+        try layer.createFolder(root.appending(path: "A"))
+        // Writer B finds /store/A, places a file in it, and reports success.
+        let b = DurableFile(layer: layer, root: root)
+        try b.makeFolder(root.appending(path: "A"))
+        try b.place(new, at: root.appending(path: "A/x"))
+        layer.cutPower()
+        #expect((try? layer.read(root.appending(path: "A/x"))) == new, "An acknowledged save was lost.")
+    }
+
+    @Test func aRetryAfterAFailedSyncOfAParentMakesTheFolderDurable() throws {
+        let layer = PowerCutFileLayer()
+        let root = URL(fileURLWithPath: "/store", isDirectory: true)
+        let durable = DurableFile(layer: layer, root: root)
+        try durable.makeFolder(root)
+        // The first try creates /store/A and dies before it syncs /store.
+        layer.die(afterOperations: 1)
+        #expect(throws: KnotError.self) { try durable.makeFolder(root.appending(path: "A")) }
+        layer.die(afterOperations: 1_000)
+        try durable.makeFolder(root.appending(path: "A"))
+        try durable.place(new, at: root.appending(path: "A/x"))
+        layer.cutPower()
+        #expect((try? layer.read(root.appending(path: "A/x"))) == new, "An acknowledged save was lost.")
     }
 }

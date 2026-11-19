@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The file-system operations that `DurableFile` places files with.
 ///
@@ -27,22 +28,29 @@ public protocol FileLayer: Sendable {
 /// The only code that places a file (docs/architecture.md §3 and §6, rule 7).
 ///
 /// It writes the content beside its destination, syncs it, renames it into place and syncs
-/// the folder. Only then does the call return, so a database row that points to the file is
-/// committed after the file is on the drive. A crash at any point leaves either the old file
-/// or the new one whole, never part of one.
+/// the folder. Before that, it makes sure that the name of every folder from the store's root
+/// down to the file is on the drive: a folder that exists is no proof of that, since another
+/// writer may have made it and not yet synced its parent. Only then does the call return, so
+/// a database row that points to the file is committed after the file is on the drive. A
+/// crash at any point leaves either the old file or the new one whole, never part of one.
 public struct DurableFile: Sendable {
     /// The suffix of a file being written, which `removePartials` clears after a crash.
     public static let partialSuffix = ".partial"
 
     public let layer: any FileLayer
+    /// The store's root, `KnotStore/`. Every path this value places lies under it.
+    public let root: URL
+    private let synced = SyncedFolders()
 
-    public init(layer: any FileLayer) {
+    public init(layer: any FileLayer, root: URL) {
         self.layer = layer
+        self.root = root.standardizedFileURL
     }
 
     /// Places `data` at `url`, replacing what was there.
     public func place(_ data: Data, at url: URL) throws(KnotError) {
         let folder = url.deletingLastPathComponent()
+        try makeFolder(folder)
         let partial = folder.appending(
             path: ".\(url.lastPathComponent).\(UUID().uuidString.lowercased())\(Self.partialSuffix)",
             directoryHint: .notDirectory)
@@ -60,10 +68,11 @@ public struct DurableFile: Sendable {
     /// Moves a file that is already written, such as one the watch link received, into place.
     /// The file is synced first, then renamed, then both folders are synced.
     public func move(_ source: URL, to destination: URL) throws(KnotError) {
-        try layer.syncFile(source)
-        try layer.rename(source, to: destination)
         let sourceFolder = source.deletingLastPathComponent()
         let destinationFolder = destination.deletingLastPathComponent()
+        try makeFolder(destinationFolder)
+        try layer.syncFile(source)
+        try layer.rename(source, to: destination)
         try layer.syncFolder(destinationFolder)
         if sourceFolder.standardizedFileURL != destinationFolder.standardizedFileURL {
             try layer.syncFolder(sourceFolder)
@@ -76,21 +85,19 @@ public struct DurableFile: Sendable {
         try layer.syncFolder(url.deletingLastPathComponent())
     }
 
-    /// Creates a folder and every missing folder above it, one level at a time, syncing each
-    /// new folder's parent before going down, so that no folder's name rests on a parent
-    /// that was never synced. A folder that is already there is left as it is.
+    /// Makes sure `url` and every folder between the store's root and it exist, and that the
+    /// name of each is on the drive: for each one, from the root down, it creates the folder
+    /// if it is missing and syncs its parent, whether this call made the folder or found it.
+    /// A folder this value has synced before is not synced again, so a save into known
+    /// folders costs no extra syncs. That memory lasts as long as the value and its copies,
+    /// and is this process's own.
     public func makeFolder(_ url: URL) throws(KnotError) {
-        var missing: [URL] = []
-        var folder = url.standardizedFileURL
-        while !layer.exists(folder) {
-            missing.append(folder)
-            let parent = folder.deletingLastPathComponent()
-            if parent.path == folder.path { break }
-            folder = parent
-        }
-        for folder in missing.reversed() {
-            try layer.createFolder(folder)
+        for folder in try chain(to: url) {
+            let key = folder.path
+            if synced.contains(key) { continue }
+            if !layer.exists(folder) { try layer.createFolder(folder) }
             try layer.syncFolder(folder.deletingLastPathComponent())
+            synced.insert(key)
         }
     }
 
@@ -101,4 +108,29 @@ public struct DurableFile: Sendable {
         }
         try layer.syncFolder(folder)
     }
+
+    /// The store's root and every folder below it down to `url`. A path outside the root is refused.
+    private func chain(to url: URL) throws(KnotError) -> [URL] {
+        let target = url.standardizedFileURL
+        let rootComponents = root.pathComponents
+        let components = target.pathComponents
+        guard components.count >= rootComponents.count, Array(components.prefix(rootComponents.count)) == rootComponents
+        else { throw KnotError.writeFailed.with(.init(posixError: EINVAL)) }
+        var chain = [root]
+        var folder = root
+        for component in components.dropFirst(rootComponents.count) {
+            folder = folder.appending(path: component, directoryHint: .isDirectory)
+            chain.append(folder)
+        }
+        return chain
+    }
+}
+
+/// The folders whose names one `DurableFile` has synced, for the life of the process.
+private final class SyncedFolders: Sendable {
+    private let paths = Mutex<Set<String>>([])
+
+    func contains(_ path: String) -> Bool { paths.withLock { $0.contains(path) } }
+
+    func insert(_ path: String) { paths.withLock { _ = $0.insert(path) } }
 }
