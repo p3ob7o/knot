@@ -27,7 +27,9 @@ targets:
       - target: Widgets-iOS
       - target: Knot-watchOS
 
-  # Tests hosted in the app, for what runs only in the iOS Simulator.
+  # Tests hosted in the app, for the contract suites that run only in the iOS Simulator
+  # (docs/architecture.md §5): RecordingStateStore across two processes, RecordingActivity
+  # and InkRecogniser. Later packages add the products of their own modules.
   Knot-iOS-Tests:
     type: bundle.unit-test
     platform: iOS
@@ -41,6 +43,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
       - target: Knot-iOS
+      - package: KnotKit
+        products: [KnotTestSupport, KnotFakes]
 
   Knot-iOS-UITests:
     type: bundle.ui-testing

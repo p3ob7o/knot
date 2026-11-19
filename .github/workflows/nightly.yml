@@ -1,0 +1,44 @@
+# The part of the nightly run that a hosted runner can do: the package tests under Thread
+# Sanitizer (named test package-tests-under-thread-sanitizer-nightly). The rest of the
+# nightly run, which needs the on-device models, the simulators and the desktop, is
+# scripts/nightly.sh on the orchestrator's Mac.
+#
+# The repository gets no self-hosted runner. This workflow holds no secrets, never uses
+# pull_request_target, has read-only permissions, and pins its actions by revision.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tsan:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      XCODEGEN_VERSION: "2.47.0"
+      XCODEGEN_SHA256: "6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen at its pinned version
+        run: |
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Package tests under Thread Sanitizer
+        run: scripts/verify.sh --only tsan
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-logs
+          path: .build/logs/
+          retention-days: 7

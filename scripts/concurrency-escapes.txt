@@ -1,0 +1,5 @@
+# Concurrency escapes that a reviewer has accepted (docs/architecture.md §17). The gate's lint
+# fails on any @unchecked Sendable, nonisolated(unsafe) or @preconcurrency beyond this list.
+# One line each, four fields separated by one tab: the path, the escape, how many times it
+# appears in that file, and why it is safe. The orchestrator adds a line when a review
+# accepts one.
