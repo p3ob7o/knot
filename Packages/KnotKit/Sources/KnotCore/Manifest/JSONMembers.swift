@@ -9,9 +9,10 @@ import Foundation
 enum JSONMembers {
     enum Failure: Error {
         case malformed
+        case duplicateKey
     }
 
-    /// The members of the object `data` holds, in order.
+    /// The members of the object `data` holds, in order. A key named twice is refused.
     static func split(_ data: Data) throws(Failure) -> [(key: String, raw: Data)] {
         let bytes = [UInt8](data)
         var index = 0
@@ -20,6 +21,7 @@ enum JSONMembers {
         index += 1
         skipSpace(bytes, &index)
         var members: [(key: String, raw: Data)] = []
+        var keys: Set<String> = []
         if index < bytes.count, bytes[index] == UInt8(ascii: "}") {
             index += 1
         } else {
@@ -27,6 +29,7 @@ enum JSONMembers {
                 let keyStart = index
                 try skipString(bytes, &index)
                 let key = try decodeKey(Data(bytes[keyStart..<index]))
+                guard keys.insert(key).inserted else { throw .duplicateKey }
                 skipSpace(bytes, &index)
                 guard index < bytes.count, bytes[index] == UInt8(ascii: ":") else { throw .malformed }
                 index += 1

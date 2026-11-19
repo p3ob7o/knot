@@ -10,8 +10,8 @@ import Foundation
 ///
 /// A kind, an origin or a field that this build does not know is kept and never dropped
 /// (docs/architecture.md §4). A field it does not know is kept as its original JSON text and
-/// written back exactly, a number past a Double's precision included. `decode(_:)` and
-/// `encoded()` are the only ways in and out.
+/// written back exactly, a number past a Double's precision included. A manifest that names a
+/// key twice is refused. `decode(_:)` and `encoded()` are the only ways in and out.
 public struct CaptureManifest: Hashable, Sendable {
     /// The format this build writes and reads.
     public static let currentFormat = 1
@@ -86,6 +86,7 @@ public struct CaptureManifest: Hashable, Sendable {
     /// refused with its own code, and the caller keeps the file.
     public static func decode(_ data: Data) throws(KnotError) -> CaptureManifest {
         guard data.count <= Limits.manifestBytes else { throw KnotError.manifestTooLarge }
+        // Split first: a key named twice is refused before anything is read.
         let members: [(key: String, raw: Data)]
         do {
             members = try JSONMembers.split(data)

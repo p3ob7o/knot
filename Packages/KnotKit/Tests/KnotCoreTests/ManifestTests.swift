@@ -65,6 +65,13 @@ import Testing
         #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
     }
 
+    @Test func aManifestThatNamesAKeyTwiceIsRefused() {
+        let twice = CaptureManifestGolden.formatOne.replacingOccurrences(
+            of: #""format":1,"#, with: #""format":1,"format":2,"#)
+        #expect(twice != CaptureManifestGolden.formatOne)
+        #expect(throws: KnotError.inboxItemUnreadable) { try CaptureManifest.decode(Data(twice.utf8)) }
+    }
+
     @Test func anUnknownPlacementIsANewerKnotsAndTheFileIsKept() {
         let data = Self.golden(replacing: "placement", with: #""pinned:top""#)
         #expect(throws: KnotError.inboxItemNewerVersion.about(capture: Self.capture)) {
