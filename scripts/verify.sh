@@ -689,13 +689,13 @@ for step in $STEPS; do
     if wait $!; then
         PASSED=$((PASSED + 1))
         printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        [[ $step == package-test ]] && count_tests "$log"
+        [[ $step == package-test || $step == tsan || $step == soak ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        [[ $step == package-test ]] && count_tests "$log"
+        [[ $step == package-test || $step == tsan || $step == soak ]] && count_tests "$log"
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
         [[ -n $MODULE && $step == package-* ]] && rerun="scripts/verify.sh --module $MODULE"

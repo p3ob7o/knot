@@ -28,9 +28,11 @@ TARGET="$(cd "$TARGET" && pwd -P)"
 # It must be a worktree of this repository, and not the main checkout.
 main="$(git -C "$KNOT_ROOT" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
 main="$(cd "$main" && pwd -P)"
-git -C "$KNOT_ROOT" worktree list --porcelain | awk '/^worktree / { print substr($0, 10) }' |
-    while IFS= read -r tree; do [[ "$(cd "$tree" 2>/dev/null && pwd -P)" == "$TARGET" ]] && echo yes; done |
-    grep -e yes >/dev/null ||
+found=0
+while IFS= read -r tree; do
+    if [[ "$(cd "$tree" 2>/dev/null && pwd -P)" == "$TARGET" ]]; then found=1; fi
+done < <(git -C "$KNOT_ROOT" worktree list --porcelain | awk '/^worktree / { print substr($0, 10) }')
+((found)) ||
     knot_fail "worktree-remove-not-worktree" "$TARGET is not a worktree of this repository." \
         "Name a folder from git worktree list." "safe" "nothing"
 [[ $TARGET != "$main" ]] ||
