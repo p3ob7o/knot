@@ -1,0 +1,178 @@
+# Named tests. This file lists the tests that the plan and `docs/architecture.md` require by name, each with the package that owns it.
+# Lines that start with `#` are comments.
+# There is one line for each test, with three fields separated by one tab character:
+#   1. the owner, a package ID such as WP-10;
+#   2. a slug of lower-case words joined by hyphens, unique in this file, which the test's code carries;
+#   3. the test, in one sentence, in the words of the plan or of `docs/architecture.md`.
+# A test that the plan gives to more than one package has one line for each of them.
+# The lines are ordered by owner.
+# The gate fails when a listed test is missing once its package has merged.
+WP-01	package-tests-under-thread-sanitizer-nightly	The nightly run executes the package tests under Thread Sanitizer.
+WP-01	contract-suite-dummy-port-two-test-targets	A contract suite in KnotTestSupport run from two test targets, which WP-01 proves with one dummy port before WP-02 relies on it.
+WP-01	scripts-self-test	The scripts have a self-test that `--quick` runs: a slot is released when its holder is killed, a failure prints the agreed fields, and the plan check catches a brief with a missing heading.
+WP-02	clock-moved-backwards	A clock moved backwards.
+WP-02	checkpoint-from-inbox-older-than-stored-text-fake	A checkpoint from `Inbox/` older than the stored text.
+WP-02	same-capture-id-different-content-fake	The same capture ID with different content.
+WP-02	job-found-running-at-launch-twice-rule	A job found running at launch twice.
+WP-02	move-repeated-after-capture-joined-new-note-fake	A move repeated after a capture joined the new note.
+WP-02	return-after-note-changed-again-fake	A return after the segment's note changed again.
+WP-02	text-past-size-limit-repeated-rule	Text that runs past the size limit, repeated.
+WP-02	store-locations-missing-group-container	`StoreLocations` with a missing group container.
+WP-02	broken-fake-ignores-repeated-capture-id	The `NoteStore` contract suite must fail a deliberately broken fake that ignores a repeated capture ID.
+WP-02	broken-fake-lowers-a-revision	The `NoteStore` contract suite must fail a deliberately broken fake that lowers a revision.
+WP-02	broken-fake-loses-move-history	The `NoteStore` contract suite must fail a deliberately broken fake that loses a move's history.
+WP-02	capture-surface-prediction-agrees-with-decision	The note that a capture surface shows before the first keystroke comes from a store query that calls the append rule, and a test checks that the prediction and the decision agree at the same instant.
+WP-02	file-layer-drops-unsynced-writes	A file-layer test drops every write that was not synced and checks that recovery still holds.
+WP-02	error-case-lacks-code-or-docs-entry	A test fails when a case of the error taxonomy lacks a code or an entry in `docs/errors.md`.
+WP-02	ink-reducer-rejects-ready-to-drawing	The reducer tests of the ink state machine reject a transition from ready back to drawing.
+WP-02	repeated-capture-id-returns-first-result	A repeated capture ID with the same content changes nothing and returns the first result.
+WP-02	stale-revision-fails	A stale revision fails.
+WP-02	changes-after-cursor-include-late-capture-and-deletion	Changes after a cursor include a late capture and a deletion.
+WP-02	cursor-ahead-of-store-is-reported	A cursor ahead of the store is reported.
+WP-02	replace-text-precedence-edited-cleaned-raw-fake	Replacing text checks the precedence of edited, cleaned and raw inside the store.
+WP-02	move-and-return-leave-both-notes-fake	A move and its return leave both notes exactly as they were.
+WP-02	move-refused-open-capture-deleted-conflict-copy-fake	A move is refused for an open capture, for a deleted segment and for a conflict copy.
+WP-02	move-refused-segment-alone-in-note-fake	A move is refused for a segment alone in its note.
+WP-02	return-refused-note-left-is-deleted-fake	A return is refused when the note it left is deleted.
+WP-02	dropped-title-put-back-by-return-fake	A dropped title that a return puts back.
+WP-02	rule-sixteen-capture-inside-window-of-moved-segment	WP-02's table for rule 16 covers a capture made inside the window of a segment that was just moved.
+WP-02	capture-on-another-surface-ends-open-one	A capture started on another surface ends the open one, whatever its kind.
+WP-02	negative-gap-less-than-window-counts-inside	A gap that is negative by less than the window counts as inside it, and a larger one starts a new note.
+WP-02	text-only-spaces-and-line-breaks-is-empty	Text that is only spaces and line breaks is empty.
+WP-02	selection-deleted-and-restored	A selection deleted and restored.
+WP-02	selection-holds-every-live-segment-of-note	A selection that holds every live segment of its note.
+WP-05	capture-before-open-migration-or-write-lock-tracer	A capture begun before the store is open, during a migration and while another process holds the write lock.
+WP-05	store-call-commits-after-inbox-fallback-tracer	A store call that commits after its capture fell back to `Inbox/`.
+WP-05	tracer-end-to-end-typed-and-recording	One end-to-end test, in which a typed capture and a fixture recording go through the engine, the queue, the in-memory `NoteStore` and the scripted `Recorder`, `Transcriber` and `Cleaner`, and the assertions read the stream page that `NoteStore` publishes.
+WP-06	capture-ledger-soak	The capture ledger soak test is seeded and time-boxed.
+WP-06	soak-red-on-acknowledgement-before-write	An injected fault turns the soak red: an acknowledgement before the write.
+WP-06	soak-red-on-skipped-capture-row	An injected fault turns the soak red: a skipped capture row.
+WP-06	soak-red-on-dropped-last-checkpoint	An injected fault turns the soak red: a dropped last checkpoint.
+WP-06	soak-red-on-capture-stored-twice	An injected fault turns the soak red: a capture stored twice.
+WP-10	two-processes-recording-captures-at-once	Two processes recording captures at once.
+WP-10	search-text-full-of-query-syntax	Search text full of query syntax.
+WP-10	database-newer-than-the-build	A database newer than the build.
+WP-10	store-that-will-not-open	A store that will not open.
+WP-10	checkpoint-from-inbox-older-than-stored-text-real	A checkpoint from `Inbox/` older than the stored text.
+WP-10	same-capture-id-different-content-real	The same capture ID with different content.
+WP-10	disk-fills-during-migration	A disk that fills during a migration.
+WP-10	long-typing-sync-off-change-log-rows	A long typing session with sync off that leaves no more `change_log` rows than records.
+WP-10	kill-inside-a-move	A kill inside a move.
+WP-10	container-holds-retired-app-files	A container that still holds the retired app's files.
+WP-10	kill-inside-delete-of-selection	A kill inside the delete of a selection.
+WP-10	move-repeated-after-capture-joined-new-note-real	A move repeated after a capture joined the new note.
+WP-10	return-after-note-changed-again-real	A return after the segment's note changed again.
+WP-10	tool-dies-before-its-notification	A tool that dies before its notification.
+WP-10	kill-during-pre-migration-copy	A kill during the pre-migration copy.
+WP-10	seeded-differential-in-memory-against-real	A seeded differential test applies random sequences of operations to the in-memory `NoteStore` and to the real one and compares every result.
+WP-10	query-plan-shows-index-for-every-query	A stream page is one query, every query in the `NoteStore` contract has an index, and a test shows each query plan.
+WP-10	search-checked-against-plain-scan	Search is checked against a plain scan: for a seeded store, whole-word and prefix queries return the same notes as a scan of the text, across typed, spoken and handwritten segments and titles, and never a deleted note.
+WP-10	writer-connection-keeps-fullfsync-and-synchronous-full	A test fails when the writer connection lacks either setting, `fullfsync` or `synchronous = FULL`.
+WP-10	store-folder-copied-elsewhere-opens	A store folder copied to another place opens with every note and file, and WP-10 tests that.
+WP-10	milestone-stores-open-migrate-pass-contract	Every later build must open each seeded synthetic store committed at a milestone tag, migrate it and then pass the whole `NoteStore` contract suite on it.
+WP-10	newer-store-still-there-after-restore	WP-10 tests that the newer store is still there after a restore.
+WP-10	replace-text-precedence-edited-cleaned-raw-real	Replacing text checks the precedence of edited, cleaned and raw inside the store.
+WP-10	move-and-return-leave-both-notes-real	A move and its return leave both notes exactly as they were.
+WP-10	move-refused-open-capture-deleted-conflict-copy-real	A move is refused for an open capture, for a deleted segment and for a conflict copy.
+WP-10	move-refused-segment-alone-in-note-real	A move is refused for a segment alone in its note.
+WP-10	return-refused-note-left-is-deleted-real	A return is refused when the note it left is deleted.
+WP-10	dropped-title-put-back-by-return-real	A dropped title that a return puts back.
+WP-10	restore-of-copy-older-than-purge	WP-10 tests a restore of a copy older than a purge.
+WP-11	soak-kill-points-capture-engine	WP-11 adds one file of kill points to the soak in its own PR, and the soak is among its merge criteria.
+WP-11	late-draft-save-must-not-replace-newer-text	A late draft save that must not replace newer text.
+WP-11	capture-before-open-migration-or-write-lock-engine	A capture begun before the store is open, during a migration and while another process holds the write lock.
+WP-11	disk-fills-during-draft-save	A disk that fills during a draft save.
+WP-11	store-call-commits-after-inbox-fallback-engine	A store call that commits after its capture fell back to `Inbox/`.
+WP-11	text-past-size-limit-repeated-engine	Text that runs past the size limit, repeated.
+WP-12	soak-kill-points-recorder	WP-12 adds one file of kill points to the soak in its own PR, and the soak is among its merge criteria.
+WP-12	press-while-saved-recording-state-is-stale	A press while the saved recording state is stale.
+WP-12	disk-fills-during-recording	A disk that fills during a recording.
+WP-12	recorder-thirty-minutes-frames-in-and-out	A recorder test feeds 30 minutes of injected audio and counts the same frames out.
+WP-12	recording-format-kill-test	The file written during recording must be readable after the app is killed, and WP-12 proves the format it picks with a kill test.
+WP-14	fidelity-guard-mutation-suite	A mutation suite is a merge criterion: for each evaluation transcript it drops a negation, changes a number, swaps a name, reorders two clauses and adds a word, and the guard must reject every one.
+WP-15	soak-kill-points-processing-and-ingest	WP-15 adds one file of kill points to the soak in its own PR, and the soak is among its merge criteria.
+WP-15	edit-arrives-while-clean-job-is-paused	An edit that arrives while a clean job is paused.
+WP-15	delete-while-a-job-runs	A delete while a job runs.
+WP-15	interrupted-transcription-continues-from-last-range	An interrupted transcription that continues from its last range.
+WP-15	unreadable-inbox-item	An unreadable inbox item.
+WP-15	job-found-running-at-launch-twice-queue	A job found running at launch twice.
+WP-15	disk-fills-during-ingest	A disk that fills during ingest.
+WP-15	inbox-item-newer-version-ingested-after-update	An inbox item of a newer version, ingested after an update.
+WP-16	zone-removed-from-icloud	A zone removed from iCloud.
+WP-16	record-with-an-unknown-kind	A record with an unknown kind.
+WP-16	fetched-change-leaves-nothing-pending	A fetched change that leaves nothing pending.
+WP-16	segment-record-arrives-before-its-note	A segment record that arrives before its note.
+WP-16	kill-between-batch-and-engine-state	A kill between applying a batch and saving the engine's state.
+WP-16	store-restored-from-older-copy	A store restored from an older copy.
+WP-16	segment-at-the-size-limit	A segment at the size limit.
+WP-16	change-of-account-with-uploads-pending	A change of account with uploads pending.
+WP-16	replica-stays-away-thirty-one-days	A replica that stays away for 31 days.
+WP-16	two-devices-finish-the-same-recording	Two devices that both finish the same recording.
+WP-16	segment-moved-on-two-devices-before-sync	A segment moved on two devices before they sync.
+WP-16	move-meets-delete-of-note-it-left	A move that meets a delete of the note it left.
+WP-16	undo-returns-segment-to-note-deleted-elsewhere	An undo that returns a segment to a note deleted elsewhere.
+WP-16	move-arrives-after-the-purge	A move that arrives after the purge.
+WP-16	merge-result-must-be-uploaded	A merge result that must be uploaded.
+WP-16	replica-simulation-two-and-three-replicas	The simulation runs with two and with three replicas, its interleavings include moves and their undos beside edits, appends and deletes, and after any interleaving it checks six things: the replicas end equal, nothing a replica acknowledged is missing, nothing made after a delete sits in a deleted note, a conflict copy appears only when both sides edited the text, applying a batch twice changes nothing, and every segment is in exactly one note and a note with no live segment is never shown.
+WP-16	simulation-zone-removed-and-made-again	The simulation's named cases include a zone that was removed and made again.
+WP-16	simulation-replicas-upload-after-environment-change	The simulation's named cases include every replica uploading again after a change of environment.
+WP-16	simulation-replica-clock-forty-days-ahead	The simulation's named cases include a replica whose clock runs 40 days ahead.
+WP-16	simulation-two-devices-same-recording-same-generation	The simulation's named cases include two devices that take the same recording at the same generation.
+WP-16	simulation-every-order-move-undo-delete-three-replicas	The simulation's named cases include every order of a move, its undo and a delete across three replicas.
+WP-16	simulation-segments-added-to-deleted-note-land-together	The simulation covers several segments added to a note that the other replica had deleted, which must land together in one new note.
+WP-17	checksum-mismatch-from-the-watch	A checksum mismatch from the watch.
+WP-17	watch-coordinator-kill-points	The watch's sequence of record, convert and send is tested on the Mac with kill points, and it finishes a conversion that a kill interrupted at the next launch.
+WP-17	watch-manifest-on-watch-or-acknowledged	WP-17 proves the watch half of the capture ledger with the fake transport: every manifest is still on the watch or acknowledged.
+WP-19	repeating-start-or-stop-recording-changes-nothing	Shortcuts get StartRecording and StopRecording on every platform, each safe to repeat, with a test that repeating either changes nothing.
+WP-19	intent-accessor-fails-typed-when-nothing-registered	An intent reads the environment through one accessor that fails with a typed error when nothing is registered, and WP-19 tests that.
+WP-20	export-names-from-hostile-titles	Export names made from hostile titles.
+WP-20	golden-file-for-selection-of-segments	WP-20 renders a selection of segments as text and as Markdown with the code that renders a note, and its golden files gain one selection.
+WP-21	accessibility-audit-in-every-ui-smoke-test	Every UI smoke test runs the system's accessibility audit from WP-21's first PR.
+WP-21	preview-for-every-designed-matrix-cell	KnotUIPreviews holds one named preview for every cell of the state matrix marked as designed, and a test that reads that matrix from the brief's own table fails when a cell has none.
+WP-21	capture-window-runs-out-while-field-empty	A view-model test covers the window running out while the field is empty.
+WP-21	voice-segment-six-states-view-model	A view-model test for each of the six states of a voice segment.
+WP-21	move-action-when-offered	WP-21 adds the move action and its undo to the note's view model, with a test for when the action is offered.
+WP-21	move-undo-after-note-it-left-deleted	WP-21 adds the move action and its undo to the note's view model, with a test for an undo after the note it left was deleted.
+WP-21	selection-order-of-copied-text	WP-21 adds the selection and its three actions to the note's view model, with a test for the order of the copied text.
+WP-21	selection-one-undo	WP-21 adds the selection and its three actions to the note's view model, with a test for one undo.
+WP-22	capture-before-open-migration-or-write-lock-composition	A capture begun before the store is open, during a migration and while another process holds the write lock.
+WP-22	live-smoke-type-kill-relaunch-read-composition	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
+WP-22	end-to-end-log-canary	The end-to-end suite carries a canary: its fixtures hold a made-up word, and the test fails if that word appears in any log line, error or diagnostics file.
+WP-22	unavailable-ports-of-live-match-allowed-list	A test compares the unavailable ports of `.live` with a list allowed for the coming milestone.
+WP-22	gates-listed-for-each-milestone-level	A test lists the gates for each level: sync and the command line open at M4, and ink at M5.
+WP-30	live-smoke-type-kill-relaunch-read-iphone	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
+WP-30	ui-late-capture-through-preview-iphone	A UI test that injects a late capture through `.preview`.
+WP-30	ui-smoke-move-segment-and-undo-iphone	The UI smoke test on the iPhone moves a segment and undoes the move.
+WP-33	hotkey-release-that-never-arrives	A hotkey release that never arrives.
+WP-33	live-smoke-type-kill-relaunch-read-mac	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
+WP-33	ui-drag-note-onto-text-field	A UI test drags a note onto a text field.
+WP-33	ui-late-capture-through-preview-mac	A UI test that injects a late capture through `.preview`.
+WP-33	panel-tap-takes-the-keyboard	The state machine tests cover a tap taking the keyboard.
+WP-33	panel-hold-does-not-take-keyboard	The state machine tests cover a hold not taking the keyboard.
+WP-33	ui-smoke-move-segment-and-undo-mac	The UI smoke test on the Mac moves a segment and undoes the move.
+WP-34	revision-from-before-a-restore	A revision from before a restore.
+WP-34	emptied-note-appears-in-knot-changes	An emptied note that appears in `knot changes`.
+WP-34	golden-tests-run-on-both-stores	WP-34's golden tests run on both the in-memory `NoteStore` and the real one.
+WP-34	mcp-conformance-both-kinds-of-client	Conformance tests of the MCP server cover both kinds of client.
+WP-34	mcp-conformance-unknown-method	Conformance tests of the MCP server cover an unknown method.
+WP-34	mcp-conformance-unsupported-version	Conformance tests of the MCP server cover an unsupported version.
+WP-34	mcp-conformance-stdout-protocol-messages-only	Conformance tests of the MCP server cover standard output that holds protocol messages only.
+WP-34	mcp-conformance-exit-at-end-of-input	Conformance tests of the MCP server cover exit at end of input.
+WP-34	two-process-app-and-tool-share-a-store	After G1 and SP-3, the gate has one development-signed step for a PR that touches KnotAgent, `knot`, the Mac app or KnotStore: the sandboxed app and `knot-dev` share a store, the tool writes and the app shows it.
+WP-34	golden-every-error-no-terminal-stdin-closed	WP-34 has a golden test for every error, run with no terminal and with standard input closed.
+WP-34	mcp-access-switched-off	Tests of `knot mcp` cover access switched off.
+WP-34	mcp-store-migrated-while-server-connected	Tests of `knot mcp` cover a store migrated while a server is connected.
+WP-34	every-example-in-cli-docs-runs	A test runs every example in `docs/cli.md`.
+WP-34	golden-unsettled-note-carries-settle-time	A golden test covers the addition that an unsettled note carries the time at which it will settle.
+WP-34	golden-deletion-reportable-after-the-purge	A golden test covers the addition that a deletion stays reportable after the purge.
+WP-34	golden-foreign-cursor-is-refused	A golden test covers the addition that a foreign cursor is refused.
+WP-34	golden-open-capture-segment-not-edited-or-deleted	A golden test covers the addition that a segment whose capture is open cannot be edited or deleted.
+WP-34	golden-move-moved	WP-34's golden tests cover the result of `knot move`: moved.
+WP-34	golden-move-not-in-that-note	WP-34's golden tests cover the result of `knot move`: not in that note.
+WP-34	golden-move-refused-for-open-capture	WP-34's golden tests cover the result of `knot move`: refused for an open capture.
+WP-34	golden-move-returned	WP-34's golden tests cover the result of `knot move`: returned.
+WP-34	golden-return-refused-segment-moved-again	WP-34's golden tests cover the result of `knot move`: a return refused because the segment moved again.
+WP-34	golden-return-refused-note-is-gone	WP-34's golden tests cover the result of `knot move`: a return refused because the note is gone.
+WP-35	ipad-ui-narrow-width	UI tests cover a narrow width.
+WP-35	ipad-ui-key-press-during-a-drawing	UI tests cover a key press during a drawing.
+WP-41	accessibility-audit-clean-on-designed-cells	WP-41 makes the audit clean on every designed cell of the state matrix.
