@@ -631,7 +631,7 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | The errors of Foundation Models can hold generated text in their descriptions. `LanguageModelError`, from OS 27, replaces `LanguageModelSession.GenerationError` and is not exhaustive. | SDK and WP-14's probe, 2026-11-19. |
 | `/usr/bin/lockf` ships with macOS. `flock` is on this Mac only through Homebrew. | Checked on 2026-11-19. |
 | `swift build` accepts `--explicit-target-dependency-import-check`, and `swift package diagnose-api-breaking-changes` exists. | Checked with Swift 6.4.4 on 2026-11-19. |
-| A CloudKit record holds at most about 1 MB apart from its assets. | From memory. SP-4 confirms it before WP-02 fixes the text limit. |
+| A CloudKit record holds at most about 1 MB apart from its assets. | From memory. SP-4's short note measures it before WP-02 fixes the text limit, and SP-4's report confirms it. |
 | GRDB's observation does not see changes made by another process, and its guide recommends a notification between processes. | GRDB's sharing guide, read through a mirror on 2026-11-19. WP-10 reads the original. |
 
 ## 21. APIs newer than your training data
