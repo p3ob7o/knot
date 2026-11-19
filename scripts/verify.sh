@@ -693,7 +693,9 @@ else
             reason="$(printf '%s\n' "$depth_out" | sed -n 's/^reason=//p')"
             common="doctor plan format ownership core-api package-build named-tests pins lint team-id links fixtures"
             case $DEPTH in
-                documents) STEPS="doctor plan links ownership named-tests" ;;
+                # The lint runs at every depth: its file-name rule catches a copy such as
+                # "docs/x 2.md" in a pull request of documents alone. It builds nothing.
+                documents) STEPS="doctor plan links ownership named-tests lint" ;;
                 leaf)
                     STEPS="$common package-test contract-two-targets self-test apps launch"
                     [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
