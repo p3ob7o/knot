@@ -530,10 +530,16 @@ step_soak() {
     local seed=${SEED:-$((RANDOM * 32768 + RANDOM))}
     echo "soak: seed $seed"
     knot_swiftpm_flags
-    KNOT_SOAK_SEED=$seed swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter '^KnotSoak\.' || {
+    local output="$KNOT_LOGS/verify-soak.out"
+    KNOT_SOAK_SEED=$seed swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "${KNOT_SOAK_FILTER:-^KnotSoak\.}" 2>&1 | tee "$output" || {
         echo "soak: failed with seed $seed. Repeat it with scripts/verify.sh --soak --seed $seed"
         return 1
     }
+    # A soak that ran no test is a failure, not a pass.
+    if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
+        echo "soak: no test ran, with seed $seed."
+        return 1
+    fi
 }
 # ---- End of the soak step.
 
