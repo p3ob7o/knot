@@ -1,0 +1,27 @@
+{
+  "name": "knot-gutenberg-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "npm run build && vitest run --environment jsdom"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "@wordpress/block-editor": "latest",
+    "@wordpress/block-library": "latest",
+    "@wordpress/blocks": "latest",
+    "@wordpress/components": "latest",
+    "@wordpress/data": "latest",
+    "@wordpress/element": "latest",
+    "@wordpress/format-library": "latest",
+    "@wordpress/i18n": "latest",
+    "vite": "latest",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "jsdom": "latest",
+    "vitest": "latest"
+  }
+}

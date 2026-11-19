@@ -1,0 +1,42 @@
+[
+  {
+    "id" : "R01",
+    "result" : "invalid UTF-8 replaced: true"
+  },
+  {
+    "id" : "R02",
+    "result" : "empty heading returned success without insertion: true"
+  },
+  {
+    "id" : "R03",
+    "result" : "two plans same URL: true; final content: second"
+  },
+  {
+    "id" : "R04",
+    "result" : "inbox escaped vault: true"
+  },
+  {
+    "id" : "R05",
+    "result" : "attachment followed symlink outside: true; returned: ![[assets\/photo.png]]"
+  },
+  {
+    "id" : "R06",
+    "result" : "matched heading in fenced example; capture placed before the real section: true; output: ```markdown\n## Quick notes\nexample\n```\n- capture\n\n## Quick notes\nreal\n"
+  },
+  {
+    "id" : "R07",
+    "result" : "heading count: 2; unique IDs: 1"
+  },
+  {
+    "id" : "R08",
+    "result" : "queue with malformed line returned without error; recovered records: 1"
+  },
+  {
+    "id" : "R09",
+    "result" : "template omitted note: true"
+  },
+  {
+    "id" : "R10",
+    "result" : "lone CR multiline route: daily"
+  }
+]

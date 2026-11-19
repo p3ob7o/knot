@@ -1,0 +1,373 @@
+/* Knot — design tokens */
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --sf-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro", "Helvetica Neue", sans-serif;
+  --sf-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --serif: "Instrument Serif", "Iowan Old Style", "Apple Garamond", Georgia, serif;
+
+  /* Accent — muted terracotta (chosen). Used sparingly. */
+  --accent: oklch(0.66 0.09 30);
+  --accent-soft: oklch(0.66 0.09 30 / 0.18);
+  --accent-ring: oklch(0.66 0.09 30 / 0.35);
+
+  /* Success — slightly desaturated system green so it doesn't yell */
+  --success: oklch(0.72 0.12 150);
+
+  /* Error */
+  --error: oklch(0.62 0.16 28);
+}
+
+/* Dark surfaces, calibrated to match macOS Sonoma/Sequoia popovers */
+.knot-dark {
+  --bg: #1d1d1f;
+  --bg-window: #2a2a2c;
+  --surface-1: #2a2a2c;
+  --surface-2: #353537;
+  --surface-3: #3a3a3c;
+  --surface-overlay: rgba(255,255,255,0.05);
+  --separator: rgba(255,255,255,0.1);
+  --separator-strong: rgba(255,255,255,0.16);
+  --fg: #f5f5f7;
+  --fg-secondary: rgba(235,235,245,0.6);
+  --fg-tertiary: rgba(235,235,245,0.3);
+  --placeholder: rgba(235,235,245,0.35);
+  --shadow-popover: 0 0 0 0.5px rgba(0,0,0,0.6), 0 24px 60px rgba(0,0,0,0.55), 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-detached: 0 0 0 0.5px rgba(0,0,0,0.7), 0 30px 80px rgba(0,0,0,0.6), 0 8px 16px rgba(0,0,0,0.4);
+  --shadow-settings: 0 0 0 0.5px rgba(0,0,0,0.65), 0 24px 60px rgba(0,0,0,0.5);
+  --pill-active: rgba(255,255,255,0.16);
+  --pill-active-border: rgba(255,255,255,0.04);
+  --traffic-stroke: rgba(0,0,0,0.18);
+}
+
+.knot-light {
+  --bg: #f2f1ed;
+  --bg-window: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f0efeb;
+  --surface-3: #e8e7e2;
+  --surface-overlay: rgba(0,0,0,0.025);
+  --separator: rgba(0,0,0,0.08);
+  --separator-strong: rgba(0,0,0,0.14);
+  --fg: #1d1d1f;
+  --fg-secondary: rgba(60,60,67,0.6);
+  --fg-tertiary: rgba(60,60,67,0.3);
+  --placeholder: rgba(60,60,67,0.35);
+  --shadow-popover: 0 0 0 0.5px rgba(0,0,0,0.12), 0 18px 50px rgba(0,0,0,0.18), 0 4px 10px rgba(0,0,0,0.08);
+  --shadow-detached: 0 0 0 0.5px rgba(0,0,0,0.16), 0 30px 70px rgba(0,0,0,0.22), 0 6px 14px rgba(0,0,0,0.1);
+  --shadow-settings: 0 0 0 0.5px rgba(0,0,0,0.14), 0 24px 60px rgba(0,0,0,0.18);
+  --pill-active: #ffffff;
+  --pill-active-border: rgba(0,0,0,0.06);
+  --traffic-stroke: rgba(0,0,0,0.1);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sf);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.sf { font-family: var(--sf); }
+.sf-display { font-family: var(--sf-display); }
+.serif { font-family: var(--serif); }
+.mono { font-family: var(--sf-mono); }
+
+/* Caret blink */
+@keyframes knot-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.knot-caret {
+  display: inline-block;
+  width: 1.5px;
+  height: 1.05em;
+  background: var(--fg);
+  vertical-align: text-bottom;
+  margin-left: 1px;
+  animation: knot-caret 1s step-end infinite;
+}
+
+/* TextEditor */
+.knot-editor textarea {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--sf);
+  font-size: 16px;
+  line-height: 1.45;
+  padding: 0;
+  caret-color: var(--accent);
+}
+.knot-editor textarea::placeholder { color: var(--placeholder); }
+
+/* Custom scrollbar matching macOS */
+.knot-scroll::-webkit-scrollbar { width: 8px; }
+.knot-scroll::-webkit-scrollbar-track { background: transparent; }
+.knot-scroll::-webkit-scrollbar-thumb {
+  background: var(--fg-tertiary);
+  border-radius: 8px;
+}
+
+/* Subtle inset for textareas */
+.knot-textarea-bg {
+  background: var(--surface-2);
+  border-radius: 12px;
+  border: 0.5px solid var(--separator);
+}
+
+/* Segmented pill */
+.knot-segmented {
+  display: inline-flex;
+  background: var(--surface-3);
+  border-radius: 7px;
+  padding: 2px;
+  border: 0.5px solid var(--separator);
+  position: relative;
+  height: 26px;
+  align-items: center;
+}
+.knot-segmented .seg {
+  position: relative;
+  z-index: 1;
+  font-family: var(--sf);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  padding: 0 12px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 120ms ease;
+  user-select: none;
+}
+.knot-segmented .seg.inactive { color: var(--fg-secondary); }
+.knot-segmented .indicator {
+  position: absolute;
+  top: 2px;
+  height: 22px;
+  background: var(--pill-active);
+  border-radius: 5px;
+  border: 0.5px solid var(--pill-active-border);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.18);
+  transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1), width 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 0;
+}
+
+/* Icon button (top right gear/pip) */
+.knot-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.knot-icon-btn:hover {
+  background: var(--surface-overlay);
+  color: var(--fg);
+}
+
+/* Send button */
+.knot-send {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-secondary);
+  transition: color 140ms ease, transform 140ms ease;
+  padding: 0;
+}
+.knot-send.enabled {
+  color: var(--accent);
+}
+.knot-send.enabled:hover { transform: scale(1.06); }
+.knot-send:disabled { opacity: 0.4; cursor: default; }
+
+/* Status pill */
+@keyframes knot-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes knot-fade-out {
+  to { opacity: 0; transform: translateY(-2px); }
+}
+
+/* Form rows in Settings */
+.knot-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.knot-section-title {
+  font-family: var(--sf);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 8px 0;
+  letter-spacing: -0.01em;
+}
+.knot-card {
+  background: var(--surface-1);
+  border: 0.5px solid var(--separator);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.knot-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 38px;
+}
+.knot-row + .knot-row { border-top: 0.5px solid var(--separator); }
+.knot-row .label {
+  font-size: 13px;
+  color: var(--fg);
+  min-width: 140px;
+  flex-shrink: 0;
+}
+.knot-row .control { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.knot-input {
+  background: var(--surface-3);
+  border: 0.5px solid var(--separator);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-family: var(--sf-mono);
+  font-size: 12px;
+  color: var(--fg);
+  text-align: right;
+  outline: none;
+  min-width: 0;
+}
+.knot-input:focus {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.knot-input.hotkey {
+  font-family: var(--sf);
+  font-size: 14px;
+  text-align: center;
+  padding: 10px;
+  width: 100%;
+  letter-spacing: 0.18em;
+}
+.knot-help {
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  padding: 0 2px;
+}
+.knot-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.knot-link:hover { text-decoration: underline; }
+.knot-btn {
+  font-family: var(--sf);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--fg);
+  border: 0.5px solid var(--separator);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.knot-btn:hover { background: var(--surface-2); }
+.knot-btn.destructive { color: var(--error); }
+.knot-btn.prominent {
+  background: var(--accent);
+  color: white;
+  border-color: transparent;
+  font-weight: 600;
+}
+.knot-btn.prominent:hover { filter: brightness(1.08); }
+
+/* Toggle switch (iOS-style) */
+.knot-switch {
+  width: 36px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--surface-3);
+  border: 0.5px solid var(--separator);
+  position: relative;
+  cursor: pointer;
+  transition: background 200ms ease;
+  flex-shrink: 0;
+}
+.knot-switch.on { background: var(--success); border-color: transparent; }
+.knot-switch .knob {
+  position: absolute;
+  top: 1.5px;
+  left: 1.5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  transition: transform 200ms ease;
+}
+.knot-switch.on .knob { transform: translateX(14px); }
+
+/* Knot mark animation — drawing on appear */
+@keyframes knot-draw {
+  from { stroke-dashoffset: var(--len, 200); }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Slot reveal for sent confirmation: textarea slides up + fades */
+@keyframes knot-slot-out {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-8px); opacity: 0; }
+}
+@keyframes knot-slot-in {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* Onboarding */
+.knot-bullet {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+.knot-bullet .dot {
+  color: var(--fg-tertiary);
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Canvas frame — for design canvas */
+.frame-caption {
+  font-family: var(--sf-mono);
+  font-size: 10.5px;
+  color: var(--fg-tertiary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
