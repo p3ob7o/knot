@@ -22,9 +22,18 @@ After a reset, read the last lines of the journal, list the open pull requests a
 What the build Mac has today, for every first message:
 
 - The pinned Xcode is the one `.xcode-version` names. The beta is used only by name, through `KNOT_XCODE`.
-- A recursive delete and a forced push each wait for Paolo's approval, and a thread that sends one stalls there. A thread takes a new folder from `mktemp -d` in place of a delete, and never rewrites a branch it has pushed.
+- A recursive delete, a forced push and a forced removal of a worktree (`git worktree remove --force`) each wait for Paolo's approval, and a thread that sends one stalls there. A thread takes a new folder from `mktemp -d` in place of a delete, never rewrites a branch it has pushed, and never chains a command that removes something with one that must run.
 - When a tool call comes back as declined together with a message on another subject, Paolo answered while the call waited for approval. The thread acts on the message, and sends the call again if it was already allowed.
 - The owner's recordings, when he has made them, are in the folder that `KNOT_LOCAL_FIXTURES` names. Nothing derived from them enters a commit, a pull request, a log or a test.
+- `KNOT_AGENT=1` is exported in every shell before a script runs.
+- A hook refuses `git add -A`, `git add -u` and a commit inside a compound command. A thread stages files by name, runs `git commit -F <file>` as a command of its own, and gives `gh pr create` its description with `--body-file`.
+- No hardware microphone, ever. A simulator's microphone is the Mac's own, so no recording path runs in a simulator.
+- Until the owner's team configuration is on the Mac, only local signing works.
+- Other threads build at the same time. A thread runs one heavy build at a time.
+- A note or a pull request describes the SDK and the simulators, never the owner's own settings: no locale or region of this Mac, no account name, no path under `/Users`. The repository is public.
+- The description of a pull request follows `PLAN.md` Appendix C.
+
+The first message ends by telling the thread to send its RESULT line to the orchestrator's thread with `t3_thread_send` when it ends.
 
 ## When a thread hands back
 
@@ -36,11 +45,13 @@ The last line of its final message is `RESULT ok` or `RESULT blocked` with a cod
 - `brief_wrong`: correct the brief first, in a pull request of the orchestrator's own.
 - `baseline_red` and `tool_failure`: find the cause before launching anything else on that base.
 
-A top-level thread does not wake the orchestrator when it ends, and a wait on it returns within a minute. The orchestrator reads the thread when something else wakes it, or schedules one check-in. A delegated task does wake it.
+A top-level thread does not wake the orchestrator by ending. The RESULT line that it sends with `t3_thread_send` does. That line is not Paolo's: the orchestrator reads the thread's last message before it acts on it. One scheduled check an hour looks for a thread that stalled on an approval prompt. A delegated task wakes the orchestrator by itself, and so does a watched pull request when its checks end.
 
 ## Review
 
-- A fresh reviewer reads the diff against the package's brief and `AGENTS.md`, with gstack `/review` and the points the orchestrator lists for that pull request. It runs as a delegated task, so its end wakes the orchestrator. It changes nothing, runs what it runs in a scratch clone, and ends with `REVIEW pass` or with `REVIEW changes` and the counts.
+- A fresh reviewer reads the diff against the package's brief and `AGENTS.md`, from a list of points that the orchestrator writes for that pull request. It runs as a delegated task, so its end wakes the orchestrator. It changes nothing, runs what it runs in a scratch clone, and ends with `REVIEW pass` or with `REVIEW changes` and the counts.
+- The orchestrator checks each finding before it passes it on, and rules where the documents are silent. A ruling goes into the documents in a pull request of the orchestrator's own.
+- A proof step's code stays on `wp/<number>-proof` with no pull request, and its note merges from `wp/<number>-note`. The orchestrator reads a short note itself, and the squash message says that no second agent did.
 - WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from another model.
 - The implementer fixes the findings. After two rounds the orchestrator decides what is left. It writes every finding it sets aside in the pull request and in the journal.
 
@@ -64,11 +75,13 @@ The gate depends on what has merged:
 | WP-01's second pull request merges | `scripts/verify.sh --quick` |
 | Afterwards | `scripts/verify.sh --gate` |
 
+The gate's Mac UI step stays pending until WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode.
+
 ## What needs Paolo
 
 - The gates G0 to G5 of `PLAN.md` §10, with the minutes each takes.
 - The list in `AGENTS.md`: moving a tag, distribution signing, notarising and uploading, deploying the CloudKit production schema, every operation on the milestone iCloud container, and deleting an archive branch.
-- Any cut of scope, and the two points at the end of `docs/plan/open-points.md`.
+- Any cut of scope, and the points under "For the owner" at the end of `docs/plan/open-points.md`.
 
 ## Models and cost
 
