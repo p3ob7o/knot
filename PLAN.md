@@ -405,7 +405,7 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
 ### 8.5 Contracts and shared files
 
 - A change to KnotCore's public API goes in its own small PR on a `contract/…` branch, with the fakes updated. The orchestrator merges it first and tells the threads that depend on it to rebase. A contract PR that only adds merges in the normal queue. One that breaks keeps the two fixed times a day of docs/architecture.md §18.
-- `Package.swift`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description.
+- `Package.swift`, `Package.resolved`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description.
 - A package edits only the paths it owns, and the gate checks that. Path ownership has stated exceptions:
   - The first PR of WP-01 creates the first files of every module folder: an empty target with one trivial test, the module's live entry point, the crash hosts and the environment factory. It also declares `AppEnvironment` in KnotCore with its `.unavailable` value and nothing else, because the factory returns that value. Each folder belongs to its package from then on.
   - `scripts/release.sh` belongs to WP-43, though the rest of `scripts/` passes to the orchestrator after WP-01.
@@ -487,7 +487,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 40 |
 | G4 | Seven days after the M2 checklist has passed | The keep-gate sitting (§5) | 30 |
 | G4 | M3 | Checklist | 30 |
-| G4 | M4 | Checklist in two sittings: hotkey, CLI and MCP, two-device sync | 45 |
+| G4 | M4 | Checklist in three sittings: hotkey, CLI and MCP, two-device sync | 45 |
 | G4 | M5 | Checklist | 20 |
 | G4 | M6 | Checklist with the regression rows, and sign-off of the applied design | 90 |
 | G4 | M2 to M5 | The VoiceOver rows, one per capture path | 5 each |

@@ -60,9 +60,9 @@ scripts/                bootstrap, verify, build-slot, sim, release
 | KnotUI | Theme tokens, components, view models | all | Core; Ink and Export on iOS and macOS |
 | KnotAgent | Command implementations and the MCP server, written against the `NoteStore` port | macOS | Core, Export |
 | KnotApp | The composition root: builds the live environment | iOS, macOS | everything |
-| KnotFakes | A fake for every leaf port, fixture builders and the preview environment. It imports no test framework. Debug builds of the apps link it; release builds do not. | all | Core; Capture on iOS and macOS |
+| KnotFakes | A fake for every leaf port, fixture builders and the preview environment. It imports no test framework. Its code compiles only in a debug build, or in a build that sets `KNOT_FAKES`, such as the optimised build that `--perf` measures. A release app links the module empty. | all | Core; Capture on iOS and macOS |
 | KnotTestSupport | The shared contract suites, one per port | all, test targets only | Core, Fakes |
-| KnotUIPreviews | SwiftUI previews of KnotUI on the preview environment | all | UI, Fakes |
+| KnotUIPreviews | SwiftUI previews of KnotUI on the preview environment. Its code compiles under the same condition as KnotFakes. | all | UI, Fakes |
 | `knot-eval` | Two local commands that score the owner's own recordings | macOS | Speech, Cleanup |
 | `knot` | The command-line executable, which composes KnotAgent with KnotStore | macOS | Agent, Store |
 
