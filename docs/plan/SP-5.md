@@ -10,16 +10,16 @@ Prove that the hotkey's press and release arrive in a sandboxed build and that t
 
 ## Owns
 
-- A `spike/…` branch that holds the spike's code. It is never merged. The plan does not name the branch.
-- The report, which merges to `docs/spikes/`.
+- `spike/mac-hotkey`, the branch that holds the spike's code. It is never merged.
+- `docs/spikes/SP-5.md`, the report.
 - `docs/notes/SP-5.md`, the short note of its code half
 
 ## Starts after
 
 | PR | What it holds | Starts after |
 |---|---|---|
-| Notes | The code half on its `spike/…` branch, and its short note | WP-01 PR 1 |
-| 1 | The report, which ends with a decision | SP-5 notes |
+| Notes | The code half on `spike/mac-hotkey`, and its short note | WP-01 PR 1 |
+| 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
 
 SP-5 starts after the first PR of WP-01. Its code half starts beside WP-02 PR 1, like the code half of each spike, with the proof steps of WP-12, WP-13, WP-14 and WP-18, and it needs only WP-01 PR 1. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-5.md`, merged by a pull request that holds nothing else. No package waits for SP-5's short note.
 
@@ -39,7 +39,7 @@ The full design round does not wait for SP-5. The design brief asks for both bra
   - Does reading the key's state once a second work in the sandbox without Input Monitoring? If a release never arrives, the recording goes on with the panel showing and a stop control, and Knot checks the key's state every second while recording (`docs/architecture.md` §15).
 - A hotkey is a key with at least one modifier, or a function key. A modifier alone is not possible with this API.
 - `docs/product-spec.md` §14 sets two first targets for the Mac: 100 ms from the key release of a tap to a panel that accepts typing, and 150 ms from the 250 ms mark of a hold to a live microphone. The spikes and WP-42 calibrate them.
-- The report ends with a decision, and updates `docs/architecture.md` where the answer changes it.
+- The report ends with a decision. Where the answer changes `docs/architecture.md`, the report lists the changes it asks for. The orchestrator owns that file and makes them in a pull request of its own (PLAN.md §7).
 
 ## Merge criteria
 

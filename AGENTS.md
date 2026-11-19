@@ -55,6 +55,7 @@ The rules are in `docs/architecture.md` §6. Three of them:
 
 - Branch names are `wp/…`, `spike/…` and `contract/…`. Never `master`.
 - Never push to `main`. The orchestrator merges.
+- Never rebase a branch you have pushed, and never force a push. The merge queue brings a branch up to date by merging `main` into it.
 - No session links in commits or pull-request descriptions.
 
 ## Needs Paolo's explicit authorisation

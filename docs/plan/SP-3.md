@@ -57,7 +57,7 @@ No chain to M2 waits for the report of SP-3.
 - If the direct route fails that check, the XPC route gets an internal upload of its own, and the report says what the tool does when Knot is not running. `docs/product-spec.md` §10 then follows it.
 - The spike app carries the privacy manifests with their required reasons, so App Store Connect checks them in wave 1.
 - The report, `docs/spikes/SP-3.md`, has a decision between direct store access and XPC to the running app.
-- The report updates `docs/architecture.md` where the answer changes it.
+- Where the answer changes `docs/architecture.md`, the report lists the changes it asks for. The orchestrator owns that file and makes them in a pull request of its own (PLAN.md §7).
 
 ## Merge criteria
 
