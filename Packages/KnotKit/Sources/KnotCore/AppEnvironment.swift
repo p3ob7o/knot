@@ -1,11 +1,33 @@
 /// Everything a running Knot process needs, reached through ports (docs/architecture.md §3).
 ///
-/// WP-01 declares the type with its `.unavailable` value and nothing else, because the
-/// environment factory in KnotApp returns that value. WP-02 adds the ports as they land.
-/// KnotFakes builds `.preview` and KnotApp builds `.live`.
+/// KnotFakes builds `.preview` and KnotApp builds `.live`. `.unavailable` holds a port for
+/// each that says it is not there yet, apart from the clock and the IDs, whose live versions
+/// live here in KnotCore. WP-02 adds the ports as they land.
 public struct AppEnvironment: Sendable {
-    /// Every port reports that it is not there yet.
-    public static let unavailable = AppEnvironment()
+    public var notes: any NoteStore
+    public var assets: any AssetStore
+    public var recorder: any Recorder
+    public var transcriber: any Transcriber
+    public var cleaner: any Cleaner
+    public var clock: any WallClock
+    public var ids: any IDGenerator
 
-    private init() {}
+    public init(
+        notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, transcriber: any Transcriber,
+        cleaner: any Cleaner, clock: any WallClock, ids: any IDGenerator
+    ) {
+        self.notes = notes
+        self.assets = assets
+        self.recorder = recorder
+        self.transcriber = transcriber
+        self.cleaner = cleaner
+        self.clock = clock
+        self.ids = ids
+    }
+
+    /// Every port that a package fills in reports that it is not there yet.
+    public static let unavailable = AppEnvironment(
+        notes: UnavailableNoteStore(), assets: UnavailableAssetStore(), recorder: UnavailableRecorder(),
+        transcriber: UnavailableTranscriber(), cleaner: UnavailableCleaner(), clock: SystemWallClock(),
+        ids: SystemIDGenerator())
 }
