@@ -145,25 +145,32 @@ import Testing
     }
 
     @Test func aMoveIsDurableToo() throws {
+        // The received file's name is synced but its content is not, as when the watch link
+        // hands over a file. A move syncs the file before it renames it, so the destination
+        // never shows a file whose content a cut has lost.
         let received = URL(fileURLWithPath: "/store/Received", isDirectory: true)
+        let source = received.appending(path: "file.m4a")
+        let destination = folder.appending(path: "file.m4a")
         for cut in 0...4 {
             let layer = PowerCutFileLayer()
             let durable = DurableFile(layer: layer)
             try durable.makeFolder(folder)
             try durable.makeFolder(received)
-            try durable.place(new, at: received.appending(path: "file.m4a"))
+            try layer.write(new, to: source)
+            try layer.syncFolder(received)
             layer.die(afterOperations: cut)
             var acknowledged = false
             do {
-                try durable.move(received.appending(path: "file.m4a"), to: folder.appending(path: "file.m4a"))
+                try durable.move(source, to: destination)
                 acknowledged = true
             } catch {}
             layer.cutPower()
-            let there = layer.exists(folder.appending(path: "file.m4a"))
-            let left = layer.exists(received.appending(path: "file.m4a"))
-            #expect(there || left, "Cut after \(cut): the file is in neither folder.")
-            if acknowledged { #expect(there && !left) }
-            if there { #expect(try layer.read(folder.appending(path: "file.m4a")) == new) }
+            let there = layer.exists(destination)
+            #expect(there || layer.exists(source), "Cut after \(cut): the file is in neither folder.")
+            if acknowledged { #expect(there && !layer.exists(source)) }
+            if there {
+                #expect(try layer.read(destination) == new, "Cut after \(cut): the moved file lost its content.")
+            }
         }
     }
 
