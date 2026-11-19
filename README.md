@@ -10,6 +10,8 @@ Knot is being rebuilt from an empty repository. There is no app to build here ye
 - [docs/architecture.md](docs/architecture.md): how it is built.
 - [docs/design/brief.md](docs/design/brief.md): the brief for the design round.
 - [PLAN.md](PLAN.md): how the work is split, ordered, checked and merged.
+- [docs/plan/](docs/plan/): one brief for each work package and spike, and [where each amendment of the plan's review went](docs/plan/amendments.md).
+- [docs/reviews/](docs/reviews/): the record of the plan's review.
 - [TODOS.md](TODOS.md): what was deferred from v1.
 - [AGENTS.md](AGENTS.md): rules for coding agents working here.
 - [Resources/Brand/](Resources/Brand/): the icon and the mark, carried over from the earlier app.
