@@ -42,27 +42,26 @@ import Testing
         }
     }
 
-    @Test func aValueThisBuildDoesNotKnowIsKeptAndAFieldIsReadPast() throws {
+    @Test func whatThisBuildDoesNotKnowIsKeptAndWrittenBackByteForByte() throws {
+        // docs/architecture.md §4: a kind, an origin, a state or a field that this build does
+        // not know is kept and never dropped, inbox manifests included.
         let golden = Data(CaptureManifestGolden.formatOneWithUnknownFields.utf8)
         let manifest = try CaptureManifest.decode(golden)
         #expect(manifest.kind == .unknown("photo"))
         #expect(manifest.origin.surface == .unknown("car_play"))
-        let written = String(decoding: try manifest.encoded(), as: UTF8.self)
-        #expect(written.contains(#""kind":"photo""#))
-        #expect(written.contains(#""surface":"car_play""#))
-        #expect(!written.contains("lens"))
-        #expect(!written.contains("tags"))
-        #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
+        #expect(manifest.unknownFields["lens"] == #"{"focal_mm":24,"front":false}"#)
+        #expect(manifest.unknownFields["tags"] == #"["x",null]"#)
+        #expect(
+            String(decoding: try manifest.encoded(), as: UTF8.self) == CaptureManifestGolden.formatOneWithUnknownFields)
     }
 
-    @Test func anUnknownFieldNeverComesBackChanged() throws {
-        // 9007199254740993 does not fit a Double. A field this build does not know is not
-        // written back at all, so it cannot come back changed.
+    @Test func anUnknownNumberComesBackExactly() throws {
+        // 9007199254740993 does not fit a Double.
         let data = Self.golden(replacing: "future_count", with: "9007199254740993")
         let manifest = try CaptureManifest.decode(data)
         let written = String(decoding: try manifest.encoded(), as: UTF8.self)
-        #expect(!written.contains("9007199254740992"))
-        #expect(!written.contains("future_count"))
+        #expect(written.contains(#""future_count":9007199254740993"#))
+        #expect(written == String(decoding: data, as: UTF8.self))
         #expect(try CaptureManifest.decode(Data(written.utf8)) == manifest)
     }
 
@@ -77,11 +76,11 @@ import Testing
         }
     }
 
-    @Test func bothWaysInRefuseAFormatThisBuildDoesNotSupport() throws {
+    @Test func aFormatThisBuildDoesNotSupportIsRefused() throws {
         for format in ["0", "-1", "2"] {
-            let data = Self.golden(replacing: "format", with: format)
-            #expect(throws: KnotError.self) { try CaptureManifest.decode(data) }
-            #expect(throws: DecodingError.self) { try JSONDecoder().decode(CaptureManifest.self, from: data) }
+            #expect(throws: KnotError.self) {
+                try CaptureManifest.decode(Self.golden(replacing: "format", with: format))
+            }
         }
     }
 

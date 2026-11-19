@@ -8,10 +8,10 @@ import Foundation
 /// refused, a newer one with `inbox_item_newer_version`, and the caller keeps the file so that
 /// an update can ingest it.
 ///
-/// A field this build does not know is read past and not written back. Writing it back could
-/// change it, as a number past a Double's precision would, and nothing in this build reads
-/// it: a field that older builds must not lose comes with a new format, which they refuse.
-/// A value this build does not know in a field it knows, such as a new kind, is kept.
+/// A kind, an origin or a field that this build does not know is kept and never dropped
+/// (docs/architecture.md §4). A field it does not know is kept as its original JSON text and
+/// written back exactly, a number past a Double's precision included. `decode(_:)` and
+/// `encoded()` are the only ways in and out.
 public struct CaptureManifest: Hashable, Sendable {
     /// The format this build writes and reads.
     public static let currentFormat = 1
@@ -39,6 +39,8 @@ public struct CaptureManifest: Hashable, Sendable {
     /// The payload's SHA-256 in lower-case hexadecimal, which the phone checks a watch file
     /// against before it acknowledges it.
     public var payloadSHA256: String?
+    /// The fields this build does not know, by key, each as its original JSON text.
+    public private(set) var unknownFields: [String: String]
 
     public init(
         captureID: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, startedAt: Date,
@@ -58,20 +60,25 @@ public struct CaptureManifest: Hashable, Sendable {
         self.revision = revision
         self.payloadByteCount = payloadByteCount
         self.payloadSHA256 = payloadSHA256
+        self.unknownFields = [:]
     }
 
-    /// The manifest as bytes: JSON with sorted keys, so the same manifest always gives the
-    /// same bytes and the golden files compare exactly.
+    /// The manifest as bytes: JSON with sorted keys and the fields this build does not know
+    /// written back as they were read, so the same manifest always gives the same bytes and
+    /// the golden files compare exactly.
     public func encoded() throws(KnotError) -> Data {
+        let context = ErrorContext(captureID: captureID)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data: Data
         do {
-            data = try encoder.encode(self)
+            let known = try JSONMembers.split(try encoder.encode(Coded(manifest: self)))
+            let unknown = unknownFields.map { (key: $0.key, raw: Data($0.value.utf8)) }
+            data = try JSONMembers.join(known + unknown)
         } catch {
-            throw KnotError.writeFailed.about(capture: captureID)
+            throw KnotError.writeFailed.with(context)
         }
-        guard data.count <= Limits.manifestBytes else { throw KnotError.manifestTooLarge.about(capture: captureID) }
+        guard data.count <= Limits.manifestBytes else { throw KnotError.manifestTooLarge.with(context) }
         return data
     }
 
@@ -79,6 +86,12 @@ public struct CaptureManifest: Hashable, Sendable {
     /// refused with its own code, and the caller keeps the file.
     public static func decode(_ data: Data) throws(KnotError) -> CaptureManifest {
         guard data.count <= Limits.manifestBytes else { throw KnotError.manifestTooLarge }
+        let members: [(key: String, raw: Data)]
+        do {
+            members = try JSONMembers.split(data)
+        } catch {
+            throw KnotError.inboxItemUnreadable
+        }
         let decoder = JSONDecoder()
         let header: FormatHeader
         do {
@@ -96,11 +109,17 @@ public struct CaptureManifest: Hashable, Sendable {
         {
             throw KnotError.inboxItemNewerVersion.with(context)
         }
+        var manifest: CaptureManifest
         do {
-            return try decoder.decode(CaptureManifest.self, from: data)
+            manifest = try decoder.decode(Coded.self, from: data).manifest
         } catch {
             throw KnotError.inboxItemUnreadable.with(context)
         }
+        let known = Set(Key.allCases.map(\.rawValue))
+        for member in members where !known.contains(member.key) {
+            manifest.unknownFields[member.key] = String(decoding: member.raw, as: UTF8.self)
+        }
+        return manifest
     }
 
     /// The fields read before the rest, each on its own, so that a damaged manifest still
@@ -125,8 +144,26 @@ public struct CaptureManifest: Hashable, Sendable {
     }
 }
 
-extension CaptureManifest: Codable {
-    private enum Key: String, CaseIterable {
+/// The known fields of a manifest as JSON. Not a public conformance of `CaptureManifest`: a
+/// decoder of its own could not keep the fields this build does not know.
+private struct Coded: Codable {
+    var manifest: CaptureManifest
+
+    init(manifest: CaptureManifest) {
+        self.manifest = manifest
+    }
+
+    init(from decoder: any Decoder) throws {
+        self.manifest = try CaptureManifest(fields: decoder)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        try manifest.encodeFields(to: encoder)
+    }
+}
+
+extension CaptureManifest {
+    fileprivate enum Key: String, CaseIterable {
         case format
         case captureID = "capture_id"
         case kind
@@ -164,7 +201,8 @@ extension CaptureManifest: Codable {
         }
     }
 
-    public init(from decoder: any Decoder) throws {
+    fileprivate init(fields decoder: any Decoder) throws {
+        unknownFields = [:]
         let container = try decoder.container(keyedBy: AnyKey.self)
         format = try container.decode(Int.self, forKey: AnyKey(.format))
         guard (1...Self.currentFormat).contains(format) else {
@@ -207,7 +245,7 @@ extension CaptureManifest: Codable {
         payloadSHA256 = try container.decodeIfPresent(String.self, forKey: AnyKey(.payloadSHA256))
     }
 
-    public func encode(to encoder: any Encoder) throws {
+    fileprivate func encodeFields(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: AnyKey.self)
         try container.encode(Self.currentFormat, forKey: AnyKey(.format))
         try container.encode(captureID, forKey: AnyKey(.captureID))
@@ -244,7 +282,7 @@ extension CaptureManifest: Codable {
             .init(codingPath: [AnyKey(key)], debugDescription: "Not an ISO 8601 date."))
     }
 
-    private static func seconds(_ duration: Duration) -> Double {
+    fileprivate static func seconds(_ duration: Duration) -> Double {
         let (seconds, attoseconds) = duration.components
         return Double(seconds) + Double(attoseconds / 1_000_000_000_000_000) / 1000
     }
