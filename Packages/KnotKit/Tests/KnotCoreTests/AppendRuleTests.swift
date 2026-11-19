@@ -315,6 +315,45 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
         AppendRow(
             "a live capture keeps the negative gap of rule 3", request("09:40"),
             [prior(1, noteB, "09:58", "10:20")], .newNote(.outsideWindow)),
+        // The wording of rule 7 in pull request 27.
+        AppendRow(
+            "with the window at zero a late capture is its own note, beside a running capture",
+            request("10:00", .window, .late), [prior(1, noteB, "09:58", "10:20")], window: .off,
+            .newNote(.appendingOff)),
+        AppendRow(
+            "two captures running in different notes: the one that started last decides",
+            request("10:00", .window, .late),
+            [
+                prior(1, noteB, "09:59", "10:20"), prior(2, noteA, "09:58", "10:30"),
+                prior(3, noteC, "09:50", "09:59:30"),
+            ],
+            .join(noteB, .insideWindow)),
+        AppendRow(
+            "the running capture's note is deleted: a new note, and no other candidate is tried",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:50", "09:58"), prior(2, noteB, "09:58", "10:20", noteDeleted: "10:30")],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "the running capture's note was closed before: a new note, and no other candidate is tried",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:50", "09:58"), prior(2, noteB, "09:58", "10:20", noteClosed: "09:59")],
+            .newNote(.latestNoteClosed)),
+        AppendRow(
+            "the capture that ended last has a deleted note: a new note, no fallback to an older one",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:55", "09:57"), prior(2, noteC, "09:56", "09:59", noteDeleted: "10:30")],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "the capture that ended last has a note closed before: a new note, no fallback",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:55", "09:57"), prior(2, noteC, "09:56", "09:59", noteClosed: "09:59:30")],
+            .newNote(.latestNoteClosed)),
+        AppendRow(
+            "the capture that ended last is outside the window: Knot looks no further back",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:30", "09:58"), prior(2, noteC, "09:20", "09:50")],
+            window: try! AppendWindow(minutes: 1),
+            .newNote(.outsideWindow)),
     ]
 
     @Test(arguments: lateCaptureRows) func lateCapture(row: AppendRow) {
