@@ -31,6 +31,16 @@ public struct StoreLocations: Hashable, Sendable {
         }
     }
 
+    /// Whether the build has an app group, which its configuration says: the local signing
+    /// configuration, used by every agent, simulator and gate build, has none.
+    public enum AppGroup: Hashable, Sendable {
+        /// The build has an app group. `container` is what the system gave, `nil` when it
+        /// gave none, which is refused.
+        case present(container: URL?)
+        /// The build has no app group. What would sit in it stays in the app's own container.
+        case absent
+    }
+
     /// The name of the folder that roots everything v1 writes.
     public static let rootFolderName = "KnotStore"
 
@@ -39,6 +49,9 @@ public struct StoreLocations: Hashable, Sendable {
     /// The folder that holds `Inbox/` and the recording state: the app group on iOS and on the
     /// Watch, so that the watch link and the widget extensions reach them.
     public let sharedRoot: URL
+    /// False when the build has no app group, so that what depends on one is switched off:
+    /// the `knot-dev` tool cannot open the store, and the extensions see no recording state.
+    public let hasAppGroup: Bool
 
     public var database: URL { storeRoot.appending(path: "knot.sqlite", directoryHint: .notDirectory) }
     public var assets: URL { storeRoot.appending(path: "Assets", directoryHint: .isDirectory) }
@@ -52,16 +65,17 @@ public struct StoreLocations: Hashable, Sendable {
     /// The watch's outbox: recordings that wait for the iPhone's acknowledgement.
     public var outbox: URL { storeRoot.appending(path: "Outbox", directoryHint: .isDirectory) }
 
-    private init(storeRoot: URL, sharedRoot: URL) {
+    private init(storeRoot: URL, sharedRoot: URL, hasAppGroup: Bool) {
         self.storeRoot = storeRoot
         self.sharedRoot = sharedRoot
+        self.hasAppGroup = hasAppGroup
     }
 
     /// The locations of a store that `root` holds whole, as package tests use: they are not
     /// sandboxed and pass a folder under the worktree.
     public static func testing(root: URL) -> StoreLocations {
         let store = root.appending(path: rootFolderName, directoryHint: .isDirectory)
-        return StoreLocations(storeRoot: store, sharedRoot: store)
+        return StoreLocations(storeRoot: store, sharedRoot: store, hasAppGroup: false)
     }
 
     /// The locations for an app shell or the tool.
@@ -70,7 +84,11 @@ public struct StoreLocations: Hashable, Sendable {
     ///   - flavour: the build's flavour, from its Info.plist.
     ///   - platform: where the code runs.
     ///   - appContainer: the app's own folder for its data, such as Application Support.
-    ///   - groupContainer: the app group's container, or `nil` when the system gave none.
+    ///   - appGroup: whether the build has an app group, from its configuration, and if so
+    ///     the container the system gave. `StoreLocations` never guesses it from a missing
+    ///     container: a build that has a group and got no container is refused. A build with
+    ///     no group keeps in the app's own container, in the same `KnotStore/` layout, what
+    ///     would sit in the group.
     ///   - devStoreFolder: on the Mac, the worktree's folder in the development container,
     ///     which only debug builds honour. A development build on the Mac must name one, or it
     ///     is refused with `dev_store_folder_invalid`: development builds from two worktrees
@@ -78,29 +96,35 @@ public struct StoreLocations: Hashable, Sendable {
     ///   - environment: the process environment. With `KNOT_AGENT=1`, the milestone store
     ///     is refused, so an agent cannot open the owner's notes by accident.
     public static func resolve(
-        flavour: Flavour, platform: Platform, appContainer: URL, groupContainer: URL?,
-        devStoreFolder: String? = nil, environment: [String: String]
+        flavour: Flavour, platform: Platform, appContainer: URL, appGroup: AppGroup, devStoreFolder: String? = nil,
+        environment: [String: String]
     ) throws(KnotError) -> StoreLocations {
         if flavour == .milestone, environment["KNOT_AGENT"] == "1" { throw KnotError.agentRefusedMilestoneStore }
+        let groupContainer: URL?
+        switch appGroup {
+        case .present(let container):
+            guard let container else { throw KnotError.groupContainerMissing }
+            groupContainer = container
+        case .absent:
+            groupContainer = nil
+        }
+        let hasGroup = groupContainer != nil
         let ownRoot = appContainer.appending(path: rootFolderName, directoryHint: .isDirectory)
+        let groupRoot = groupContainer?.appending(path: rootFolderName, directoryHint: .isDirectory)
         switch platform {
         case .watchOS:
             // The Watch has no database. Its recording state sits in the group, which the
             // Watch app shares with its widget extension for the complication; its recordings
             // and its outbox stay in its own container.
-            guard let groupContainer else { throw KnotError.groupContainerMissing }
-            let shared = groupContainer.appending(path: rootFolderName, directoryHint: .isDirectory)
-            return StoreLocations(storeRoot: ownRoot, sharedRoot: shared)
+            return StoreLocations(storeRoot: ownRoot, sharedRoot: groupRoot ?? ownRoot, hasAppGroup: hasGroup)
         case .iOS:
             // The database stays in the app's own container: iOS kills a process suspended
             // while it holds a lock on a database in a shared container.
-            guard let groupContainer else { throw KnotError.groupContainerMissing }
-            let shared = groupContainer.appending(path: rootFolderName, directoryHint: .isDirectory)
-            return StoreLocations(storeRoot: ownRoot, sharedRoot: shared)
+            return StoreLocations(storeRoot: ownRoot, sharedRoot: groupRoot ?? ownRoot, hasAppGroup: hasGroup)
         case .macOS:
-            // In the app group, so that the `knot` command opens the same store.
-            guard let groupContainer else { throw KnotError.groupContainerMissing }
-            var base = groupContainer
+            // In the app group, so that the `knot` command opens the same store; without one,
+            // in the app's own container, which the tool cannot open.
+            var base = groupContainer ?? appContainer
             if flavour == .dev {
                 // Development builds from two worktrees never share a store, so a build that
                 // names no usable worktree folder is refused, never given a shared one.
@@ -110,7 +134,7 @@ public struct StoreLocations: Hashable, Sendable {
                 base = base.appending(path: name, directoryHint: .isDirectory)
             }
             let root = base.appending(path: rootFolderName, directoryHint: .isDirectory)
-            return StoreLocations(storeRoot: root, sharedRoot: root)
+            return StoreLocations(storeRoot: root, sharedRoot: root, hasAppGroup: hasGroup)
         }
     }
 

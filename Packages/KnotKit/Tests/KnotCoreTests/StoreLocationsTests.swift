@@ -14,7 +14,7 @@ import Testing
             for flavour in [StoreLocations.Flavour.dev, .milestone] {
                 #expect(throws: KnotError.groupContainerMissing) {
                     try StoreLocations.resolve(
-                        flavour: flavour, platform: platform, appContainer: app, groupContainer: nil,
+                        flavour: flavour, platform: platform, appContainer: app, appGroup: .present(container: nil),
                         devStoreFolder: "wp-02", environment: [:])
                 }
             }
@@ -23,7 +23,8 @@ import Testing
 
     @Test func onTheWatchTheRecordingStateIsInTheGroupAndTheOutboxIsNot() throws {
         let locations = try StoreLocations.resolve(
-            flavour: .dev, platform: .watchOS, appContainer: app, groupContainer: group, environment: [:])
+            flavour: .dev, platform: .watchOS, appContainer: app, appGroup: .present(container: group), environment: [:]
+        )
         #expect(locations.recordingState.path == "/containers/group/KnotStore/RecordingState")
         #expect(locations.outbox.path == "/containers/app/Library/Application Support/KnotStore/Outbox")
         #expect(locations.recording.path == "/containers/app/Library/Application Support/KnotStore/Recording")
@@ -31,7 +32,7 @@ import Testing
 
     @Test func onIOSTheDatabaseStaysInTheAppsOwnContainer() throws {
         let locations = try StoreLocations.resolve(
-            flavour: .dev, platform: .iOS, appContainer: app, groupContainer: group, environment: [:])
+            flavour: .dev, platform: .iOS, appContainer: app, appGroup: .present(container: group), environment: [:])
         #expect(locations.database.path == "/containers/app/Library/Application Support/KnotStore/knot.sqlite")
         #expect(locations.assets.path == "/containers/app/Library/Application Support/KnotStore/Assets")
         #expect(locations.recording.path == "/containers/app/Library/Application Support/KnotStore/Recording")
@@ -41,14 +42,15 @@ import Testing
 
     @Test func onTheMacEverythingIsInTheGroupSoTheToolOpensTheSameStore() throws {
         let milestone = try StoreLocations.resolve(
-            flavour: .milestone, platform: .macOS, appContainer: app, groupContainer: group,
+            flavour: .milestone, platform: .macOS, appContainer: app, appGroup: .present(container: group),
             devStoreFolder: "wp-02", environment: [:])
         #expect(milestone.database.path == "/containers/group/KnotStore/knot.sqlite")
         #expect(milestone.inbox.path == "/containers/group/KnotStore/Inbox")
 
         // A development build's store sits in a folder named for its worktree.
         let dev = try StoreLocations.resolve(
-            flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
+            flavour: .dev, platform: .macOS, appContainer: app, appGroup: .present(container: group),
+            devStoreFolder: "wp-02",
             environment: [:])
         #expect(dev.database.path == "/containers/group/wp-02/KnotStore/knot.sqlite")
     }
@@ -58,7 +60,8 @@ import Testing
         // so there is no shared fallback.
         #expect(throws: KnotError.devStoreFolderInvalid) {
             try StoreLocations.resolve(
-                flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, environment: [:])
+                flavour: .dev, platform: .macOS, appContainer: app, appGroup: .present(container: group),
+                environment: [:])
         }
     }
 
@@ -66,12 +69,13 @@ import Testing
         for platform in [StoreLocations.Platform.iOS, .macOS, .watchOS] {
             #expect(throws: KnotError.agentRefusedMilestoneStore) {
                 try StoreLocations.resolve(
-                    flavour: .milestone, platform: platform, appContainer: app, groupContainer: group,
+                    flavour: .milestone, platform: platform, appContainer: app, appGroup: .present(container: group),
                     environment: ["KNOT_AGENT": "1"])
             }
         }
         _ = try StoreLocations.resolve(
-            flavour: .dev, platform: .macOS, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
+            flavour: .dev, platform: .macOS, appContainer: app, appGroup: .present(container: group),
+            devStoreFolder: "wp-02",
             environment: ["KNOT_AGENT": "1"])
     }
 
@@ -80,7 +84,8 @@ import Testing
         let capture: CaptureID = id(1)
         for platform in [StoreLocations.Platform.iOS, .macOS, .watchOS] {
             let locations = try StoreLocations.resolve(
-                flavour: .dev, platform: platform, appContainer: app, groupContainer: group, devStoreFolder: "wp-02",
+                flavour: .dev, platform: platform, appContainer: app, appGroup: .present(container: group),
+                devStoreFolder: "wp-02",
                 environment: [:])
             let paths = [
                 locations.database, locations.assets, locations.recording, locations.inbox, locations.recordingState,
@@ -136,7 +141,8 @@ import Testing
         let group = URL(fileURLWithPath: "/containers/group", isDirectory: true)
         let resolve = {
             try StoreLocations.resolve(
-                flavour: .dev, platform: .macOS, appContainer: root, groupContainer: group, devStoreFolder: name,
+                flavour: .dev, platform: .macOS, appContainer: root, appGroup: .present(container: group),
+                devStoreFolder: name,
                 environment: [:])
         }
         if used {
@@ -155,5 +161,50 @@ import Testing
             locations.outboxManifest(capture),
         ]
         for path in paths { #expect(isInside(path, locations.storeRoot), "\(path.standardizedFileURL.path)") }
+    }
+}
+
+/// A build made with the local signing configuration has no app group: every agent build,
+/// simulator build and gate build. The caller says so, and StoreLocations roots what would
+/// sit in the group in the app's own container (the orchestrator's ruling on §7).
+@Suite struct StoreLocationsWithoutAppGroupTests {
+    let app = URL(fileURLWithPath: "/containers/app/Library/Application Support", isDirectory: true)
+
+    @Test func onIOSInboxAndTheRecordingStateStayInTheAppsContainer() throws {
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .iOS, appContainer: app, appGroup: .absent, environment: [:])
+        #expect(!locations.hasAppGroup)
+        #expect(locations.database.path == "/containers/app/Library/Application Support/KnotStore/knot.sqlite")
+        #expect(locations.inbox.path == "/containers/app/Library/Application Support/KnotStore/Inbox")
+        #expect(locations.recordingState.path == "/containers/app/Library/Application Support/KnotStore/RecordingState")
+    }
+
+    @Test func onTheWatchTheRecordingStateStaysInTheAppsContainer() throws {
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .watchOS, appContainer: app, appGroup: .absent, environment: [:])
+        #expect(!locations.hasAppGroup)
+        #expect(locations.recordingState.path == "/containers/app/Library/Application Support/KnotStore/RecordingState")
+        #expect(locations.outbox.path == "/containers/app/Library/Application Support/KnotStore/Outbox")
+    }
+
+    @Test func onTheMacTheDatabaseStaysInTheAppsContainerInTheWorktreesFolder() throws {
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .macOS, appContainer: app, appGroup: .absent, devStoreFolder: "wp-02",
+            environment: [:])
+        #expect(!locations.hasAppGroup)
+        #expect(locations.database.path == "/containers/app/Library/Application Support/wp-02/KnotStore/knot.sqlite")
+        #expect(locations.inbox.path == "/containers/app/Library/Application Support/wp-02/KnotStore/Inbox")
+        #expect(throws: KnotError.devStoreFolderInvalid) {
+            try StoreLocations.resolve(
+                flavour: .dev, platform: .macOS, appContainer: app, appGroup: .absent, environment: [:])
+        }
+    }
+
+    @Test func aBuildThatHasAGroupSaysSo() throws {
+        let group = URL(fileURLWithPath: "/containers/group", isDirectory: true)
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .iOS, appContainer: app, appGroup: .present(container: group), environment: [:])
+        #expect(locations.hasAppGroup)
+        #expect(StoreLocations.testing(root: app).hasAppGroup == false)
     }
 }
