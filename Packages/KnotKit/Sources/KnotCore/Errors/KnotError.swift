@@ -17,6 +17,20 @@ public struct ErrorCode: RawRepresentable, Hashable, Sendable, Codable, Expressi
     }
 
     public var description: String { rawValue }
+
+    /// True for the form every code has: lower-case ASCII letters, digits and underscores,
+    /// starting with a letter, at most 64 characters. A code read from elsewhere, such as a
+    /// file or a newer Knot, may not have it, and then it is never written to a log as it is.
+    public var isWellFormed: Bool {
+        let bytes = Array(rawValue.utf8)
+        guard let first = bytes.first, (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(first), bytes.count <= 64
+        else { return false }
+        return bytes.allSatisfy { byte in
+            (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+                || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                || byte == UInt8(ascii: "_")
+        }
+    }
 }
 
 /// Whether an error is a failure, or a step that cannot run now (docs/architecture.md §4).

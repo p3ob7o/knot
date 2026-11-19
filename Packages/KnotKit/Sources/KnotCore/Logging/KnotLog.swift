@@ -78,7 +78,7 @@ public enum LogField: Sendable, Hashable {
         case .segment(let id): "segment=\(id)"
         case .asset(let id): "asset=\(id)"
         case .job(let id): "job=\(id)"
-        case .code(let code): "code=\(code)"
+        case .code(let code): "code=\(code.isWellFormed ? code.rawValue : "malformed_code")"
         case .detail(let detail): "detail=\(detail.rawValue)"
         case .number(let name, let value): "\(name)=\(value)"
         case .duration(let name, let value): "\(name)_ms=\(Self.milliseconds(value))"

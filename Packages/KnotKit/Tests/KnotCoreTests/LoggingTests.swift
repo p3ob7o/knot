@@ -46,3 +46,18 @@ final class RecordingSink: LogSink {
         }
     }
 }
+
+@Suite struct LoggedCodeFormTests {
+    @Test(arguments: ["the note said call Anna", "disk_full\nextra", "DISK_FULL", "", "a b", "code=x"])
+    func aCodeThatIsNotAWellFormedCodeNeverReachesALogLine(code: String) {
+        let sink = RecordingSink()
+        KnotLog(.store, sink: sink).log(.error, "store.failed", .code(ErrorCode(rawValue: code)))
+        #expect(sink.lines == ["store.failed code=malformed_code"])
+    }
+
+    @Test func aWellFormedCodeIsLoggedAsItIs() {
+        let sink = RecordingSink()
+        KnotLog(.store, sink: sink).log(.error, "store.failed", .code("disk_full"))
+        #expect(sink.lines == ["store.failed code=disk_full"])
+    }
+}
