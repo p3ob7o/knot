@@ -1,0 +1,69 @@
+# SP-4's throwaway app: CloudKit sync shape (docs/plan/SP-4.md). It lives on the branch
+# spike/sync-shape and is never merged. Generate and build it with Spikes/SP-4/build.sh,
+# never by hand. The generated SP4.xcodeproj is git-ignored.
+#
+# It shares Apps/Config/Base.xcconfig with the real apps, so it takes the development
+# identifiers (com.p3ob7o.knot.dev, iCloud.com.p3ob7o.knot.dev) and the same signing switch.
+# Stage 1 builds only with KNOT_SIGNING=local: sandboxed on the Mac, no iCloud entitlement,
+# KnotSyncAvailable = NO, so the app cannot reach a container. Stage 2 adds the team
+# entitlements (README.md says which) once the owner's signing is on the Mac.
+
+name: SP4
+
+options:
+  bundleIdPrefix: com.p3ob7o
+  deploymentTarget:
+    macOS: "27.0"
+    iOS: "27.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  defaultConfig: Debug
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: ../../Apps/Config/Base.xcconfig
+  Release: ../../Apps/Config/Base.xcconfig
+
+targets:
+  SP4-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_NAME: SP4
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
+        INFOPLIST_FILE: Config/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/SP4-macOS-$(KNOT_SIGNING).entitlements
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - sdk: CloudKit.framework
+
+  SP4-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_NAME: SP4
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
+        INFOPLIST_FILE: Config/Info.plist
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - sdk: CloudKit.framework
+
+schemes:
+  SP4-macOS:
+    build:
+      targets:
+        SP4-macOS: all
+  SP4-iOS:
+    build:
+      targets:
+        SP4-iOS: all
