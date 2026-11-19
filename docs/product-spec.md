@@ -34,7 +34,7 @@ Three promises, in priority order:
 A note is a series of captures made close together.
 
 1. When a capture starts, Knot looks at the most recent capture in this device's copy of the stream. If that capture ended less than X minutes ago, the new one becomes the next segment of the same note. Otherwise it starts a new note.
-2. X is a setting, in minutes. The default is 5. Zero turns appending off, so every capture is its own note.
+2. X is a setting, in minutes. The default is 5. Zero turns appending off, so every capture is its own note. The one exception is a capture that ends an open one on the same device (rules 13 and 15): it stays in that capture's note.
 3. The gap runs from the end of the previous capture to the start of the new one. A long recording keeps its note open while it runs. A gap that comes out negative, because a clock moved back, counts as inside the window when it is negative by less than X. A larger negative gap starts a new note.
 4. "New note" forces a new note inside the window. It is one action away wherever the capture surface shows the note: the iPhone and iPad capture surface, the Mac panel and an open note. A capture started from the Action Button, a control, the Watch or a held key follows the window, and its surface shows whether it continues a note or starts a new one, without showing any text.
 5. Capturing from inside an open note always appends to that note, whatever the window says.
@@ -46,8 +46,8 @@ A note is a series of captures made close together.
 11. A note with no segments left is treated as deleted.
 12. A draft found after a crash becomes a finished typed segment at relaunch.
 13. A typed capture starts at its first keystroke, not when the surface appears, and the note it joins is decided then. Holding the Mac hotkey while typing ends the typed capture and starts a recording as the next segment of the same note.
-14. The window looks at the most recent capture that has not been deleted. If the most recent note was deleted, a new note starts.
-15. One capture is open at a time on a device. Starting a capture of another kind, or on another surface, ends the open one, and the new capture is the next segment of the same note. A recording is the exception: while it runs, the capture surface accepts no typing and no Pencil. Text added through the command line or MCP does not end an open capture. It is placed by the window like any other capture.
+14. The window looks at the most recent capture that has not been deleted. If the most recent note was deleted, a new note starts, and Knot does not fall back to an older note. The most recent note is the note of the most recent capture, deleted captures included, and a note with no segment left counts as deleted (rule 11).
+15. One capture is open at a time on a device. Starting a capture of another kind, or on another surface, ends the open one, and the new capture is the next segment of the same note. A recording is the exception: while it runs, no capture surface on that device accepts typing or Pencil. Text added through the command line or MCP does not end an open capture. It is placed by the window like any other capture.
 16. Knot never regroups notes by itself. You can: "Move to its own note" takes one segment out of a note (section 7). A move does not reset the window. The window still looks at the most recent capture, in whichever note now holds it, so a capture made within the window of a segment you have just moved out joins that segment's new note.
 
 ## 4. Capturing
@@ -133,6 +133,8 @@ A voice segment is always in one of these states, named for what you can do, not
 | Needs you | A step failed. The recording is kept. | Retry. |
 | Kept, no text | No words were recognised, or the audio cannot be read. This is a final state, not an error. | Play or share the file, or delete it. |
 
+Typed and handwritten segments use the same names. A typed segment is Ready. A drawing whose text is still being recognised is "Saved, text on its way", a recognised one is Ready, and one whose recognition failed is "Needs you". A recording whose transcript is there is Ready while cleanup runs. A segment that a newer Knot made in a state this one does not know says so, and offers nothing else.
+
 ## 6. Entry points
 
 ### iPhone
@@ -178,6 +180,7 @@ The hotkey is chosen in Settings. The hotkey is a key with at least one modifier
 |---|---|
 | Key down | Nothing shows. Knot gets the microphone ready without opening it. |
 | Released before 250 ms | A tap. The panel appears ready for typing within 100 ms, or hides if it was showing. The microphone never opened. |
+| Released a moment after 250 ms, before the microphone opened | A tap as well. No press does nothing. |
 | Still held at 250 ms | The panel appears and the microphone opens. The listening state shows once it is live, and that is the moment to speak. |
 | Released after a hold | The recording stops. |
 
@@ -272,7 +275,7 @@ Rules:
 - **Editing safely.** `edit` and `title` take `--if-revision`, and refuse when the segment or note has changed since that revision. A revision carries the store's generation, so one kept from before a restore of the store is refused too. Text that `edit` replaced is kept for 30 days. A segment whose capture is still open in the app cannot be edited, deleted or moved from the command line.
 - **Moving.** `knot move` names the note you saw the segment in. If the segment is no longer there, nothing moves and the result says where it is, so the command is safe to repeat. It returns both notes, the segment and the store's cursor. `knot move <segment> --back` returns a segment to the note it left. It works for 30 days, on the Mac where the move was made, and it is refused when the segment has moved again since or the note it left is gone. `knot restore` is not used for moves: it undoes a delete, or brings back replaced text on a segment that is not deleted.
 - **Polling.** `--since` is a filter on time. An agent that polls uses `knot changes`, which also reports a late Watch recording and a deletion. A page is read in one go and ordered by the counter, so a note that changes again simply appears again, and nothing is skipped. A deletion stays reportable after the purge. A cursor taken before a restore of the store is refused as a conflict, with the instruction to read again from the start.
-- **Is a note finished.** Each note says whether it is settled: its window has closed, and nothing is still being transcribed, cleaned or downloaded. A settled note can still gain a late capture, and then it appears in `knot changes` again. Settling by time alone writes nothing, so an unsettled note carries the time at which it will settle if nothing else happens, and an agent reads it again then. Each segment carries its state, in the six names of section 5, where its text came from and its revision.
+- **Is a note finished.** Each note says whether it is settled: its window has closed, and nothing is still being transcribed, cleaned or downloaded. A segment whose step failed waits for a person and not for work, so it does not keep its note unsettled. A settled note can still gain a late capture, and then it appears in `knot changes` again. Settling by time alone writes nothing, so an unsettled note carries the time at which it will settle if nothing else happens, or no time while work still runs, and an agent reads it again then. Each segment carries its state, in the six names of section 5, where its text came from and its revision.
 - **Is the store current.** Every result says whether Knot is running, whether sync is on, and when it last synced. Text output adds one line on standard error when the store may be behind. That is information, never an error.
 - **Export.** The command does not download. If recordings or drawings are still on another device, it writes nothing and says so. `--skip-missing` exports the rest, with a list of what is missing.
 - **Errors.** Every error says what failed, the fix, whether a retry is safe and what was written, under a stable code. With `--json` it is one object on standard error. Exit codes: 0 done, 1 unexpected, 2 usage, 3 ID not found or ambiguous, 4 access off, 5 conflict, 6 store busy, 7 the store needs the owner, 8 incomplete.

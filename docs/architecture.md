@@ -79,7 +79,7 @@ App shells get their environment from one factory in KnotApp. WP-01 writes it so
 ## 4. Domain model
 
 ```swift
-struct Capture { id; kind: typed | voice | ink; origin; startedAt; endedAt: Date?
+struct Capture { id; kind: typed | voice | ink; origin: (source, surface); startedAt; endedAt: Date?
                  outcome: open | stored | discardedEmpty | failed(code)
                  launchID                           // the process launch that owns it while it is open
                  placement: window | newNote | named // what was asked for; local
@@ -88,7 +88,7 @@ struct Capture { id; kind: typed | voice | ink; origin; startedAt; endedAt: Date
 struct Note    { id; createdAt; updatedAt
                  title: String?; titleOrigin: none | generated | user
                  lastCaptureEndedAt; closedAt: Date?; deletedAt: Date?
-                 revision: Int }                    // the store's change counter at this note's last change
+                 revision: Int64 }                  // the store's change counter at this note's last change
 
 struct Segment { id; noteID; kind: typed | voice | ink
                  noteGeneration: Int                // synced: rises each time the segment's note changes
@@ -104,10 +104,11 @@ struct Segment { id; noteID; kind: typed | voice | ink
                  arrivedAt: Date?                   // local, not synced: when a late capture reached this device
                  state: SegmentState; assetID: AssetID?; duration: Duration?
                  conflictOf: SegmentID?; deletedAt: Date?
-                 revision: Int }                    // local, never synced: rises each time the text changes
+                 revision: Int64 }                  // local, never synced: rises each time the text changes
 
 struct Asset   { id; segmentID; kind: audio | ink; byteCount; sha256
-                 availability: local | remote | downloading }
+                 availability: local | remote | downloading   // whether the file is on this device
+                 upload: localOnly | uploading | published }  // how far its upload has gone
 
 struct Job     { id; segmentID; kind: transcribe | clean | recognise
                  state; attempts; deaths; notBefore; lastErrorCode }
@@ -129,7 +130,7 @@ Sizes are bounded in the domain types, and WP-02 fixes the numbers. First values
 
 The device ID is checked against an install ID kept in the Keychain for this device only. When a store arrives on another device through a backup, the two no longer match. Knot then gives the store a new device ID, resets the sync state and fetches again, so a restored phone never acts as the old one.
 
-A kind, an origin or a field that this build does not know is kept and never dropped, and the segment shows as made by a newer Knot. That holds for the database, for synced records and for inbox manifests.
+A kind, an origin, a state or a field that this build does not know is kept and never dropped, and the segment shows as made by a newer Knot, which is a visible state of its own beside the six of product spec §5. That holds for the database, for synced records and for inbox manifests.
 
 Segment states:
 
@@ -141,10 +142,13 @@ voice   recording ──stop──► recorded ──► transcribing ──► 
             │ killed            │ cannot run now            │ no model, or the guard rejects
             ▼                   ▼                           ▼
         recovered ──────► recorded (pending)          ready, with the raw transcript as text
-        any step fails ──► failed(step): the recording is kept and a retry is offered
+        recording ──a tap-started one, stopped within a second──► discarded
+        cleaning ──cannot run now──► transcribed
+        any step fails ──► failed(step, code): the recording is kept and a retry is offered
 
 ink     drawing ──end──► recognising ──► ready     (empty canvas ──► discarded)
         drawing ──killed──► recognising at relaunch
+        recognition fails ──► failed(recognise, code): the drawing is kept and a retry is offered
 
 watch   onWatch ──transfer──► delivered ──► continues as "recorded" on the iPhone
 ```
@@ -174,6 +178,8 @@ KnotCore declares these protocols. KnotFakes ships a fake for each, except `Capt
 
 Implementers: `AudioPlayer` and `RecordingStateStore` in KnotAudio; `SettingsStore` in KnotStore; `AssetFetcher` in KnotSync, with a local-only version in KnotStore for when sync is off; `RecordingActivity` in the iOS app target.
 
+KnotCore also declares two seams that are not ports of `AppEnvironment`: `FileLayer`, under `DurableFile`, which the power-cut layer of KnotTestSupport replaces in tests, and `LogSink`, under the logging facade, for tests that check that no text reaches a log.
+
 Two operations carry the "nothing is lost" promise and are part of the contracts:
 
 - `NoteStore` records a capture in one transaction: it applies the append rule, writes the capture row and writes the segment. `CaptureEngine` and the `knot` command both use that one operation, so the append rule runs in one place. The store decides. The engine passes only what the user asked for: follow the window, a new note, or a named note. The note that a capture surface shows before the first keystroke comes from a store query that calls the same rule, and a test checks that the prediction and the decision agree at the same instant. The rules about open captures on a device are checked in that transaction too, against the `capture` table, because two processes share it on the Mac.
@@ -197,7 +203,7 @@ Three rules keep a fallback or a retry from undoing newer work:
 
 A recovered capture ends at its last durable write.
 
-WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked. A cancelled step is a yield: it is not an attempt, not a decline and not an error. A recording that is empty or silent is not an error either: it is ready with empty text.
+WP-02's error taxonomy names these failures by case, and no port throws an untyped error: disk full; store busy; store damaged; store newer than this build; write failed; microphone permission refused; no input device; audio session busy; too little space; conversion failed; audio unreadable; transcription failed, with the engine's code; speech unavailable on this device; cleanup model unavailable; cleanup declined (refusal, guardrail violation, empty or malformed result, guard rejection, text too long for the model, unsupported language, unsupported request); cleanup timed out; recognition failed; inbox item unreadable; checksum mismatch; and the sync conditions of §11. The engineering review added three cases: text too long; a capture stopped because the disk filled; and a cursor from another store generation. One code covers a cursor from another store and one from another generation of this store, and one code does the same for a revision. The errors of a step that cannot run now form a class of their own, a deferral (§4): speech model not installed or still installing, cleanup model not ready, requests limited by the system, with the time to try again when the system gives one, system resources limited, no background time, device locked. A cancelled step is a yield: it is not an attempt, not a decline and not an error. A recording that is empty or silent is not an error either: it is ready with empty text.
 
 Each real implementation runs its contract suite where it can run:
 
@@ -230,7 +236,7 @@ Rules:
 5. Views never touch storage. They talk to view models, and view models talk to ports.
 6. The capture ledger. Every capture has a `capture` row. On the store path the row is its first durable write, and that write is what "started" means. A recording writes its manifest first, and a capture that falls back to `Inbox/` starts with its file there. A typed capture starts at its first keystroke. A recording whose microphone cannot open never starts, and the surface says why.
    - After recovery no row is `open`. Each row is stored as a segment, discarded as empty, or failed with its content kept and visible. A failed capture becomes stored when a retry succeeds.
-   - Empty means no text for a typed capture, no strokes for an ink capture, and under one second for a tap-started recording.
+   - Empty means no text for a typed capture, no strokes for an ink capture, and under one second for a tap-started recording. The second is measured between the two presses, and a stop that the clock puts before its start is kept.
    - A typed or ink capture whose save fails writes its content to a file in `Inbox/` and is marked failed. If the row itself cannot be written, the content still goes to `Inbox/`, and ingest creates the row later.
    - If the store cannot be opened at all, capture still works: every capture goes to `Inbox/`, and the stream shows what is wrong. Nothing is deleted. Ingest stores those captures once the store opens again.
    - Capture rows belong to the device that made the capture and do not sync. Writes from `knot` and the MCP server create rows too. The invariant covers segments that originated on this device.
@@ -249,7 +255,7 @@ In v1 the only producer outside the app process is the watch link. Extensions th
 ## 7. Storage
 
 - **Database:** `KnotStore/knot.sqlite`, a GRDB `DatabasePool` in WAL mode with `synchronous = FULL`, foreign keys on and a 5-second busy timeout. On iOS and iPadOS it lives in the app's own container: iOS kills a process that is suspended while holding a lock on a database in a shared container, and no extension needs the database. On macOS it lives in the app group container, so that the `knot` command can open it. The writer connection sets `fullfsync` (§6, rule 7). Reads use the pool's reader connections and never wait for the writer.
-- **Files:** under the same `KnotStore/` root, `Assets/<last two ID characters>/<assetID>.<ext>` for recordings and drawings, because the first characters of a time-ordered ID stay the same for years, `Recording/` for audio in progress and its manifests, `Inbox/` for items waiting to be ingested. On iOS, `Inbox/` and the recording state sit in the app group container, where the watch link and the widget extension reach them.
+- **Files:** under the same `KnotStore/` root, `Assets/<last two ID characters>/<assetID>.<ext>` for recordings and drawings, because the first characters of a time-ordered ID stay the same for years, `Recording/` for audio in progress and its manifests, `Inbox/` for items waiting to be ingested. On iOS, `Inbox/` and the recording state sit in the app group container, where the watch link and the widget extension reach them, and `Recording/` stays in the app's own container beside the database. On the Watch, the recording state and what the complication reads sit in the Watch's app group, where its widget extension reaches them, and the outbox and the recordings stay in the Watch app's own container.
 - **File protection on iOS:** `completeUntilFirstUserAuthentication` for everything Knot writes. Recording and ingest must work while the phone is locked, and the default class would block them.
 - **Build flavours:** every build that is not a milestone build uses development identifiers: the bundle ID with a `.dev` suffix, its own app group and its own iCloud container. That covers agent builds, PR builds, spikes and tests, and tests also pass the store path in. Development builds from two worktrees never share a store. On iOS each worktree has its own simulators. On the Mac a sandboxed app cannot write into a worktree, so its store sits in the development container, in a folder named for the worktree and chosen by a setting that only debug builds honour. Package tests are not sandboxed and pass a path under the worktree. Only a milestone build opens the default store or the real iCloud container. A thread started for an agent exports `KNOT_AGENT=1`. With it set, `StoreLocations` refuses the milestone store and the milestone `knot` refuses to run, so an agent cannot open the owner's notes by accident.
 - **When data must survive:** notes on the owner's iPhone and iPad are disposable until the M2 milestone build, and notes on his Mac until the M4 milestone build, which needs SP-3's answer on where the Mac store lives. After those builds, every change to the schema or to the store's location ships a tested migration. Schema version 1 is the schema of the M2 milestone build, and every change after that build is a numbered migration, whichever package makes it. A lint fails on GRDB's `eraseDatabaseOnSchemaChange`.
@@ -270,7 +276,7 @@ In v1 the only producer outside the app process is the watch link. Extensions th
 - If conversion fails, the working file stays as the segment's recording and the queue retries the conversion.
 - WP-12's proof step reports the working file's size per minute on each platform. On the watch, a 30-minute recording and its converted copy must fit together.
 - A stored recording keeps a small array of level peaks beside it, written while recording, so that a waveform never needs the audio decoded.
-- The saved recording state can outlive a crash, so it carries a heartbeat that the recorder writes every second. A state whose heartbeat is older than three seconds is stale: no recording is running. A press that meets a stale state recovers the orphaned recording and starts a new one, with the started cue, because a person pressing then is starting a recording. Controls show "recording" only while the heartbeat is fresh, the Live Activity carries a stale date, and launch ends an activity that has no recorder. A press while a recording is starting or stopping is ignored. In the app process the recorder itself is the truth: a press stops a recording that this process is running, whatever the heartbeat says. The heartbeat serves the controls and widgets of other processes, and recovery at launch. The rule for a press runs only in a process that has a recorder. Any other process hands the press to the app's process and never waits for an owner that may be dead. There, an idle recorder that finds a saved state recovers the orphan and starts, whether the heartbeat is fresh or stale.
+- The saved recording state can outlive a crash, so it carries a heartbeat that the recorder writes every second. A state whose heartbeat is older than three seconds is stale: no recording is running. A heartbeat more than three seconds ahead of now is stale too, because a clock moved back. A press that meets a stale state recovers the orphaned recording and starts a new one, with the started cue, because a person pressing then is starting a recording. Controls show "recording" only while the heartbeat is fresh, the Live Activity carries a stale date, and launch ends an activity that has no recorder. A press while a recording is starting or stopping is ignored. In the app process the recorder itself is the truth: a press stops a recording that this process is running, whatever the heartbeat says. The heartbeat serves the controls and widgets of other processes, and recovery at launch. The rule for a press runs only in a process that has a recorder. Any other process hands the press to the app's process and never waits for an owner that may be dead. There, an idle recorder that finds a saved state recovers the orphan and starts, whether the heartbeat is fresh or stale.
 - The recorder takes its audio from an injected source. Under test it refuses the hardware input, so no automated test and no proof run by an agent opens a microphone on the build Mac.
 - If writing fails while a recording runs, for example because the disk filled, the recording stops with the stop cue and its reason, and everything written so far is kept.
 - The authoritative transcript comes from transcribing the saved file after stop. Every recording then takes one code path, whether it started in the app, from an intent, on the watch, or was recovered after a crash.
@@ -388,7 +394,7 @@ Intents on iPhone, iPad and Mac call `CaptureEngine`, and watch intents call the
 ## 15. Mac specifics
 
 - **Hotkey keys:** a key with at least one modifier, or a function key. A modifier alone is not possible with this API. SP-5 proves press and release in a sandboxed build, and the panel over a full-screen app. If press and release do not arrive, the fallback is a listen-only event tap, which needs the Input Monitoring permission.
-- **Hotkey:** Carbon `RegisterEventHotKey`. It delivers both press and release, and developers report that it works in the sandbox with no extra permission. A small state machine with a 250 ms threshold separates a tap from a hold. A tap is known at key release, and the panel must accept typing within 100 ms of it. A hold is known at the 250 ms mark, and the microphone opens then, never on a tap, so the system's microphone indicator lights only for a recording. The audio engine is prepared at key-down, so that the microphone is live within 150 ms of the mark. SP-5 measures whether first words get clipped. If they do, the alternative is to listen from key-down into a buffer that a tap discards, on built-in and wired inputs only. Hold-to-record is exempt from the one-second discard.
+- **Hotkey:** Carbon `RegisterEventHotKey`. It delivers both press and release, and developers report that it works in the sandbox with no extra permission. A small state machine with a 250 ms threshold separates a tap from a hold. It times presses with a monotonic clock, and a release that arrives before the mark has been handled is a tap, so no press does nothing. A tap is known at key release, and the panel must accept typing within 100 ms of it. A hold is known at the 250 ms mark, and the microphone opens then, never on a tap, so the system's microphone indicator lights only for a recording. The audio engine is prepared at key-down, so that the microphone is live within 150 ms of the mark. SP-5 measures whether first words get clipped. If they do, the alternative is to listen from key-down into a buffer that a tap discards, on built-in and wired inputs only. Hold-to-record is exempt from the one-second discard.
 - **Hotkey failures:** if the key is already registered by another app, Settings says so and asks for another key. If a release never arrives, the recording goes on with the panel showing and a stop control. Esc or another press of the hotkey stops it, and Knot checks the key's state every second while recording.
 - **Panel:** an `NSPanel` that does not activate the app and joins every Space, including full-screen apps. It opens on the display that has the keyboard focus. A tap makes it the key window. A hold shows it without making it key, and it hides shortly after the text has arrived unless the pointer or the keyboard enters it. It has a microphone control that starts and stops a recording, for when a key cannot be held.
 - **Menu bar:** a click opens the menu, as the system's convention has it. The icon shows when Knot is recording.
