@@ -1,0 +1,9 @@
+# Audio spoken by the macOS system voices is made on each Mac and never committed:
+# the voices' licence does not allow redistributing it. See Fixtures/README.md.
+generated/
+
+# The owner's recordings belong in the folder that KNOT_LOCAL_FIXTURES names, never here.
+read-aloud-*-*.m4a
+note-*-*.m4a
+read-aloud-*-*.wav
+note-*-*.wav
