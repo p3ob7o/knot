@@ -131,12 +131,17 @@ public struct SystemLogSink: LogSink {
 
     public func write(_ record: LogRecord) {
         let line = record.line
-        switch record.level {
-        case .debug: logger.debug("\(line, privacy: .public)")
-        case .info: logger.info("\(line, privacy: .public)")
-        case .notice: logger.notice("\(line, privacy: .public)")
-        case .error: logger.error("\(line, privacy: .public)")
-        case .fault: logger.fault("\(line, privacy: .public)")
-        }
+        let type: OSLogType =
+            switch record.level {
+            case .debug: .debug
+            case .info: .info
+            case .notice: .default
+            case .error: .error
+            case .fault: .fault
+            }
+        // The one place a whole line is shown as public. A LogRecord is built only from a
+        // StaticString event name and typed fields: IDs, numbers, durations, flags, details
+        // and catalogued codes. The facade takes no text, so no note text can reach the line.
+        logger.log(level: type, "\(line, privacy: .public)")  // knot-lint: allow logged-text: IDs and codes only
     }
 }
