@@ -160,24 +160,31 @@ if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
 import re, sys
 fixture, output = sys.argv[1], open(sys.argv[2]).read()
 found = {(int(m.group(1)), m.group(2)) for m in re.finditer(r":(\d+): \[([\w-]+)\]", output)}
-expected = []
+flagged = {number for number, _ in found}
+expected, clean = [], []
 for number, line in enumerate(open(fixture), 1):
     m = re.match(r"^// expect: ([\w-]+)$", line.strip())
-    if m:
+    if m and m.group(1) == "nothing":
+        clean.append(number + 1)
+    elif m:
         expected.append((number + 1, m.group(1)))
 missed = [case for case in expected if case not in found]
+wrong = [number for number in clean if number in flagged]
 copy = "[copy-file]" in output
 for number, rule in missed:
     print(f"      missed: line {number}, {rule}")
+for number in wrong:
+    print(f"      flagged, though it must pass: line {number}")
 if not copy:
     print('      missed: the folder named "Copies 2"')
-print(f"      caught {len(expected) - len(missed) + (1 if copy else 0)} of {len(expected) + 1} cases")
-sys.exit(1 if missed or not copy else 0)
+print(f"      caught {len(expected) - len(missed) + (1 if copy else 0)} of {len(expected) + 1} cases, "
+      f"and let {len(clean) - len(wrong)} of {len(clean)} harmless lines pass")
+sys.exit(1 if missed or wrong or not copy else 0)
 PY
 then
-    pass "the lint catches every case of its fixture"
+    pass "the lint catches every case of its fixture, and lets its harmless lines pass"
 else
-    fail "the lint misses cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
+    fail "the lint misses or wrongly flags cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
 fi
 
 if ((FAILED)); then

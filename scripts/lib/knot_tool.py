@@ -492,10 +492,10 @@ REQUIRED_REASON = {
     "NSPrivacyAccessedAPICategoryFileTimestamp":
         r"\bcreationDate\b|\bmodificationDate\b|contentModificationDate|attributesOfItem|\bfileModificationDate\b"
         r"|\b(?:creation|contentModification|attributeModification|contentAccess)DateKey\b"
-        r"|\bgetattrlist\(|(?<![\w.])[fl]?stat\(",
+        r"|\bf?getattrlist(?:bulk|at)?\(|(?<![\w.])[fl]?stat(?:at)?\(",
     "NSPrivacyAccessedAPICategorySystemBootTime": r"\bsystemUptime\b|\bmach_absolute_time\(",
     "NSPrivacyAccessedAPICategoryDiskSpace":
-        r"volumeAvailableCapacity|volumeTotalCapacity|systemFreeSize|\bsystemSize\b|\bstatv?fs\(",
+        r"volumeAvailableCapacity|volumeTotalCapacity|systemFreeSize|\bsystemSize\b|\bf?statv?fs\(",
     "NSPrivacyAccessedAPICategoryActiveKeyboards": r"\bactiveInputModes\b",
 }
 
@@ -514,13 +514,14 @@ MANIFESTS = {
 
 
 def code_lines(path):
-    """The statements of a Swift file, with comments blanked, as (first line number, text). A
-    call that runs over several lines is joined into one statement, by its parentheses."""
+    """The statements of a Swift file, as (first line number, code, raw text). The code has its
+    comments blanked; the raw text keeps them, for the `knot-lint: allow` marker. A call that
+    runs over several lines is joined into one statement, by its parentheses."""
     with open(path, encoding="utf-8") as f:
-        text = f.read()
-    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
-    start, parts, depth = None, [], 0
-    for number, line in enumerate(text.splitlines(), 1):
+        raw_text = f.read()
+    text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), raw_text, flags=re.S)
+    start, parts, raws, depth = None, [], [], 0
+    for number, (line, raw) in enumerate(zip(text.splitlines(), raw_text.splitlines()), 1):
         if line.strip().startswith("//"):
             line = ""
         line = re.sub(r"\s//.*$", "", line)
@@ -529,18 +530,32 @@ def code_lines(path):
                 continue
             start = number
         parts.append(line.strip())
+        raws.append(raw.strip())
         depth += line.count("(") - line.count(")")
         if depth <= 0:
-            yield start, " ".join(parts)
-            start, parts, depth = None, [], 0
+            yield start, " ".join(parts), " ".join(raws)
+            start, parts, raws, depth = None, [], [], 0
     if start is not None:
-        yield start, " ".join(parts)
+        yield start, " ".join(parts), " ".join(raws)
 
 
 LOG_CALL = re.compile(r"\.\s*(?:debug|info|notice|error|fault|warning|trace|critical|log)\s*\(\s*(?:level:[^,]*,\s*)?\"")
-# A value that `privacy: .public` may show: an ID, a count, a code, a duration or a state.
-PUBLIC_VALUE = re.compile(r"(?i)(?:id|ids|count|code|codes|duration|seconds|milliseconds|kind|state|status|version"
-                          r"|build|step|attempts?|deaths|index|number|bytes|size|reason|rawValue)$")
+# A value that `privacy: .public` may show: an ID, a count, a code, a duration or a state,
+# judged by its name. One component of the expression must be such a name, as in
+# `captureID`, `note.id` or `elapsed`, and every component after it must only format it, as
+# `uuidString` or `formatted()` do. The lint cannot know what a value holds.
+PUBLIC_VALUE = re.compile(r"(?i)^(?:\w*(?:id|ids)|count|code|codes|\w*duration|elapsed|latency|interval|seconds"
+                          r"|milliseconds|kind|state|status|version|build|step|attempts?|deaths|index|number|bytes|size"
+                          r"|reason|rawValue)$|^\w+(?:ID|Id|IDs|Count|Code|Duration|Kind|State|Status|Reason)$")
+FORMATTING = re.compile(r"^(?:uuidString|description|rawValue|formatted|count|components|seconds|milliseconds)$")
+
+
+def public_value_allowed(value):
+    parts = [re.sub(r"\(.*$", "", part) for part in re.split(r"\.(?![^()]*\))", value.strip())]
+    for index, part in enumerate(parts):
+        if PUBLIC_VALUE.search(part) and all(FORMATTING.search(after) for after in parts[index + 1:]):
+            return True
+    return False
 
 
 def interpolations(text):
@@ -571,8 +586,7 @@ def log_problems(statement):
                 found.append(f"the logged value \\({expression.strip()}) states no privacy")
             elif re.search(r"privacy:\s*\.public\b", expression):
                 value = expression.split(",")[0].strip()
-                last = re.split(r"[.\s]", value)[-1]
-                if not PUBLIC_VALUE.search(last):
+                if not public_value_allowed(value):
                     found.append(f"\\({value}) is shown as public, and its name is not an ID, a count or a code")
     return found
 
@@ -629,10 +643,11 @@ def cmd_lint(only=None, as_prefix=None):
     used = {}
     for path in files:
         place = (as_prefix + os.path.basename(path)) if as_prefix else path
-        library = place.startswith("Packages/KnotKit/Sources/") and not place.startswith(LIBRARY_EXEMPT)
-        for number, line in code_lines(path):
-            allowed = re.findall(r"knot-lint: allow ([\w-]+)", line)
-            if re.search(r"UserDefaults\s*\.\s*standard|UserDefaults\(\)|:\s*UserDefaults\s*=\s*\.standard\b", line):
+        for number, line, raw in code_lines(path):
+            # The marker sits in a comment, so it is read from the raw line.
+            allowed = re.findall(r"knot-lint: allow ([\w-]+)", raw)
+            if re.search(r"UserDefaults\s*\.\s*standard|UserDefaults\(\)"
+                         r"|(?::\s*UserDefaults\??\s*=|\bstore:|defaultAppStorage\()\s*\.standard\b", line):
                 problem(path, number, "standard-defaults", "v1 keeps its settings in a named defaults suite")
             if "@AppStorage(" in line and "store:" not in line:
                 problem(path, number, "app-storage", "@AppStorage needs a named store")
@@ -647,8 +662,9 @@ def cmd_lint(only=None, as_prefix=None):
             if "logged-text" not in allowed:
                 for why in log_problems(line):
                     problem(path, number, "logged-text", why)
-                if library and re.search(r"(?<![\w.])(?:print|debugPrint)\(", line):
-                    problem(path, number, "logged-text", "a library logs through Logger, never print")
+                if not place.startswith(LIBRARY_EXEMPT) and \
+                        re.search(r"(?<![\w.])(?:print|debugPrint|dump)\(|\bSwift\.(?:print|debugPrint|dump)\(", line):
+                    problem(path, number, "logged-text", "an app or a library logs through Logger, never print or dump")
             for escape in ("@unchecked Sendable", "nonisolated(unsafe)", "@preconcurrency"):
                 escapes[(path, escape)] = escapes.get((path, escape), 0) + line.count(escape)
             for category, pattern in REQUIRED_REASON.items():

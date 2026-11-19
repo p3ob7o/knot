@@ -116,15 +116,15 @@ The build products, the logs and the status line go to the tree's own `.build/`.
 
 **What the lint catches, and what it does not.** A pass of the lint is not proof that Knot logs no note text and reaches no host. It reads the Swift sources line by line, joining a call that runs over several lines, and it catches:
 
-- a log call, on any receiver, with an interpolated value that states no `privacy:`, checked for each value; `os_log` and `NSLog`; `print` in a library;
-- `privacy: .public` on a value whose name is not an ID, a count, a code, a duration or a state;
-- `UserDefaults.standard`, `UserDefaults()` and a `UserDefaults` typed as `.standard`; `@AppStorage` without a store; an autosave name without `v1.`;
+- a log call, on any receiver, with an interpolated value that states no `privacy:`, checked for each value; `os_log` and `NSLog`; `print`, `debugPrint` and `dump`, `Swift.print` among them, anywhere but the command-line executables;
+- `privacy: .public` on a value that is not named as an ID, a count, a code, a duration or a state. The lint knows an ID by its name: one component of the expression must be such a name, as in `captureID`, `note.id` or `elapsed`, and every component after it must only format it, as `uuidString`, `description` or `formatted()` do. So `\(note.id.uuidString, privacy: .public)` and `\(elapsed.formatted(), privacy: .public)` pass, and `\(note.text, privacy: .public)` does not;
+- `UserDefaults.standard`, `UserDefaults()`, a `UserDefaults` or `UserDefaults?` set to `.standard`, `@AppStorage(…, store: .standard)` and `.defaultAppStorage(.standard)`; `@AppStorage` without a store; an autosave name without `v1.`;
 - `URLSession`, `URLRequest`, the `NW` connection, listener, browser and endpoint types, `CFStream`, `CFSocket` and any `http://` or `https://` in code;
 - `eraseDatabaseOnSchemaChange`; a concurrency escape beyond `scripts/concurrency-escapes.txt`;
-- a required-reason API, among them the file-timestamp resource keys, `stat`, `fstat` and `lstat`, without its reason in the manifest of each target that links it;
+- a required-reason API, among them the file-timestamp resource keys, `stat`, `fstat`, `lstat`, `fstatat`, the `getattrlist` family and the `statfs` family, without its reason in the manifest of each target that links it;
 - a file or folder whose name ends in " 2".
 
-It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. `knot-lint: allow network` or `knot-lint: allow logged-text` on a line lets that line pass, and the review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule, and the self-test fails when the lint misses one.
+It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. A comment `knot-lint: allow network` or `knot-lint: allow logged-text` on a line, followed by the reason, lets that line pass, as for a sink that logs a finished line as public by design. The review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule and three lines that must pass, and the self-test fails when the lint misses a case or flags one of those lines.
 
 ## The other scripts
 
