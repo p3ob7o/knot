@@ -236,15 +236,14 @@ public enum AppendRule {
     }
 
     /// Rules 10, 11 and 14: if the most recent note is deleted, or has no segment left, a new
-    /// note starts. A late capture never joins a deleted note.
+    /// note starts. A capture never joins a deleted note, live or late.
     public static let latestNoteDeleted = Step(name: "latest-note-deleted") { request, context in
         if mostRecentNote(for: request, in: context)?.noteCountsAsDeleted == true {
             return .newNote(.latestNoteDeleted)
         }
-        // Rule 10: a late capture never joins a deleted note, whichever capture chose it.
-        if request.arrival == .late, latest(for: request, in: context)?.noteCountsAsDeleted == true {
-            return .newNote(.latestNoteDeleted)
-        }
+        // A capture never joins a deleted note, live or late (rules 10 and 14): when the
+        // capture the window looks at sits in one, a new note starts, with no looking further back.
+        if latest(for: request, in: context)?.noteCountsAsDeleted == true { return .newNote(.latestNoteDeleted) }
         return nil
     }
 

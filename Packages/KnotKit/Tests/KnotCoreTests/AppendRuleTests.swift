@@ -249,6 +249,15 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
             request("09:05"),
             [prior(1, noteA, "09:00", "09:01"), prior(2, noteB, "09:02", "09:03", deleted: true, noteEmpty: true)],
             .newNote(.latestNoteDeleted)),
+        // The orchestrator's ruling after pull request 27: a capture never joins a deleted
+        // note, live or late, and Knot does not look further back.
+        AppendRow(
+            "rule 14: the capture the window looks at sits in a deleted note: a new note", request("10:00"),
+            [
+                prior(1, noteA, "09:50", "09:50"), prior(2, noteA, "09:59", "09:59", deleted: true),
+                prior(3, noteB, "09:57", "09:57", noteDeleted: "09:58"),
+            ],
+            .newNote(.latestNoteDeleted)),
         AppendRow(
             "rule 14: a deleted capture in a note that keeps a live segment elsewhere", request("09:05"),
             [prior(1, noteA, "09:00", "09:01"), prior(2, noteB, "09:02", "09:03", deleted: true)],
