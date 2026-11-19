@@ -1,0 +1,12 @@
+import KnotCore
+
+/// The live entry point of KnotSync. It provides `SyncEngine` and `AssetFetcher`.
+///
+/// Until the package that owns KnotSync fills it in, it returns the environment it is given,
+/// whose ports from this module are still the unavailable ones. KnotApp calls it when it
+/// builds `.live`, so that package wires itself in without editing `Sources/KnotApp/`.
+public enum KnotSyncLive {
+    public static func wire(_ environment: AppEnvironment) -> AppEnvironment {
+        environment
+    }
+}

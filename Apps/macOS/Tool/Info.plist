@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>KnotAppGroup</key>
+	<string>$(KNOT_MAC_APP_GROUP)</string>
+	<key>KnotCloudContainer</key>
+	<string>$(KNOT_CLOUD_CONTAINER)</string>
+	<key>KnotDevStoreFolder</key>
+	<string>$(KNOT_WORKTREE)</string>
+	<key>KnotFlavour</key>
+	<string>$(KNOT_FLAVOUR)</string>
+	<key>KnotMilestoneLevel</key>
+	<string>$(KNOT_MILESTONE_LEVEL)</string>
+	<key>KnotSyncAvailable</key>
+	<string>$(KNOT_SYNC_AVAILABLE)</string>
+	<key>KnotWorktree</key>
+	<string>$(KNOT_WORKTREE)</string>
+</dict>
+</plist>

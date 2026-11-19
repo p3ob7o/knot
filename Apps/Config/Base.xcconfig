@@ -1,0 +1,59 @@
+// The settings every target shares. project.yml sets this file for both configurations.
+
+// The flavour. Every build is `dev` unless it is a milestone build, which passes
+// KNOT_FLAVOUR=milestone and KNOT_MILESTONE_LEVEL=M1 … M7 on the command line and signs
+// with the owner's team. A feature whose milestone has not passed is switched off by a
+// gate that reads KnotMilestoneLevel from the Info.plist: sync and the command line open
+// at M4, ink at M5. WP-22 builds the test that lists the gates for each level.
+KNOT_FLAVOUR = dev
+KNOT_MILESTONE_LEVEL = none
+
+// Signing. `local` is the configuration for tests and agent builds: it keeps the sandbox
+// and leaves out the entitlements that need the owner's signing profile (app group,
+// iCloud, push), with sync off. `team` signs with DEVELOPMENT_TEAM from Local.xcconfig.
+KNOT_SIGNING = local
+
+// Written by scripts/bootstrap.sh. The Mac development store sits in a folder named for
+// the worktree, which only debug builds honour (docs/architecture.md §7).
+KNOT_WORKTREE = unknown
+
+#include "Identifiers.xcconfig"
+#include? "../../.build/config/Worktree.xcconfig"
+// scripts/bootstrap.sh links this from the file that KNOT_LOCAL_CONFIG names, in the build
+// folder outside every worktree. It may set KNOT_SIGNING = team and DEVELOPMENT_TEAM. A
+// team ID never enters the repository.
+#include? "../../.build/config/Local.xcconfig"
+
+KNOT_CODE_SIGN_STYLE_local = Manual
+KNOT_CODE_SIGN_STYLE_team = Automatic
+KNOT_CODE_SIGN_IDENTITY_local = -
+KNOT_CODE_SIGN_IDENTITY_team = Apple Development
+KNOT_SYNC_AVAILABLE_local = NO
+KNOT_SYNC_AVAILABLE_team = YES
+
+CODE_SIGN_STYLE = $(KNOT_CODE_SIGN_STYLE_$(KNOT_SIGNING))
+CODE_SIGN_IDENTITY = $(KNOT_CODE_SIGN_IDENTITY_$(KNOT_SIGNING))
+KNOT_SYNC_AVAILABLE = $(KNOT_SYNC_AVAILABLE_$(KNOT_SIGNING))
+
+MARKETING_VERSION = $(KNOT_MARKETING_VERSION)
+CURRENT_PROJECT_VERSION = $(KNOT_BUILD_NUMBER)
+
+// The availability rule: the deployment target is 27.0. An API that first shipped in
+// 27.1 or later is guarded, or the stated minimum rises. Code must compile with the
+// release Xcode that .xcode-version pins.
+IPHONEOS_DEPLOYMENT_TARGET = 27.0
+MACOSX_DEPLOYMENT_TARGET = 27.0
+WATCHOS_DEPLOYMENT_TARGET = 27.0
+
+// Swift 6, strict concurrency complete, warnings are errors.
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+ENABLE_HARDENED_RUNTIME = YES
+DEAD_CODE_STRIPPING = YES
+GENERATE_INFOPLIST_FILE = YES
+LOCALIZATION_PREFERS_STRING_CATALOGS = YES
+SWIFT_EMIT_LOC_STRINGS = YES
