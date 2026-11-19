@@ -24,7 +24,7 @@ import Testing
         // The layer drops what was not synced: a plain write, and a synced file whose name
         // the folder never synced.
         let plain = PowerCutFileLayer()
-        try plain.createFolder(folder)
+        try DurableFile(layer: plain).makeFolder(folder)
         try plain.write(new, to: target)
         plain.cutPower()
         #expect(!plain.exists(target))
@@ -64,6 +64,83 @@ import Testing
             // What a crash left beside the target is cleared at relaunch.
             try DurableFile(layer: layer).removePartials(in: folder)
             #expect(try layer.contents(of: folder) == ["capture.json"])
+        }
+
+        // A folder's name is an entry in its parent: a folder made from nothing survives
+        // only when every new level's parent was synced.
+        let bare = PowerCutFileLayer()
+        let bareFolder = URL(fileURLWithPath: "/store/KnotStore/Assets/ab", isDirectory: true)
+        try DurableFile(layer: bare).makeFolder(bareFolder)
+        try DurableFile(layer: bare).place(new, at: bareFolder.appending(path: "x.m4a"))
+        bare.cutPower()
+        #expect(try bare.read(bareFolder.appending(path: "x.m4a")) == new)
+
+        // And the test notices a DurableFile that forgets any one of its syncs: with each
+        // sync of each operation forgotten in turn, what the operation promised is lost.
+        for scenario in Scenario.allCases {
+            let clean = try run(scenario, forgetting: nil)
+            #expect(clean.survived, "\(scenario) loses what it promised.")
+            #expect(clean.syncs > 0)
+            for index in 0..<clean.syncs {
+                #expect(
+                    try !run(scenario, forgetting: index).survived,
+                    "\(scenario): forgetting sync \(index) of \(clean.syncs) goes unnoticed.")
+            }
+        }
+    }
+
+    /// The durable operations, each from a disk that holds only what it needs.
+    enum Scenario: CaseIterable {
+        /// Folders made from nothing down to `Assets/ab`, then a file placed there.
+        case placeIntoNewFolders
+        /// A received file, written but not synced, moved into `Inbox/`.
+        case moveReceivedFile
+        case remove
+    }
+
+    /// Runs a scenario with sync number `forgetting` forgotten, cuts the power, and says how
+    /// many syncs it made and whether what it promised survived.
+    func run(_ scenario: Scenario, forgetting index: Int?) throws -> (syncs: Int, survived: Bool) {
+        let layer: PowerCutFileLayer
+        let durable: DurableFile
+        let before: Int
+        switch scenario {
+        case .placeIntoNewFolders:
+            layer = PowerCutFileLayer()
+            durable = DurableFile(layer: layer)
+            let assets = URL(fileURLWithPath: "/store/KnotStore/Assets/ab", isDirectory: true)
+            before = layer.syncCount
+            if let index { layer.forgetSync(index) }
+            try durable.makeFolder(assets)
+            try durable.place(new, at: assets.appending(path: "x.m4a"))
+            let syncs = layer.syncCount - before
+            layer.cutPower()
+            return (syncs, (try? layer.read(assets.appending(path: "x.m4a"))) == new)
+        case .moveReceivedFile:
+            layer = PowerCutFileLayer()
+            durable = DurableFile(layer: layer)
+            let received = URL(fileURLWithPath: "/store/Received", isDirectory: true)
+            let source = received.appending(path: "file.m4a")
+            let destination = folder.appending(path: "file.m4a")
+            try durable.makeFolder(received)
+            try durable.makeFolder(folder)
+            try layer.write(new, to: source)
+            try layer.syncFolder(received)
+            before = layer.syncCount
+            if let index { layer.forgetSync(index) }
+            try durable.move(source, to: destination)
+            let syncs = layer.syncCount - before
+            layer.cutPower()
+            return (syncs, (try? layer.read(destination)) == new && !layer.exists(source))
+        case .remove:
+            layer = try layerWithOldFile()
+            durable = DurableFile(layer: layer)
+            before = layer.syncCount
+            if let index { layer.forgetSync(index) }
+            try durable.remove(target)
+            let syncs = layer.syncCount - before
+            layer.cutPower()
+            return (syncs, !layer.exists(target))
         }
     }
 

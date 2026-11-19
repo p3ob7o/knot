@@ -6,8 +6,9 @@ import Synchronization
 /// unsynced part when a test cuts the power (docs/architecture.md §6, rule 7).
 ///
 /// It models what a drive promises. A file's content survives a power cut only once the file
-/// was synced. A file's name in its folder, made by a write, a rename or a removal, survives
-/// only once the folder was synced. Folders themselves are taken as durable once made. The
+/// was synced. A name in a folder, made by a write, a rename, a removal or the creation of a
+/// folder, survives only once that folder was synced, so a folder whose parent was never
+/// synced is lost with everything in it. Only the root, `/`, is there from the start. The
 /// store's and the recorder's tests use it too, to show that recovery holds whatever a power
 /// cut drops.
 public final class PowerCutFileLayer: FileLayer {
@@ -16,16 +17,23 @@ public final class PowerCutFileLayer: FileLayer {
         var synced: Data
     }
 
+    private enum Entry: Equatable {
+        case file(Int)
+        case folder
+    }
+
     private struct Folder {
-        var current: [String: Int] = [:]
-        var synced: [String: Int] = [:]
+        var current: [String: Entry] = [:]
+        var synced: [String: Entry] = [:]
     }
 
     private struct State {
         var files: [Int: File] = [:]
-        var folders: [String: Folder] = [:]
+        var folders: [String: Folder] = ["/": Folder()]
         var nextFile = 0
         var operations = 0
+        var syncs = 0
+        var forgotten: Set<Int> = []
         var dieAfter: Int?
         var failNextWrite: KnotError?
     }
@@ -36,6 +44,9 @@ public final class PowerCutFileLayer: FileLayer {
 
     /// How many operations ran, which a test uses to cut the power after each one in turn.
     public var operationCount: Int { state.withLock { $0.operations } }
+
+    /// How many syncs of files and folders ran.
+    public var syncCount: Int { state.withLock { $0.syncs } }
 
     /// From now on, every operation after `count` more fails, as if the process had died
     /// there. Call `cutPower()` afterwards to drop what was not synced.
@@ -48,29 +59,54 @@ public final class PowerCutFileLayer: FileLayer {
         state.withLock { $0.failNextWrite = error }
     }
 
-    /// Cuts the power: every folder entry and every file content that was not synced is lost.
+    /// Makes sync number `index` from now, counting from 0, return without syncing, as code
+    /// that forgot it would. A test uses it to show that it notices every missing sync.
+    public func forgetSync(_ index: Int) {
+        state.withLock { _ = $0.forgotten.insert($0.syncs + index) }
+    }
+
+    /// Cuts the power: every name and every file content that was not synced is lost.
     /// Afterwards the layer works again, as after a restart.
     public func cutPower() {
         state.withLock { state in
-            for path in state.folders.keys {
-                state.folders[path]!.current = state.folders[path]!.synced
+            var survivors: [String: Folder] = [:]
+            var pending = ["/"]
+            while let path = pending.popLast() {
+                guard var folder = state.folders[path] else { continue }
+                folder.current = folder.synced
+                survivors[path] = folder
+                for (name, entry) in folder.synced where entry == .folder {
+                    pending.append(path == "/" ? "/" + name : path + "/" + name)
+                }
             }
-            let reachable = Set(state.folders.values.flatMap { $0.current.values })
+            state.folders = survivors
+            let reachable = Set(
+                survivors.values.flatMap { folder in
+                    folder.current.values.compactMap { entry -> Int? in
+                        if case .file(let id) = entry { return id }
+                        return nil
+                    }
+                })
             state.files = state.files.filter { reachable.contains($0.key) }
             for id in state.files.keys {
                 state.files[id]!.current = state.files[id]!.synced
             }
             state.dieAfter = nil
             state.failNextWrite = nil
+            state.forgotten = []
         }
     }
 
+    /// Creates one folder, whose parent must exist. A folder that is already there is kept.
     public func createFolder(_ url: URL) throws(KnotError) {
-        try run { state in
-            var path = ""
-            for component in Self.components(url) {
-                path += "/" + component
-                if state.folders[path] == nil { state.folders[path] = Folder() }
+        try run { state throws(KnotError) in
+            let (parent, name) = try Self.locate(url, in: state)
+            switch state.folders[parent]!.current[name] {
+            case .folder: return
+            case .file: throw KnotError.writeFailed.with(.init(posixError: EEXIST))
+            case nil:
+                state.folders[parent]!.current[name] = .folder
+                state.folders[Self.path(url)] = Folder()
             }
         }
     }
@@ -82,13 +118,16 @@ public final class PowerCutFileLayer: FileLayer {
                 throw error
             }
             let (folder, name) = try Self.locate(url, in: state)
-            if let id = state.folders[folder]!.current[name] {
+            switch state.folders[folder]!.current[name] {
+            case .file(let id):
                 state.files[id]!.current = data
-            } else {
+            case .folder:
+                throw KnotError.writeFailed.with(.init(posixError: EISDIR))
+            case nil:
                 let id = state.nextFile
                 state.nextFile += 1
                 state.files[id] = File(current: data, synced: Data())
-                state.folders[folder]!.current[name] = id
+                state.folders[folder]!.current[name] = .file(id)
             }
         }
     }
@@ -96,6 +135,7 @@ public final class PowerCutFileLayer: FileLayer {
     public func syncFile(_ url: URL) throws(KnotError) {
         try run { state throws(KnotError) in
             let id = try Self.file(url, in: state)
+            if Self.forgets(&state) { return }
             state.files[id]!.synced = state.files[id]!.current
         }
     }
@@ -106,7 +146,7 @@ public final class PowerCutFileLayer: FileLayer {
             let (from, name) = try Self.locate(source, in: state)
             let (to, newName) = try Self.locate(destination, in: state)
             state.folders[from]!.current[name] = nil
-            state.folders[to]!.current[newName] = id
+            state.folders[to]!.current[newName] = .file(id)
         }
     }
 
@@ -114,6 +154,7 @@ public final class PowerCutFileLayer: FileLayer {
         try run { state throws(KnotError) in
             let path = Self.path(url)
             guard state.folders[path] != nil else { throw KnotError.writeFailed.with(.init(posixError: ENOENT)) }
+            if Self.forgets(&state) { return }
             state.folders[path]!.synced = state.folders[path]!.current
         }
     }
@@ -121,6 +162,9 @@ public final class PowerCutFileLayer: FileLayer {
     public func remove(_ url: URL) throws(KnotError) {
         try run { state throws(KnotError) in
             let (folder, name) = try Self.locate(url, in: state)
+            guard state.folders[folder]!.current[name] != .folder else {
+                throw KnotError.writeFailed.with(.init(posixError: EISDIR))
+            }
             state.folders[folder]!.current[name] = nil
         }
     }
@@ -145,11 +189,7 @@ public final class PowerCutFileLayer: FileLayer {
             guard let entries = state.folders[Self.path(folder)]?.current else {
                 throw KnotError.writeFailed.with(.init(posixError: ENOENT))
             }
-            let subfolders = state.folders.keys.compactMap { path -> String? in
-                let parent = (path as NSString).deletingLastPathComponent
-                return parent == Self.path(folder) ? (path as NSString).lastPathComponent : nil
-            }
-            return (Array(entries.keys) + subfolders).sorted()
+            return entries.keys.sorted()
         }
     }
 
@@ -161,6 +201,13 @@ public final class PowerCutFileLayer: FileLayer {
             state.operations += 1
             try body(&state)
         }
+    }
+
+    /// Counts a sync, and says whether it is one to forget.
+    private static func forgets(_ state: inout State) -> Bool {
+        let index = state.syncs
+        state.syncs += 1
+        return state.forgotten.contains(index)
     }
 
     private static func components(_ url: URL) -> [String] {
@@ -179,7 +226,7 @@ public final class PowerCutFileLayer: FileLayer {
 
     private static func file(_ url: URL, in state: State) throws(KnotError) -> Int {
         let (folder, name) = try locate(url, in: state)
-        guard let id = state.folders[folder]!.current[name] else {
+        guard case .file(let id) = state.folders[folder]!.current[name] else {
             throw KnotError.writeFailed.with(.init(posixError: ENOENT))
         }
         return id

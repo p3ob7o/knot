@@ -6,7 +6,7 @@ import Foundation
 /// synced apart from what was not, and drops the unsynced writes when a test simulates a
 /// power cut (docs/architecture.md §6, rule 7). Every operation fails with `KnotError`.
 public protocol FileLayer: Sendable {
-    /// Creates a folder and any missing parents.
+    /// Creates one folder, whose parent must exist. A folder already there is not an error.
     func createFolder(_ url: URL) throws(KnotError)
     /// Writes a whole file, replacing any file at that path. Nothing is synced.
     func write(_ data: Data, to url: URL) throws(KnotError)
@@ -76,10 +76,22 @@ public struct DurableFile: Sendable {
         try layer.syncFolder(url.deletingLastPathComponent())
     }
 
-    /// Creates a folder and syncs its parent, so the folder stays.
+    /// Creates a folder and every missing folder above it, one level at a time, syncing each
+    /// new folder's parent before going down, so that no folder's name rests on a parent
+    /// that was never synced. A folder that is already there is left as it is.
     public func makeFolder(_ url: URL) throws(KnotError) {
-        try layer.createFolder(url)
-        try layer.syncFolder(url.deletingLastPathComponent())
+        var missing: [URL] = []
+        var folder = url.standardizedFileURL
+        while !layer.exists(folder) {
+            missing.append(folder)
+            let parent = folder.deletingLastPathComponent()
+            if parent.path == folder.path { break }
+            folder = parent
+        }
+        for folder in missing.reversed() {
+            try layer.createFolder(folder)
+            try layer.syncFolder(folder.deletingLastPathComponent())
+        }
     }
 
     /// Removes what a crash left of files being placed in `folder`.

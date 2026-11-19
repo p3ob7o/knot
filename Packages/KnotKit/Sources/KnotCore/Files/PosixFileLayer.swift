@@ -14,11 +14,8 @@ public struct PosixFileLayer: FileLayer {
     public init() {}
 
     public func createFolder(_ url: URL) throws(KnotError) {
-        do {
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        } catch {
-            throw Self.error(for: error)
-        }
+        let result = url.withUnsafeFileSystemRepresentation { mkdir($0!, 0o755) }
+        guard result == 0 || errno == EEXIST else { throw Self.error(errno: errno) }
     }
 
     public func write(_ data: Data, to url: URL) throws(KnotError) {
