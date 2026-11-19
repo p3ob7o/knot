@@ -13,6 +13,7 @@ WP-00	docs/product-spec.md	PLAN.md §8.5
 WP-00	docs/architecture.md	PLAN.md §8.5
 WP-00	scripts/	PLAN.md §8.5: after WP-01 merges
 WP-00	docs/checklists/	PLAN.md §8.5: after WP-04 merges
+WP-00	Fixtures/	PLAN.md §8.5: after WP-04 merges, outside the results folders of WP-13 and WP-14
 WP-00	docs/status.md	PLAN.md §8.7: written at milestones
 WP-13	Packages/KnotKit/Sources/knot-eval/Speech*.swift	pull request 19: each command of knot-eval in files of its own
 WP-13	Packages/KnotKit/Tests/knot-evalTests/Speech*.swift	pull request 19
