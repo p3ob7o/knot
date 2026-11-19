@@ -58,8 +58,9 @@ public enum SettledRule {
     }
 }
 
-/// The six states a person sees on a segment (docs/product-spec.md §5). The app, the
-/// command line and the agent all use these names.
+/// The six states a person sees on a segment (docs/product-spec.md §5), and a seventh beside
+/// them for a segment made by a newer Knot (docs/architecture.md §4). The app, the command
+/// line and the agent all use these names.
 public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
     case savedOnWatch = "saved_on_watch"
     case savedTextOnItsWay = "saved_text_on_its_way"
@@ -67,6 +68,9 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
     case ready
     case needsYou = "needs_you"
     case keptNoText = "kept_no_text"
+    /// A kind, an origin or a state this build does not know: the segment is kept, says so,
+    /// and asks for an update (docs/product-spec.md §7).
+    case madeByNewerKnot = "made_by_newer_knot"
 
     /// The name a person reads.
     public var name: String {
@@ -77,11 +81,13 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
         case .ready: "Ready"
         case .needsYou: "Needs you"
         case .keptNoText: "Kept, no text"
+        case .madeByNewerKnot: "Made by a newer Knot"
         }
     }
 
     /// The state a person sees for a segment on the device `thisDevice`, or `nil` for a
-    /// segment the stream does not show: a discarded capture, or a state a newer Knot made.
+    /// discarded capture, which the stream does not show. A segment whose kind, origin, text
+    /// origin or state this build does not know is made by a newer Knot.
     ///
     /// Work on a voice segment belongs to its processing owner. Until it has text, it shows
     /// as on its way here, or as being made elsewhere when another device owns it. Once a
@@ -89,6 +95,11 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
     /// once. A recording with no words, or whose audio cannot be read, is kept with no text:
     /// a final state, not an error.
     public static func of(_ segment: Segment, thisDevice: DeviceID) -> VisibleState? {
+        if segment.kind.isUnknown || segment.origin.isUnknown || segment.textOrigin.isUnknown
+            || segment.state.isUnknown
+        {
+            return .madeByNewerKnot
+        }
         switch segment.state {
         case .typed(.draft), .typed(.ready): return .ready
         case .typed(.discarded): return nil
@@ -116,7 +127,7 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
             case .discarded: return nil
             }
         case .unknown:
-            return nil
+            return .madeByNewerKnot
         }
     }
 }

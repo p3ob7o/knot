@@ -224,7 +224,7 @@ private let noteA: NoteID = id(201)
         Row(state: .ink(.recognising), owner: nil, text: "", expected: .savedTextOnItsWay),
         Row(state: .ink(.ready), owner: nil, text: "", expected: .ready),
         Row(state: .ink(.failed(KnotError.recognitionFailed.code)), owner: nil, text: "", expected: .needsYou),
-        Row(state: .unknown("photo.developing"), owner: nil, text: "", expected: nil),
+        Row(state: .unknown("photo.developing"), owner: nil, text: "", expected: .madeByNewerKnot),
     ]
 
     @Test(arguments: rows) func theSixStatesAPersonSees(row: Row) {
@@ -240,7 +240,7 @@ private let noteA: NoteID = id(201)
             VisibleState.allCases.map(\.name) == [
                 "Saved on the Watch", "Saved, text on its way", "Saved, text being made elsewhere", "Ready",
                 "Needs you",
-                "Kept, no text",
+                "Kept, no text", "Made by a newer Knot",
             ])
     }
 }
@@ -280,5 +280,25 @@ private let noteA: NoteID = id(201)
     ])
     func wordsFollowUnicodeWordBoundaries(title: String, note: [String], fits: Bool) {
         #expect(TitleRule.fits(title, noteTexts: note) == fits)
+    }
+}
+
+@Suite struct NewerKnotVisibleStateTests {
+    @Test func aSegmentThisBuildCannotReadShowsAsMadeByANewerKnot() {
+        let base = segment(1, note: id(9), kind: .voice, start: at("09:00"), end: at("09:01"))
+        var unknownState = base
+        unknownState.state = .unknown("voice.summarising")
+        var unknownKind = base
+        unknownKind.kind = .unknown("photo")
+        var unknownOrigin = base
+        unknownOrigin.origin = .unknown("car_play")
+        var unknownText = base
+        unknownText.textOrigin = .unknown("summarised")
+        for segment in [unknownState, unknownKind, unknownOrigin, unknownText] {
+            #expect(VisibleState.of(segment, thisDevice: thisDevice) == .madeByNewerKnot)
+        }
+        #expect(VisibleState.madeByNewerKnot.rawValue == "made_by_newer_knot")
+        #expect(VisibleState.madeByNewerKnot.name == "Made by a newer Knot")
+        #expect(VisibleState.allCases.contains(.madeByNewerKnot))
     }
 }
