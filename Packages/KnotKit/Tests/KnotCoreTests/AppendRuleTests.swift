@@ -594,3 +594,84 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
         #expect(note.deletedAt == nil)
     }
 }
+
+/// The eleven cases the documents' second review tried against rules 1 to 16, with their
+/// letters. The window is 5 minutes unless a row says otherwise.
+@Suite struct ReviewedCaseTests {
+    static let na: NoteID = id(501)
+    static let nb: NoteID = id(502)
+    static let nc: NoteID = id(503)
+    static let nd: NoteID = id(504)
+    static let ne: NoteID = id(505)
+    static let nf: NoteID = id(506)
+    static let n: NoteID = id(507)
+    static let m: NoteID = id(508)
+
+    static let rows: [AppendRow] = [
+        AppendRow(
+            "a: window 0, a typed capture open on the Mac, the hotkey held: the same note", request("10:00"), [],
+            open: prior(1, na, "09:59", nil), window: .off, .join(na, .openCaptureOnDevice)),
+        AppendRow(
+            "b: window 0, a late Watch capture made while a phone recording ran: its own note",
+            request("10:00", .window, .late), [prior(1, nb, "09:58", "10:20")], window: .off,
+            .newNote(.appendingOff)),
+        AppendRow(
+            "c: A in NA 09:50 to 09:59, B in NB 09:58 to 10:20, late at 10:00: NB",
+            request("10:00", .window, .late), [prior(1, na, "09:50", "09:59"), prior(2, nb, "09:58", "10:20")],
+            .join(nb, .insideWindow)),
+        AppendRow(
+            "d: as c, and NB deleted afterwards: a new note", request("10:00", .window, .late),
+            [prior(1, na, "09:50", "09:59"), prior(2, nb, "09:58", "10:20", noteDeleted: "11:00")],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "e: as c, and NB closed by New note at 09:59:30: a new note", request("10:00", .window, .late),
+            [prior(1, na, "09:50", "09:59"), prior(2, nb, "09:58", "10:20", noteClosed: "09:59:30")],
+            .newNote(.latestNoteClosed)),
+        AppendRow(
+            "f: C in NC running since 09:40, D in ND since 09:55, late at 10:00: ND",
+            request("10:00", .window, .late), [prior(1, nc, "09:40", nil), prior(2, nd, "09:55", nil)],
+            .join(nd, .insideWindow)),
+        AppendRow(
+            "g: nothing running, E ended 09:57 in NE, F ended 09:58 in a deleted NF: a new note",
+            request("10:00", .window, .late),
+            [prior(1, ne, "09:56", "09:57"), prior(2, nf, "09:57", "09:58", noteDeleted: "10:30")],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "h: A 09:00 to 09:01 in NA, B 09:02 to 09:03 the only segment of NB and deleted, live at 09:05: a new note",
+            request("09:05"),
+            [prior(1, na, "09:00", "09:01"), prior(2, nb, "09:02", "09:03", deleted: true, noteEmpty: true)],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "i: N holds n1 at 09:00 and a deleted n2 at 09:02, M holds m1 at 09:01, live at 09:03: M",
+            request("09:03"),
+            [
+                prior(1, n, "09:00", "09:00"), prior(2, n, "09:02", "09:02", deleted: true),
+                prior(3, m, "09:01", "09:01"),
+            ],
+            .join(m, .insideWindow)),
+        AppendRow(
+            "j: text from the command line on the Mac is placed by the window from what the Mac knows",
+            request("10:00", source: .cli), [prior(1, na, "09:57", "09:58")], .join(na, .insideWindow)),
+        AppendRow(
+            "k: from inside an open note whose last capture ended an hour ago", request("10:00", .named(na)),
+            [prior(1, na, "08:59", "09:00"), prior(2, nb, "09:58", "09:59")], .join(na, .namedNote)),
+    ]
+
+    @Test(arguments: rows) func reviewedCase(row: AppendRow) {
+        #expect(AppendRule.decide(row.request, in: row.context) == row.expected)
+    }
+
+    @Test func caseJTypingOnThePhoneIsRefusedWhileARecordingRuns() {
+        let recording = OpenCapture(captureID: id(1), noteID: Self.na, kind: .voice, surface: .control)
+        let typing = CaptureStart(kind: .typed, origin: CaptureOrigin(source: fromDevice, surface: .app))
+        #expect(
+            OpenCaptureRule.decide(open: recording, start: typing)
+                == .refused(KnotError.captureBlockedByRecording.about(capture: id(1))))
+    }
+
+    @Test func caseAHoldingTheHotkeyEndsTheTypedCapture() {
+        let typing = OpenCapture(captureID: id(1), noteID: Self.na, kind: .typed, surface: .macPanel)
+        let hold = CaptureStart(kind: .voice, origin: CaptureOrigin(source: fromDevice, surface: .macPanel))
+        #expect(OpenCaptureRule.decide(open: typing, start: hold) == .endOpenAndAppend(ended: id(1), note: Self.na))
+    }
+}
