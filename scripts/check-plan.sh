@@ -17,9 +17,11 @@
 # The script needs python3, which comes with Xcode.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+scripts_dir="$(cd "$(dirname "$0")" && pwd -P)"
+# It checks the plan of the tree that KNOT_TREE names, or else of its own checkout.
+cd "${KNOT_TREE:-$scripts_dir/..}"
 # Every failure is reported through scripts/lib/fail.sh, after the check's own lines.
-source scripts/lib/fail.sh
+source "$scripts_dir/lib/fail.sh"
 
 PYTHON="$(command -v python3 || true)"
 if [ -z "$PYTHON" ]; then

@@ -2,20 +2,28 @@
 # Checks the machine before a build (docs/architecture.md §18). scripts/verify.sh runs it
 # first in every run.
 #
-#   scripts/doctor.sh [--tier quick|full|gate|soak|perf] [--require-signing]
+#   scripts/doctor.sh [--tier quick|full|gate|soak|perf] [--mac-ui] [--models] [--require-signing]
 #
-# It fails at once on what no agent can change for the tier asked for, and only warns
-# about what that tier does not need.
+#   --mac-ui           the run includes the Mac UI tests, which need Automation Mode
+#   --models           the run requires the on-device models, as the gate does
+#   --require-signing  the run signs for development, as the gate's signed step does
+#
+# It fails at once on what no agent can change for the run asked for, and only warns
+# about what that run does not need.
 
 source "$(dirname "$0")/lib/common.sh"
 
 TIER=quick
 REQUIRE_SIGNING=0
+MAC_UI=0
+MODELS=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --tier) TIER=${2:-}; shift 2 ;;
         --require-signing) REQUIRE_SIGNING=1; shift ;;
-        -h | --help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --mac-ui) MAC_UI=1; shift ;;
+        --models) MODELS=1; shift ;;
+        -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) knot_fail "doctor-usage" "Unknown argument: $1" "Run scripts/doctor.sh --help." "safe" "nothing" ;;
     esac
 done
@@ -127,7 +135,7 @@ if ((automation_on && developer_on)); then
     ok automation "Automation Mode and developer mode are on"
 else
     message="Automation Mode or developer mode is off. The owner runs, once: sudo automationmodetool enable-automationmode-without-authentication && sudo DevToolsSecurity -enable"
-    if [[ $TIER == full || $TIER == gate ]]; then
+    if ((MAC_UI)); then
         bad "doctor-automation-mode" "$message" "Ask the owner to run the two commands (gate G1)." "safe" "nothing"
     else
         warn automation "$message"
@@ -158,7 +166,20 @@ else
     rm -rf "$(dirname "$probe")"
 fi
 
-# 8. Agent threads export KNOT_AGENT=1 (AGENTS.md).
+# 8. The on-device models, which the gate requires (docs/architecture.md §17): the speech
+#    model for English and the system language model.
+if ((MODELS)); then
+    models="$(knot_with_timeout 120 xcrun swift "$KNOT_SCRIPTS/lib/models.swift" 2>&1 || true)"
+    if printf '%s\n' "$models" | grep -e '^speech-english: en' >/dev/null &&
+        printf '%s\n' "$models" | grep -e '^cleanup: available' >/dev/null; then
+        ok models "$(printf '%s\n' "$models" | grep -E '^(speech-english|cleanup):' | tr '\n' ' ')"
+    else
+        bad "doctor-models" "The gate requires the on-device models, and this Mac reports: $(printf '%s' "$models" | tr '\n' ' ')" \
+            "Install the English speech model and turn on Apple Intelligence, then rerun." "safe" "nothing"
+    fi
+fi
+
+# 9. Agent threads export KNOT_AGENT=1 (AGENTS.md).
 if [[ ${KNOT_AGENT:-} == 1 ]]; then ok agent "KNOT_AGENT=1"; else warn agent "KNOT_AGENT is not set. Agent threads set it."; fi
 
 if ((FAILED)); then

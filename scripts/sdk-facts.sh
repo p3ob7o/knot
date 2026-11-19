@@ -89,12 +89,21 @@ fact("handGestureShortcut is available on watchOS 11.", "watchOS 11.0" in gestur
 long_running = attributes_before(intents_ios, r"protocol LongRunningIntent\b") or ""
 fact("LongRunningIntent exists from OS 27, with performBackgroundTask.",
      "27.0" in long_running and "func performBackgroundTask" in intents_ios, long_running.strip()[:160])
-# 7
-fact("LiveActivityIntent is available on macOS 27.3.",
-     "macOS 27.3" in (attributes_before(intents_ios, r"protocol LiveActivityIntent\b") or ""))
+# 7. The row's last sentence, that canImport(ActivityKit) is true on macOS, is compiled
+#    after this script, in the shell.
+activity_ios = text("ios", "ActivityKit")
+live = attributes_before(intents_ios, r"protocol LiveActivityIntent\b") or ""
+attributes = attributes_before(activity_ios, r"protocol ActivityAttributes\b") or ""
+fact("LiveActivityIntent and ActivityKit's ActivityAttributes are marked unavailable on macOS in the pinned SDK.",
+     "macOS, unavailable" in live and "macOS, unavailable" in attributes,
+     (live.strip() + " / " + attributes.strip())[:200])
 # 8
-fact("The notes schema offers createNote, updateNote and appendText.",
-     all(re.search(rf"var {n}: some AppIntents::AppSchemaIntent", intents_ios) for n in ["createNote", "updateNote", "appendText"]))
+schema = intents_ios.splitlines()
+notes = next((i for i, line in enumerate(schema) if re.search(r"var createNote: some AppIntents::AppSchemaIntent", line)), None)
+notes_attributes = " ".join(schema[max(0, notes - 6):notes]) if notes is not None else ""
+fact("The notes schema offers createNote, updateNote and appendText. It is unavailable on watchOS.",
+     all(re.search(rf"var {n}: some AppIntents::AppSchemaIntent", intents_ios) for n in ["createNote", "updateNote", "appendText"])
+     and "watchOS, unavailable" in notes_attributes, notes_attributes.strip()[:200])
 # 9
 pencil = {p: text(p, "PencilKit") for p in ["ios", "macos"]}
 fact("PKStrokeRecognizer exists on iOS and macOS, with an async search.",
@@ -121,10 +130,23 @@ body = re.search(r"public struct FetchedRecordZoneChanges : [^{]*\{(.*?)\n  \}",
 fact("CKSyncEngine.Event.FetchedRecordZoneChanges has no public initialiser.",
      body is not None and "public init" not in body.group(1))
 
-print("sdk-facts: every row holds" if failures == 0 else f"sdk-facts: {failures} rows do not hold")
 sys.exit(1 if failures else 0)
 PY
 
+# Check 7, its last sentence: compiled for macOS against the pinned SDK.
+probe="$(mktemp -d)"
+printf '#if canImport(ActivityKit)\nlet found = true\n#else\nlet found = false\n#endif\nprint(found)\n' >"$probe/probe.swift"
+if xcrun --sdk macosx swiftc -target "$(uname -m)-apple-macos27.0" "$probe/probe.swift" -o "$probe/probe" >/dev/null 2>&1 &&
+    [[ "$("$probe/probe")" == true ]]; then
+    echo "ok    canImport(ActivityKit) is true on macOS."
+else
+    echo "FAIL  canImport(ActivityKit) is true on macOS."
+    ((status == 0)) && status=1
+fi
+
+if ((status == 0)); then
+    echo "sdk-facts: every row holds"
+fi
 if ((status == 1)); then
     knot_fail "sdk-facts" "Rows of docs/architecture.md §20 marked SDK do not hold in $(knot_xcode_label)." \
         "The SDK wins: say so in the PR, with each row that failed, and ask the orchestrator to update §20." "safe" "nothing"
