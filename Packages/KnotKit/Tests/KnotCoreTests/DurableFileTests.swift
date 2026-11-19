@@ -1,7 +1,9 @@
 import Foundation
-import KnotCore
 import KnotTestSupport
+import Synchronization
 import Testing
+
+@testable import KnotCore
 
 @Suite struct DurableFileTests {
     let folder = URL(fileURLWithPath: "/store/Inbox", isDirectory: true)
@@ -128,5 +130,92 @@ import Testing
             #expect(error.code == KnotError.writeFailed.code)
             #expect(error.context.posixError == ENOENT)
         }
+    }
+}
+
+/// How the live layer flushes: F_FULLFSYNC, and fsync only where the file system does not
+/// support it.
+@Suite struct PosixFlushTests {
+    /// Scripted answers of the two calls, and how often each was made.
+    final class Calls: Sendable {
+        private struct State {
+            var full: [Int32]
+            var plain: [Int32]
+            var fullCount = 0
+            var plainCount = 0
+        }
+
+        private let state: Mutex<State>
+
+        init(full: [Int32], plain: [Int32] = []) {
+            self.state = Mutex(State(full: full, plain: plain))
+        }
+
+        var fullCount: Int { state.withLock { $0.fullCount } }
+        var plainCount: Int { state.withLock { $0.plainCount } }
+
+        var flushCalls: PosixFileLayer.FlushCalls {
+            PosixFileLayer.FlushCalls(
+                fullSync: { _ in
+                    self.state.withLock { state in
+                        state.fullCount += 1
+                        return state.full.isEmpty ? 0 : state.full.removeFirst()
+                    }
+                },
+                plainSync: { _ in
+                    self.state.withLock { state in
+                        state.plainCount += 1
+                        return state.plain.isEmpty ? 0 : state.plain.removeFirst()
+                    }
+                })
+        }
+    }
+
+    @Test func aFullSyncThatWorksIsEnough() throws {
+        let calls = Calls(full: [0])
+        try PosixFileLayer.flush(3, calls: calls.flushCalls)
+        #expect(calls.plainCount == 0)
+    }
+
+    @Test(arguments: [EIO, ENOSPC, EBADF, EINVAL])
+    func aFullSyncThatFailsIsAFailureEvenIfFsyncWorks(failure: Int32) {
+        let calls = Calls(full: [failure], plain: [0])
+        #expect(throws: KnotError.self) { try PosixFileLayer.flush(3, calls: calls.flushCalls) }
+        do {
+            try PosixFileLayer.flush(3, calls: Calls(full: [failure], plain: [0]).flushCalls)
+        } catch {
+            #expect(error.context.posixError == failure)
+        }
+        #expect(calls.plainCount == 0, "fsync is no stand-in for a flush that failed.")
+    }
+
+    @Test(arguments: [ENOTSUP, ENOTTY, ENODEV])
+    func aFileSystemWithoutFullSyncFallsBackToFsync(unsupported: Int32) throws {
+        let calls = Calls(full: [unsupported], plain: [0])
+        try PosixFileLayer.flush(3, calls: calls.flushCalls)
+        #expect(calls.plainCount == 1)
+        let failing = Calls(full: [unsupported], plain: [EIO])
+        #expect(throws: KnotError.writeFailed.with(.init(posixError: EIO))) {
+            try PosixFileLayer.flush(3, calls: failing.flushCalls)
+        }
+    }
+
+    @Test func theLiveCallsFallBackOnADeviceWithoutFullSync() throws {
+        // /dev/null sits on devfs, which has no F_FULLFSYNC and answers ENODEV.
+        let descriptor = open("/dev/null", O_RDONLY)
+        #expect(descriptor >= 0)
+        defer { close(descriptor) }
+        #expect(PosixFileLayer.FlushCalls.live.fullSync(descriptor) == ENODEV)
+        try PosixFileLayer.flush(descriptor, calls: .live)
+    }
+
+    @Test func anInterruptionIsRetried() throws {
+        let calls = Calls(full: [EINTR, EINTR, 0])
+        try PosixFileLayer.flush(3, calls: calls.flushCalls)
+        #expect(calls.fullCount == 3)
+        #expect(calls.plainCount == 0)
+        let fallback = Calls(full: [ENOTSUP], plain: [EINTR, 0])
+        try PosixFileLayer.flush(3, calls: fallback.flushCalls)
+        #expect(fallback.plainCount == 2)
     }
 }

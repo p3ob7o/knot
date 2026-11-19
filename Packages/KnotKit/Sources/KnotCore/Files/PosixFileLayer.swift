@@ -97,10 +97,38 @@ public struct PosixFileLayer: FileLayer {
         let descriptor = url.withUnsafeFileSystemRepresentation { open($0!, flags | O_CLOEXEC) }
         guard descriptor >= 0 else { throw error(errno: errno) }
         defer { close(descriptor) }
-        // F_FULLFSYNC asks the drive to flush its cache. A file system that does not offer
-        // it falls back to fsync.
-        if fcntl(descriptor, F_FULLFSYNC) == 0 { return }
-        guard fsync(descriptor) == 0 else { throw error(errno: errno) }
+        try flush(descriptor, calls: .live)
+    }
+
+    /// The two system calls that flush a descriptor, each returning 0 or the error number.
+    /// A test passes calls of its own to reach every failure.
+    struct FlushCalls: Sendable {
+        var fullSync: @Sendable (Int32) -> Int32
+        var plainSync: @Sendable (Int32) -> Int32
+
+        static let live = FlushCalls(
+            fullSync: { fcntl($0, F_FULLFSYNC) == 0 ? 0 : errno },
+            plainSync: { fsync($0) == 0 ? 0 : errno })
+    }
+
+    /// The errors with which `F_FULLFSYNC` says the file system does not support it. The
+    /// manual page of fcntl(2) names none. On macOS 27.3, devfs answers `ENODEV`; `ENOTSUP`
+    /// and `ENOTTY` are the kernel's answers to an operation a file system lacks.
+    static let fullSyncUnsupported: Set<Int32> = [ENOTSUP, ENOTTY, ENODEV]
+
+    /// Flushes a descriptor to the drive.
+    ///
+    /// `F_FULLFSYNC` asks the drive to flush its cache. Only a file system that does not
+    /// support it falls back to `fsync`. An interruption is retried, and any other failure
+    /// is passed on: an `fsync` that works after a failed flush proves nothing.
+    static func flush(_ descriptor: Int32, calls: FlushCalls) throws(KnotError) {
+        var failure = calls.fullSync(descriptor)
+        while failure == EINTR { failure = calls.fullSync(descriptor) }
+        if failure == 0 { return }
+        guard fullSyncUnsupported.contains(failure) else { throw error(errno: failure) }
+        failure = calls.plainSync(descriptor)
+        while failure == EINTR { failure = calls.plainSync(descriptor) }
+        guard failure == 0 else { throw error(errno: failure) }
     }
 
     private static func error(errno number: Int32) -> KnotError {
