@@ -88,3 +88,26 @@ import Testing
         }
     }
 }
+
+@Suite struct IdentifierParsingTests {
+    static let canonical = "01234567-89ab-7fff-bfff-ffffffffff3c"
+
+    @Test(arguments: [
+        canonical + "\u{0}", canonical + "\u{0}junk", canonical + " ", " " + canonical, "{" + canonical + "}",
+        "0123456789ab7fffbfffffffffffff3c", "01234567-89ab-7fff-bfff-ffffffffff3", canonical + "0",
+        "01234567_89ab-7fff-bfff-ffffffffff3c", "0123456g-89ab-7fff-bfff-ffffffffff3c",
+        "01234567-89ab-7fff-bfff-ffffffffff3\u{FF43}", "",
+    ])
+    func onlyTheCanonicalFormIsAnID(text: String) {
+        #expect(NoteID(text) == nil)
+        let json = try! JSONEncoder().encode(text)
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(NoteID.self, from: json) }
+    }
+
+    @Test func eitherCaseIsTheSameID() throws {
+        let lower = try #require(NoteID(Self.canonical))
+        #expect(NoteID(Self.canonical.uppercased()) == lower)
+        let json = try JSONEncoder().encode(Self.canonical.uppercased())
+        #expect(try JSONDecoder().decode(NoteID.self, from: json) == lower)
+    }
+}

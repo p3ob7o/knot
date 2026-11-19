@@ -16,10 +16,30 @@ public struct Identifier<Tag: IdentifierTag>: Hashable, Sendable, Comparable, Cu
         self.uuid = uuid
     }
 
-    /// Parses the canonical text form, in either case.
+    /// Parses the canonical text form, in either case: exactly 36 ASCII characters, hex
+    /// digits in groups of 8, 4, 4, 4 and 12 joined by hyphens. Nothing else is an ID.
     public init?(_ text: String) {
-        guard let uuid = UUID(uuidString: text) else { return nil }
+        guard let uuid = Self.parse(text) else { return nil }
         self.uuid = uuid
+    }
+
+    /// The one parser of an ID's text, for the initialiser and for decoding.
+    static func parse(_ text: String) -> UUID? {
+        let bytes = Array(text.utf8)
+        guard bytes.count == 36 else { return nil }
+        for (index, byte) in bytes.enumerated() {
+            switch index {
+            case 8, 13, 18, 23:
+                guard byte == UInt8(ascii: "-") else { return nil }
+            default:
+                let isHex =
+                    (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                    || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+                    || (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(byte)
+                guard isHex else { return nil }
+            }
+        }
+        return UUID(uuidString: text)
     }
 
     /// The same UUID as an identifier of another kind. A segment shares its capture's ID.
@@ -48,7 +68,7 @@ public struct Identifier<Tag: IdentifierTag>: Hashable, Sendable, Comparable, Cu
 extension Identifier: Codable {
     public init(from decoder: any Decoder) throws {
         let text = try decoder.singleValueContainer().decode(String.self)
-        guard let uuid = UUID(uuidString: text) else {
+        guard let uuid = Self.parse(text) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "Not a UUID."))
         }
