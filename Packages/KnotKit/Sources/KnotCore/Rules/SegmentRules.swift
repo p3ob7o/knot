@@ -46,13 +46,13 @@ public enum SettledRule {
     /// cannot transcribe. A settled note can still gain a late capture, and then it is
     /// unsettled again.
     ///
-    /// - Parameter speechNeverRunsHere: true only when speech can never run on this device,
-    ///   which the transcriber reports as "unavailable" or as "unsupported locale". It is
-    ///   false while a speech model is missing, not installed or installing, since that work
-    ///   is only waiting: the recording then stays pending.
+    /// - Parameter speech: the transcriber's readiness on this device. Unavailable and an
+    ///   unsupported locale mean speech never runs here (`TranscriberReadiness.neverRunsHere`);
+    ///   a model not installed or installing means the work is only waiting, and the
+    ///   recording stays pending.
     public static func evaluate(
         note: Note, segments: [Segment], downloadingAssets: Set<AssetID> = [], window: AppendWindow, now: Date,
-        thisDevice: DeviceID, speechNeverRunsHere: Bool
+        thisDevice: DeviceID, speech: TranscriberReadiness
     ) -> Settledness {
         let live = segments.filter { $0.noteID == note.id && $0.deletedAt == nil }
         let working = live.contains { segment in
@@ -61,7 +61,7 @@ public enum SettledRule {
             // changes and is reported again.
             let awaited =
                 segment.state.isPending
-                && VisibleState.of(segment, thisDevice: thisDevice, speechNeverRunsHere: speechNeverRunsHere)
+                && VisibleState.of(segment, thisDevice: thisDevice, speech: speech)
                     != .keptNoText
             return awaited || segment.assetID.map(downloadingAssets.contains) == true
         }
@@ -113,11 +113,11 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
     /// with no text here until another device takes the work: no words recognised, audio that
     /// cannot be read and speech unavailable all show as "Kept, no text".
     ///
-    /// - Parameter speechNeverRunsHere: true only when speech can never run on this device,
-    ///   which the transcriber reports as "unavailable" or as "unsupported locale". It is
-    ///   false while a speech model is missing, not installed or installing, since that work
-    ///   is only waiting: the recording then stays pending.
-    public static func of(_ segment: Segment, thisDevice: DeviceID, speechNeverRunsHere: Bool) -> VisibleState? {
+    /// - Parameter speech: the transcriber's readiness on this device. Unavailable and an
+    ///   unsupported locale mean speech never runs here (`TranscriberReadiness.neverRunsHere`);
+    ///   a model not installed or installing means the work is only waiting, and the
+    ///   recording stays pending.
+    public static func of(_ segment: Segment, thisDevice: DeviceID, speech: TranscriberReadiness) -> VisibleState? {
         if segment.kind.isUnknown || segment.origin.isUnknown || segment.textOrigin.isUnknown
             || segment.state.isUnknown
         {
@@ -133,7 +133,7 @@ public enum VisibleState: String, Hashable, Sendable, Codable, CaseIterable {
             case .recovered, .recorded, .transcribing:
                 let elsewhere = segment.processingOwner.map { $0 != thisDevice } ?? false
                 if elsewhere { return .savedTextBeingMadeElsewhere }
-                return speechNeverRunsHere ? .keptNoText : .savedTextOnItsWay
+                return speech.neverRunsHere ? .keptNoText : .savedTextOnItsWay
             case .transcribed, .cleaning:
                 return .ready
             case .ready:
