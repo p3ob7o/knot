@@ -169,17 +169,23 @@ KnotCore declares these protocols. KnotFakes ships a fake for each, except `Capt
 | `Transcriber` | Report readiness in five states: ready, not installed, installing, unsupported locale, unavailable. Install the model with progress, which only the app does. Transcribe a file in resumable runs: a run reads at most a budget of audio from an offset, ends at the last finished phrase, and returns its pieces with their time ranges and where the next run starts. Stream live text for `Sendable` chunks of samples. |
 | `Cleaner` | Report availability in three states: available, not ready, unavailable with its reason. Publish its changes. Turn a raw transcript into a body and, when asked, a title, in one call that returns the whole result. A decline is a result, not an error. |
 | `InkRecogniser` | Turn drawing data into text. |
-| `ProcessingQueue` | Run and resume transcribe, clean and recognise jobs. |
+| `ProcessingQueue` | Run and resume transcribe, clean and recognise jobs. Each drain takes a `BackgroundRunner` and a progress sink from its caller. |
 | `SyncEngine` | Start, stop and report status. |
 | `WatchLink` | Send a capture, receive acknowledgements, publish how many captures wait and how many failed. |
 | `AudioPlayer` | Play, pause and seek a recording. |
 | `AssetFetcher` | Bring a recording or drawing made on another device onto this one, with progress. |
-| `RecordingStateStore` | Publish whether a recording is running, for controls and widgets in other processes. |
-| `RecordingActivity` | Start, update and end the Live Activity that keeps an intent-started recording alive. iPhone and iPad only. |
+| `RecordingStateStore` | Publish whether a recording is running, for controls and widgets in other processes: a synchronous read and write of one value in the app group's defaults. |
+| `RecordingActivity` | Start, update and end the Live Activity that keeps an intent-started recording alive, keyed by capture ID, and at launch end every activity that has no recorder. Its errors name ActivityKit's refusal. iPhone and iPad only. |
 | `SettingsStore`, `FeatureGates`, `Clock`, `IDGenerator` | Small supporting ports. |
 | `SurfaceRouter`, `CueEmitter`, `BackgroundRunner`, `FreeSpaceProbe`, `InstallIdentity`, `ProcessNotifier`, `Lifecycle` | Supporting ports that the second engineering pass named, each with a fake: where an Open intent lands, the cues of product spec §4.5, background time, free space, the Keychain install ID, the notice between processes, and the app's foreground and background events. |
 
 Implementers: `AudioPlayer` and `RecordingStateStore` in KnotAudio; `SettingsStore` in KnotStore; `AssetFetcher` in KnotSync, with a local-only version in KnotStore for when sync is off; `RecordingActivity` in the iOS app target.
+
+SP-1's code half fixed three of these ports:
+
+- `RecordingActivity` holds no `Activity`, because ActivityKit's `Activity` is not `Sendable`. Its implementation finds the activity by the capture ID in its attributes each time, so a new launch ends the activity that a dead one left, through `endAll(except:)`.
+- `BackgroundRunner` is not a service the queue calls. Background time from an intent exists only inside that intent's `perform()`, through a method of the intent itself, and every mechanism that gives minutes requires progress reports. So the runner is passed in by whoever holds the time, is scoped to one call, and runs work that reports its progress. `ProcessingQueue` takes a runner and a progress sink for each drain and owns no background time. Which mechanism gives the time waits for SP-1's report.
+- Reloading the controls when the recording phase changes belongs to the app shell, with `ControlCenter.shared.reloadControls(ofKind:)`, and not to `RecordingStateStore`, so that KnotAudio needs no WidgetKit.
 
 KnotCore also declares two seams that are not ports of `AppEnvironment`: `FileLayer`, under `DurableFile`, which the power-cut layer of KnotTestSupport replaces in tests, and `LogSink`, under the logging facade, for tests that check that no text reaches a log.
 
@@ -388,9 +394,11 @@ Rules taken from Apple's documentation, to be confirmed by SP-1:
 - The Live Activity must start with the recording and last as long as it does, or the system stops the recording.
 - If Live Activities are off or the microphone permission is missing, the intent must open the app.
 
-Intents reach the environment through the App Intents dependency manager, which the app registers at launch. The widget extension links KnotIntents for the types only, and no intent runs there. An intent reads the environment through one accessor that fails with a typed error when nothing is registered, so an intent that the system runs in the wrong process fails safely. The Live Activity's attributes type lives in KnotIntents and belongs to WP-19. WP-01 proves the packaging with one trivial intent that appears in both the app and the widget extension.
+Intents reach the environment through the App Intents dependency manager, which the app registers at launch. The widget extension links KnotIntents for the types only, and no intent runs there. An intent reads the environment through one accessor that fails with a typed error when nothing is registered, so an intent that the system runs in the wrong process fails safely. That accessor is `@Dependency(default:)` with the unavailable environment as its default, because `AppDependencyManager` has no lookup that can fail: in a process that registered nothing, the intent gets the unavailable environment and throws the typed error. Every intent that writes declares `allowedExecutionTargets = [.main]` (OS 27), so the system cannot run it in the extension. The Live Activity's attributes type lives in KnotIntents and belongs to WP-19. WP-01 proves the packaging with one trivial intent that appears in both the app and the widget extension.
 
 Shortcuts get StartRecording and StopRecording on every platform, and each is safe to repeat. ToggleRecording is for buttons: the Action Button and the controls.
+
+On iPhone and iPad the intents that start a recording declare `supportedModes = [.background, .foreground(.dynamic)]`. They start in the background and call `continueInForeground` only when Live Activities are off or the microphone is refused, which is how the intent opens the app. StopRecording never needs the app in front and declares `[.background]`.
 
 Knot's URL scheme only navigates: it opens the capture surface or a note. It never writes text and never starts a recording.
 
@@ -542,6 +550,12 @@ Every depth starts with the same checks: `doctor`, formatting, path ownership (t
 | watchOS has CloudKit with `CKSyncEngine`, SwiftData, WidgetKit, AppIntents, WatchConnectivity and FoundationModels. | SDK |
 | `ControlWidget` is available on iOS 18, macOS 26 and watchOS 26. `handGestureShortcut` is available on watchOS 11. | SDK |
 | `LongRunningIntent` exists from OS 27, with `performBackgroundTask`. | SDK |
+| `AppIntent.allowedExecutionTargets` exists from OS 27. With `[.main]` the system runs an intent only in the app, though its type is compiled into the widget extension too, and the metadata of both bundles records it. | SDK and the metadata, read by SP-1 on 2026-11-19. |
+| An intent's `authenticationPolicy` defaults to `.alwaysAllowed`. | SDK and the metadata, read by SP-1 on 2026-11-19. |
+| `IntentSystemContext.preciseTimestamp` is recorded only for the Action Button of an Apple Watch Ultra. | Apple docs, read by SP-1 on 2026-11-19. |
+| `BGContinuedProcessingTaskRequest` is submitted from the foreground, as a result of a person's action, and its task must report progress. In the iOS simulator it fails as unavailable, `BGTaskSchedulerErrorDomain` 1. | Apple docs, and observed by SP-1 in the iOS 27.2 simulator on 2026-11-19. |
+| `BGTaskScheduler.submit(_:)` is deprecated in OS 27 for `submitTaskRequest(_:)`. | SDK, read by SP-1 on 2026-11-19. |
+| ActivityKit's `Activity` is not `Sendable`. | SDK, read by SP-1 on 2026-11-19. |
 | `LiveActivityIntent` and ActivityKit's `ActivityAttributes` are marked unavailable on macOS in the 27.2 SDK. The 27.3 beta SDK offers both from macOS 27.3. `canImport(ActivityKit)` is true on macOS with either. | SDK, both read on 2026-11-19 |
 | The notes schema offers `createNote`, `updateNote` and `appendText`. It is unavailable on watchOS. | SDK |
 | Xcode warns when an app lists a statically linked package in `AppIntentsPackage.includedPackages`, because that package's metadata is already included. Warnings are errors, so the apps declare no `AppIntentsPackage` of their own. | Found by WP-01's build with Xcode 27.2. |
