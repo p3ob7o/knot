@@ -126,9 +126,9 @@ public struct StoreLocations: Hashable, Sendable {
         recording.appending(path: "\(capture).json", directoryHint: .notDirectory)
     }
 
-    /// The working audio file of a recording in progress. WP-12 picks its format.
-    public func recordingAudio(_ capture: CaptureID, fileExtension: String) -> URL {
-        recording.appending(path: "\(capture).\(fileExtension)", directoryHint: .notDirectory)
+    /// The working audio file of a recording in progress.
+    public func recordingAudio(_ capture: CaptureID, format: RecordingFormat) -> URL {
+        recording.appending(path: "\(capture).\(format.fileExtension)", directoryHint: .notDirectory)
     }
 
     /// The manifest of a recording in the watch's outbox.
@@ -150,11 +150,32 @@ public struct StoreLocations: Hashable, Sendable {
         }
     }
 
-    /// A worktree's folder name, as one path component. A name that could leave its folder
-    /// is refused.
+    /// A worktree's folder name, as one path component: letters, digits, `.`, `_` and `-`,
+    /// not starting with a dot, at most 128 characters. Any other name is not used.
     private static func safeFolderName(_ name: String) -> String? {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != ".", trimmed != "..", !trimmed.contains("/") else { return nil }
-        return trimmed
+        let allowed = name.unicodeScalars.allSatisfy { scalar in
+            scalar.isASCII
+                && (scalar.properties.isAlphabetic || ("0"..."9").contains(scalar)
+                    || "._-".unicodeScalars.contains(scalar))
+        }
+        guard allowed, !name.isEmpty, name.count <= 128, !name.hasPrefix(".") else { return nil }
+        return name
+    }
+}
+
+/// The formats a recording in progress may be written in (docs/architecture.md §8). WP-12
+/// picks one of the two candidates and proves it with a kill test. A closed set, so that no
+/// text from outside becomes part of a path.
+public enum RecordingFormat: String, Hashable, Sendable, CaseIterable {
+    /// Core Audio Format.
+    case caf
+    /// Fragmented MPEG-4.
+    case fragmentedMP4 = "fragmented_mp4"
+
+    public var fileExtension: String {
+        switch self {
+        case .caf: "caf"
+        case .fragmentedMP4: "mp4"
+        }
     }
 }

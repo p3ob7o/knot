@@ -76,7 +76,7 @@ import Testing
                 locations.database, locations.assets, locations.recording, locations.inbox, locations.recordingState,
                 locations.outbox, locations.asset(id(2), kind: .audio), locations.inboxManifest(capture),
                 locations.inboxPayload(capture, kind: .voice), locations.recordingManifest(capture),
-                locations.recordingAudio(capture, fileExtension: "caf"), locations.outboxManifest(capture),
+                locations.recordingAudio(capture, format: .caf), locations.outboxManifest(capture),
                 locations.outboxAudio(capture),
             ]
             for path in paths {
@@ -98,5 +98,47 @@ import Testing
         let capture = CaptureID(asset)
         #expect(locations.inboxManifest(capture).lastPathComponent == "01234567-89ab-7fff-bfff-ffffffffff3c.json")
         #expect(locations.inboxPayload(capture, kind: .typed).lastPathComponent.hasSuffix(".txt"))
+    }
+}
+
+@Suite struct StorePathContainmentTests {
+    let root = URL(fileURLWithPath: "/tmp/contained", isDirectory: true)
+
+    func isInside(_ url: URL, _ folder: URL) -> Bool {
+        url.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path + "/")
+    }
+
+    @Test func aRecordingStaysInItsFolder() {
+        let locations = StoreLocations.testing(root: root)
+        for format in RecordingFormat.allCases {
+            let url = locations.recordingAudio(id(1), format: format)
+            #expect(isInside(url, locations.recording), "\(url.standardizedFileURL.path)")
+            #expect(url.lastPathComponent == "\(CaptureID(id(1) as CaptureID)).\(format.fileExtension)")
+        }
+    }
+
+    @Test(arguments: [
+        ("..", false), ("../x", false), ("a/b", false), (".", false), (".hidden", false), ("a\u{0}b", false),
+        ("wt name", false), ("é", false), ("", false), (String(repeating: "w", count: 129), false),
+        ("wp-02-domain-f78f835066dc3556", true), ("-ok_1.2", true),
+    ])
+    func aWorktreeFolderNameNeverLeavesTheGroup(name: String, used: Bool) throws {
+        let group = URL(fileURLWithPath: "/containers/group", isDirectory: true)
+        let locations = try StoreLocations.resolve(
+            flavour: .dev, platform: .macOS, appContainer: root, groupContainer: group, devStoreFolder: name,
+            environment: [:])
+        let expected = used ? "/containers/group/\(name)/KnotStore" : "/containers/group/KnotStore"
+        #expect(locations.storeRoot.standardizedFileURL.path == expected)
+    }
+
+    @Test func everyPathOfAStoreStaysUnderItsRoot() {
+        let locations = StoreLocations.testing(root: root)
+        let capture: CaptureID = id(2)
+        let paths = [
+            locations.asset(id(3), kind: .unknown("../../x")), locations.inboxPayload(capture, kind: .unknown("../x")),
+            locations.inboxManifest(capture), locations.recordingManifest(capture), locations.outboxAudio(capture),
+            locations.outboxManifest(capture),
+        ]
+        for path in paths { #expect(isInside(path, locations.storeRoot), "\(path.standardizedFileURL.path)") }
     }
 }
