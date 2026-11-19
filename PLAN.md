@@ -412,6 +412,7 @@ The orchestrator runs a serial queue and binds each result to a base, a head and
   - WP-05 owns `Packages/KnotKit/Sources/KnotFakes/Preview/`.
   - WP-13 owns `Fixtures/results/speech/` and WP-14 owns `Fixtures/results/cleanup/`, inside WP-04's `Fixtures/`. Each commits its synthetic results there.
   - A proof step and the code half of a spike each own their short note, `docs/notes/<ID>.md`.
+  - A PR that brings a required-reason API into a module adds its reason to the privacy manifest of every target that links the module, whichever package owns the manifest (docs/architecture.md §19).
   - WP-06 owns the soak step of `scripts/verify.sh`. WP-11, WP-12 and WP-15 each add one file of kill points to `Packages/KnotKit/Tests/KnotSoak/` in their own PRs.
   - WP-40's ownership extends to the view models that a difference listed in `docs/design/deltas.md` touches. Where the handoff is silent, the implementer uses the system default and adds a line to that file, which the owner clears at M6.
 - The README links to setup, the command reference, contributing and recovery. A changelog is kept from M4, with a section for the command line.
