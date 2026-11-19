@@ -90,7 +90,8 @@ extension KnotError {
     public static let speechUnavailable = KnotError(
         code: "speech_unavailable", errorClass: .final, next: .none, retry: .notSafe, written: .contentKept,
         exitStatus: .unexpected)
-    /// The transcriber returned an error. The recording is kept.
+    /// The transcriber returned an error, whose code `context.engineCode` carries. The
+    /// recording is kept.
     public static let transcriptionFailed = KnotError(
         code: "transcription_failed", next: .retry, retry: .safe(times: 5), written: .contentKept,
         exitStatus: .unexpected)

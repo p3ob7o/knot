@@ -170,11 +170,14 @@ public struct ErrorContext: Hashable, Sendable, Codable {
     public var detail: ErrorDetail?
     /// When to try again, when the system gives a time, as it may for limited requests.
     public var retryAt: Date?
+    /// The error code an engine returned, such as the transcriber's: a number only, never
+    /// the engine's description, which may hold text.
+    public var engineCode: Int?
 
     public init(
         captureID: CaptureID? = nil, noteID: NoteID? = nil, segmentID: SegmentID? = nil,
         assetID: AssetID? = nil, jobID: JobID? = nil, posixError: Int32? = nil, detail: ErrorDetail? = nil,
-        retryAt: Date? = nil
+        retryAt: Date? = nil, engineCode: Int? = nil
     ) {
         self.captureID = captureID
         self.noteID = noteID
@@ -184,6 +187,7 @@ public struct ErrorContext: Hashable, Sendable, Codable {
         self.posixError = posixError
         self.detail = detail
         self.retryAt = retryAt
+        self.engineCode = engineCode
     }
 
     public static let empty = ErrorContext()

@@ -230,7 +230,7 @@ Speech recognition is unavailable on this device. The recording stays recorded a
 
 ### `transcription_failed`
 
-The transcriber returned an error. The recording is kept.
+The transcriber returned an error, whose code `context.engineCode` carries. The recording is kept.
 
 - Class: failure
 - Next: retry

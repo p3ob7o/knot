@@ -52,6 +52,7 @@ public struct KnotLog: Sendable {
         if let id = error.context.jobID { all.append(.job(id)) }
         if let number = error.context.posixError { all.append(.number("errno", Int(number))) }
         if let detail = error.context.detail { all.append(.detail(detail)) }
+        if let code = error.context.engineCode { all.append(.number("engine_code", code)) }
         sink.write(LogRecord(level: level, category: category, event: event.description, fields: all + fields))
     }
 }

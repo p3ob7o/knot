@@ -61,3 +61,15 @@ final class RecordingSink: LogSink {
         #expect(sink.lines == ["store.failed code=disk_full"])
     }
 }
+
+@Suite struct EngineCodeTests {
+    @Test func aFailedTranscriptionCarriesTheEnginesCodeAndLogsIt() throws {
+        let error = KnotError.transcriptionFailed.with(.init(captureID: id(1), engineCode: 1_101))
+        #expect(error.context.engineCode == 1_101)
+        #expect(try JSONDecoder().decode(KnotError.self, from: JSONEncoder().encode(error)) == error)
+        let sink = RecordingSink()
+        KnotLog(.speech, sink: sink).failure(error, "transcribe.failed")
+        let capture: CaptureID = id(1)
+        #expect(sink.lines == ["transcribe.failed capture=\(capture) code=transcription_failed engine_code=1101"])
+    }
+}
