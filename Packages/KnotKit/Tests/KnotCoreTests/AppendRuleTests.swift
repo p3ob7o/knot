@@ -348,6 +348,20 @@ struct AppendRow: Sendable, CustomTestStringConvertible {
             request("10:00", .window, .late),
             [prior(1, noteA, "09:55", "09:57"), prior(2, noteC, "09:56", "09:59", noteClosed: "09:59:30")],
             .newNote(.latestNoteClosed)),
+        // "A deleted capture counts here as rule 14 says" (pull request 27).
+        AppendRow(
+            "the capture that would decide, counting deleted ones, was deleted and left its note empty",
+            request("10:00", .window, .late),
+            [prior(1, noteA, "09:56", "09:57"), prior(2, noteC, "09:57", "09:58", deleted: true, noteEmpty: true)],
+            .newNote(.latestNoteDeleted)),
+        AppendRow(
+            "a deleted capture whose note keeps a live segment is skipped", request("10:00", .window, .late),
+            [prior(1, noteA, "09:56", "09:57"), prior(2, noteC, "09:57", "09:58", deleted: true)],
+            .join(noteA, .insideWindow)),
+        AppendRow(
+            "a running capture that was deleted and left its note empty", request("10:00", .window, .late),
+            [prior(1, noteA, "09:56", "09:59"), prior(2, noteC, "09:58", "10:20", deleted: true, noteEmpty: true)],
+            .newNote(.latestNoteDeleted)),
         AppendRow(
             "the capture that ended last is outside the window: Knot looks no further back",
             request("10:00", .window, .late),

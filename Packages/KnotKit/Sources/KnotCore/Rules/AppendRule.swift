@@ -238,23 +238,24 @@ public enum AppendRule {
     /// Rules 10, 11 and 14: if the most recent note is deleted, or has no segment left, a new
     /// note starts. A late capture never joins a deleted note.
     public static let latestNoteDeleted = Step(name: "latest-note-deleted") { request, context in
-        guard let latest = mostRecentNote(for: request, in: context), latest.noteCountsAsDeleted else { return nil }
-        return .newNote(.latestNoteDeleted)
+        if mostRecentNote(for: request, in: context)?.noteCountsAsDeleted == true {
+            return .newNote(.latestNoteDeleted)
+        }
+        // Rule 10: a late capture never joins a deleted note, whichever capture chose it.
+        if request.arrival == .late, latest(for: request, in: context)?.noteCountsAsDeleted == true {
+            return .newNote(.latestNoteDeleted)
+        }
+        return nil
     }
 
-    /// The capture whose note is "the most recent note" of rule 14.
+    /// The capture whose note is "the most recent note" of rule 14, deleted captures counted.
     ///
-    /// For a live capture, by the orchestrator's ruling on rules 11 and 14, it is the most
-    /// recent capture with deleted captures counted, and the rule does not fall back to an
-    /// older note when that note is deleted or has no live segment. For a late capture it is
-    /// the capture the window looks at (rule 10).
+    /// For a live capture it is the most recent capture of all, deleted or not; for a late
+    /// one it is the capture that would decide by rule 7, deleted ones counted, because "a
+    /// deleted capture counts here as rule 14 says". When its note is deleted or has no live
+    /// segment, a new note starts and the rule does not fall back to an older note.
     public static func mostRecentNote(for request: AppendRequest, in context: AppendContext) -> PriorCapture? {
-        guard request.arrival == .live else { return latest(for: request, in: context) }
-        var candidates = context.captures
-        if let open = context.openCapture, !candidates.contains(where: { $0.segmentID == open.segmentID }) {
-            candidates.append(open)
-        }
-        return candidates.filter { !$0.isConflictCopy }.max(by: isOlder)
+        pick(for: request, from: candidates(in: context).filter { !$0.isConflictCopy })
     }
 
     /// Rules 4 and 10: a note closed by "New note" takes no more captures, except a late one
@@ -299,11 +300,20 @@ public enum AppendRule {
     ///
     /// Ties fall back to the later start and then to the ID, as a fixed tie-break.
     public static func latest(for request: AppendRequest, in context: AppendContext) -> PriorCapture? {
+        pick(for: request, from: candidates(in: context).filter { !$0.isDeleted && !$0.isConflictCopy })
+    }
+
+    /// The captures the device knows, with the open one.
+    private static func candidates(in context: AppendContext) -> [PriorCapture] {
         var candidates = context.captures
         if let open = context.openCapture, !candidates.contains(where: { $0.segmentID == open.segmentID }) {
             candidates.append(open)
         }
-        candidates = candidates.filter { !$0.isDeleted && !$0.isConflictCopy }
+        return candidates
+    }
+
+    /// The capture that decides among `candidates`, by rules 1 and 7.
+    private static func pick(for request: AppendRequest, from candidates: [PriorCapture]) -> PriorCapture? {
         guard request.arrival == .late else { return candidates.max(by: isOlder) }
         let earlier = candidates.filter { $0.startedAt < request.startedAt }
         let running = earlier.filter { capture in capture.endedAt.map { $0 > request.startedAt } ?? true }
