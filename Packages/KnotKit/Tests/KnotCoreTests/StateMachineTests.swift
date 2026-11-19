@@ -282,3 +282,25 @@ extension Job {
         #expect(job.attempts == 1)
     }
 }
+
+@Suite struct JobDeferralTimeAndDeclineTests {
+    static func running(_ kind: JobKind = .clean) -> Job {
+        Job(id: id(1), segmentID: id(2), kind: kind, state: .running)
+    }
+
+    @Test func aDeferralKeepsTheTimeTheSystemGives() throws {
+        let limited = KnotError.requestsLimited.with(.init(retryAt: at("10:05")))
+        let job = try JobMachine.reduce(Self.running(), .stepFailed(limited, retryAt: nil))
+        #expect(job.state == .queued)
+        #expect(job.notBefore == at("10:05"))
+        #expect(job.attempts == 0)
+    }
+
+    @Test func aDeclineIsAResultAndEndsTheJobAtOnce() throws {
+        let declined = KnotError.cleanupDeclined.with(.init(detail: .guardRejected))
+        let job = try JobMachine.reduce(Self.running(), .stepFailed(declined, retryAt: at("10:00")))
+        #expect(job.state == .done, "The segment is ready with the raw transcript as its text.")
+        #expect(job.attempts == 0)
+        #expect(job.lastErrorCode == KnotError.cleanupDeclined.code)
+    }
+}

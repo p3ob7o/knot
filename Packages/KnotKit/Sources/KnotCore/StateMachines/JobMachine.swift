@@ -5,9 +5,10 @@ public enum JobEvent: Hashable, Sendable {
     /// The queue starts the job.
     case start
     case succeeded
-    /// The step returned an error. A deferral goes back to the queue uncounted. A final
-    /// error ends the job at once as done, with the error's code. Any other error is an
-    /// attempt, and the job waits until `retryAt` before it runs again.
+    /// The step returned an error. A deferral goes back to the queue uncounted, keeping the
+    /// time to try again that the system may give with it. A final error, and a declined
+    /// cleanup, which is a result, end the job at once as done, with the error's code. Any
+    /// other error is an attempt, and the job waits until `retryAt` before it runs again.
     case stepFailed(KnotError, retryAt: Date?)
     /// The step was cancelled, because background time ran out or the queue was asked to
     /// stop. It is not counted, and the job stays queued.
@@ -38,13 +39,16 @@ public enum JobMachine {
             next.lastErrorCode = nil
         case (.running, .stepFailed(let error, let retryAt)):
             next.lastErrorCode = error.code
-            if error.isFinal {
-                // No retry on this device can fix it: the job ends, and is not tried again.
+            if error.isFinal || error.code == KnotError.cleanupDeclined.code {
+                // No retry on this device can fix it, or cleanup declined, which is a result
+                // and not an error (docs/architecture.md §5 and §9): the job ends at once and
+                // the segment is ready with the raw transcript as its text.
                 next.state = .done
                 next.notBefore = nil
             } else if error.isDeferral {
+                // Not counted. A limit by the system may carry the time to try again: keep it.
                 next.state = .queued
-                next.notBefore = nil
+                next.notBefore = error.context.retryAt
             } else {
                 next.attempts += 1
                 if next.attempts >= maximumAttempts {
