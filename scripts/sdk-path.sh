@@ -11,9 +11,12 @@
 
 source "$(dirname "$0")/lib/common.sh"
 
+case ${1:-} in
+    -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
 if [[ $# -ne 2 ]]; then
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
-    exit 2
+    knot_fail "sdk-path-usage" "scripts/sdk-path.sh takes a platform and a framework, and was given $# arguments." \
+        "Run scripts/sdk-path.sh <platform> <framework>, for example scripts/sdk-path.sh ios AppIntents." "safe" "nothing"
 fi
 case $1 in
     ios) sdk=iphoneos ;;

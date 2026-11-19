@@ -44,6 +44,8 @@ scripts/verify.sh --quick    # formatting, the plan check, the pins, the package
 - Three simulators named after the worktree: `<worktree>-iphone`, `<worktree>-ipad` and `<worktree>-watch`. `scripts/sim.sh` lists, boots, shuts down and deletes them. It never touches another project's simulators.
 - On the Mac, a development store folder named after the worktree, inside the development container. The worktree's name reaches the app through `.build/config/Worktree.xcconfig` and the `KnotDevStoreFolder` key of the Info.plist.
 
+The worktree's folder name is the name of its simulators and of its Mac development store, so it must be unique on the Mac. T3 Code's worktree folders end in a hash, which keeps them apart. Two clones in folders of the same name would share simulators and a store.
+
 Keep the repository, its worktrees, the build folder (`~/knot-build`, or `KNOT_BUILD_FOLDER`) and the fixtures folder (`KNOT_LOCAL_FIXTURES`) out of any folder that a cloud file provider syncs, such as `~/Documents` or `~/Desktop` with iCloud Drive on. `scripts/doctor.sh` refuses them there.
 
 ## Build flavours and signing
@@ -64,6 +66,18 @@ Signing has two configurations, chosen by `KNOT_SIGNING`:
 
 - `local`, for tests and agent builds. It keeps the sandbox, signs ad hoc, and leaves out the entitlements that need the owner's signing profile: the app group, iCloud and push. Sync is off (`KnotSyncAvailable` is `NO`). `scripts/verify.sh` always builds with it.
 - `team`, for device builds, spikes and milestone builds. It needs a team ID, which never enters the repository. Copy `Apps/Config/Local.xcconfig.example` to a file outside the repository, for the owner `~/knot-build/Local.xcconfig`, fill in the team, and set `KNOT_LOCAL_CONFIG` to its path. `scripts/bootstrap.sh` links it into `.build/config/Local.xcconfig`.
+
+## The fakes in an optimised build
+
+KnotFakes, which holds the fakes and the preview environment, and KnotUIPreviews compile only under `DEBUG` or `KNOT_FAKES`: every file of both sits inside `#if DEBUG || KNOT_FAKES`. Xcode links a package product into every configuration of an app, so without that guard a release app would carry the fakes. `scripts/verify.sh --only packaging` fails when a Release binary holds a KnotFakes symbol.
+
+An optimised build that needs the fakes, such as `scripts/verify.sh --perf` or an optimised soak child, opts in by defining `KNOT_FAKES`:
+
+```sh
+swift build -c release --package-path Packages/KnotKit -Xswiftc -DKNOT_FAKES
+```
+
+With `xcodebuild`, pass `OTHER_SWIFT_FLAGS='$(inherited) -DKNOT_FAKES'`. No build that ships defines it.
 
 ## What the owner does once, at gate G1
 

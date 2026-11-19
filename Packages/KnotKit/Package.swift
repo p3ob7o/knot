@@ -115,7 +115,7 @@ let package = Package(
         module("KnotUIPreviews", ["KnotCore", "KnotUI", "KnotFakes"]),
 
         // Executables.
-        tool("knot", ["KnotCore", "KnotAgent", "KnotExport", "KnotStore"]),
+        tool("knot", ["KnotAgent", "KnotStore"]),
         tool("knot-eval", ["KnotCore", "KnotSpeech", "KnotCleanup"]),
 
         // Crash hosts: small processes that a kill test starts and kills
@@ -150,6 +150,18 @@ let package = Package(
                 "KnotApp", "KnotCore", "KnotStore", "KnotAudio", "KnotCapture", "KnotSpeech",
                 "KnotCleanup", "KnotInk", "KnotSync", "KnotIntents", "KnotExport", "KnotUI",
                 "KnotTestSupport", "KnotFakes",
+                .target(name: "KnotLink", condition: .when(platforms: [.iOS])),
+                .target(name: "KnotAgent", condition: .when(platforms: [.macOS])),
+            ]
+        ),
+        // Fixture audio through to a finished note, kill and relaunch, and the canary
+        // (docs/architecture.md §17). WP-22 owns it.
+        tests(
+            "KnotEndToEndTests",
+            [
+                "KnotApp", "KnotCore", "KnotStore", "KnotAudio", "KnotCapture", "KnotSpeech",
+                "KnotCleanup", "KnotInk", "KnotSync", "KnotIntents", "KnotExport", "KnotUI",
+                "KnotTestSupport", "KnotFakes", grdb,
                 .target(name: "KnotLink", condition: .when(platforms: [.iOS])),
                 .target(name: "KnotAgent", condition: .when(platforms: [.macOS])),
             ]

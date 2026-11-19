@@ -27,6 +27,7 @@ usage_fail() { knot_fail "verify-usage" "$1" "Run scripts/verify.sh --help." "sa
 TIER=""
 ONLY=""
 MODULE=""
+TEST_TARGET=""
 set_tier() {
     [[ -z $TIER ]] || usage_fail "One run takes one tier; got --$TIER and $1."
     TIER=${1#--}
@@ -66,7 +67,17 @@ if [[ -n $ONLY ]]; then
     [[ $ONLY == doctor ]] || STEPS="doctor $ONLY"
     LABEL="--only $ONLY"
 elif [[ -n $MODULE ]]; then
-    [[ -d $KNOT_PACKAGE/Sources/$MODULE ]] || usage_fail "No module $MODULE in Packages/KnotKit/Sources."
+    # --module takes a module or a test target. It runs the test target: the folder of
+    # that name under Tests/, or else <module>Tests.
+    if [[ -d $KNOT_PACKAGE/Tests/$MODULE ]]; then
+        TEST_TARGET=$MODULE
+    elif [[ -d $KNOT_PACKAGE/Sources/$MODULE && -d $KNOT_PACKAGE/Tests/${MODULE}Tests ]]; then
+        TEST_TARGET=${MODULE}Tests
+    elif [[ -d $KNOT_PACKAGE/Sources/$MODULE ]]; then
+        usage_fail "$MODULE has no test target of its own. Name the module whose tests use it, or a folder of Packages/KnotKit/Tests."
+    else
+        usage_fail "No module or test target $MODULE in Packages/KnotKit/Sources or Packages/KnotKit/Tests."
+    fi
     STEPS="doctor package-build package-test"
     LABEL="--module $MODULE"
 else
@@ -108,7 +119,23 @@ check() {
 
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null; }
 
-macho_files() { find "$1" -type f -exec sh -c 'file -b "$1" | grep -q Mach-O' _ {} \; -print; }
+# Prints every Mach-O file under a folder, each ended by a NUL, so that a path with a
+# space survives. Read it with: while IFS= read -r -d '' f; do …; done < <(macho_files …)
+macho_files() {
+    local f
+    while IFS= read -r -d '' f; do
+        if file -b "$f" | grep -e Mach-O >/dev/null; then printf '%s\0' "$f"; fi
+    done < <(find "$1" -type f -print0)
+}
+
+# The main executable of an app bundle, from its Info.plist.
+main_executable() {
+    if [[ -f $1/Contents/Info.plist ]]; then
+        printf '%s/Contents/MacOS/%s' "$1" "$(plist_value "$1/Contents/Info.plist" CFBundleExecutable)"
+    else
+        printf '%s/%s' "$1" "$(plist_value "$1/Info.plist" CFBundleExecutable)"
+    fi
+}
 
 # ------------------------------------------------------------------ steps
 
@@ -170,24 +197,44 @@ step_package_build() {
 
 step_package_test() {
     knot_swiftpm_flags
-    local filter=()
+    local filter=() output="$KNOT_LOGS/verify-package-test.out"
     if [[ -n $MODULE ]]; then
-        filter=(--filter "^${MODULE%Tests}Tests\.")
-        [[ $MODULE == KnotSoak ]] && filter=(--filter "^KnotSoak\.")
+        # The Swift module of a test target turns "-" into "_": knot-evalTests is
+        # knot_evalTests.
+        filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
-    swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error ${filter[@]+"${filter[@]}"}
+    swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
+        ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"
+    # A run that matched no test is a failure, not a pass.
+    if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
+        echo "No test ran${MODULE:+ for $TEST_TARGET}."
+        return 1
+    fi
 }
 
 # The named test contract-suite-dummy-port-two-test-targets: one contract suite in
 # KnotTestSupport, run from two test targets.
 step_contract_two_targets() {
     knot_swiftpm_flags
-    local targets
+    local targets target output="$KNOT_LOGS/verify-contract-run.out" ran=0
     targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null |
-        grep 'contractSuiteDummyPortTwoTestTargets' | cut -d. -f1 | cut -d/ -f1 | sort -u)"
-    echo "Targets that run the dummy contract suite:"
-    echo "$targets"
-    [[ $(printf '%s\n' "$targets" | grep -c .) -ge 2 ]]
+        grep -e 'contractSuiteDummyPortTwoTestTargets' | cut -d. -f1 | sort -u)"
+    # Run the suite from each test target on its own, and count a target only when its
+    # run passed exactly that test.
+    for target in $targets; do
+        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.contractSuiteDummyPortTwoTestTargets" >"$output" 2>&1 || {
+            echo "FAIL  the dummy contract suite failed in $target"
+            continue
+        }
+        if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
+            echo "ok    the dummy contract suite ran and passed in $target"
+            ran=$((ran + 1))
+        else
+            echo "FAIL  the dummy contract suite did not run in $target"
+        fi
+    done
+    echo "$ran test targets ran the dummy contract suite (two needed)"
+    ((ran >= 2))
 }
 
 # Every app, Debug: the iOS app with the Watch app and both widget extensions in it, and
@@ -222,9 +269,10 @@ step_packaging() {
 
     activity_in() {
         local f
-        for f in $(macho_files "$1"); do
-            nm "$f" 2>/dev/null | xcrun swift-demangle | grep -e "KnotIntents.KnotPlaceholderActivityAttributes" >/dev/null && return 0
-        done
+        while IFS= read -r -d '' f; do
+            nm "$f" 2>/dev/null | xcrun swift-demangle |
+                grep -e "KnotIntents.KnotPlaceholderActivityAttributes" >/dev/null && return 0
+        done < <(macho_files "$1")
         return 1
     }
     check "Live Activity attributes type in the widget extension" activity_in "$ios/PlugIns/Widgets-iOS.appex" || failed=1
@@ -250,27 +298,30 @@ step_packaging() {
     }
     check "knot-dev embedded and signed in the Mac app, with its own sandbox, and runs" tool_embedded || failed=1
 
-    check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets >/dev/null || failed=1
+    check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets || failed=1
 
-    free_of_fakes() {
-        local f found=0
-        for f in $(macho_files "$1"); do
+    # Scans every Mach-O file of an app bundle, its main executable included, for
+    # KnotFakes. It fails when it scanned nothing, so it cannot pass by finding no file.
+    # `want` is "none" for a release build and "some" for the debug control.
+    scan_for_fakes() {
+        local app=$1 want=$2 f main scanned=0 main_seen=0 found=0
+        main="$(main_executable "$app")"
+        while IFS= read -r -d '' f; do
+            scanned=$((scanned + 1))
+            [[ $f == "$main" ]] && main_seen=1
             if nm -a "$f" 2>/dev/null | grep -e 9KnotFakes >/dev/null || strings -a "$f" | grep -e KnotFakes >/dev/null; then
-                echo "KnotFakes in $f"
-                found=1
+                echo "      KnotFakes in $f"
+                found=$((found + 1))
             fi
-        done
-        ((found == 0))
+        done < <(macho_files "$app")
+        echo "      scanned $scanned Mach-O files in $app, main executable $( ((main_seen)) && echo included || echo MISSING)"
+        ((scanned > 0 && main_seen)) || return 1
+        if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
     }
-    check "Release Mac app free of KnotFakes" free_of_fakes "$(products Release)/Knot.app" || failed=1
+    check "Release Mac app free of KnotFakes" scan_for_fakes "$(products Release)/Knot.app" none || failed=1
     check "Release iOS app, its extension and the Watch app free of KnotFakes" \
-        free_of_fakes "$(products Release-iphonesimulator)/Knot.app" || failed=1
-    debug_has_fakes() {
-        local f
-        for f in $(macho_files "$ios"); do nm -a "$f" 2>/dev/null | grep -e 9KnotFakes >/dev/null && return 0; done
-        return 1
-    }
-    check "the Debug iOS app does hold KnotFakes, so the check can see it" debug_has_fakes || failed=1
+        scan_for_fakes "$(products Release-iphonesimulator)/Knot.app" none || failed=1
+    check "the Debug iOS app does hold KnotFakes, so the check can see it" scan_for_fakes "$ios" some || failed=1
     ((failed == 0))
 }
 

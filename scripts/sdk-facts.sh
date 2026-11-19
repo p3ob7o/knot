@@ -17,7 +17,8 @@ for sdk in iphoneos macosx watchos; do
     roots+=("$sdk=$(xcrun --sdk "$sdk" --show-sdk-path)" "$sdk-platform=$(xcrun --sdk "$sdk" --show-sdk-platform-path)")
 done
 
-python3 -I - "${roots[@]}" <<'PY'
+status=0
+python3 -I - "${roots[@]}" <<'PY' || status=$?
 import glob, os, re, sys
 
 roots = dict(arg.split("=", 1) for arg in sys.argv[1:])
@@ -123,3 +124,11 @@ fact("CKSyncEngine.Event.FetchedRecordZoneChanges has no public initialiser.",
 print("sdk-facts: every row holds" if failures == 0 else f"sdk-facts: {failures} rows do not hold")
 sys.exit(1 if failures else 0)
 PY
+
+if ((status == 1)); then
+    knot_fail "sdk-facts" "Rows of docs/architecture.md §20 marked SDK do not hold in $(knot_xcode_label)." \
+        "The SDK wins: say so in the PR, with each row that failed, and ask the orchestrator to update §20." "safe" "nothing"
+elif ((status != 0)); then
+    knot_fail "infra-sdk-facts-crashed" "The SDK check stopped with status $status before it finished." \
+        "Read the Python error above." "safe" "nothing"
+fi

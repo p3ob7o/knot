@@ -1,7 +1,5 @@
 import Foundation
 import KnotAgent
-import KnotCore
-import KnotExport
 import KnotStore
 
 // The `knot` command (docs/product-spec.md §10). WP-34 builds its commands. WP-01 makes it

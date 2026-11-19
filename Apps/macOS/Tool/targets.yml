@@ -8,7 +8,7 @@ targets:
     platform: macOS
     templates: [KnotProduct]
     sources:
-      - path: ../../../Packages/KnotKit/Sources/knot/main.swift
+      - path: ../../../Packages/KnotKit/Sources/knot
     settings:
       base:
         PRODUCT_NAME: $(KNOT_TOOL_NAME)
@@ -20,4 +20,4 @@ targets:
         SKIP_INSTALL: YES
     dependencies:
       - package: KnotKit
-        products: [KnotAgent, KnotCore, KnotExport, KnotStore]
+        products: [KnotAgent, KnotStore]

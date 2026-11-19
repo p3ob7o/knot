@@ -127,5 +127,7 @@ case ${1:-} in
             [[ -n $udid ]] && xcrun simctl delete "$udid"
         done
         true ;;
-    *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; [[ ${1:-} == -h || ${1:-} == --help ]] || exit 2 ;;
+    -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) knot_fail "sim-usage" "Unknown command: ${1:-none}." \
+        "Use ensure, list, udid <role>, boot <role>, shutdown or delete (scripts/sim.sh --help)." "safe" "nothing" ;;
 esac

@@ -5,9 +5,14 @@
 #   3. the package that delivers it;
 #   4. what it checks.
 # A pending step becomes required when its package merges. Exceptions come first.
+#
+# KNOT_XCODE names an Xcode other than the pinned one for an implementer's run. From WP-01
+# PR 2 on, the gate refuses KNOT_XCODE when it differs from the Xcode that .xcode-version
+# pins, so a gate run always uses the pinned Xcode.
 
 exception	required	WP-01 PR 2	Until WP-01 PR 2 merges, the gate is scripts/verify.sh --quick.
 doctor	required	WP-01 PR 1	The machine: no cloud-synced folder, the disk floor, the pinned Xcode and XcodeGen.
+pinned-xcode	pending	WP-01 PR 2	The gate refuses KNOT_XCODE when it differs from the pin in .xcode-version.
 plan	required	WP-01 PR 1	scripts/check-plan.sh.
 format	required	WP-01 PR 1	swift format lint --strict with .swift-format.
 pins	required	WP-01 PR 1	GRDB's version and revision for SwiftPM and for Xcode, and no other dependency.

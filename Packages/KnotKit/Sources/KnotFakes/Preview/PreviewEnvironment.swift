@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || KNOT_FAKES
     import KnotCore
 
     extension AppEnvironment {
