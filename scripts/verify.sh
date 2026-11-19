@@ -213,8 +213,8 @@ step_team_id() {
 
 step_ownership() {
     if [[ -z $PACKAGE ]]; then
-        echo "ownership: no package to check. This is not a package's branch, and no --package or --branch named one."
-        return 0
+        echo "ownership: no package to check: this is not a package's branch, and no --package or --branch named one."
+        return "$SKIPPED_CODE"
     fi
     local allow=() path
     for path in ${ALLOW[@]+"${ALLOW[@]}"}; do allow+=(--allow "$path"); done
@@ -736,7 +736,7 @@ PASSED=0
 SKIPPED_STEPS=0
 # A step that cannot run on this Mac exits with this status, and counts as skipped.
 SKIPPED_CODE=3
-SKIPPABLE="team-id"
+SKIPPABLE="team-id ownership"
 FAILED_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
