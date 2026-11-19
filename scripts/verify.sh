@@ -631,6 +631,7 @@ fi
 DEPTH=""
 RUN_MAC_UI=0
 PENDING=""
+PENDING_COUNT=0
 if [[ -n $ONLY ]]; then
     case " $(echo $ALL_STEPS) " in *" $ONLY "*) ;; *)
         usage_fail "Unknown step: $ONLY. Steps: $(echo $ALL_STEPS)." ;;
@@ -693,6 +694,7 @@ else
                 state="$(gate_state "$step")"
                 if [[ $state == pending* ]]; then
                     PENDING="$PENDING $step (${state#pending })"
+                    PENDING_COUNT=$((PENDING_COUNT + 1))
                     [[ $step == mac-ui ]] && RUN_MAC_UI=0
                 else
                     kept="$kept $step"
@@ -781,8 +783,7 @@ total=$(echo $STEPS | wc -w | tr -d ' ')
 failed=$((${#FAILED_STEP} > 0 ? 1 : 0))
 not_run=$((total - PASSED - failed - SKIPPED_STEPS))
 ALLOWED=${ALLOWED:-0}
-pending=0
-for word in $PENDING; do [[ $word == "("* ]] && pending=$((pending + 1)); done
+pending=$PENDING_COUNT
 status=ok
 [[ -n $FAILED_STEP ]] && status=FAILED
 xcode="$( [[ -n ${KNOT_XCODE_VERSION:-} ]] && knot_xcode_label || echo 'Xcode not selected')"
