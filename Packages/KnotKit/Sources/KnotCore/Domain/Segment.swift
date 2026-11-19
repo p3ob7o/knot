@@ -44,7 +44,8 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     /// `replaceText(_:origin:)`, which holds it to the size limit.
     public private(set) var text: String
     public var textOrigin: TextOrigin
-    /// Voice only. Never modified once written. Set through `setRawTranscript(_:)`.
+    /// Voice only. Never modified: it grows as the runs of a transcription deliver their
+    /// pieces, through `appendToRawTranscript(_:)`, and nothing replaces, shortens or clears it.
     public private(set) var rawTranscript: String?
     /// Voice only.
     public var transcription: TranscriptionProvenance?
@@ -105,10 +106,18 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.textOrigin = origin
     }
 
-    /// Sets the raw transcript. One past the size limit is refused.
-    public mutating func setRawTranscript(_ transcript: String?) throws(KnotError) {
-        if let transcript { try Limits.checkSegmentText(transcript) }
-        self.rawTranscript = transcript
+    /// Adds the text of a transcription run's pieces to the end of the raw transcript
+    /// (docs/architecture.md §4 and §9). It joins what is there with one space, unless either
+    /// side already has a space or a line break at the joint. Empty text changes nothing.
+    /// A transcript that would pass the size limit is refused and stays as it was.
+    public mutating func appendToRawTranscript(_ piece: String) throws(KnotError) {
+        guard !piece.isEmpty else { return }
+        let current = rawTranscript ?? ""
+        let needsSpace =
+            !current.isEmpty && current.last?.isWhitespace == false && piece.first?.isWhitespace == false
+        let grown = current + (needsSpace ? " " : "") + piece
+        try Limits.checkSegmentText(grown)
+        rawTranscript = grown
     }
 
     /// Encodes a segment, held to the bounds its decoder holds, so that nothing is written

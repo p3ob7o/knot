@@ -196,18 +196,45 @@ func segment(
 @Suite struct SegmentSetterTests {
     static let tooLong = String(repeating: "x", count: Limits.segmentTextBytes + 1)
 
-    @Test func textAndTranscriptChangeOnlyWithinTheLimit() throws {
+    @Test func textChangesOnlyWithinTheLimit() throws {
         var segment = try SegmentLimitTests.build(text: "x")
         #expect(throws: KnotError.textTooLong) { try segment.replaceText(Self.tooLong, origin: .edited) }
-        #expect(throws: KnotError.textTooLong) { try segment.setRawTranscript(Self.tooLong) }
         #expect(segment.text == "x")
         try segment.replaceText("edited", origin: .edited)
-        try segment.setRawTranscript("raw")
         #expect(segment.text == "edited")
         #expect(segment.textOrigin == .edited)
-        #expect(segment.rawTranscript == "raw")
         // What encodes also decodes.
         #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+
+    /// The raw transcript is never modified (docs/architecture.md §4): it grows as the runs
+    /// of a transcription deliver their pieces, and nothing replaces, shortens or clears it.
+    @Test func theRawTranscriptOnlyGrows() throws {
+        var segment = try SegmentLimitTests.build(text: "")
+        #expect(segment.rawTranscript == nil)
+        try segment.appendToRawTranscript("Buy milk")
+        #expect(segment.rawTranscript == "Buy milk")
+        // A piece joins what is there with one space, unless either side already has one.
+        try segment.appendToRawTranscript("and eggs.")
+        #expect(segment.rawTranscript == "Buy milk and eggs.")
+        try segment.appendToRawTranscript(" Then")
+        try segment.appendToRawTranscript("\ncall home")
+        #expect(segment.rawTranscript == "Buy milk and eggs. Then\ncall home")
+        // An empty piece, as a run over silence gives, changes nothing.
+        try segment.appendToRawTranscript("")
+        #expect(segment.rawTranscript == "Buy milk and eggs. Then\ncall home")
+        #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+
+    @Test func aRawTranscriptThatWouldPassTheLimitIsRefusedAndKept() throws {
+        var segment = try SegmentLimitTests.build(text: "", raw: "kept")
+        #expect(throws: KnotError.textTooLong) { try segment.appendToRawTranscript(Self.tooLong) }
+        let room = String(repeating: "y", count: Limits.segmentTextBytes - "kept ".utf8.count)
+        try segment.appendToRawTranscript(room)
+        #expect(segment.rawTranscript?.utf8.count == Limits.segmentTextBytes)
+        #expect(throws: KnotError.textTooLong) { try segment.appendToRawTranscript("z") }
+        #expect(segment.rawTranscript?.hasPrefix("kept y") == true)
+        #expect(segment.rawTranscript?.utf8.count == Limits.segmentTextBytes)
     }
 }
 
