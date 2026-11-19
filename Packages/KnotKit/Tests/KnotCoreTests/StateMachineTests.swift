@@ -216,11 +216,12 @@ private let failure = KnotError.transcriptionFailed.code
         let states: [JobState] = [.queued, .running, .done, .failed(Self.attempt.code)]
         let events: [JobEvent] = [
             .start, .succeeded, .stepFailed(Self.attempt, retryAt: nil), .stepFailed(Self.deferral, retryAt: nil),
-            .foundRunningAtLaunch, .retry,
+            .foundRunningAtLaunch, .retry, .yielded, .stepFailed(.audioUnreadable, retryAt: nil),
         ]
         let legal: [(JobState, JobEvent)] = [
             (.queued, .start), (.running, .succeeded), (.running, .stepFailed(Self.attempt, retryAt: nil)),
             (.running, .stepFailed(Self.deferral, retryAt: nil)), (.running, .foundRunningAtLaunch),
+            (.running, .yielded), (.running, .stepFailed(.audioUnreadable, retryAt: nil)),
             (.failed(Self.attempt.code), .retry),
         ]
         for state in states {
@@ -238,5 +239,43 @@ extension Job {
         var copy = self
         copy.lastErrorCode = lastErrorCode
         return copy
+    }
+}
+
+@Suite struct JobFinalAndYieldTests {
+    static func running() -> Job {
+        Job(id: id(1), segmentID: id(2), kind: .transcribe, state: .running)
+    }
+
+    @Test(arguments: [KnotError.audioUnreadable, .speechUnavailable, .cleanupModelUnavailable])
+    func aFinalErrorEndsTheJobAtOnceAsDone(error: KnotError) throws {
+        let job = try JobMachine.reduce(Self.running(), .stepFailed(error, retryAt: at("10:00")))
+        #expect(job.state == .done, "\(error.code) is not tried again on this device.")
+        #expect(job.lastErrorCode == error.code)
+        #expect(job.attempts == 0)
+        #expect(job.notBefore == nil)
+    }
+
+    @Test func aYieldIsNotCountedAndTheJobStaysQueued() throws {
+        var job = Self.running()
+        for _ in 1...10 {
+            job = try JobMachine.reduce(job, .yielded)
+            #expect(job.state == .queued)
+            job = try JobMachine.reduce(job, .start)
+        }
+        #expect(job.attempts == 0)
+        #expect(job.deaths == 0)
+        #expect(job.lastErrorCode == nil, "A yield is not an error.")
+        #expect(throws: IllegalTransition(from: JobState.queued, event: JobEvent.yielded)) {
+            try JobMachine.reduce(Job(id: id(1), segmentID: id(2), kind: .transcribe), .yielded)
+        }
+    }
+
+    @Test func aFailedRecognitionIsAnAttempt() throws {
+        let job = try JobMachine.reduce(
+            Job(id: id(1), segmentID: id(2), kind: .recognise, state: .running),
+            .stepFailed(.recognitionFailed, retryAt: nil))
+        #expect(job.state == .queued)
+        #expect(job.attempts == 1)
     }
 }

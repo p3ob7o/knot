@@ -5,17 +5,21 @@ public enum JobEvent: Hashable, Sendable {
     /// The queue starts the job.
     case start
     case succeeded
-    /// The step returned an error. A deferral goes back to the queue uncounted; any other
-    /// error is an attempt, and the job waits until `retryAt` before it runs again.
+    /// The step returned an error. A deferral goes back to the queue uncounted. A final
+    /// error ends the job at once as done, with the error's code. Any other error is an
+    /// attempt, and the job waits until `retryAt` before it runs again.
     case stepFailed(KnotError, retryAt: Date?)
+    /// The step was cancelled, because background time ran out or the queue was asked to
+    /// stop. It is not counted, and the job stays queued.
+    case yielded
     /// The job was found marked running at launch, so the process died inside it.
     case foundRunningAtLaunch
     /// A person pressed Retry on the segment.
     case retry
 }
 
-/// The job's state machine: attempts, deferrals and deaths are counted apart
-/// (docs/architecture.md §4).
+/// The job's state machine (docs/architecture.md §4). Five things stop a job and are told
+/// apart: an attempt, a deferral, a death, a yield and a final error.
 public enum JobMachine {
     /// After this many attempts the job fails and its segment offers a retry.
     public static let maximumAttempts = 5
@@ -34,7 +38,11 @@ public enum JobMachine {
             next.lastErrorCode = nil
         case (.running, .stepFailed(let error, let retryAt)):
             next.lastErrorCode = error.code
-            if error.isDeferral {
+            if error.isFinal {
+                // No retry on this device can fix it: the job ends, and is not tried again.
+                next.state = .done
+                next.notBefore = nil
+            } else if error.isDeferral {
                 next.state = .queued
                 next.notBefore = nil
             } else {
@@ -47,6 +55,8 @@ public enum JobMachine {
                     next.notBefore = retryAt
                 }
             }
+        case (.running, .yielded):
+            next.state = .queued
         case (.running, .foundRunningAtLaunch):
             next.deaths += 1
             if next.deaths >= maximumDeaths {
