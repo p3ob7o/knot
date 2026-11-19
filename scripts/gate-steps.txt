@@ -1,32 +1,37 @@
 # The steps of the merge gate, scripts/verify.sh --gate (docs/architecture.md §18).
 # Lines that start with `#` are comments. Each line has four fields separated by one tab:
 #   1. the step, as scripts/verify.sh names it;
-#   2. its state: `required` runs in the gate now, `pending` until its package merges;
-#   3. the package that delivers it;
+#   2. its state: `required` runs in the gate now, `pending` does not run yet;
+#   3. what it waits for, or the package that delivered it;
 #   4. what it checks.
-# A pending step becomes required when its package merges. Exceptions come first.
+# The gate reads field 2: a pending step is listed in its output and not run. A pending
+# step becomes required when what it waits for has happened; the orchestrator changes the
+# line. Which steps a gate takes at all comes from the depth table of §18, applied to the
+# diff by scripts/lib/knot_tool.py.
 #
-# KNOT_XCODE names an Xcode other than the pinned one for an implementer's run. From WP-01
-# PR 2 on, the gate refuses KNOT_XCODE when it differs from the Xcode that .xcode-version
-# pins, so a gate run always uses the pinned Xcode.
+# The gate builds with the pinned Xcode only: it refuses KNOT_XCODE when it names another
+# Xcode than .xcode-version pins. It refuses --only, --module and --skip.
 
-exception	required	WP-01 PR 2	Until WP-01 PR 2 merges, the gate is scripts/verify.sh --quick.
-doctor	required	WP-01 PR 1	The machine: no cloud-synced folder, the disk floor, the pinned Xcode and XcodeGen.
-pinned-xcode	pending	WP-01 PR 2	The gate refuses KNOT_XCODE when it differs from the pin in .xcode-version.
-plan	required	WP-01 PR 1	scripts/check-plan.sh.
-format	required	WP-01 PR 1	swift format lint --strict with .swift-format.
-pins	required	WP-01 PR 1	GRDB's version and revision for SwiftPM and for Xcode, and no other dependency.
-package-build	required	WP-01 PR 1	The package and its tests build, with --explicit-target-dependency-import-check error.
-package-test	required	WP-01 PR 1	The package tests, Swift Testing, on the Mac.
-contract-two-targets	required	WP-01 PR 1	A contract suite in KnotTestSupport runs from two test targets.
-apps	pending	WP-01 PR 2	Every app builds: the iOS app with the Watch app and both extensions, and the Mac app with knot-dev.
-packaging	pending	WP-01 PR 2	The packaging proofs of docs/plan/WP-01.md, with a Release binary free of KnotFakes.
-launch	pending	WP-01 PR 2	The three apps launch and show the placeholder.
-ownership	pending	WP-01 PR 2	The diff stays inside the paths the package owns.
-core-api	pending	WP-01 PR 2	KnotCore's public API matches main, except on a contract branch.
-named-tests	pending	WP-01 PR 2	Every test in docs/plan/named-tests.txt exists once its package has merged.
-lint	pending	WP-01 PR 2	No team ID, network call, logged text, standard defaults domain, eraseDatabaseOnSchemaChange, unlisted concurrency escape, undeclared required-reason API, or file named "… 2".
-mac-ui	pending	WP-01 PR 2	Mac UI tests, on the exclusive slot, where the diff reaches the Mac app or KnotUI.
-models	pending	WP-13	The on-device speech and cleanup models are present; a skipped model test fails the gate.
+doctor	required	WP-01	The machine: no cloud-synced folder, the disk floor, the pinned Xcode and XcodeGen, the simulator runtimes, and the on-device models.
+plan	required	WP-01	scripts/check-plan.sh.
+links	required	WP-01	Every relative link in a Markdown file resolves.
+fixtures	required	WP-04	Fixtures/tools/generate.sh --check: the committed fixtures match a fresh run, and the generated audio has its format and length.
+format	required	WP-01	swift format lint --strict with .swift-format.
+pins	required	WP-01	GRDB's version and revision for SwiftPM and for Xcode, and no other dependency.
+team-id	pending	the owner's local configuration on the Mac (KNOT_LOCAL_CONFIG)	The signing team's ID from the owner's local configuration is in no tracked file. Without the configuration the check cannot run.
+lint	required	WP-01	No network call, logged text, standard defaults domain, eraseDatabaseOnSchemaChange, unlisted concurrency escape, undeclared required-reason API, or file named "… 2".
+ownership	required	WP-01	The diff stays inside the paths the package owns, from its brief and scripts/ownership-extra.txt.
+core-api	required	WP-01	KnotCore's public API matches the base, except on a contract branch.
+named-tests	required	WP-01	Every test in docs/plan/named-tests.txt exists once its package has merged.
+package-build	required	WP-01	The package and its tests build, with --explicit-target-dependency-import-check error.
+package-test	required	WP-01	The package tests, Swift Testing, on the Mac. A skipped test fails the gate, because the gate requires the models.
+contract-two-targets	required	WP-01	A contract suite in KnotTestSupport runs from two test targets.
+self-test	required	WP-01	The scripts' self-test.
+apps	required	WP-01	Every app builds: the iOS app with the Watch app and both extensions, and the Mac app with knot-dev.
+packaging	required	WP-01	The packaging proofs of docs/plan/WP-01.md, with Release binaries free of KnotFakes.
+ios-hosted	required	WP-01	The tests hosted in the iOS app in the iPhone simulator: the contract suites that run only there. At the leaf depth, where the diff reaches KnotAudio, KnotInk or the iOS app.
+launch	required	WP-01	The UI tests on the iPhone, iPad and Watch simulators, and the Mac app's window.
+mac-ui	pending	WP-01 PR 3, once the owner has enabled Automation Mode and developer mode	Mac UI tests, on the exclusive slot, where the diff reaches the Mac app or KnotUI.
 soak	pending	WP-06	The capture ledger soak, where docs/architecture.md §17 asks for it.
-development-signed	pending	WP-34	After G1 and SP-3: the sandboxed app and knot-dev share a store.
+live-smoke	pending	WP-22	One UI smoke test on each platform on .live with a temporary store.
+two-process	pending	WP-34	After G1 and SP-3: the sandboxed app and knot-dev share a store, the tool writes and the app shows it.

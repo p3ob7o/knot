@@ -13,9 +13,11 @@ KNOT_MILESTONE_LEVEL = none
 // iCloud, push), with sync off. `team` signs with DEVELOPMENT_TEAM from Local.xcconfig.
 KNOT_SIGNING = local
 
-// Written by scripts/bootstrap.sh. The Mac development store sits in a folder named for
-// the worktree, which only debug builds honour (docs/architecture.md §7).
+// Written by scripts/bootstrap.sh. The Mac development store sits in a folder named by the
+// worktree's ID, its folder name and a short hash of its path, which only debug builds
+// honour (docs/architecture.md §7).
 KNOT_WORKTREE = unknown
+KNOT_WORKTREE_ID = unknown
 
 #include "Identifiers.xcconfig"
 #include? "../../.build/config/Worktree.xcconfig"

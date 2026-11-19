@@ -9,7 +9,7 @@
 	<key>KnotCloudContainer</key>
 	<string>$(KNOT_CLOUD_CONTAINER)</string>
 	<key>KnotDevStoreFolder</key>
-	<string>$(KNOT_WORKTREE)</string>
+	<string>$(KNOT_WORKTREE_ID)</string>
 	<key>KnotFlavour</key>
 	<string>$(KNOT_FLAVOUR)</string>
 	<key>KnotMilestoneLevel</key>

@@ -4,12 +4,29 @@
 
 set -euo pipefail
 
-KNOT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# The scripts come from one checkout, KNOT_SCRIPTS, and work on one tree, KNOT_ROOT. They
+# are the same folder unless KNOT_TREE names another tree: then the scripts of this
+# checkout, such as main's, check that tree, such as a candidate in the gate worktree
+# (docs/architecture.md §18). Everything a script reads of the code, the plan, the fixtures
+# and the pinned Xcode comes from the tree; the scripts, their helpers and the lists only the
+# orchestrator edits come from KNOT_SCRIPTS.
+KNOT_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=fail.sh
-source "$KNOT_ROOT/scripts/lib/fail.sh"
+source "$KNOT_SCRIPTS/lib/fail.sh"
+KNOT_ROOT="$(cd "$KNOT_SCRIPTS/.." && pwd -P)"
+if [[ -n ${KNOT_TREE:-} ]]; then
+    KNOT_ROOT="$(cd "$KNOT_TREE" 2>/dev/null && pwd -P)" ||
+        knot_fail "knot-tree-missing" "KNOT_TREE names $KNOT_TREE, which is not a folder." \
+            "Name the tree to check, such as the gate worktree, or unset KNOT_TREE." "safe" "nothing"
+fi
+# Children, such as a step that runs in its own process, check the same tree.
+export KNOT_TREE="$KNOT_ROOT" KNOT_SCRIPTS
 
 # This worktree's own build products (docs/architecture.md §18). `.build/` is git-ignored.
 KNOT_WORKTREE="$(basename "$KNOT_ROOT")"
+# The worktree's ID on this Mac: its folder name and a short hash of its root path, so two
+# clones in folders of the same name never share simulators or a development store.
+KNOT_WORKTREE_ID="$KNOT_WORKTREE-$(printf '%s' "$KNOT_ROOT" | shasum -a 256 | cut -c1-6)"
 KNOT_BUILD="$KNOT_ROOT/.build"
 KNOT_CONFIG="$KNOT_BUILD/config"
 KNOT_LOGS="$KNOT_BUILD/logs"
@@ -155,8 +172,8 @@ knot_swiftpm_flags() {
 # KNOT_LOCAL_CONFIG names, if any.
 knot_write_worktree_config() {
     mkdir -p "$KNOT_CONFIG"
-    printf '// Written by scripts/bootstrap.sh. Not committed.\nKNOT_WORKTREE = %s\n' "$KNOT_WORKTREE" \
-        >"$KNOT_CONFIG/Worktree.xcconfig"
+    printf '// Written by scripts/bootstrap.sh. Not committed.\nKNOT_WORKTREE = %s\nKNOT_WORKTREE_ID = %s\n' \
+        "$KNOT_WORKTREE" "$KNOT_WORKTREE_ID" >"$KNOT_CONFIG/Worktree.xcconfig"
     if [[ -n ${KNOT_LOCAL_CONFIG:-} ]]; then
         [[ -f $KNOT_LOCAL_CONFIG ]] ||
             knot_fail "bootstrap-local-config-missing" "KNOT_LOCAL_CONFIG names $KNOT_LOCAL_CONFIG, which does not exist." \
