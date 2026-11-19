@@ -38,9 +38,12 @@ enum EvalExit {
 }
 
 /// The options both commands take, read once by the entry point.
+///
+/// There are two, `--set` and `--fixtures`, and any other argument is a usage error. A command
+/// that needs an option of its own asks for it here, so that a mistyped option is never ignored.
 struct EvalOptions: Sendable {
     /// Which fixtures a run scores.
-    enum Set: String, Sendable {
+    enum FixtureSet: String, Sendable {
         /// The committed synthetic fixtures.
         case synthetic
         /// The owner's own recordings, in the folder that KNOT_LOCAL_FIXTURES names.
@@ -56,13 +59,11 @@ struct EvalOptions: Sendable {
     static let usage = "usage: knot-eval [speech|cleanup] --set synthetic|local [--fixtures <folder>]\n"
 
     /// The set to score.
-    let set: Set
+    let set: FixtureSet
     /// The folder to read, which exists. For `synthetic` it is the repository's `Fixtures`
     /// folder: the one `--fixtures` names, or `Fixtures` in the current directory. For `local`
     /// it is the folder that KNOT_LOCAL_FIXTURES names, and nothing else can name it.
     let fixtures: URL
-    /// The arguments the entry point does not know, for the command to read.
-    let rest: [String]
 
     /// Reads the options from the arguments that follow the command's name.
     static func parse(
@@ -70,26 +71,26 @@ struct EvalOptions: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         currentDirectory: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     ) -> Result<EvalOptions, Failure> {
-        var set: Set?
+        var set: FixtureSet?
         var named: URL?
-        var rest: [String] = []
         var index = arguments.startIndex
         while index < arguments.endIndex {
-            let argument = arguments[index]
-            let value = index + 1 < arguments.endIndex ? arguments[index + 1] : nil
-            switch argument {
-            case "--set":
-                guard set == nil, let value, let chosen = Set(rawValue: value) else { return .failure(.usage) }
-                set = chosen
-                index += 2
-            case "--fixtures":
-                guard named == nil, let value else { return .failure(.usage) }
-                named = URL(fileURLWithPath: value, isDirectory: true, relativeTo: currentDirectory)
-                index += 2
-            default:
-                rest.append(argument)
-                index += 1
+            // Each option takes one value, and a value never looks like an option.
+            guard index + 1 < arguments.endIndex, !arguments[index + 1].hasPrefix("--") else {
+                return .failure(.usage)
             }
+            let value = arguments[index + 1]
+            switch arguments[index] {
+            case "--set":
+                guard set == nil, let chosen = FixtureSet(rawValue: value) else { return .failure(.usage) }
+                set = chosen
+            case "--fixtures":
+                guard named == nil, !value.isEmpty else { return .failure(.usage) }
+                named = URL(fileURLWithPath: value, isDirectory: true, relativeTo: currentDirectory)
+            default:
+                return .failure(.usage)
+            }
+            index += 2
         }
         guard let set else { return .failure(.usage) }
 
@@ -113,6 +114,6 @@ struct EvalOptions: Sendable {
         else {
             return .failure(.inputMissing(missing))
         }
-        return .success(EvalOptions(set: set, fixtures: fixtures, rest: rest))
+        return .success(EvalOptions(set: set, fixtures: fixtures))
     }
 }
