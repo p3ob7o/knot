@@ -94,6 +94,17 @@ xcodebuild -exportArchive -archivePath .build/sp3/SP3.xcarchive -exportPath .bui
 
 The export options name the method `app-store-connect`, the destination `upload` and the team, read from the build settings at run time, so that no team ID is written down. Build output goes to a file and is filtered before anything is quoted.
 
+**Where to run it.** Not on the build Mac. The upload reuses `com.p3ob7o.knot.dev` and `com.p3ob7o.knot.dev.cli`, whose data containers there list only the local and the development signers, so the TestFlight build is a new signer and its first start raises the same "not in ACL" dialog, for a reason that has nothing to do with the group. The owner runs the check on a Mac, or in a user account, where no Knot Dev build has ever run. There no signer's dialog is expected, and any dialog is the group's.
+
+**Telling the two apart, if a dialog does come.** The system log says which it is. Right after the dialog, in Terminal:
+
+```sh
+/usr/bin/log show --last 5m --style compact --predicate \
+  '(process == "secinitd" AND eventMessage CONTAINS "prompting") OR (process == "containermanagerd" AND eventMessage CONTAINS "knot.dev") OR (process == "tccd" AND eventMessage CONTAINS "knot.dev")'
+```
+
+A secinitd line "… not in ACL for container ~/Library/Containers/com.p3ob7o.knot.dev…/Data …; prompting" is a signer's dialog: he allows it, and it does not fail the check. A line about the group container, a containermanagerd "REJECTED" or a tccd request naming `knot.dev`, is the group's, and it fails the check for that form. The lines carry the team's ID: they are read, not pasted into a note.
+
 At G3 the owner installs the build from TestFlight, opens Knot Dev once, and runs in Terminal, watching its window refresh:
 
 ```sh
