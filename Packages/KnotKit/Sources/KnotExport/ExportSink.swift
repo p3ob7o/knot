@@ -51,6 +51,8 @@ public struct FolderExportSink: ExportSink {
     /// needs no check: the write replaces it by a rename, which never follows it.
     ///
     /// The check reads the link itself, from a path with no trailing slash, which would follow it.
+    /// It narrows the window and does not close it: something that swaps the folder for a link
+    /// between the check and the write still gets the write.
     static func refuseLink(_ folder: URL) throws(KnotError) {
         let path = folder.path(percentEncoded: false)
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil else { return }

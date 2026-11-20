@@ -104,7 +104,8 @@ public struct ExportPreview: Hashable, Sendable {
 /// What an export wrote and what it left out.
 public struct ExportReport: Hashable, Sendable {
     /// Every path written, in the order it was written: each note's recordings and drawings,
-    /// then its Markdown file, note by note in the order of the stream.
+    /// then its Markdown file, note by note in the order of the stream, then the notes that the
+    /// catch-up found changed while the export ran, last, in the order of their changes.
     public var written: [ExportPath]
     /// The notes written.
     public var notes: Int
