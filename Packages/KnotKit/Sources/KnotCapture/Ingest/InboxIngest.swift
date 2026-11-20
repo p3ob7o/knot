@@ -58,13 +58,56 @@ public actor InboxIngest {
 
     /// Ingests every item in `Inbox/`, in the order their captures started. Stops at the
     /// first item the store does not take because it is not open or is busy.
+    ///
+    /// One run at a time: a call that comes while a run is in flight returns at once, with no
+    /// outcomes, and the run in flight scans `Inbox/` again before it ends. So no item is placed
+    /// while an earlier one is still in flight, and no caller waits for another's run.
     public func ingestAll() async -> [CaptureID: ItemOutcome] {
+        guard !inFlight else {
+            rescan = true
+            return [:]
+        }
+        inFlight = true
+        defer { inFlight = false }
+        return await scanWhileAsked()
+    }
+
+    /// Ingests the item of one capture, unless a run is in flight, which then takes it.
+    public func ingest(_ capture: CaptureID) async -> ItemOutcome {
+        guard !inFlight else {
+            rescan = true
+            return .alreadyRunning
+        }
+        inFlight = true
+        defer { inFlight = false }
+        let outcome = await ingestItem(capture)
+        if rescan { _ = await scanWhileAsked() }
+        return outcome
+    }
+
+    private var inFlight = false
+    private var rescan = false
+
+    /// Scans `Inbox/` until no call asked for another scan meanwhile, or the store stops
+    /// answering.
+    private func scanWhileAsked() async -> [CaptureID: ItemOutcome] {
+        var outcomes: [CaptureID: ItemOutcome] = [:]
+        repeat {
+            rescan = false
+            let (scanned, stopped) = await scanOnce()
+            outcomes.merge(scanned) { $1 }
+            if stopped { break }
+        } while rescan
+        return outcomes
+    }
+
+    private func scanOnce() async -> (outcomes: [CaptureID: ItemOutcome], stopped: Bool) {
         let found: [CaptureID]
         do throws(KnotError) {
             found = try items.captureIDs()
         } catch {
             log.failure(error, "inbox_not_listed")
-            return [:]
+            return ([:], true)
         }
         var manifests: [(CaptureID, Date)] = []
         for id in found {
@@ -73,15 +116,14 @@ public actor InboxIngest {
         }
         var outcomes: [CaptureID: ItemOutcome] = [:]
         for (id, _) in manifests.sorted(by: { ($0.1, $0.0) < ($1.1, $1.0) }) {
-            let outcome = await ingest(id)
+            let outcome = await ingestItem(id)
             outcomes[id] = outcome
-            if case .kept(let code) = outcome, Self.storeDidNotAnswer(code) { break }
+            if case .kept(let code) = outcome, Self.storeDidNotAnswer(code) { return (outcomes, true) }
         }
-        return outcomes
+        return (outcomes, false)
     }
 
-    /// Ingests the item of one capture.
-    public func ingest(_ capture: CaptureID) async -> ItemOutcome {
+    private func ingestItem(_ capture: CaptureID) async -> ItemOutcome {
         // An item already being ingested is not ingested twice at once.
         guard running.insert(capture).inserted else { return .alreadyRunning }
         defer { running.remove(capture) }

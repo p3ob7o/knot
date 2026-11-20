@@ -230,4 +230,30 @@ import Testing
         #expect(outcomes[begun.captureID] == .kept(KnotError.captureIDConflict.code))
         #expect(r.layer.entryKind(r.locations.inboxManifest(begun.captureID)) == .file)
     }
+
+    /// Finding 37, the re-check's N1. Two ingests overlap, as the engine starts one at every
+    /// end: no item is placed while an earlier one is in flight, so the recording that followed
+    /// a typed capture lands in its note.
+    @Test func overlappingIngestsKeepTheHandoffInOneNote() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        _ = try await r.engine.end(b.captureID)
+        // The first ingest waits in the store on the typed capture; a second starts meanwhile.
+        let hold = await r.notes.holdNextCaptureWrite()
+        let ingest = r.ingest
+        let first = Task { await ingest.ingestAll() }
+        await reached(hold)
+        _ = await SuiteWait.value("the second ingest") { await ingest.ingestAll() }
+        hold.release()
+        _ = await SuiteWait.value("the first ingest") { await first.value }
+        let sa = try #require(try await r.notes.segment(SegmentID(a.captureID)))
+        let sb = try #require(try await r.notes.segment(SegmentID(b.captureID)))
+        #expect(sa.noteID == sb.noteID)
+        #expect(r.inboxFiles().isEmpty)
+    }
 }
