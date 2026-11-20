@@ -29,7 +29,8 @@ build() {
     if ! xcodebuild -project "$SPIKE/SP2.xcodeproj" -scheme SP2-iOS -configuration Debug \
         -destination "$destination" -derivedDataPath "$DERIVED" COMPILER_INDEX_STORE_ENABLE=NO "$@" \
         build >"$log" 2>&1; then
-        grep -E "error:|warning:" "$log" | sort -u | head -40 >&2
+        # Xcode writes the team's prefix into the log: ten upper-case letters and digits.
+        grep -E "error:|warning:" "$log" | sort -u | head -40 | sed -E 's/[A-Z0-9]{10}/<team>/g' >&2
         knot_fail "sp2-build" "The SP-2 build for $destination failed." "Read $log." "safe" "the build folder"
     fi
     echo "sp2: built for $destination ($(grep -c 'warning:' "$log" || true) warning lines)"
@@ -60,21 +61,29 @@ case ${1:-} in
         build "generic/platform=iOS" "$KNOT_BUILD/logs/sp2-device.log" KNOT_SIGNING=local CODE_SIGNING_ALLOWED=NO
         ;;
     device)
+        # Signing with the team: KNOT_LOCAL_CONFIG names the local configuration, which is
+        # given to this build alone as -xcconfig, never linked into the worktree.
+        signing=()
+        [[ -n ${KNOT_LOCAL_CONFIG:-} ]] && signing=(-xcconfig "$KNOT_LOCAL_CONFIG")
         generate
-        build "generic/platform=iOS" "$KNOT_BUILD/logs/sp2-device.log" -allowProvisioningUpdates
+        build "generic/platform=iOS" "$KNOT_BUILD/logs/sp2-device.log" "${signing[@]}" -allowProvisioningUpdates -allowProvisioningDeviceRegistration
         app="$DERIVED/Build/Products/Debug-iphoneos/SP2.app"
-        codesign -dv "$app" 2>&1 | grep -q '^TeamIdentifier=[A-Z0-9]' || knot_fail "sp2-unsigned" "The device build is not signed with a team." \
-            "Set KNOT_SIGNING = team and DEVELOPMENT_TEAM in the Local.xcconfig that KNOT_LOCAL_CONFIG names, then run scripts/bootstrap.sh." "safe" "nothing"
-        echo "sp2: devices that devicectl sees:"
-        xcrun devicectl list devices
+        # Read whole before matching: with pipefail, `grep -q` closing the pipe early fails codesign.
+        signature="$(codesign -dv "$app" 2>&1 || true)"
+        [[ $signature == *$'\nTeamIdentifier='[A-Z0-9]* ]] || knot_fail "sp2-unsigned" "The device build is not signed with a team." \
+            "Set KNOT_LOCAL_CONFIG to the local configuration that sets KNOT_SIGNING = team and DEVELOPMENT_TEAM." "safe" "nothing"
+        echo "sp2: signed with a team"
+        # The iPhone app first, then the Watch app embedded in it. SP2_PHONE and SP2_WATCH are
+        # the devices' identifiers from `xcrun devicectl list devices`.
         if [[ -n ${SP2_PHONE:-} ]]; then
-            xcrun devicectl device install app --device "$SP2_PHONE" "$app"
-        else
-            echo "sp2: set SP2_PHONE=<iPhone identifier> to install. The Watch app follows the iPhone app" \
-                "when the Watch app on the iPhone installs apps automatically; otherwise set SP2_WATCH."
+            xcrun devicectl device install app --device "$SP2_PHONE" "$app" >"$KNOT_BUILD/logs/sp2-install-phone.log" 2>&1 ||
+                knot_fail "sp2-install-phone" "The install on the iPhone failed." "Read $KNOT_BUILD/logs/sp2-install-phone.log." "safe" "nothing"
+            echo "sp2: installed on the iPhone"
         fi
         if [[ -n ${SP2_WATCH:-} ]]; then
-            xcrun devicectl device install app --device "$SP2_WATCH" "$app/Watch/SP2.app"
+            xcrun devicectl device install app --device "$SP2_WATCH" "$app/Watch/SP2.app" >"$KNOT_BUILD/logs/sp2-install-watch.log" 2>&1 ||
+                knot_fail "sp2-install-watch" "The install on the Watch failed." "Read $KNOT_BUILD/logs/sp2-install-watch.log." "safe" "nothing"
+            echo "sp2: installed on the Watch"
         fi
         ;;
     *)

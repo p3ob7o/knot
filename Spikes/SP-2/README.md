@@ -30,14 +30,14 @@ Spikes/SP-2/sim-test.sh watch run -sp2-count 5 -sp2-mode sequential
 
 ## Build for the devices
 
-1. The local configuration that `KNOT_LOCAL_CONFIG` names sets `KNOT_SIGNING = team` and `DEVELOPMENT_TEAM`. `scripts/bootstrap.sh` links it into `.build/config/Local.xcconfig`, which `Config/SP2.xcconfig` includes.
-2. Xcode is signed in to the team's account, so that automatic signing can register the three bundle IDs and make development profiles. The iPhone and the Watch are registered devices, have Developer Mode on, and the Watch is paired with the iPhone.
-3. `xcrun devicectl list devices` shows both. Then:
+1. `KNOT_LOCAL_CONFIG` names the local configuration that sets `KNOT_SIGNING = team` and `DEVELOPMENT_TEAM`. The script gives it to the build alone, as `-xcconfig`, and links nothing into the worktree.
+2. Xcode is signed in to the team's account. The build passes `-allowProvisioningUpdates -allowProvisioningDeviceRegistration`, so the first one registers the development app IDs and any connected device that the account lacks. A Watch is registered only by a build whose destination is the Watch itself: build the `SP2-watchOS` scheme once with `-destination id=<Watch UDID>` and those two flags, then run the script. Developer Mode is on on both devices, and the Watch is paired with the iPhone.
+3. Find the iPhone's and the Watch's identifiers with `xcrun devicectl list devices`. Then, with the pinned XcodeGen first on `PATH`:
 
 ```
-SP2_PHONE=<iPhone identifier> SP2_WATCH=<Watch identifier> Spikes/SP-2/build.sh device
+KNOT_LOCAL_CONFIG=<file> SP2_PHONE=<iPhone identifier> SP2_WATCH=<Watch identifier> Spikes/SP-2/build.sh device
 ```
 
-The script builds with `-allowProvisioningUpdates`, checks the signature, and installs the iPhone app and then the Watch app. Without `SP2_WATCH`, the Watch app installs from the iPhone when the iPhone's Watch app installs apps automatically.
+The script builds, checks that the app is signed with a team, and installs the iPhone app and then the Watch app embedded in it.
 
 Then follow `sitting.md`.
