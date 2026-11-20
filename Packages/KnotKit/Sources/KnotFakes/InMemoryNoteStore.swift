@@ -714,9 +714,22 @@
 
         /// Records a capture that has no row: rule 15, the placement, the note, its segments,
         /// its row and its first job, in `next`.
-        private func place(_ capture: NewCapture, ingesting: Bool, in next: inout State) throws(KnotError)
+        private func place(_ asked: NewCapture, ingesting: Bool, in next: inout State) throws(KnotError)
             -> CaptureReceipt
         {
+            var capture = asked
+            // Rule 15 in the order the captures began (finding 62): a start that commits after a
+            // newer capture began on this device never ends that capture. It is ended by the
+            // newer one's start and placed at its own start, as the window saw it then.
+            var request = capture.appendRequest
+            var lateStart = false
+            if !ingesting, capture.arrival == .live, !capture.origin.source.isTool,
+                let open = openOnDevice(in: next), open.startedAt > capture.startedAt
+            {
+                lateStart = true
+                capture.endedAt = min(capture.endedAt ?? open.startedAt, open.startedAt)
+                request.arrival = .late
+            }
             // A segment ID that another capture owns is refused, and nothing is written.
             for id in segmentIDs(of: capture) where next.segments[id] != nil && next.segmentCapture[id] != capture.id {
                 throw KnotError.captureIDConflict.about(capture: capture.id)
@@ -731,8 +744,8 @@
             } else {
                 // Rule 15 for a capture made now; an inbox item's moment has passed.
                 decision = try decide(
-                    capture.appendRequest, kind: capture.kind, surface: capture.origin.surface, in: &next,
-                    predicting: false, openRule: !ingesting, shown: shownNote(of: capture, in: next))
+                    request, kind: capture.kind, surface: capture.origin.surface, in: &next,
+                    predicting: false, openRule: !ingesting && !lateStart, shown: shownNote(of: capture, in: next))
             }
             let noteID: NoteID
             let joined: Bool
@@ -752,7 +765,7 @@
                 if capture.placement == .newNote, capture.arrival == .live,
                     !faults.contains(.newNoteClosesNothing)
                 {
-                    closeLatestNote(before: capture, in: &next, counter: counter)
+                    closeLatestNote(before: request, in: &next, counter: counter)
                 }
                 next.notes[noteID] = Note(
                     id: noteID, createdAt: capture.startedAt, updatedAt: now,
@@ -760,7 +773,10 @@
             }
             let outcome: CaptureOutcome = capture.endedAt == nil ? .open : .stored
             let segmentIDs = try writeSegments(for: capture, in: noteID, joined: joined, at: now, into: &next)
-            if outcome == .stored, capture.kind == .voice { writeTranscribeJob(for: SegmentID(capture.id), in: &next) }
+            // A recording ended by a later start has no file yet: its job comes with the file.
+            if outcome == .stored, capture.kind == .voice, case .file = capture.body {
+                writeTranscribeJob(for: SegmentID(capture.id), in: &next)
+            }
             touch(noteID, counter: counter, at: now, in: &next)
             let hash = outcome == .stored ? capture.body.content.map { contentHash(capture.kind, $0) } : nil
             next.captures[capture.id] = Capture(
@@ -865,12 +881,12 @@
         }
 
         /// Rule 4: "New note" closes the note the window would have joined, at the capture's start.
-        private func closeLatestNote(before capture: NewCapture, in next: inout State, counter: Int64) {
-            let context = appendContext(for: capture.appendRequest, in: next)
-            guard let latest = AppendRule.latest(for: capture.appendRequest, in: context),
+        private func closeLatestNote(before request: AppendRequest, in next: inout State, counter: Int64) {
+            let context = appendContext(for: request, in: next)
+            guard let latest = AppendRule.latest(for: request, in: context),
                 var note = next.notes[latest.noteID], note.deletedAt == nil, note.closedAt == nil
             else { return }
-            note.closedAt = capture.startedAt
+            note.closedAt = request.startedAt
             next.notes[note.id] = note
             touch(note.id, counter: counter, at: clock.now(), in: &next)
         }

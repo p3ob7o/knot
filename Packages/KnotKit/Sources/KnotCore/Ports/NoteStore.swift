@@ -42,6 +42,11 @@ public protocol NoteStore: Sendable {
     /// when text runs past the size limit. A capture placed as a late arrival is marked as
     /// arrived (`Segment.arrivedAt`).
     ///
+    /// Rule 15 applies in the order the captures began. A capture whose store call commits
+    /// after a newer capture began on this device, the race of §6 rule 6, never ends that
+    /// capture: it is recorded as ended at the newer one's start, takes its later saves by
+    /// revision, and is placed by the note it showed or by the append rule at its own start.
+    ///
     /// A capture that follows the window goes to the note its surface showed, whenever it names
     /// one and that note can still take it: not deleted, a live segment left, and not closed by
     /// "New note" before the capture started. So a store call that commits late and the ingest

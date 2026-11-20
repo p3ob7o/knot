@@ -146,6 +146,34 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         #expect(result.receipt.noteID == a.noteID)
     }
 
+    /// The reviewer's sequence for finding 62: hold the record of a typed capture begun in the
+    /// app, begin one in the Mac panel 12 seconds later, release: the panel's capture stays open.
+    @Test func aHeldStartReleasedAfterANewerOneBeganDoesNotEndIt() async throws {
+        let clock = FakeClock()
+        let ids = SeededIDGenerator(seed: 12, clock: clock)
+        let device: DeviceID = ids.make()
+        let store = InMemoryNoteStore(clock: clock, ids: ids, deviceID: device)
+        let launch: LaunchID = ids.make()
+        let older = NewCapture(
+            id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .app),
+            launchID: launch, placement: .window, startedAt: clock.now(), body: .text("Typed in the app"),
+            revision: 1)
+        let hold = await store.holdNextCaptureWrite()
+        let late = Task { try await store.record(older) }
+        await hold.untilReached()
+        clock.advance(by: 12)
+        let panel = NewCapture(
+            id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .macPanel),
+            launchID: launch, placement: .window, startedAt: clock.now(), body: .text("Typing in the panel now"),
+            revision: 1)
+        _ = try await store.record(panel)
+        hold.release()
+        _ = try await late.value
+        #expect(try await store.capture(panel.id)?.outcome == .open)
+        #expect(try await store.segment(SegmentID(panel.id))?.segment.state == .typed(.draft))
+        #expect(try await store.capture(older.id)?.endedAt == panel.startedAt)
+    }
+
     /// A store call that commits after its capture fell back to `Inbox/`: the hold lets the
     /// ingest of the inbox item commit first, and the late call then finds the row ended and
     /// changes nothing it should not.

@@ -97,6 +97,7 @@ public enum NoteStoreContract {
         Check(name: "title-time", run: theTitlesTimeIsSetByEachChange),
         Check(name: "discard-not-final", run: aDiscardIsNotFinalForALaterSave),
         Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
+        Check(name: "late-start", run: aLateStartDoesNotEndTheCaptureBeingMadeNow),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -1889,6 +1890,38 @@ public enum NoteStoreContract {
         _ = try await h.store.record(h.typed("and the dog", from: 6, to: 6.1, placement: .named(first.noteID)))
         #expect(
             try await h.store.note(first.noteID)?.note.titleEditedAt == h.at(5), "A later capture does not move it.")
+    }
+
+    /// §6 rule 6, and rule 15 in the order the captures began (finding 62): a start whose
+    /// store call commits after a newer capture began on this device never ends that capture.
+    /// It is recorded as ended at the newer one's start, takes its later saves by revision, and
+    /// is placed at its own start, here in a note of its own, since nothing began before it.
+    public static func aLateStartDoesNotEndTheCaptureBeingMadeNow(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        // A begins in the app; its store call is slow, and the engine falls back. B begins in
+        // the Mac panel 12 seconds later, and its call commits first.
+        let older = h.typedDraft("Typed in the app", at: 10)
+        var panel = h.typedDraft("Typing in the panel now", at: 10.2)
+        panel.origin = CaptureOrigin(source: .device(h.device), surface: .macPanel)
+        let now = try await h.store.record(panel)
+        let late = try await h.store.record(older)
+
+        #expect(try await h.row(panel.id)?.outcome == .open, "The capture being made now stays open.")
+        #expect(try await h.store.segment(SegmentID(panel.id))?.segment.state == .typed(.draft))
+        #expect(try await h.text(SegmentID(panel.id)) == "Typing in the panel now")
+        let row = try #require(try await h.row(older.id))
+        #expect(row.outcome == .stored && row.endedAt == h.at(10.2), "Ended by the start of the newer capture.")
+        #expect(late.outcome == .stored && !late.joinedExistingNote)
+        #expect(late.noteID != now.noteID, "Placed at its own start, not in the note of the newer capture.")
+        #expect(try await h.store.segment(SegmentID(older.id))?.segment.state == .typed(.ready))
+
+        let saved = try await h.store.checkpoint(
+            CaptureCheckpoint(captureID: older.id, text: "Typed in the app, and more", revision: 2))
+        #expect(saved.applied, "A later save of the older capture is taken by revision.")
+        #expect(try await h.text(SegmentID(older.id)) == "Typed in the app, and more")
+        let ended = try await h.store.end(h.endTyped(panel.id, "Typed in the panel", at: 10.5, revision: 2))
+        #expect(ended.noteID == now.noteID && ended.outcome == .stored)
+        #expect(try await h.store.openCaptures().isEmpty)
     }
 
     // MARK: Reading
