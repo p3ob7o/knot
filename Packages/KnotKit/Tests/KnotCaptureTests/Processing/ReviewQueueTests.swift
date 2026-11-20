@@ -371,6 +371,51 @@ import Testing
         #expect(job.state == .queued)
         #expect(result == .idle)
     }
+
+    /// The re-check's B6. A drain that stops on an error while the store cannot say whether
+    /// work is left says `yielded`.
+    @Test func drainThatStopsWhileTheStoreCannotSayHasYielded() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks)
+        hooks.failJobReads(-1)
+        #expect(
+            await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } }
+                == .yielded)
+    }
+
+    /// The re-check's B2. While this process drains one job, `resume()` counts once the death
+    /// of a job an earlier launch left running; a second `resume()` counts nothing more.
+    @Test func earlierDeathIsCountedOnceWhileAnotherJobRuns() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let a = try await r.beginRecording()
+        _ = try await r.engine.end(a.captureID)
+        let b = try await r.beginRecording()
+        _ = try await r.engine.end(b.captureID)
+        // A was left running, as a death of an earlier launch leaves it.
+        let jobA = try #require(try await r.notes.jobs(for: SegmentID(a.captureID)).first)
+        try await r.notes.saveJob(try JobMachine.reduce(jobA, .start))
+        r.transcriber.setRunDelay(.milliseconds(300))
+        let queue = r.queue
+        let drain = Task { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        #expect(
+            await eventually("job B to run") {
+                (try? await r.notes.jobs(for: SegmentID(b.captureID)))?.first?.state == .running
+            })
+        for _ in 0..<2 {
+            let resumed = await SuiteWait.value("resume()") { () async -> Bool in (try? await queue.resume()) != nil }
+            #expect(resumed == true)
+            #expect(try await r.notes.jobs(for: SegmentID(a.captureID)).first?.deaths == 1)
+        }
+        #expect(await SuiteWait.value("the drain") { await drain.value } == .idle)
+        let endB = try #require(try await r.notes.jobs(for: SegmentID(b.captureID)).first { $0.kind == .transcribe })
+        #expect(endB.deaths == 0)
+        #expect(endB.state == .done)
+    }
 }
 
 /// A runner whose work meets a store that does not answer.
