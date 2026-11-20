@@ -74,6 +74,19 @@ struct Replica: Codable, Sendable {
         return true
     }
 
+    /// A segment leaves its note for a new note of its own (§4): the new note takes the
+    /// segment's dates, and noteGeneration rises by one.
+    mutating func move(_ segment: UUID, toNewNote note: UUID) {
+        guard var local = segments[segment] else { return }
+        notes[note] = NoteValue(id: note, createdAt: local.value.startedAt, title: nil, titleOrigin: TitleOrigin.none,
+                                titleEditedAt: nil, closedAt: nil, deletedAt: nil)
+        local.value.noteID = note
+        local.value.noteGeneration += 1
+        segments[segment] = local
+        pending.insert(RecordKey(kind: .note, id: note))
+        pending.insert(RecordKey(kind: .segment, id: segment))
+    }
+
     /// Retry on this device moves the work here and raises the generation (§11).
     mutating func takeOwnership(_ segment: UUID) {
         guard var local = segments[segment] else { return }

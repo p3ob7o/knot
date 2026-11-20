@@ -19,6 +19,9 @@ enum AdapterInput: Sendable {
     case sendStarted
     case sent(saved: [RemoteChange], systemFields: [RecordKey: Data], deleted: [UUID], failures: [SendFailure])
     case sendEnded
+    /// Something the spike's trace records and the core ignores: a zone fetch starting, the
+    /// reason of a fetch or a send.
+    case trace(String)
 }
 
 enum AccountTransition: Equatable, Sendable {
@@ -28,7 +31,7 @@ enum AccountTransition: Equatable, Sendable {
 }
 
 /// The three reasons CKSyncEngine gives for a deleted zone, from the SDK.
-enum ZoneLoss: String, Sendable {
+enum ZoneLoss: String, Codable, Sendable {
     case deleted, purged, encryptedDataReset, unknown
 }
 
@@ -225,6 +228,8 @@ struct BatchBuilder: Sendable {
         /// Records outside the send's scope: returning them fails the send with
         /// invalidArguments (CKSyncEngine.h).
         var outOfScope: [RecordKey] = []
+        /// The records this batch holds, saves and deletes.
+        var taken: [RecordKey] = []
     }
 
     func build(_ pending: [OutgoingRecord], scope: CKSyncEngine.SendChangesOptions.Scope) -> Batch {
@@ -239,6 +244,7 @@ struct BatchBuilder: Sendable {
             if batch.saves.count + batch.deletes.count >= maxRecords { break }
             if case .deleted = item.change {
                 batch.deletes.append(id)
+                batch.taken.append(key)
                 continue
             }
             guard let record = try? mapping.record(for: item.change, systemFields: item.systemFields) else { continue }
@@ -251,6 +257,7 @@ struct BatchBuilder: Sendable {
             // empty: one record under the record limit always fits a request on its own.
             if batch.bytes + size > maxBytes, !(batch.saves.isEmpty && batch.deletes.isEmpty) { break }
             batch.saves.append(record)
+            batch.taken.append(key)
             batch.bytes += size
         }
         return batch

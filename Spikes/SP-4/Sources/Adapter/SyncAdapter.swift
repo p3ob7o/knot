@@ -16,17 +16,34 @@ protocol SyncStoreSink: Sendable {
     func pendingForSend(limit: Int, generation: Int) async -> [OutgoingRecord]
     /// Records the batch builder refused because they exceed the record limit.
     func refused(oversize: [RecordKey], generation: Int) async
+    /// The records the batch builder took into a batch, so that the store does not hand
+    /// them out again in this send, and does hand out the ones it left.
+    func taken(_ keys: [RecordKey], generation: Int) async
+    /// The record to save for a pending change the engine tracks, for the engine's own
+    /// batch builder, `RecordZoneChangeBatch(pendingChanges:recordProvider:)`.
+    func record(for recordID: CKRecord.ID, generation: Int) async -> CKRecord?
 }
 
 final class SyncAdapter: CKSyncEngineDelegate {
     let store: any SyncStoreSink
     let generation: Int
     let translator = EventTranslator()
-    let builder = BatchBuilder()
+    let builder: BatchBuilder
+    /// The spike's switch for statement 3: build batches with the engine's own builder from
+    /// the pending changes the engine tracks, instead of the adapter's.
+    let useEngineBuilder: Bool
+    /// The spike's switch for statement 5: keep the Attachments zone out of fetches.
+    let excludeAttachments: Bool
 
-    init(store: any SyncStoreSink, generation: Int) {
+    init(store: any SyncStoreSink, generation: Int, useEngineBuilder: Bool = false, excludeAttachments: Bool = true,
+         maxBytes: Int? = nil) {
+        var builder = BatchBuilder()
+        if let maxBytes { builder.maxBytes = maxBytes }
+        self.builder = builder
         self.store = store
         self.generation = generation
+        self.useEngineBuilder = useEngineBuilder
+        self.excludeAttachments = excludeAttachments
     }
 
     // The engine delivers events one at a time and waits for this method to return before
@@ -51,15 +68,17 @@ final class SyncAdapter: CKSyncEngineDelegate {
                                     failed: sent.failedRecordSaves.map { ($0.record, $0.error) },
                                     deleted: sent.deletedRecordIDs,
                                     failedDeletes: sent.failedRecordDeletes)
-        case .willFetchChanges:
+        case .willFetchChanges(let will):
+            await store.receive(.trace("willFetchChanges reason=\(will.context.reason)"), generation: generation)
             input = .fetchStarted
-        case .willFetchRecordZoneChanges:
-            input = nil
+        case .willFetchRecordZoneChanges(let will):
+            input = .trace("willFetchRecordZoneChanges zone=\(will.zoneID.zoneName)")
         case .didFetchRecordZoneChanges(let done):
             input = .zoneFetchFinished(zone: done.zoneID.zoneName, condition: done.error.map(translator.condition))
         case .didFetchChanges:
             input = .fetchEnded
-        case .willSendChanges:
+        case .willSendChanges(let will):
+            await store.receive(.trace("willSendChanges reason=\(will.context.reason)"), generation: generation)
             input = .sendStarted
         case .didSendChanges:
             input = .sendEnded
@@ -73,9 +92,21 @@ final class SyncAdapter: CKSyncEngineDelegate {
     // returns nil or the send is cancelled (CKSyncEngine.h, "Batches").
     func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext,
                                    syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        if useEngineBuilder {
+            let scope = context.options.scope
+            let pending = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
+            let store = self.store, generation = self.generation
+            let batch = await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { id in
+                await store.record(for: id, generation: generation)
+            }
+            await store.receive(.trace("batch.engineBuilder pending=\(pending.count) saves=\(batch?.recordsToSave.count ?? 0) bytes=\(batch?.recordsToSave.reduce(0) { $0 + RecordMapping.size(of: $1).fieldBytes } ?? 0)"), generation: generation)
+            return batch
+        }
         let pending = await store.pendingForSend(limit: builder.maxRecords, generation: generation)
         let batch = builder.build(pending, scope: context.options.scope)
         if !batch.oversize.isEmpty { await store.refused(oversize: batch.oversize, generation: generation) }
+        await store.taken(batch.taken, generation: generation)
+        await store.receive(.trace("batch.adapterBuilder saves=\(batch.saves.count) deletes=\(batch.deletes.count) bytes=\(batch.bytes)"), generation: generation)
         guard !batch.saves.isEmpty || !batch.deletes.isEmpty else { return nil }
         return CKSyncEngine.RecordZoneChangeBatch(recordsToSave: batch.saves, recordIDsToDelete: batch.deletes,
                                                   atomicByZone: false)
@@ -83,7 +114,7 @@ final class SyncAdapter: CKSyncEngineDelegate {
 
     func nextFetchChangesOptions(_ context: CKSyncEngine.FetchChangesContext,
                                  syncEngine: CKSyncEngine) async -> CKSyncEngine.FetchChangesOptions {
-        translator.fetchOptions(context.options)
+        excludeAttachments ? translator.fetchOptions(context.options) : context.options
     }
 }
 

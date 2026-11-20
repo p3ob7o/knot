@@ -2,6 +2,7 @@
 // store that stage 2 drives the real engine with. docs/architecture.md §5 says only
 // "Start, stop and report status"; the note says what reading the SDK adds.
 
+import CloudKit
 import Foundation
 
 /// What the user sees of sync. The engine reports no progress of its own: the adapter
@@ -19,7 +20,7 @@ enum SyncStatus: Equatable, Sendable {
 }
 
 /// Every pause asks the user something, and each has two defined answers (§11).
-enum SyncQuestion: Equatable, Sendable {
+enum SyncQuestion: Equatable, Codable, Sendable {
     case signedOut
     case accountChanged
     case zoneRemoved(ZoneLoss)
@@ -58,6 +59,7 @@ actor SpikeStore: SyncStoreSink {
         var generation: Int
         var account: String?
         var zoneSaved: Bool
+        var questions: [SyncQuestion]?
     }
 
     private(set) var replica: Replica
@@ -73,6 +75,12 @@ actor SpikeStore: SyncStoreSink {
     private(set) var counters: [String: Int] = [:]
     /// One line per notable input: codes and counts only.
     private(set) var lines: [String] = []
+    /// Every input in the order it arrived, with batch requests between them.
+    private(set) var trace: [String] = []
+    /// For statements that need to see a send the store would hold back.
+    var ignorePause = false
+    func setIgnorePause(_ value: Bool) { ignorePause = value }
+    func clearQuestions() { questions = [] }
     /// Records already handed to a batch in this send. The engine asks for batches until it
     /// gets nil, and the header does not say that a batch's sent event arrives before the
     /// next request, so the store must not hand the same records out twice in one send.
@@ -87,11 +95,12 @@ actor SpikeStore: SyncStoreSink {
         generation = p.generation
         account = p.account
         zoneSaved = p.zoneSaved
+        questions = p.questions ?? []
     }
 
     var persisted: Persisted {
         Persisted(replica: replica, savedState: savedState, systemFields: systemFields, generation: generation,
-                  account: account, zoneSaved: zoneSaved)
+                  account: account, zoneSaved: zoneSaved, questions: questions)
     }
 
     /// A local write, as the store would make it.
@@ -102,7 +111,10 @@ actor SpikeStore: SyncStoreSink {
             counters["dropped.olderRun", default: 0] += 1
             return
         }
+        trace.append(Self.describe(input))
         switch input {
+        case .trace:
+            break
         case .saveState(let data):
             count("stateUpdate")
             savedState = data
@@ -177,15 +189,53 @@ actor SpikeStore: SyncStoreSink {
     private func count(_ name: String) { counters[name, default: 0] += 1 }
 
     func pendingForSend(limit: Int, generation: Int) async -> [OutgoingRecord] {
-        guard generation == self.generation, questions.isEmpty else { return [] }
+        guard generation == self.generation, questions.isEmpty || ignorePause else {
+            trace.append("batch.request held: a question waits")
+            return []
+        }
         let next = replica.outgoing().filter { $0.key.map { !handedOut.contains($0) } ?? false }.prefix(limit)
-        for change in next { if let key = change.key { handedOut.insert(key) } }
         counters["batch.requests", default: 0] += 1
+        trace.append("batch.request offered=\(next.count)")
         return next.map { OutgoingRecord(change: $0, systemFields: $0.key.flatMap { systemFields[$0] }) }
     }
 
+    func taken(_ keys: [RecordKey], generation: Int) async {
+        handedOut.formUnion(keys)
+        trace.append("batch.taken \(keys.count) handedThisSend=\(handedOut.count)")
+    }
+
     func refused(oversize: [RecordKey], generation: Int) async {
+        handedOut.formUnion(oversize)
         lines.append("batch.oversize \(oversize.count)")
         questions.append(.recordTooLarge(count: oversize.count))
+    }
+
+    func record(for recordID: CKRecord.ID, generation: Int) async -> CKRecord? {
+        let mapping = RecordMapping()
+        guard let id = UUID(uuidString: recordID.recordName) else { return nil }
+        for kind in [RecordKind.note, .segment] {
+            let key = RecordKey(kind: kind, id: id)
+            if let change = replica.current(key) {
+                counters["engineBuilder.recordProvided", default: 0] += 1
+                return try? mapping.record(for: change, systemFields: systemFields[key])
+            }
+        }
+        return nil
+    }
+
+    static func describe(_ input: AdapterInput) -> String {
+        switch input {
+        case .trace(let line): line
+        case .saveState(let data): "stateUpdate bytes=\(data.count)"
+        case .account(let t): "accountChange \(String(describing: t).prefix(9))"
+        case .zonesChanged(let saved, let lost): "zones saved=\(saved) lost=\(lost.map { "\($0.zone):\($0.reason.rawValue)" })"
+        case .fetchStarted: "fetchStarted"
+        case .fetched(let c, _, let u): "fetched records=\(c.count) unreadable=\(u.count)"
+        case .zoneFetchFinished(let zone, let condition): "didFetchRecordZoneChanges zone=\(zone) error=\(condition.map { "\($0.code)" } ?? "none")"
+        case .fetchEnded: "didFetchChanges"
+        case .sendStarted: "sendStarted"
+        case .sent(let saved, _, let deleted, let failures): "sent saved=\(saved.count) deleted=\(deleted.count) failed=\(failures.count)\(failures.isEmpty ? "" : " codes=\(Set(failures.map(\.condition.code)).sorted())")"
+        case .sendEnded: "didSendChanges"
+        }
     }
 }
