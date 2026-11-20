@@ -58,3 +58,20 @@ logger.info("opened \(note.id.uuidString, privacy: .public)")
 logger.info("took \(elapsed.formatted(), privacy: .public)")
 // expect: nothing
 logger.info("\(line, privacy: .public)")  // knot-lint: allow logged-text: the system sink logs a finished line
+// expect: fake-unguarded
+struct FakeTransport {}
+#if DEBUG || KNOT_FAKES
+    // expect: nothing
+    struct FakeGuardedTransport {}
+#else
+    // expect: fake-unguarded
+    struct FakeInTheElseBranch {}
+#endif
+#if KNOT_FAKES || DEBUG
+    // expect: nothing
+    final class FakeOtherOrder {}
+#endif
+#if !KNOT_FAKES
+    // expect: fake-unguarded
+    enum FakeBehindNot {}
+#endif
