@@ -232,6 +232,9 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id] = nil
     }
 
+    /// Saves a typed capture's whole text so far. The engine numbers its revisions in the order
+    /// it takes the calls, not the order the caller made them, so a surface sends the updates of
+    /// one capture from one task, each after the one before has returned.
     public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
         await endPendingDiscards()
         await retryConversions(dueOnly: true)
