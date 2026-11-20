@@ -135,4 +135,21 @@ import Testing
         _ = await r.ingest.ingestAll()
         #expect(try await r.notes.segment(SegmentID(item.captureID))?.noteID == note)
     }
+
+    /// Finding 12. Ingest places an item by the placement it asked for: "New note" inside the
+    /// window starts a new note.
+    @Test func ingestKeepsThePlacementAskedFor() async throws {
+        let r = Rig(engineIngests: false)
+        let first = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first"))
+        let note = try #require(try await r.engine.end(first.captureID).noteID)
+        r.clock.advance(by: 10)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let item = try await r.engine.begin(
+            CaptureRequest(kind: .typed, surface: .app, placement: .newNote, text: "its own"))
+        _ = try await r.engine.end(item.captureID)
+        _ = await r.ingest.ingestAll()
+        let placed = try #require(try await r.notes.segment(SegmentID(item.captureID)))
+        #expect(placed.noteID != note)
+        #expect(try await r.notes.capture(item.captureID)?.placement == .newNote)
+    }
 }
