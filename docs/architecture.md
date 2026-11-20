@@ -203,22 +203,7 @@ SP-1's code half fixed three of these ports:
 - `BackgroundRunner` is not a service the queue calls. Background time from an intent exists only inside that intent's `perform()`, through a method of the intent itself, and every mechanism that gives minutes requires progress reports. So the runner is passed in by whoever holds the time, is scoped to one call, and runs work that reports its progress. `ProcessingQueue` takes a runner and a progress sink for each drain and owns no background time. Which mechanism gives the time waits for SP-1's report.
 - Reloading the controls when the recording phase changes belongs to the app shell, with `ControlCenter.shared.reloadControls(ofKind:)`, and not to `RecordingStateStore`, so that KnotAudio needs no WidgetKit.
 
-SP-4's code half shaped `SyncEngine` from the SDK alone, with no server (docs/notes/SP-4.md). This is its draft, and WP-02's third PR fixes the exact signatures:
-
-```swift
-protocol SyncEngine: Sendable {
-    func statusUpdates() -> AsyncStream<SyncStatus>   // the current status, then every change
-    func start() async
-    func stop() async                                 // cancels, and drops every later event of this run
-    func syncNow() async throws(SyncFailure)          // fetch, then send; the condition carries retryAfter
-    func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async
-}
-enum SyncStatus { case off, idle(lastSuccess: Date?), fetching, sending(remaining: Int),
-                  waiting(until: Date?), paused(SyncQuestion), failed(SyncCondition) }
-enum SyncQuestion { case signedOut, accountChanged, zoneRemoved(ZoneLoss), largeDelete(notes: Int, ofTotal: Int),
-                    restoredStore, environmentChanged, recordTooLarge(count: Int) }
-enum SyncAnswer { case upload, keepPaused }
-```
+SP-4's code half shaped `SyncEngine` from the SDK alone, with no server. Its draft of the protocol is in docs/notes/SP-4.md, in the section "For WP-02: the port", and WP-02's third PR fixes the exact signatures:
 
 - **Status.** By the SDK, the engine streams no progress, only the events it hands its delegate one at a time (§20). The adapter derives the status from them: `fetching` and `sending` from the will and did events, and `remaining` from the store's count of pending records. The engine retries transient errors by itself and names no event that reports the error or the wait (§20), so `waiting(until:)` has a time only after a manual sync that threw one.
 - **Stop.** `cancelOperations()` is asynchronous, and an operation in flight may finish after it returns (§20). So `stop()` cancels, raises the run's generation and releases the engine, and the store drops every input from an older generation, so an event that arrives after a stop never reaches the notes.
