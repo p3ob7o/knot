@@ -102,7 +102,13 @@ import Testing
         ("```swift\nlet x = 1", "```swift\nlet x = 1\n```"),
         ("~~~~\ncode\n~~~", "~~~~\ncode\n~~~\n~~~~"),
         ("````\ncode\n```", "````\ncode\n```\n````"),
-        ("  ```\nindented by two", "  ```\nindented by two\n```"),
+        ("  ```\nindented by two", "  ```\nindented by two\n  ```"),
+        // Finding 13: a fence in a list item is closed with its opening line's own spaces, so
+        // the close stays in the item; one in a nested list or a quote is left to its container.
+        ("- Step one\n\n  ```\n  let x = 1", "- Step one\n\n  ```\n  let x = 1\n  ```"),
+        ("1. Step one\n\n   ~~~~\n   let x = 1", "1. Step one\n\n   ~~~~\n   let x = 1\n   ~~~~"),
+        ("- Outer\n  - Inner\n\n    ```\n    let x = 1", "- Outer\n  - Inner\n\n    ```\n    let x = 1"),
+        ("> ```\n> let x = 1", "> ```\n> let x = 1"),
         ("```\nclosed\n```", "```\nclosed\n```"),
         ("```\nclosed by a longer one\n`````", "```\nclosed by a longer one\n`````"),
         ("    ```\nan indented code block, not a fence", "    ```\nan indented code block, not a fence"),

@@ -153,13 +153,16 @@ public enum NoteMarkdown {
     }
 
     /// A segment's text with a code fence it opened and never closed closed after it, with the
-    /// fence's own character and length, so that it does not turn the rest of the note into
-    /// code. The fences are those of CommonMark: three or more backticks or tildes, indented by
-    /// at most three spaces, with no backtick after a backtick fence; a fence closes with the
-    /// same character, at least as many, and nothing after it but spaces. The plain text is
-    /// left as it is.
+    /// fence's own character and length and the opening line's own leading spaces, so that it
+    /// does not turn the rest of the note into code. The spaces keep the close inside a list
+    /// item whose fence they indent: a close at the margin would end the item and open a fence
+    /// at the top level. The fences are those of CommonMark: three or more backticks or tildes,
+    /// indented by at most three spaces, with no backtick after a backtick fence; a fence closes
+    /// with the same character, at least as many, and nothing after it but spaces. A fence
+    /// indented further, as in a nested list, or behind a quote's marker is not read here, and
+    /// its container's end closes it. The plain text is left as it is.
     static func closingOpenFence(_ text: String) -> String {
-        var open: (character: Character, length: Int)?
+        var open: (character: Character, length: Int, indent: Int)?
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let indent = line.prefix { $0 == " " }.count
             guard indent <= 3 else { continue }
@@ -173,11 +176,12 @@ public enum NoteMarkdown {
                     open = nil
                 }
             } else if !(mark == "`" && after.contains("`")) {
-                open = (mark, length)
+                open = (mark, length, indent)
             }
         }
         guard let fence = open else { return text }
-        return text + "\n" + String(repeating: fence.character, count: fence.length)
+        return text + "\n" + String(repeating: " ", count: fence.indent)
+            + String(repeating: fence.character, count: fence.length)
     }
 
     /// A segment's text as a paragraph: Windows and old Mac line endings become line feeds,
