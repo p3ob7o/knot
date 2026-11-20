@@ -152,4 +152,61 @@ import Testing
         #expect(placed.noteID != note)
         #expect(try await r.notes.capture(item.captureID)?.placement == .newNote)
     }
+
+    /// An earlier launch's recording: its open row unless `withRow` is false, and its recorder
+    /// manifest and working file, of `frames` frames.
+    private static func orphan(_ r: Rig, frames: Int64, withRow: Bool = true) async throws -> CaptureID {
+        let earlier: LaunchID = r.ids.make()
+        let id: CaptureID = r.ids.make()
+        if withRow {
+            _ = try await r.notes.record(
+                NewCapture(
+                    id: id, kind: .voice, origin: CaptureOrigin(source: .device(r.deviceID), surface: .app),
+                    launchID: earlier, placement: .window, startedAt: r.clock.now(), body: .none))
+        }
+        try r.recorder.leaveOrphan(id, launch: earlier, frames: frames)
+        return id
+    }
+
+    /// Finding 18, the second review's R2. A recording whose manifest is there and whose audio
+    /// is not ends as discarded and empty, and its manifest goes: no row of an earlier launch
+    /// is open after recovery.
+    @Test(arguments: [true, false])
+    func recordingWithAManifestAndNoAudioIsEndedAtLaunch(withRow: Bool) async throws {
+        let r = Rig()
+        let id = try await Self.orphan(r, frames: 16_000, withRow: withRow)
+        try r.layer.remove(r.locations.recordingAudio(id, format: .caf))
+        let outcomes = try await r.recovery.run(ingest: r.ingest)
+        #expect(outcomes[id] == .ended(.discardedEmpty))
+        #expect(try await r.notes.openCaptures().isEmpty)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == nil)
+        if withRow { #expect(try await r.notes.capture(id)?.outcome == .discardedEmpty) }
+        #expect(try await r.stream().notes.isEmpty)
+    }
+
+    /// Finding 18. A working file that holds no frame ends the same way.
+    @Test func recordingWithNoFrameIsEndedAtLaunch() async throws {
+        let r = Rig()
+        let id = try await Self.orphan(r, frames: 0)
+        let outcomes = try await r.recovery.run(ingest: r.ingest)
+        #expect(outcomes[id] == .ended(.discardedEmpty))
+        #expect(try await r.notes.capture(id)?.outcome == .discardedEmpty)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == nil)
+    }
+
+    /// Finding 18. A working file that holds audio and will not convert ends its row as failed
+    /// with `conversion_failed`, and the working file and its manifest stay for the retry: the
+    /// audio a person spoke is never thrown away.
+    @Test(arguments: [true, false])
+    func recordingThatWillNotConvertEndsFailed(withRow: Bool) async throws {
+        let r = Rig()
+        let id = try await Self.orphan(r, frames: 16_000, withRow: withRow)
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let outcomes = try await r.recovery.run(ingest: r.ingest)
+        #expect(outcomes[id] == .ended(.failed(KnotError.conversionFailed.code)))
+        #expect(try await r.notes.capture(id)?.outcome == .failed(KnotError.conversionFailed.code))
+        #expect(try await r.notes.openCaptures().isEmpty)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == .file)
+        #expect(r.layer.entryKind(r.locations.recordingAudio(id, format: .caf)) == .file)
+    }
 }

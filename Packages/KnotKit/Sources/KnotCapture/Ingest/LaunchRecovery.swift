@@ -59,12 +59,20 @@ public struct LaunchRecovery: Sendable {
         var outcomes: [CaptureID: Outcome] = [:]
         var audio: [CaptureID: RecordedAudio] = [:]
         for recording in recovered { audio[recording.captureID] = recording }
+        var withoutRow: [RecordedAudio] = []
         for recording in recovered.sorted(by: { $0.captureID < $1.captureID }) {
-            outcomes[recording.captureID] = await finishRecording(recording)
+            if let outcome = await finishRecording(recording) {
+                outcomes[recording.captureID] = outcome
+            } else {
+                withoutRow.append(recording)
+            }
         }
         for row in try await notes.openCaptures() where row.needsRecovery(currentLaunch: launchID) {
             guard audio[row.id] == nil else { continue }
             outcomes[row.id] = await finishWithoutFile(row)
+        }
+        for recording in withoutRow {
+            outcomes[recording.captureID] = await finishWithoutRow(recording)
         }
         return outcomes
     }
@@ -78,7 +86,13 @@ public struct LaunchRecovery: Sendable {
 
     // MARK: Recordings
 
-    private func finishRecording(_ recording: RecordedAudio) async -> Outcome {
+    /// Ends a recovered recording's capture, so that no row of an earlier launch stays open
+    /// once the store answered. Audio that converts is stored. A working file that is missing or
+    /// holds no frame is a recording with no audio: its row ends discarded and empty, and its
+    /// manifest goes. Audio that will not convert ends its row as failed, and the working file
+    /// and its manifest stay for the retry: the audio a person spoke is never thrown away.
+    /// Returns `nil` for a recording whose row must be made after every other row has ended.
+    private func finishRecording(_ recording: RecordedAudio) async -> Outcome? {
         let id = recording.captureID
         do throws(KnotError) {
             let row = try await notes.capture(id)
@@ -90,7 +104,24 @@ public struct LaunchRecovery: Sendable {
             default:
                 break
             }
-            let converted = try await recorder.convert(recording)
+            let hasAudio = recording.frames > 0 && recording.workingFile.map { layer.entryKind($0) == .file } == true
+            guard hasAudio else {
+                if let row, row.outcome == .open {
+                    _ = try await notes.end(
+                        CaptureEnd(
+                            captureID: id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision))
+                }
+                try await recorder.removeWorkingFile(of: id)
+                log.capture(id, "recording_recovered_without_audio")
+                return .ended(.discardedEmpty)
+            }
+            let converted: ConvertedRecording
+            do throws(KnotError) {
+                converted = try await recorder.convert(recording)
+            } catch {
+                guard let row else { return nil }
+                return try await failConversion(row, recording, error.about(capture: id))
+            }
             let stored = try await assets.move(converted.file, as: .ofCapture(id), kind: .audio)
             let asset = Asset(
                 id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
@@ -121,6 +152,41 @@ public struct LaunchRecovery: Sendable {
             try? await queue.enqueue(SegmentID(id))
             log.capture(id, "recording_recovered", .duration("length", converted.duration))
             return .ended(outcome)
+        } catch {
+            log.failure(error.about(capture: id), "recording_not_recovered")
+            return .kept(error.code)
+        }
+    }
+
+    /// Ends the row of a recording whose audio will not convert as failed with the error's
+    /// code. The working file and its manifest stay.
+    private func failConversion(_ row: Capture, _ recording: RecordedAudio, _ error: KnotError) async throws(KnotError)
+        -> Outcome
+    {
+        if row.outcome == .open {
+            _ = try await notes.end(
+                CaptureEnd(
+                    captureID: row.id, endedAt: row.startedAt.addingTimeInterval(seconds(recording.duration)),
+                    outcome: .failed(error.code), revision: max(row.revision, recording.frames)))
+        }
+        log.failure(error, "recording_not_converted")
+        return .ended(.failed(error.code))
+    }
+
+    /// A recording that will not convert and whose row the store never took: its row is made
+    /// from the recorder's manifest, open, and ended as failed. It runs once every other open
+    /// row has ended, so that none of them holds rule 15 against it.
+    private func finishWithoutRow(_ recording: RecordedAudio) async -> Outcome {
+        let id = recording.captureID
+        do throws(KnotError) {
+            guard let manifest = try recordingManifest(id) else { return .kept(KnotError.inboxItemUnreadable.code) }
+            _ = try await notes.record(
+                NewCapture(
+                    id: id, kind: .voice, origin: manifest.origin, launchID: manifest.launchID,
+                    placement: manifest.placement, startedAt: manifest.startedAt, body: .none, revision: 0,
+                    shownNote: manifest.shownNoteID))
+            guard let row = try await notes.capture(id) else { return .kept(KnotError.notFound.code) }
+            return try await failConversion(row, recording, KnotError.conversionFailed.about(capture: id))
         } catch {
             log.failure(error.about(capture: id), "recording_not_recovered")
             return .kept(error.code)
