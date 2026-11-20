@@ -139,7 +139,7 @@ public protocol NoteStore: Sendable {
 
     /// Sets or clears a note's title as a person's. With `ifRevision`, a stale or foreign
     /// revision fails.
-    func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) async throws(KnotError) -> Note
+    func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) async throws(KnotError) -> NoteRead
 
     /// Deletes a note or a segment, softly. Deleting a note marks the note and not its
     /// segments. A segment whose capture is open cannot be deleted.
@@ -177,7 +177,7 @@ public protocol NoteStore: Sendable {
     // MARK: Processing
 
     /// Sets a segment's state, as a reducer of `SegmentMachines` decided.
-    func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> Segment
+    func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> SegmentRead
 
     /// Adds a transcription run to a voice segment in one transaction: its pieces to the raw
     /// transcript, which only grows, its provenance with the first run, the text where it is
@@ -185,7 +185,7 @@ public protocol NoteStore: Sendable {
     /// job. Idempotent: a run is applied only when it starts at the job's stored resume point,
     /// so the same run applied twice adds its words once.
     func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
-        -> Segment
+        -> SegmentRead
 
     /// Writes a cleanup result in one transaction: the cleaned body where the text is still
     /// the raw transcript, with the OS build whose model made it, and a proposed title only
@@ -479,7 +479,9 @@ public struct NoteRecord: Hashable, Sendable {
     public var isShown: Bool { StreamRule.isShown(note, segments: segments) }
 }
 
-/// A segment with its revision, stamped.
+/// A segment with its revision, stamped, as every read and write returns it. Its other
+/// fields read through, as `read.text`.
+@dynamicMemberLookup
 public struct SegmentRead: Hashable, Sendable {
     public var segment: Segment
     public var revision: StampedRevision
@@ -488,6 +490,23 @@ public struct SegmentRead: Hashable, Sendable {
         self.segment = segment
         self.revision = revision
     }
+
+    public subscript<Value>(dynamicMember path: KeyPath<Segment, Value>) -> Value { segment[keyPath: path] }
+}
+
+/// A note with its revision, stamped, as every write returns it. Its other fields read
+/// through, as `read.title`.
+@dynamicMemberLookup
+public struct NoteRead: Hashable, Sendable {
+    public var note: Note
+    public var revision: StampedRevision
+
+    public init(note: Note, revision: StampedRevision) {
+        self.note = note
+        self.revision = revision
+    }
+
+    public subscript<Value>(dynamicMember path: KeyPath<Note, Value>) -> Value { note[keyPath: path] }
 }
 
 /// Where a page of the stream ended.
@@ -587,18 +606,22 @@ public struct TextReplacement: Hashable, Sendable {
     }
 }
 
-/// What a replacement did.
+/// What a replacement did, with the segment as it stands and its stamped revision.
 public enum TextReplacementResult: Hashable, Sendable {
-    /// The text was replaced, and this is the segment's new revision.
-    case replaced(Segment, StampedRevision)
+    /// The text was replaced.
+    case replaced(SegmentRead)
     /// The text has a higher origin, so it stays (`TextPrecedence`). Not an error.
-    case keptByPrecedence(Segment)
+    case keptByPrecedence(SegmentRead)
 
-    public var segment: Segment {
+    public var read: SegmentRead {
         switch self {
-        case .replaced(let segment, _), .keptByPrecedence(let segment): segment
+        case .replaced(let read), .keptByPrecedence(let read): read
         }
     }
+
+    public var segment: Segment { read.segment }
+
+    public var revision: StampedRevision { read.revision }
 }
 
 /// A note or a segment.
@@ -626,22 +649,20 @@ public enum MoveResult: Hashable, Sendable {
     case notInThatNote(segment: SegmentID, currentNote: NoteID)
 }
 
-/// Both notes and the segment after a move or a return.
+/// Both notes and the segment after a move or a return, each with its stamped revision. A
+/// move changes no text, so the segment's revision stays.
 public struct MoveOutcome: Hashable, Sendable {
-    public var segment: Segment
+    public var segment: SegmentRead
     /// The note the segment left.
-    public var from: Note
+    public var from: NoteRead
     /// The note it is in now.
-    public var to: Note
-    /// The segment's revision, stamped. A move changes no text, so it stays.
-    public var revision: StampedRevision
+    public var to: NoteRead
     public var cursor: StoreCursor
 
-    public init(segment: Segment, from: Note, to: Note, revision: StampedRevision, cursor: StoreCursor) {
+    public init(segment: SegmentRead, from: NoteRead, to: NoteRead, cursor: StoreCursor) {
         self.segment = segment
         self.from = from
         self.to = to
-        self.revision = revision
         self.cursor = cursor
     }
 }
@@ -650,14 +671,14 @@ public struct MoveOutcome: Hashable, Sendable {
 
 /// What a cleanup result changed.
 public struct CleanupApplied: Hashable, Sendable {
-    public var segment: Segment
-    public var note: Note
+    public var segment: SegmentRead
+    public var note: NoteRead
     /// False when the result declined, or the text was no longer the raw transcript.
     public var textReplaced: Bool
     /// True when the proposed title became the note's title.
     public var titleSet: Bool
 
-    public init(segment: Segment, note: Note, textReplaced: Bool, titleSet: Bool) {
+    public init(segment: SegmentRead, note: NoteRead, textReplaced: Bool, titleSet: Bool) {
         self.segment = segment
         self.note = note
         self.textReplaced = textReplaced

@@ -273,7 +273,7 @@
         public func note(_ id: NoteID) throws(KnotError) -> NoteRecord? { record(id, in: state) }
 
         public func segment(_ id: SegmentID) throws(KnotError) -> SegmentRead? {
-            state.segments[id].map { SegmentRead(segment: $0, revision: stamp($0.revision)) }
+            state.segments[id].map(read)
         }
 
         public func asset(_ id: AssetID) throws(KnotError) -> Asset? { state.assets[id] }
@@ -340,7 +340,7 @@
             try refuseIfOpen(segment.id)
             try replacement.ifRevision?.check(storeID: storeID, generation: generation, current: segment.revision)
             guard TextPrecedence.mayReplace(segment.textOrigin, with: replacement.origin) else {
-                return .keptByPrecedence(segment)
+                return .keptByPrecedence(read(segment))
             }
             var next = state
             let now = clock.now()
@@ -354,10 +354,11 @@
             next.counter += 1
             touch(segment.noteID, counter: next.counter, at: now, in: &next)
             commit(next)
-            return .replaced(segment, stamp(segment.revision))
+            return .replaced(read(segment))
         }
 
-        public func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) throws(KnotError) -> Note
+        public func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) throws(KnotError)
+            -> NoteRead
         {
             guard var stored = state.notes[note] else { throw KnotError.notFound.with(.init(noteID: note)) }
             try ifRevision?.check(storeID: storeID, generation: generation, current: stored.revision)
@@ -367,7 +368,7 @@
             next.counter += 1
             touch(note, counter: next.counter, at: clock.now(), in: &next)
             commit(next)
-            return next.notes[note] ?? stored
+            return read(next.notes[note] ?? stored)
         }
 
         public func delete(_ target: StoreTarget) throws(KnotError) -> StoreCursor {
@@ -559,7 +560,7 @@
 
         // MARK: Processing
 
-        public func setState(_ newState: SegmentState, of segmentID: SegmentID) throws(KnotError) -> Segment {
+        public func setState(_ newState: SegmentState, of segmentID: SegmentID) throws(KnotError) -> SegmentRead {
             guard var segment = state.segments[segmentID] else {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }
@@ -569,11 +570,11 @@
             next.counter += 1
             touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
             commit(next)
-            return segment
+            return read(segment)
         }
 
         public func appendTranscript(_ run: TranscriptionRun, to segmentID: SegmentID, job jobID: JobID)
-            throws(KnotError) -> Segment
+            throws(KnotError) -> SegmentRead
         {
             guard var segment = state.segments[segmentID] else {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
@@ -583,7 +584,7 @@
             else { throw KnotError.notFound.with(.init(segmentID: segmentID, jobID: jobID)) }
             try refuseIfOpen(segmentID)
             // Applied only at the stored resume point, so a run applied twice is applied once.
-            guard job.state != .done, run.startsAt == (job.resumeAt ?? .zero) else { return segment }
+            guard job.state != .done, run.startsAt == (job.resumeAt ?? .zero) else { return read(segment) }
             var next = state
             try segment.appendToRawTranscript(run.text)
             if segment.transcription == nil { segment.transcription = run.provenance }
@@ -605,7 +606,7 @@
             next.counter += 1
             touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
             commit(next)
-            return segment
+            return read(segment)
         }
 
         public func applyCleanup(_ result: CleanupResult, to segmentID: SegmentID) throws(KnotError) -> CleanupApplied {
@@ -640,7 +641,8 @@
                 commit(next)
             }
             return CleanupApplied(
-                segment: segment, note: next.notes[note.id] ?? note, textReplaced: textReplaced, titleSet: titleSet)
+                segment: read(next.segments[segmentID] ?? segment), note: read(next.notes[note.id] ?? note),
+                textReplaced: textReplaced, titleSet: titleSet)
         }
 
         public func saveJob(_ job: Job) throws(KnotError) {
@@ -1350,8 +1352,7 @@
             guard let moved = state.segments[segment], let fromNote = state.notes[from], let toNote = state.notes[to]
             else { throw KnotError.notFound }
             return MoveOutcome(
-                segment: moved, from: fromNote, to: toNote, revision: stamp(moved.revision),
-                cursor: cursor(state.counter))
+                segment: read(moved), from: read(fromNote), to: read(toNote), cursor: cursor(state.counter))
         }
 
         private func waitIfHeld() async {
@@ -1371,6 +1372,14 @@
 
         private func cursor(_ counter: Int64) -> StoreCursor {
             StoreCursor(storeID: storeID, generation: generation, counter: counter)
+        }
+
+        private func read(_ segment: Segment) -> SegmentRead {
+            SegmentRead(segment: segment, revision: stamp(segment.revision))
+        }
+
+        private func read(_ note: Note) -> NoteRead {
+            NoteRead(note: note, revision: stamp(note.revision))
         }
 
         private func stamp(_ revision: Int64) -> StampedRevision {

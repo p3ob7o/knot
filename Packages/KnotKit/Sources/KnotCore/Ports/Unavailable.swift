@@ -37,7 +37,7 @@ public struct UnavailableNoteStore: NoteStore {
         throw missing
     }
     public func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) async throws(KnotError)
-        -> Note
+        -> NoteRead
     { throw missing }
     public func delete(_ target: StoreTarget) async throws(KnotError) -> StoreCursor { throw missing }
     public func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor { throw missing }
@@ -46,11 +46,11 @@ public struct UnavailableNoteStore: NoteStore {
     public func returnToFormerNote(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveOutcome {
         throw missing
     }
-    public func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> Segment {
+    public func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> SegmentRead {
         throw missing
     }
     public func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
-        -> Segment
+        -> SegmentRead
     { throw missing }
     public func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError)
         -> CleanupApplied

@@ -92,6 +92,7 @@ public enum NoteStoreContract {
         Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
         Check(name: "recording-job", run: aStoredRecordingAlwaysHasItsJob),
         Check(name: "job-forward", run: aJobOnlyMovesForward),
+        Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
     ]
 
@@ -229,10 +230,11 @@ public enum NoteStoreContract {
         let edited = try await h.store.replaceText(
             TextReplacement(
                 segment: segment, text: "Draft two", origin: .edited, writer: .commandLine, ifRevision: read))
-        guard case .replaced(_, let now) = edited else {
+        guard case .replaced(let replaced) = edited else {
             Issue.record("An edit at the current revision replaces the text.")
             return
         }
+        let now = replaced.revision
         #expect(now.value > read.value, "An edit raises the segment's revision.")
         await refuses(.revisionStale) {
             try await h.store.replaceText(
@@ -294,7 +296,7 @@ public enum NoteStoreContract {
             return
         }
         #expect(
-            moved.from.revision > beforeMove.counter && moved.to.revision > beforeMove.counter,
+            moved.from.revision.value > beforeMove.counter && moved.to.revision.value > beforeMove.counter,
             "Both notes take a new counter value.")
         var seen: Set<NoteID> = []
         var next = beforeMove
@@ -900,7 +902,7 @@ public enum NoteStoreContract {
         #expect(moved.to.createdAt == moved.segment.startedAt, "The new note is dated by the segment.")
         #expect(moved.to.lastCaptureEndedAt == moved.segment.latestTime)
         #expect(moved.segment.noteGeneration == 1, "The move raises the note generation.")
-        #expect(moved.revision == before.revision(of: segment), "A move changes no text.")
+        #expect(moved.segment.revision == before.revision(of: segment), "A move changes no text.")
         #expect(moved.from.lastCaptureEndedAt == before.segments[0].latestTime, "The note it left is recomputed.")
 
         let back = try await h.store.returnToFormerNote(segment, from: moved.to.id)
@@ -1622,6 +1624,41 @@ public enum NoteStoreContract {
         #expect(lowered.attempts == 1)
         lowered.attempts = 0
         await refuses(.illegalTransition, "Counters never fall.") { try await h.store.saveJob(lowered) }
+    }
+
+    /// Every write returns its revisions stamped with the store and its generation, as the
+    /// reads do, so no caller builds a stamp (finding 46).
+    public static func everyWriteReturnsStampedRevisions(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let cursor = try await h.store.cursor()
+        func stamped(_ revision: StampedRevision, _ value: Int64, _ what: String) {
+            #expect(
+                revision.storeID == cursor.storeID && revision.generation == cursor.generation
+                    && revision.value == value,
+                "\(what) returns a stamped revision.")
+        }
+        let voice = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = voice.segmentIDs[0]
+        let job = JobID.transcribe(of: segment)
+        let appended = try await h.store.appendTranscript(
+            h.run("words here", from: .zero, resumeAt: nil), to: segment, job: job)
+        stamped(appended.revision, appended.segment.revision, "appendTranscript")
+        let state = try await h.store.setState(.voice(.cleaning), of: segment)
+        stamped(state.revision, state.segment.revision, "setState")
+        let cleaned = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .cleaned(body: "Words here."), title: "words", provenance: .init(osBuild: "b"), modelName: "m"),
+            to: segment)
+        stamped(cleaned.segment.revision, cleaned.segment.segment.revision, "applyCleanup's segment")
+        stamped(cleaned.note.revision, cleaned.note.note.revision, "applyCleanup's note")
+        let titled = try await h.store.setTitle("Here", of: voice.noteID, ifRevision: cleaned.note.revision)
+        stamped(titled.revision, titled.note.revision, "setTitle")
+        _ = try await h.store.setTitle("Again", of: voice.noteID, ifRevision: titled.revision)
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Mine", origin: .edited, writer: .app))
+        let kept = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Machine", origin: .cleaned, writer: .queue))
+        stamped(kept.revision, kept.segment.revision, "A result kept by precedence")
     }
 
     // MARK: Reading
