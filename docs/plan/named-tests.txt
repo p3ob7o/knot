@@ -41,7 +41,7 @@ WP-02	negative-gap-less-than-window-counts-inside	A gap that is negative by less
 WP-02	text-only-spaces-and-line-breaks-is-empty	Text that is only spaces and line breaks is empty.
 WP-05	capture-before-open-migration-or-write-lock-tracer	A capture begun before the store is open, during a migration and while another process holds the write lock.
 WP-05	store-call-commits-after-inbox-fallback-tracer	A store call that commits after its capture fell back to `Inbox/`.
-WP-05	tracer-end-to-end-typed-and-recording	One end-to-end test, in which a typed capture and a fixture recording go through the engine, the queue, the in-memory `NoteStore` and the scripted `Recorder`, `Transcriber` and `Cleaner`, and the assertions read the stream page that `NoteStore` publishes.
+WP-05	tracer-end-to-end-typed-and-recording	One end-to-end test, in which a typed capture and a recording go through the engine, the queue, the in-memory `NoteStore` and the scripted `Recorder`, `Transcriber` and `Cleaner`, and the assertions read the stream page that `NoteStore` publishes. The test makes its own recording, in the format the fixture clips use, and reads no file from `Fixtures/generated/`. The scripted transcriber returns the committed text `Fixtures/audio/canary.txt` for it, so the canary word goes through the engine, the queue and the store.
 WP-06	capture-ledger-soak	The capture ledger soak test is seeded and time-boxed.
 WP-06	soak-red-on-acknowledgement-before-write	An injected fault turns the soak red: an acknowledgement before the write.
 WP-06	soak-red-on-skipped-capture-row	An injected fault turns the soak red: a skipped capture row.

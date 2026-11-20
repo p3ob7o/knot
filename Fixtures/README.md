@@ -6,7 +6,7 @@ Synthetic test data that packages share. Nothing here comes from a real note, a 
 |---|---|---|---|
 | `audio/<name>.txt` | The text each clip speaks, which is also its reference transcript | yes | WP-13, `knot-eval --set synthetic` |
 | `audio/long.source.txt`, `audio/long.txt` | The paragraphs of the ten-minute clip, and its reference | yes | WP-13 |
-| `generated/audio/` | The audio itself, spoken on this Mac | **no**, git ignores it | WP-12, WP-13, the soak, the end-to-end suite |
+| `generated/audio/` | The audio itself, spoken on this Mac | **no**, git ignores it | WP-12, WP-13, the soak, WP-22's end-to-end suite |
 | `generated/manifest.json` | The macOS build, voices, lengths and checksums of this Mac's audio | **no** | tests, `knot-eval` |
 | `ink/<name>.json`, `ink/<name>.svg` | Strokes built from Bézier paths, and a preview of each | yes | WP-18 |
 | `cleanup/cases.json` | 30 raw transcripts with what a correct cleanup keeps and removes | yes | WP-14, `knot-eval --set synthetic` |
