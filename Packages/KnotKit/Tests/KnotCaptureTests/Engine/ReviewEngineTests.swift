@@ -365,6 +365,24 @@ import Testing
         #expect(try await r.notes.capture(recording.captureID)?.outcome == .discardedEmpty)
     }
 
+    /// Finding 45. An update answers a capture as saved, as a begin does: after a begin that
+    /// reached no disk and an update saved by the capture's ID, a typed start on the same surface
+    /// is a capture of its own, and the updated text stays.
+    @Test func updateAnswersTheCaptureAsSaved() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        r.layer.failNextWrite(with: .diskFull)
+        let failed = await expectError(.diskFull) {
+            try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first"))
+        }
+        let a = try #require(failed?.context.captureID)
+        let updated = try await r.engine.update(a, with: .text("first, updated"))
+        #expect(updated.durableRevision > 0)
+        let b = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "second"))
+        #expect(b.captureID != a, "The start took the updated capture as its retry.")
+        #expect(r.inboxText(a) == "first, updated")
+    }
+
     /// Finding 35, the re-check's N5. A typed start on another surface that reached no disk
     /// leaves the open capture going on (finding 8); once its retry reaches disk, rule 15 ends
     /// the open capture as a first start does, so one capture is open.
