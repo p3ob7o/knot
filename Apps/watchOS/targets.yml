@@ -27,6 +27,7 @@ targets:
     platform: watchOS
     sources:
       - UITests
+      - ../UITestSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).watchkitapp.uitests

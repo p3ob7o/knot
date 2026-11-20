@@ -98,6 +98,22 @@ import Testing
         }
     }
 
+    /// `NoteStore` has no operation that takes over a segment's `processingOwner` yet, so moving
+    /// the work here says it is not available and changes nothing. The day the operation
+    /// exists, this test fails, and the action is wired to it.
+    @Test func movingTheWorkHereIsNotAvailableYet() async throws {
+        let rig = StoreRig()
+        let (model, segment) = try await noteViewModel(.savedTextBeingMadeElsewhere, rig: rig)
+        let before = try await rig.notes.segment(segment)
+        model.perform(.moveWorkHere, on: segment)
+        await settled(model)
+        #expect(model.problem == .notAvailableYet)
+        #expect(model.problem?.message == "This isn't available yet.")
+        #expect(try await rig.notes.segment(segment) == before)
+        #expect(rig.queue.segments.isEmpty)
+        #expect(model.items.first { $0.id == segment }?.state == .savedTextBeingMadeElsewhere)
+    }
+
     @Test func aRecordingThisDeviceCannotTranscribeIsKeptWithNoText() async throws {
         let rig = StoreRig()
         rig.transcriber.setReadiness(.unavailable)
