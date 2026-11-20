@@ -59,6 +59,22 @@ else
     fail "a command that exits with 75: status $status, ran $(wc -l <"$count" 2>/dev/null | tr -d ' ') times"
 fi
 
+# 1c. A run that waited says how long it waited, when it gets the slot: not the wait and its
+#     own run together, after the command has ended. One slot is open; its holder keeps it
+#     3 s, and the waiter's command takes 6 s.
+wait_slots="$scratch/wait-slots"
+KNOT_SLOT_DIR="$wait_slots" KNOT_BUILD_SLOTS=2 "$KNOT_SCRIPTS/build-slot.sh" run --label holder -- sleep 3 &
+waiting_holder=$!
+for _ in $(seq 1 50); do [[ -s $wait_slots/build-1.holder ]] && break; sleep 0.1; done
+KNOT_SLOT_DIR="$wait_slots" KNOT_BUILD_SLOTS=2 "$KNOT_SCRIPTS/build-slot.sh" run --label waiter -- sleep 6 2>"$scratch/waiter.err"
+wait "$waiting_holder" 2>/dev/null || true
+reported="$(sed -n -E 's/^build-slot: got a slot after ([0-9]+)s, at .*/\1/p' "$scratch/waiter.err")"
+if [[ -n $reported ]] && ((reported >= 1 && reported <= 5)); then
+    pass "a run that waited reports the wait alone, when it gets the slot"
+else
+    fail "a run that waited reported: $(cat "$scratch/waiter.err")"
+fi
+
 # 2. A failure prints the agreed fields: a code, what failed, the fix, whether a retry is
 #    safe, and what was changed, and exits 1.
 status=0
