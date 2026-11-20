@@ -212,6 +212,12 @@ public actor OutboxLink {
         changed()
     }
 
+    /// True when an iPhone acknowledged the capture, in this launch or, by the outbox's
+    /// marker, in an earlier one while something of it was still on the Watch.
+    public func hasBeenAcknowledged(_ capture: CaptureID) -> Bool {
+        everAcknowledged.contains(capture) || outbox.wasAcknowledged(capture)
+    }
+
     /// Stops counting a recording that `hold` counted.
     public func release(_ capture: CaptureID) {
         if held.removeValue(forKey: capture) != nil { changed() }

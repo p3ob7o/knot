@@ -265,7 +265,7 @@ public actor WatchCoordinator {
         let capture = recording.captureID
         guard finishing.insert(capture).inserted else { return nil }
         defer { finishing.remove(capture) }
-        if link.outbox.wasAcknowledged(capture) {
+        if await link.hasBeenAcknowledged(capture) {
             // An iPhone has it: what is left here goes, and nothing is converted or sent again.
             return await removeAcknowledgedLeftovers(capture)
         }
@@ -370,9 +370,13 @@ public actor WatchCoordinator {
         return .sent(capture)
     }
 
-    /// Tries again the recordings this launch kept, apart from those a final error kept.
+    /// Tries again the recordings this launch kept, apart from those a final error kept. The
+    /// coordinator takes other calls while a retry awaits the recorder, so each capture is
+    /// looked at again just before it is tried: one that another finish has sent, or that an
+    /// iPhone has acknowledged meanwhile, is no longer kept and is left alone.
     private func finishUnfinished(except capture: CaptureID) async {
-        for (other, kept) in unfinished where other != capture && !kept.final {
+        for other in unfinished.keys.sorted() where other != capture {
+            guard let kept = unfinished[other], !kept.final else { continue }
             _ = await finish(kept.recording)
         }
     }
