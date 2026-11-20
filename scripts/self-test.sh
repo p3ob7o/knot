@@ -387,7 +387,9 @@ fi
 # Every start the scripts wait for has a limit, shaped like its call site: a run of hosted
 # tests (knot_run_limited), a simctl call (knot_sim_call) and the Mac app's start
 # (knot_start_app). For each, a stub that hangs ends at a short limit with its message, a
-# stub that passes is not slowed, and a status other than zero still fails.
+# stub that passes is not slowed, and a status other than zero still fails. The timings
+# allow 10 s, room for a loaded Mac: a missing limit shows as 15 s or more, since the
+# stubs hang for 30 and a probe has 15.
 lim="$scratch/limits"
 mkdir -p "$lim"
 printf '#!/bin/sh\nsleep 30\n' >"$lim/hangs"
@@ -409,8 +411,8 @@ timed() {
 timed hosted_hang knot_run_limited "The hosted iOS tests" 1 "$lim/hangs"
 timed hosted_pass knot_run_limited "The hosted iOS tests" 30 "$lim/passes"
 timed hosted_fail knot_run_limited "The hosted iOS tests" 30 "$lim/fails"
-if [[ $hosted_hang_status == 124 && "$(cat "$lim/hosted_hang.out")" == *"system dialog"* && $hosted_hang_seconds -lt 6 &&
-    $hosted_pass_status == 0 && $hosted_pass_seconds -lt 2 && $hosted_fail_status == 65 ]]; then
+if [[ $hosted_hang_status == 124 && "$(cat "$lim/hosted_hang.out")" == *"system dialog"* && $hosted_hang_seconds -lt 10 &&
+    $hosted_pass_status == 0 && $hosted_pass_seconds -lt 10 && $hosted_fail_status == 65 ]]; then
     pass "a run of hosted tests ends at its limit naming a dialog, is not slowed when it passes, and keeps its status"
 else
     fail "hosted tests: hang $hosted_hang_status in ${hosted_hang_seconds}s, pass $hosted_pass_status in ${hosted_pass_seconds}s, fail $hosted_fail_status: $(cat "$lim/hosted_hang.out")"
@@ -418,8 +420,8 @@ fi
 timed sim_hang knot_sim_call 1 launch set-iphone "$lim/hangs"
 timed sim_pass knot_sim_call 30 launch set-iphone "$lim/passes"
 timed sim_fail knot_sim_call 30 launch set-iphone "$lim/fails"
-if [[ $sim_hang_status == 1 && "$(cat "$lim/sim_hang.out")" == *"set-iphone did not end within 1s"* && $sim_hang_seconds -lt 6 &&
-    $sim_pass_status == 0 && $sim_pass_seconds -lt 2 &&
+if [[ $sim_hang_status == 1 && "$(cat "$lim/sim_hang.out")" == *"set-iphone did not end within 1s"* && $sim_hang_seconds -lt 10 &&
+    $sim_pass_status == 0 && $sim_pass_seconds -lt 10 &&
     $sim_fail_status == 1 && "$(cat "$lim/sim_fail.out")" == *"set-iphone failed with status 65"* ]]; then
     pass "a simctl call ends at its limit naming the simulator, is not slowed when it passes, and fails on its status"
 else
@@ -430,8 +432,8 @@ hang_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_pass knot_start_app 30 "$lim/hangs" "$lim/a-window"
 pass_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_fail knot_start_app 30 "$lim/quits" "$lim/no-window"
-if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 8 &&
-    -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 4 && -z $pass_left &&
+if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 10 &&
+    -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 10 && -z $pass_left &&
     $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* ]]; then
     pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, and leaves nothing running"
 else
@@ -481,7 +483,7 @@ pkill -KILL -f "$lim/leaves" 2>/dev/null || true
 printf '#!/bin/sh\nsleep 30\n' >"$lim/silent-probe"
 chmod +x "$lim/silent-probe"
 timed app_silent knot_start_app 2 "$lim/hangs" "$lim/silent-probe"
-if [[ $app_silent_status == 1 && $app_silent_seconds -lt 6 && "$(cat "$lim/app_silent.out")" == *"did not answer"* ]]; then
+if [[ $app_silent_status == 1 && $app_silent_seconds -lt 10 && "$(cat "$lim/app_silent.out")" == *"did not answer"* ]]; then
     pass "the app's start keeps to its limit when the probe does not answer"
 else
     fail "the app's start with a probe that never answers: status $app_silent_status after ${app_silent_seconds}s (limit 2s): $(cat "$lim/app_silent.out")"
@@ -498,7 +500,7 @@ timed swift_pass knot_swift_test_limited package-test "$lim/passes"
 timed swift_fail knot_swift_test_limited package-test "$lim/fails"
 swift_message="$(cat "$lim/swift_hang.out")"
 if [[ $swift_hang_status == 124 && $swift_message == *"The step package-test did not end"* && $swift_message != *dialog* &&
-    $swift_hang_seconds -lt 6 && $swift_pass_status == 0 && $swift_pass_seconds -lt 2 && $swift_fail_status == 65 ]]; then
+    $swift_hang_seconds -lt 10 && $swift_pass_status == 0 && $swift_pass_seconds -lt 10 && $swift_fail_status == 65 ]]; then
     pass "a step of package tests ends at its limit naming the step, is not slowed when it passes, and keeps its status"
 else
     fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
@@ -616,20 +618,22 @@ else
 fi
 
 # A limit is wall-clock time, not a count of polls: with each poll's sleep slowed to 0.3 s,
-# as a loaded Mac slows it, a 2-second limit still ends near 2 seconds. A limit under a
+# as a loaded Mac slows it, a 6-second limit still ends near 6 seconds. A limit under a
 # minute is stated in seconds.
 precise_now() { python3 -I -c 'import time; print("%.2f" % time.time())'; }
 slow_started="$(precise_now)"
-timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 2 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 6 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
 slow_elapsed="$(python3 -I -c 'import sys; print("%.1f" % (float(sys.argv[2]) - float(sys.argv[1])))' "$slow_started" "$(precise_now)")"
 timed short_limit env KNOT_SWIFT_TEST_LIMIT=1 bash -c 'source "$1"; knot_swift_test_limited package-test "$2"' _ \
     "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
-# It ends neither late nor early: at least the limit, as the timer measures it.
-if [[ $slow_polls_status == 124 && $slow_polls_seconds -le 4 && "${slow_elapsed%.*}${slow_elapsed#*.}" -ge 19 &&
+# It ends neither late nor early: at least the limit, as the timer measures it, and within
+# twice it. The limit is 6 s, so that a timer at half the limit, 3 s, and a count of the slowed
+# polls, 18 s, stay far from the bounds however loaded the Mac.
+if [[ $slow_polls_status == 124 && "${slow_elapsed%.*}${slow_elapsed#*.}" -ge 55 && "${slow_elapsed%.*}" -le 12 &&
     "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
     pass "a limit is wall-clock time, neither early nor late however slow each poll, and a short one is stated in seconds"
 else
-    fail "a 2 s limit with slow polls ended after ${slow_elapsed}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
+    fail "a 6 s limit with slow polls ended after ${slow_elapsed}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
