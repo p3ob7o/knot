@@ -41,3 +41,21 @@ public struct UnavailableSyncEngine: SyncEngine {
     public func syncNow() async throws(KnotError) { throw KnotError.portUnavailable }
     public func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async {}
 }
+
+/// A `WatchLink` that is not there: nothing is sent, and nothing waits.
+public struct UnavailableWatchLink: WatchLink {
+    public init() {}
+
+    public func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError) {
+        throw KnotError.portUnavailable.about(capture: manifest.captureID)
+    }
+    public func acknowledgements() -> AsyncStream<CaptureID> { AsyncStream { $0.finish() } }
+    public func counts() -> AsyncStream<WatchLinkCounts> {
+        AsyncStream { continuation in
+            continuation.yield(WatchLinkCounts(waiting: 0, failed: 0))
+            continuation.finish()
+        }
+    }
+    public func resume(_ trigger: WatchLinkTrigger) async {}
+    public func runBackgroundTask(limit: Duration) async -> Bool { true }
+}
