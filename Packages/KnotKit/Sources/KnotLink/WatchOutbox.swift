@@ -89,6 +89,22 @@ public struct WatchOutbox: Sendable {
         layer.entryKind(recordingURL(capture)) == .file
     }
 
+    /// Makes a capture's entry durable as it stands: syncs its manifest and its recording,
+    /// then the outbox folder that holds their names, and the folders above it. An entry found
+    /// at launch may be one whose admission failed after its rename, before the folder's sync,
+    /// so its names may not be on the drive; until this succeeds, the working pair in
+    /// `Recording/` is the durable copy.
+    public func makeDurable(_ capture: CaptureID) throws(KnotError) {
+        do {
+            try layer.syncFile(manifestURL(capture))
+            try layer.syncFile(recordingURL(capture))
+            try files.makeFolder(locations.outbox)
+            try layer.syncFolder(locations.outbox)
+        } catch {
+            throw error.about(capture: capture)
+        }
+    }
+
     /// The capture's entry, or `nil` when its manifest is not in the outbox.
     public func entry(_ capture: CaptureID) -> Entry? {
         let url = manifestURL(capture)

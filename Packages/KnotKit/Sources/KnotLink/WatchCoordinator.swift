@@ -264,7 +264,14 @@ public actor WatchCoordinator {
         guard finishing.insert(capture).inserted else { return nil }
         defer { finishing.remove(capture) }
         if let entry = link.outbox.entry(capture), entry.hasRecording, entry.manifest != nil {
-            // Already in the outbox: only the working file is left to remove.
+            // Already in the outbox, but perhaps by an admission whose folder sync failed: the
+            // working pair goes only once the entry is known to be durable.
+            do {
+                try await link.makeDurable(capture)
+            } catch {
+                log.failure(error, "watch_outbox_entry_not_durable")
+                return await keep(recording, error)
+            }
             unfinished[capture] = nil
             await link.release(capture)
             return await removeWorkingFile(capture)

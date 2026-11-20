@@ -181,6 +181,12 @@ public actor OutboxLink {
         }
     }
 
+    /// Makes a capture's outbox entry durable (`WatchOutbox.makeDurable(_:)`), on the link,
+    /// beside no admission and no sweep.
+    public func makeDurable(_ capture: CaptureID) throws(KnotError) {
+        try outbox.makeDurable(capture)
+    }
+
     // MARK: What the outbox holds
 
     /// The captures the iPhone acknowledged, each once, as it leaves the outbox. When the
