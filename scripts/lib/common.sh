@@ -307,13 +307,14 @@ knot_start_tool() {
 # application-identifier. No run needs the ID, and most do not know it, so a team ID is
 # matched by its shape, ten capitals and digits, where those keys or an identifier put it:
 # before `.com.` or `.*`, as a plist's whole string, as codesign's `[String]` value, and as
-# the parenthesised end of a certificate's name. A run that names the owner's configuration,
-# with KNOT_TEAM_CONFIG or KNOT_LOCAL_CONFIG, knows the ID: the filter reads it from that file
-# itself, never prints it, and masks it wherever it stands.
+# the parenthesised end of a certificate's name. A run that has the owner's configuration
+# knows the ID: the filter reads it, as the team-ID step does, from KNOT_TEAM_CONFIG, else
+# KNOT_LOCAL_CONFIG, else the configuration that bootstrap linked into the tree, never prints
+# it, and masks it wherever it stands.
 #   … | knot_filter_team
 KNOT_TEAM_FILTER='
     BEGIN {
-        my $config = $ENV{KNOT_TEAM_CONFIG} || $ENV{KNOT_LOCAL_CONFIG} || "";
+        my $config = $ENV{KNOT_FILTER_CONFIG} || "";
         if ($config ne "" && open(my $file, "<", $config)) {
             local $/;
             my $text = <$file>;
@@ -329,7 +330,9 @@ KNOT_TEAM_FILTER='
     s/\([A-Z0-9]{10}\)/(<TEAM>)/g;
     s/\Q$main::team\E/<TEAM>/g if defined $main::team;
 '
-knot_filter_team() { perl -pe "$KNOT_TEAM_FILTER"; }
+# The configuration the filter reads the ID from, chosen as step_team_id chooses it.
+knot_filter_config() { echo "${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-$KNOT_CONFIG/Local.xcconfig}}"; }
+knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_TEAM_FILTER"; }
 
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
 # the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
@@ -340,7 +343,7 @@ knot_scrub_logs() {
     [[ -d $folder ]] || return 0
     for log in "$folder"/verify-* "$folder"/bootstrap-*; do
         [[ -f $log ]] || continue
-        perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
+        KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
     done
 }
 
