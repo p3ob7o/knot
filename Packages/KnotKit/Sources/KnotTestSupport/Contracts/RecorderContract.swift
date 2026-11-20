@@ -10,15 +10,18 @@ public struct RecorderSubject: Sendable {
     public let exists: @Sendable (URL) -> Bool
     /// A file's size in bytes, or `nil` when there is none, read without the recorder.
     public let size: @Sendable (URL) -> Int?
+    /// A file's bytes, or `nil` when there is none, read without the recorder.
+    public let read: @Sendable (URL) -> Data?
 
     public init(
         recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
-        size: @escaping @Sendable (URL) -> Int?
+        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?
     ) {
         self.recorder = recorder
         self.locations = locations
         self.exists = exists
         self.size = size
+        self.read = read
     }
 }
 
@@ -28,6 +31,7 @@ public struct RecorderSubject: Sendable {
 public enum RecorderContract {
     public static func run(_ make: @Sendable () async throws -> RecorderSubject) async throws {
         try await aRecordingStreamsStopsAndConverts(make)
+        try await theFirstManifestNamesTheCaptureItFollows(make)
         try await aStopIsFinalAndCannotBeCancelled(make)
         try await twoStopsAtOnceBothWaitForTheFile(make)
         try await aDiscardRemovesTheRecording(make)
@@ -119,6 +123,36 @@ public enum RecorderContract {
         #expect(subject.exists(converted.file))
     }
 
+    /// The manifest's first write records the request, read as the start returns and before any
+    /// sample is taken: the link to the capture the recording follows among it, and no link
+    /// when it follows nothing. A recorder that ignores the link fails here: a death just after
+    /// the start would leave a recording that ingest cannot place after the capture it follows.
+    public static func theFirstManifestNamesTheCaptureItFollows(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        var following = request()
+        let followed: CaptureID = Identifier(uuid: UUID())
+        following.followsCaptureID = followed
+        let session = try await recorder.start(following)
+        let bytes = subject.read(subject.locations.recordingManifest(following.captureID))
+        let written = try #require(bytes, "The manifest is written before the start returns.")
+        let manifest = try CaptureManifest.decode(written)
+        #expect(manifest.captureID == following.captureID && manifest.kind == .voice)
+        #expect(manifest.launchID == following.launchID && manifest.origin == following.origin)
+        #expect(manifest.placement == following.placement && manifest.shownNoteID == following.shownNote)
+        #expect(manifest.followsCaptureID == followed, "The manifest's first write names the capture it follows.")
+        _ = await SuiteWait.value("the discard") { await session.discard() }
+
+        let alone = request()
+        let other = try await recorder.start(alone)
+        let first = subject.read(subject.locations.recordingManifest(alone.captureID))
+        let plain = try CaptureManifest.decode(try #require(first, "The manifest is written before the start returns."))
+        #expect(plain.followsCaptureID == nil, "A recording that follows nothing names nothing.")
+        _ = await SuiteWait.value("the discard") { await other.discard() }
+    }
+
     /// A stop called again returns the same result, and a stop whose caller is cancelled
     /// still finishes.
     public static func aStopIsFinalAndCannotBeCancelled(_ make: @Sendable () async throws -> RecorderSubject)
@@ -183,24 +217,35 @@ public enum RecorderContract {
     /// A recording of an earlier launch that stopped and was never converted, or whose
     /// conversion failed, leaves a working file, and it is among that launch's orphans: a later
     /// launch's recovery returns it, read to its last complete frame, until `removeWorkingFile`
-    /// takes it. So a failed conversion is tried again at the next launch (finding 23).
+    /// takes it, in the same call as a recording of that launch that never ended. So a failed
+    /// conversion is tried again at the next launch (finding 23), and a recording that stopped
+    /// is never left uncounted in `Recording/`.
     public static func aStoppedRecordingThatWasNotConvertedIsAnOrphan(
         _ make: @Sendable () async throws -> RecorderSubject
     ) async throws {
         let subject = try await make()
         let recorder = subject.recorder
-        let earlier = request()
+        let launch: LaunchID = Identifier(uuid: UUID())
+        let earlier = request(launch)
         let session = try await recorder.start(earlier)
         let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        // Beside it, a recording of the same launch that never ended: the launch died with it.
+        let unended = request(launch)
+        _ = try await recorder.start(unended)
         let later: LaunchID = Identifier(uuid: UUID())
-        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
-            $0.captureID == earlier.captureID
-        }
+        let orphans = try await recorder.recoverOrphans(currentLaunch: later)
+        let found = orphans.first { $0.captureID == earlier.captureID }
         #expect(found != nil, "A stopped recording that was never converted is an orphan of its launch.")
         #expect(found?.workingFile == stopped.workingFile && found?.frames == stopped.frames, "Read to its end.")
+        let died = orphans.first { $0.captureID == unended.captureID }
+        #expect(died != nil, "A recording that never ended is an orphan of its launch, beside the stopped one.")
+        #expect(died?.ending == .recovered, "It is finished as recovered.")
+        for capture in [earlier.captureID, unended.captureID] {
+            #expect(orphans.filter { $0.captureID == capture }.count == 1, "Each orphan comes back once in a call.")
+        }
         #expect(
-            try await recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
-            "It stays an orphan until its working file is removed.")
+            try await recorder.recoverOrphans(currentLaunch: later).filter { $0.captureID == earlier.captureID }.count
+                == 1, "It stays an orphan until its working file is removed, once in each call.")
         try await recorder.removeWorkingFile(of: earlier.captureID)
         #expect(
             try await !recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
