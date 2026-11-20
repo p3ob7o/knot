@@ -98,7 +98,7 @@ struct Capture { id; kind: typed | voice | ink; origin: (source, surface); start
 
 struct Note    { id; createdAt; updatedAt
                  title: String?; titleOrigin: none | generated | user
-                 titleEditedAt: Date?               // synced: when the title last changed, which the rule that a title keeps the later edit compares (§11)
+                 titleEditedAt: Date?               // synced: when the title or its origin last changed, which the rule that a title keeps the later edit compares (§11)
                  lastCaptureEndedAt; closedAt: Date?; deletedAt: Date?
                  revision: Int64 }                  // the store's change counter at this note's last change
 
@@ -372,7 +372,7 @@ The code half of SP-4, in its first stage, read CKSyncEngine in the pinned SDK a
 - **What a merge makes:** applying a fetched batch can make records of its own: a conflict copy, a derived note, or a note reference or an owner that it settled. Those are queued for upload in the same transaction, although the triggers are off on that connection (§7). Only a record applied exactly as it was fetched leaves nothing pending.
 - **What syncs when:** a segment syncs once its capture has ended. Drafts and recordings in progress never sync.
 - **Machine text:** a write by the processing queue never creates a conflict copy and never overwrites text whose origin is `edited`. Precedence is edited, then cleaned, then raw transcript.
-- **Titles and deletes:** a title keeps the later edit, by the note's `titleEditedAt` (§4). An edit that arrives for a deleted note is applied to the deleted copy, which stays deleted.
+- **Titles and deletes:** a title keeps the later edit, by four rules. A title of origin `user` wins over one of origin `generated` or `none`, whatever the times, because a machine never touches a title of origin `user` (§4). Between two titles of the same origin, the later `titleEditedAt` wins, and at equal times the title that sorts higher by its UTF-8 bytes wins, so that every device decides the same. `titleEditedAt` is the writing device's time of any change to the title or to its origin: a person's edit, the clean job's proposal, and the drop or the return of a generated title when a segment leaves or comes back. A note that never had a title has no `titleEditedAt`, and any time wins over none. An edit that arrives for a deleted note is applied to the deleted copy, which stays deleted.
 - **Settings:** the append window, the cleanup switch and the English variant sync. The hotkey, launch at login and the sync switch are per device.
 - **Deletes** sync as `deletedAt`. The purge after 30 days deletes the records.
 - **Account changes:** signing out pauses sync and keeps local data. Signing in to a different account asks the user before uploading anything. Apple's headers advise otherwise: on a sign-out and on a switch of account they say to delete the local data of the previous account. Knot keeps it on purpose, because its local store is the primary copy, where a capture lands first, and not a cache of iCloud. By the same headers, read by SP-4's code half and not yet observed (docs/notes/SP-4.md), a change of account resets the engine's state and clears every pending change it held, and several changes made while the app was not running arrive as one event. `change_log` keeps what waits to go up (§7).
