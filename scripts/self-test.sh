@@ -443,9 +443,11 @@ pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 # the app writes to standard error reaches the step's log.
 printf '#!/bin/sh\necho "the probe cannot run" >&2\nexit 1\n' >"$lim/broken-probe"
 printf '#!/bin/sh\necho "the app says something" >&2\nsleep 30\n' >"$lim/talks"
-chmod +x "$lim/broken-probe" "$lim/talks"
+# A window comes after the app has started, so this probe sees it after half a second.
+printf '#!/bin/sh\nsleep 0.5\necho "$1 layer 0 320x240"\n' >"$lim/a-later-window"
+chmod +x "$lim/broken-probe" "$lim/talks" "$lim/a-later-window"
 timed app_probe knot_start_app 2 "$lim/hangs" "$lim/broken-probe"
-timed app_talks knot_start_app 30 "$lim/talks" "$lim/a-window"
+timed app_talks knot_start_app 30 "$lim/talks" "$lim/a-later-window"
 probe_message="$(cat "$lim/app_probe.out")"
 if [[ $app_probe_status == 1 && $probe_message == *"probe"*"status 1"*"the probe cannot run"* && $probe_message != *"system dialog"* &&
     $app_talks_status == 0 && "$(cat "$lim/app_talks.out")" == *"the app says something"* ]]; then

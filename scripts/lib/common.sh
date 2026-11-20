@@ -442,11 +442,10 @@ knot_start_app() {
     shift 2
     out="$(mktemp)"
     errors="$(mktemp)"
-    # The app runs in a subshell that records its status, disowned, so that ending it prints
-    # no job notice; its standard error is the step's.
-    ("$app" >/dev/null; echo "$?" >"$out.status") &
+    # The app's standard error is the step's. It is started directly and waited for: a
+    # version that ran it in a disowned subshell hung the self-test on a hosted runner.
+    "$app" >/dev/null &
     pid=$!
-    disown "$pid" 2>/dev/null || true
     deadline=$(($(knot_now) + seconds))
     while (($(knot_now) < deadline)); do
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -454,7 +453,7 @@ knot_start_app() {
             break
         fi
         probe_status=0
-        knot_limit 15 "$@" "$(knot_descendants "$pid" | head -n 1)" >"$out" 2>"$errors" || probe_status=$?
+        knot_limit 15 "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
         found="$(cat "$out")"
         [[ -n $found ]] && break
         if ((KNOT_LIMIT_HIT)); then
@@ -467,11 +466,12 @@ knot_start_app() {
         sleep 0.5
     done
     if ((exited)); then
-        status="$(cat "$out.status" 2>/dev/null || echo unknown)"
+        wait "$pid" || status=$?
     else
         knot_end_process "$pid"
+        wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$out" "$out.status" "$errors"
+    rm -f "$out" "$errors"
     if [[ -n $found ]]; then
         echo "windows: $found"
         return 0
