@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "run-past-resume", run: aRunThatStartsPastTheResumePointIsNotApplied),
     ]
 
     // MARK: Idempotence
@@ -1659,6 +1660,21 @@ public enum NoteStoreContract {
         let kept = try await h.store.replaceText(
             TextReplacement(segment: segment, text: "Machine", origin: .cleaned, writer: .queue))
         stamped(kept.revision, kept.segment.revision, "A result kept by precedence")
+    }
+
+    /// Witness 47: a final run that starts past the job's resume point is not applied, and the
+    /// text, the resume point and the job's state stay.
+    public static func aRunThatStartsPastTheResumePointIsNotApplied(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let recording = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = recording.segmentIDs[0]
+        let job = JobID.transcribe(of: segment)
+        _ = try await h.store.appendTranscript(h.run("future", from: .seconds(5), resumeAt: nil), to: segment, job: job)
+        #expect(try await h.text(segment).isEmpty, "The text stays empty.")
+        let stored = try #require(try await h.store.jobs(for: segment).first)
+        #expect(stored.resumeAt == nil && stored.state == .queued, "The resume point and the state stay.")
+        _ = try await h.store.appendTranscript(h.run("real", from: .zero, resumeAt: nil), to: segment, job: job)
+        #expect(try await h.text(segment) == "real")
     }
 
     // MARK: Reading
