@@ -48,14 +48,31 @@ protocol SyncEnginePort: Sendable {
 struct SyncFailure: Error, Equatable, Sendable { var condition: SyncCondition }
 
 /// The store stand-in for stage 2: the merge core behind the sink the adapter calls. It
-/// keeps the engine's state and the system fields in memory and prints counts only.
+/// keeps the engine's state and the system fields beside the replica, saves them to one file
+/// between launches, and reports counts, sizes and codes, never text.
 actor SpikeStore: SyncStoreSink {
+    struct Persisted: Codable, Sendable {
+        var replica: Replica
+        var savedState: Data?
+        var systemFields: [RecordKey: Data]
+        var generation: Int
+        var account: String?
+        var zoneSaved: Bool
+    }
+
     private(set) var replica: Replica
     private(set) var savedState: Data?
     private(set) var systemFields: [RecordKey: Data] = [:]
     private(set) var generation = 1
+    /// The account the records were synced under (§11, account isolation).
+    private(set) var account: String?
+    private(set) var zoneSaved = false
     private var fetchCompleted = true
     private(set) var questions: [SyncQuestion] = []
+    /// How many inputs of each kind arrived, in this launch.
+    private(set) var counters: [String: Int] = [:]
+    /// One line per notable input: codes and counts only.
+    private(set) var lines: [String] = []
     /// Records already handed to a batch in this send. The engine asks for batches until it
     /// gets nil, and the header does not say that a batch's sent event arrives before the
     /// next request, so the store must not hand the same records out twice in one send.
@@ -63,54 +80,112 @@ actor SpikeStore: SyncStoreSink {
 
     init(device: UUID) { replica = Replica(device: device) }
 
+    init(_ p: Persisted) {
+        replica = p.replica
+        savedState = p.savedState
+        systemFields = p.systemFields
+        generation = p.generation
+        account = p.account
+        zoneSaved = p.zoneSaved
+    }
+
+    var persisted: Persisted {
+        Persisted(replica: replica, savedState: savedState, systemFields: systemFields, generation: generation,
+                  account: account, zoneSaved: zoneSaved)
+    }
+
+    /// A local write, as the store would make it.
+    func write(_ body: @Sendable (inout Replica) -> Void) { body(&replica) }
+
     func receive(_ input: AdapterInput, generation: Int) async {
-        guard generation == self.generation else { return }
+        guard generation == self.generation else {
+            counters["dropped.olderRun", default: 0] += 1
+            return
+        }
         switch input {
         case .saveState(let data):
+            count("stateUpdate")
             savedState = data
         case .account(let transition):
-            // The engine has reset its state and dropped its pending changes. Knot keeps
-            // its notes and its change_log, and asks before uploading (§11).
-            self.generation += 1
+            count("accountChange")
             switch transition {
-            case .signedOut: questions.append(.signedOut)
-            case .switched, .signedIn: questions.append(.accountChanged)
+            case .signedIn(let user) where account == nil:
+                // The first account this store meets: nothing was synced under another.
+                account = user
+                lines.append("account.signedIn first")
+            case .signedIn(let user), .switched(_, let user):
+                // The engine has reset its state and dropped its pending changes. Knot keeps
+                // its notes and its change_log, and asks before uploading (§11).
+                lines.append("account.changed same=\(user == account)")
+                questions.append(.accountChanged)
+            case .signedOut:
+                lines.append("account.signedOut")
+                questions.append(.signedOut)
             }
-        case .zonesChanged(_, let lost):
-            for loss in lost where loss.zone == Zones.stream.zoneName {
-                questions.append(.zoneRemoved(loss.reason))
+        case .zonesChanged(let saved, let lost):
+            count("zonesChanged")
+            if saved.contains(Zones.stream.zoneName) { zoneSaved = true }
+            for loss in lost {
+                lines.append("zone.lost \(loss.zone) reason=\(loss.reason.rawValue)")
+                if loss.zone == Zones.stream.zoneName {
+                    zoneSaved = false
+                    questions.append(.zoneRemoved(loss.reason))
+                }
             }
         case .fetchStarted:
+            count("willFetchChanges")
             fetchCompleted = true
-        case .fetched(let changes, let fields, _):
+        case .fetched(let changes, let fields, let unreadable):
+            count("fetchedRecordZoneChanges")
+            counters["fetched.records", default: 0] += changes.count
+            if !unreadable.isEmpty { lines.append("fetched.unreadable \(unreadable.count)") }
             systemFields.merge(fields) { $1 }
-            _ = replica.apply(changes)
-        case .zoneFetchFinished(_, let condition):
-            if condition != nil { fetchCompleted = false }
+            let outcome = replica.apply(changes)
+            if !outcome.queued.isEmpty { lines.append("merge.queued \(outcome.queued.count) copies=\(outcome.conflictCopies.count)") }
+        case .zoneFetchFinished(let zone, let condition):
+            count("didFetchRecordZoneChanges")
+            if let condition {
+                fetchCompleted = false
+                lines.append("fetch.zoneFailed \(zone) code=\(condition.code) kind=\(condition.kind)")
+            }
         case .fetchEnded:
-            _ = replica.endFetch(completed: fetchCompleted)
-        case .sent(let saved, let fields, _, let failures):
+            count("didFetchChanges")
+            let outcome = replica.endFetch(completed: fetchCompleted)
+            if !outcome.moved.isEmpty { lines.append("settle.moved \(outcome.moved.count) derived=\(outcome.derivedNotes.count)") }
+        case .sent(let saved, let fields, let deleted, let failures):
+            count("sentRecordZoneChanges")
+            counters["sent.saved", default: 0] += saved.count
+            counters["sent.deleted", default: 0] += deleted.count
             systemFields.merge(fields) { $1 }
             for change in saved { replica.sent(change) }
             for failure in failures {
+                lines.append("sent.failed \(failure.key.kind.rawValue) code=\(failure.condition.code) kind=\(failure.condition.kind) retryAfter=\(failure.condition.retryAfter.map { String($0) } ?? "-")")
                 if let server = failure.server {
                     if let fields = failure.serverSystemFields { systemFields[failure.key] = fields }
                     _ = replica.serverChanged(server)
                 }
             }
-        case .sendStarted, .sendEnded:
+        case .sendStarted:
+            count("willSendChanges")
+            handedOut = []
+        case .sendEnded:
+            count("didSendChanges")
             handedOut = []
         }
     }
+
+    private func count(_ name: String) { counters[name, default: 0] += 1 }
 
     func pendingForSend(limit: Int, generation: Int) async -> [OutgoingRecord] {
         guard generation == self.generation, questions.isEmpty else { return [] }
         let next = replica.outgoing().filter { $0.key.map { !handedOut.contains($0) } ?? false }.prefix(limit)
         for change in next { if let key = change.key { handedOut.insert(key) } }
+        counters["batch.requests", default: 0] += 1
         return next.map { OutgoingRecord(change: $0, systemFields: $0.key.flatMap { systemFields[$0] }) }
     }
 
     func refused(oversize: [RecordKey], generation: Int) async {
+        lines.append("batch.oversize \(oversize.count)")
         questions.append(.recordTooLarge(count: oversize.count))
     }
 }

@@ -2,7 +2,7 @@
 # Builds SP-4's throwaway app with the pinned Xcode (docs/plan/SP-4.md).
 #
 #   Spikes/SP-4/build.sh check       generate, build the Mac app (signed ad hoc, sandboxed)
-#                                    and the iOS app for the Simulator, and check both
+#                                    and the iOS app for the Simulator, both signed locally
 #   Spikes/SP-4/build.sh selftest    build the Mac app, then run its self-test, which drives
 #                                    the merge core, the mapping and the adapter's testable
 #                                    half and quits by itself
@@ -10,8 +10,15 @@
 #                                    against the pinned macOS SDK: every CloudKit type the
 #                                    note names must fail to construct, every control must not
 #
-# Stage 1 builds only with KNOT_SIGNING=local. That build has no iCloud entitlement and
-# says KnotSyncAvailable = NO, so nothing in it can open a container.
+# Stage 2, simulators only, signed with the owner's team (KNOT_LOCAL_CONFIG linked by
+# scripts/bootstrap.sh). ENV is Development (the default) or Production, which names the
+# throwaway container alone:
+#   Spikes/SP-4/build.sh sim-build [ENV]          build the iOS app for the Simulator, team-signed
+#   Spikes/SP-4/build.sh sim-install ROLE [ENV]   boot the worktree's iphone or ipad, install it
+#   Spikes/SP-4/build.sh live ROLE ARGS…          run one LiveRunner step there and print it
+#
+# The Mac app is never signed with the team: a team-signed Mac build of the development
+# identifiers raises a consent dialog on the build Mac that only the owner can answer.
 
 source "$(dirname "$0")/../../scripts/lib/common.sh"
 knot_select_xcode
@@ -23,9 +30,11 @@ LOGS="$KNOT_LOGS/sp4"
 MAC_APP="$DERIVED/Build/Products/Debug/SP4.app"
 mkdir -p "$LOGS"
 
+BUNDLE_ID=com.p3ob7o.knot.dev
+
 if [[ ${KNOT_SIGNING:-local} != local ]]; then
-    knot_fail "sp4-stage" "Stage 1 of SP-4 builds only with KNOT_SIGNING=local." \
-        "Stage 2 adds the team entitlements first (Spikes/SP-4/README.md)." "safe" "nothing"
+    knot_fail "sp4-signing" "Set no KNOT_SIGNING for this script." \
+        "The Mac app is always local; sim-build signs the iOS app with the team itself." "safe" "nothing"
 fi
 
 generate() {
@@ -33,18 +42,60 @@ generate() {
     (cd "$SPIKE" && xcodegen generate --spec project.yml --quiet)
 }
 
+# build SCHEME DESTINATION [SIGNING [ENV]]. Never passes -allowProvisioningUpdates, so a
+# build cannot register anything in the owner's developer account.
 build() {
-    local scheme=$1 destination=$2 log="$LOGS/build-$1.log"
+    local scheme=$1 destination=$2 signing=${3:-local} env=${4:-Development}
+    local derived="$DERIVED" log="$LOGS/build-$1-$signing-$env.log"
+    [[ $signing == team ]] && derived="$DERIVED-team-$env"
     local extra=()
     [[ ${KNOT_AGENT:-} == 1 ]] && extra+=(COMPILER_INDEX_STORE_ENABLE=NO)
-    if ! "$KNOT_SCRIPTS/build-slot.sh" run --label "sp4 $scheme" -- \
-        xcodebuild -project "$PROJECT" -scheme "$scheme" -configuration Debug -derivedDataPath "$DERIVED" \
-        -destination "$destination" KNOT_SIGNING=local ${extra[@]+"${extra[@]}"} build >"$log" 2>&1; then
-        grep -E "error:|warning:" "$log" | sort -u | head -40
-        knot_fail "sp4-build" "The SP-4 build of $scheme failed." "Read $log." "safe" "$DERIVED"
+    if ! "$KNOT_SCRIPTS/build-slot.sh" run --label "sp4 $scheme $signing" -- \
+        xcodebuild -project "$PROJECT" -scheme "$scheme" -configuration Debug -derivedDataPath "$derived" \
+        -destination "$destination" KNOT_SIGNING="$signing" SP4_CLOUD_ENVIRONMENT="$env" \
+        ${extra[@]+"${extra[@]}"} build >"$log" 2>&1; then
+        # The log holds the team's prefix; print only error lines, with it taken out.
+        grep -E "error:" "$log" | grep -v -E "TeamIdentifierPrefix|AppIdentifierPrefix" |
+            sed -E 's/[A-Z0-9]{10}\./<team>./g' | sort -u | head -20
+        knot_fail "sp4-build" "The SP-4 build of $scheme ($signing, $env) failed." "Read $log (it holds the team's prefix)." "safe" "$derived"
     fi
-    echo "sp4: built $scheme"
+    echo "sp4: built $scheme ($signing, $env)"
 }
+
+sim_app() { printf '%s/Build/Products/Debug-iphonesimulator/SP4.app' "$DERIVED-team-${1:-Development}"; }
+
+# What the simulator build carries, with identifiers that hold the team's prefix left out.
+check_sim() {
+    local app entitlements
+    app="$(sim_app "$1")"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :KnotSyncAvailable' "$app/Info.plist")" == YES ]] ||
+        knot_fail "sp4-sim-sync" "The team-signed simulator build says sync is unavailable." "Check the local config link." "safe" "nothing"
+    # A simulator build is signed ad hoc and keeps its entitlements in the executable's
+    # __TEXT,__entitlements section, which the simulator honours in place of a profile.
+    local tmp
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/sp4-ent.XXXXXX")"
+    lipo "$app/SP4" -thin arm64 -output "$tmp/thin"
+    segedit "$tmp/thin" -extract __TEXT __entitlements "$tmp/ent.plist"
+    entitlements="$(plutil -convert json -o - "$tmp/ent.plist")"
+    python3 -I -c '
+import json,sys
+e=json.loads(sys.argv[1] or "{}")
+keep={k:v for k,v in e.items() if k in ("aps-environment","com.apple.developer.icloud-container-identifiers",
+      "com.apple.developer.icloud-services","com.apple.developer.icloud-container-environment","get-task-allow")}
+print("sp4: simulated entitlements, team identifiers left out:", json.dumps(keep, sort_keys=True))
+print("sp4: other keys present:", sorted(k for k in e if k not in keep))
+' "$entitlements"
+    python3 -I -c '
+import json,sys
+e=json.loads(sys.argv[1] or "{}")
+bad=[c for c in e.get("com.apple.developer.icloud-container-identifiers",[]) if c not in ("iCloud.com.p3ob7o.knot.dev","iCloud.com.p3ob7o.knot.spike4")]
+prod=e.get("com.apple.developer.icloud-container-environment")=="Production"
+if bad or (prod and e.get("com.apple.developer.icloud-container-identifiers")!=["iCloud.com.p3ob7o.knot.spike4"]):
+    sys.exit(1)
+' "$entitlements" || knot_fail "sp4-container" "The build names a container it must not." "Check Config/SP4-iOS-team*.entitlements." "safe" "nothing"
+}
+
+udid() { "$KNOT_SCRIPTS/sim.sh" udid "$1"; }
 
 # The Mac build is sandboxed, uses the development identifiers and has no iCloud entitlement.
 check_mac() {
@@ -110,8 +161,28 @@ case ${1:-} in
     probe)
         probe
         ;;
+    sim-build)
+        env=${2:-Development}
+        [[ $env == Development || $env == Production ]] || knot_fail "sp4-env" "ENV is $env." "Use Development or Production." "safe" "nothing"
+        [[ -n ${KNOT_LOCAL_CONFIG:-} ]] ||
+            knot_fail "sp4-no-team" "KNOT_LOCAL_CONFIG names no team configuration." "Export it; every build.sh call needs it, or generate unlinks it." "safe" "nothing"
+        generate
+        build SP4-iOS "generic/platform=iOS Simulator" team "$env"
+        check_sim "$env"
+        ;;
+    sim-install)
+        role=${2:?role}; env=${3:-Development}
+        "$KNOT_SCRIPTS/sim.sh" boot "$role" >/dev/null
+        xcrun simctl install "$(udid "$role")" "$(sim_app "$env")"
+        echo "sp4: installed the $env build on the $role simulator"
+        ;;
+    live)
+        role=${2:?role}; shift 2
+        knot_with_timeout 900 xcrun simctl launch --console-pty --terminate-running-process \
+            "$(udid "$role")" "$BUNDLE_ID" -SP4Live "$@" | grep '^sp4live:' | tee -a "$LOGS/live-$role.log"
+        ;;
     *)
-        sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
         exit 2
         ;;
 esac

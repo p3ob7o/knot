@@ -4,9 +4,10 @@
 #
 # It shares Apps/Config/Base.xcconfig with the real apps, so it takes the development
 # identifiers (com.p3ob7o.knot.dev, iCloud.com.p3ob7o.knot.dev) and the same signing switch.
-# Stage 1 builds only with KNOT_SIGNING=local: sandboxed on the Mac, no iCloud entitlement,
-# KnotSyncAvailable = NO, so the app cannot reach a container. Stage 2 adds the team
-# entitlements (README.md says which) once the owner's signing is on the Mac.
+# The Mac app builds only with KNOT_SIGNING=local: sandboxed, no iCloud entitlement,
+# KnotSyncAvailable = NO, so it cannot reach a container, and no team-signed build of the
+# development identifiers runs as a Mac process on the build Mac. Stage 2 builds the iOS app
+# with KNOT_SIGNING=team for simulators only, with the entitlements in Config/.
 
 name: SP4
 
@@ -22,6 +23,10 @@ options:
 configs:
   Debug: debug
   Release: release
+
+settings:
+  base:
+    SP4_CLOUD_ENVIRONMENT: Development
 
 configFiles:
   Debug: ../../Apps/Config/Base.xcconfig
@@ -52,9 +57,16 @@ targets:
       base:
         PRODUCT_NAME: SP4
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID)
-        INFOPLIST_FILE: Config/Info.plist
+        INFOPLIST_FILE: Config/Info-iOS.plist
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Stage 2. Development reaches the development environment of the development
+        # container and of the throwaway container. Production names the throwaway
+        # container alone, because the environment entitlement applies to every container
+        # an app names, and nothing goes to the production side of the development container.
+        SP4_ENTITLEMENTS_SUFFIX_Development: ""
+        SP4_ENTITLEMENTS_SUFFIX_Production: "-production"
+        CODE_SIGN_ENTITLEMENTS: Config/SP4-iOS-$(KNOT_SIGNING)$(SP4_ENTITLEMENTS_SUFFIX_$(SP4_CLOUD_ENVIRONMENT)).entitlements
     dependencies:
       - sdk: CloudKit.framework
 

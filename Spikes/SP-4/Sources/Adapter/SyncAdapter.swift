@@ -87,25 +87,51 @@ final class SyncAdapter: CKSyncEngineDelegate {
     }
 }
 
-/// Makes the real engine. Stage 1 never calls it: a build with the local signing
-/// configuration says `KnotSyncAvailable = NO` and has no iCloud entitlement, and the
-/// factory refuses before it touches CKContainer.
+/// Makes the real engine. The Mac build, signed locally, says `KnotSyncAvailable = NO` and
+/// has no iCloud entitlement, so the factory refuses before it touches CKContainer. The iOS
+/// build signed with the team reaches two containers and no other: the development
+/// container, in its development environment only, and the spike's throwaway container,
+/// in either environment. Knot's real container is refused by name.
 enum LiveSync {
-    enum Refusal: Error, Equatable { case notInThisBuild, noContainer }
+    static let developmentContainer = "iCloud.com.p3ob7o.knot.dev"
+    static let spikeContainer = "iCloud.com.p3ob7o.knot.spike4"
+    static let realContainer = "iCloud.com.p3ob7o.knot"
 
-    static func makeEngine(adapter: SyncAdapter, state: Data?, bundle: Bundle = .main) throws(Refusal) -> CKSyncEngine {
+    enum Refusal: Error, Equatable {
+        case notInThisBuild
+        case containerNotAllowed(String)
+        case productionOnlyInTheSpikeContainer
+    }
+
+    struct Target: Equatable, Sendable {
+        var container: String
+        /// From the build's own entitlement, through the Info.plist: no API reports it.
+        var environment: String
+    }
+
+    static func target(requested: String?, bundle: Bundle = .main) throws(Refusal) -> Target {
         guard bundle.object(forInfoDictionaryKey: "KnotSyncAvailable") as? String == "YES" else {
             throw .notInThisBuild
         }
-        guard let identifier = bundle.object(forInfoDictionaryKey: "KnotCloudContainer") as? String,
-              identifier.hasSuffix(".dev") else { throw .noContainer }
+        let environment = bundle.object(forInfoDictionaryKey: "KnotCloudEnvironment") as? String ?? "Development"
+        let container = requested ?? (environment == "Production" ? spikeContainer : developmentContainer)
+        guard container != realContainer, [developmentContainer, spikeContainer].contains(container) else {
+            throw .containerNotAllowed(container)
+        }
+        guard environment == "Development" || container == spikeContainer else {
+            throw .productionOnlyInTheSpikeContainer
+        }
+        return Target(container: container, environment: environment)
+    }
+
+    static func makeEngine(adapter: SyncAdapter, state: Data?, target: Target, automaticallySync: Bool) -> CKSyncEngine {
         let serialization = state.flatMap {
             try? PropertyListDecoder().decode(CKSyncEngine.State.Serialization.self, from: $0)
         }
-        let container = CKContainer(identifier: identifier)
+        let container = CKContainer(identifier: target.container)
         var configuration = CKSyncEngine.Configuration(database: container.privateCloudDatabase,
                                                        stateSerialization: serialization, delegate: adapter)
-        configuration.automaticallySync = true
+        configuration.automaticallySync = automaticallySync
         return CKSyncEngine(configuration)
     }
 }

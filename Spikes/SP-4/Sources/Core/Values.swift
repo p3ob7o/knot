@@ -6,7 +6,7 @@ import Foundation
 
 /// A synced field whose value this build may not know. The raw string is kept and written
 /// back, so a kind, an origin or a state from a newer Knot is never dropped (§4).
-struct Tag: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+struct Tag: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
     init(_ rawValue: String) { self.rawValue = rawValue }
@@ -40,7 +40,7 @@ enum TextOrigin {
     static func isMachine(_ origin: Tag) -> Bool { precedence(origin) < 3 }
 }
 
-struct NoteValue: Equatable, Sendable {
+struct NoteValue: Equatable, Codable, Sendable {
     var id: UUID
     var createdAt: Date
     var title: String?
@@ -53,7 +53,7 @@ struct NoteValue: Equatable, Sendable {
     var deletedAt: Date?
 }
 
-struct SegmentValue: Equatable, Sendable {
+struct SegmentValue: Equatable, Codable, Sendable {
     var id: UUID
     var noteID: UUID
     var noteGeneration: Int
@@ -74,26 +74,26 @@ struct SegmentValue: Equatable, Sendable {
 
 /// The device that made a change, and the local revision of a segment's text, are local
 /// facts the core needs for a conflict copy's ID.
-struct LocalSegment: Equatable, Sendable {
+struct LocalSegment: Equatable, Codable, Sendable {
     var value: SegmentValue
     /// Local only, never synced (§4): rises each time the text changes.
     var revision: Int64
 }
 
-enum RecordKind: String, Sendable {
+enum RecordKind: String, Codable, Sendable {
     case note = "Note"
     case segment = "Segment"
 }
 
 /// A record name in the Stream zone is the value's UUID. The kind travels beside it.
-struct RecordKey: Hashable, Sendable, CustomStringConvertible {
+struct RecordKey: Hashable, Codable, Sendable, CustomStringConvertible {
     var kind: RecordKind
     var id: UUID
     var description: String { "\(kind.rawValue)/\(id.uuidString.prefix(8))" }
 }
 
 /// One change fetched from iCloud, in the core's terms.
-enum RemoteChange: Equatable, Sendable {
+enum RemoteChange: Equatable, Codable, Sendable {
     case note(NoteValue)
     case segment(SegmentValue)
     /// The record is gone from the zone: a purge after 30 days, or a long-absent replica's

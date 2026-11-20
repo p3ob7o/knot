@@ -12,5 +12,7 @@
 	<string>$(KNOT_SYNC_AVAILABLE)</string>
 	<key>KnotCloudContainer</key>
 	<string>$(KNOT_CLOUD_CONTAINER)</string>
+	<key>KnotCloudEnvironment</key>
+	<string>$(SP4_CLOUD_ENVIRONMENT)</string>
 </dict>
 </plist>

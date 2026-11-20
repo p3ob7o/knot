@@ -23,17 +23,22 @@ Throwaway code for [SP-4](../../docs/plan/SP-4.md): the sync design of `docs/arc
 Every command runs from the repository root, with `KNOT_AGENT=1` for an agent.
 
 ```
-Spikes/SP-4/build.sh check       # the Mac app (ad hoc, sandboxed, no iCloud) and the iOS Simulator app
+Spikes/SP-4/build.sh check       # the Mac app (ad hoc, sandboxed, no iCloud) and the iOS Simulator app, both local
 Spikes/SP-4/build.sh selftest    # the Mac app, then its self-test, which exits with the result
 Spikes/SP-4/build.sh probe       # the types with no public initialiser, checked against the SDK
 ```
 
-The script refuses `KNOT_SIGNING=team` in stage 1. It checks that the Mac build carries the sandbox and no iCloud or push entitlement, and that its Info.plist says `KnotSyncAvailable = NO`. `LiveSync.makeEngine` refuses before it touches `CKContainer` unless that key says `YES` and the container's identifier ends in `.dev`.
+The script refuses a `KNOT_SIGNING` from the environment. It checks that the Mac build carries the sandbox and no iCloud or push entitlement, and that its Info.plist says `KnotSyncAvailable = NO`. `LiveSync.makeEngine` refuses before it touches `CKContainer` unless that key says `YES` and the container's identifier ends in `.dev`.
 
-## What stage 2 adds
+## Stage 2
 
-These need the owner's signing on the Mac and two devices signed in to iCloud. Nothing here touches the milestone container or the production schema.
+`stage2.md` says what stage 2 needs from the owner's developer account and from him, and in what order. In short:
 
-1. Team entitlements for both targets: `com.apple.developer.icloud-container-identifiers` with `iCloud.com.p3ob7o.knot.dev`, `com.apple.developer.icloud-services` with `CloudKit`, and push for CloudKit's notifications (`aps-environment` on iOS, `com.apple.developer.aps-environment` on the Mac, development). On iOS, the `remote-notification` background mode. Whether the sandboxed Mac app also needs `com.apple.security.network.client` is checked then.
-2. A window to drive it: make notes and segments, edit, delete, move, fetch now, send now, cancel, and a log of events with counts, sizes and timings, never text.
-3. The runs the brief lists, with the note's "Not verified yet" as the checklist.
+```
+export KNOT_AGENT=1 KNOT_LOCAL_CONFIG=<the owner's Local.xcconfig>   # every build.sh call needs it
+Spikes/SP-4/build.sh sim-build Development        # or Production: the throwaway container alone
+Spikes/SP-4/build.sh sim-install iphone           # and ipad
+Spikes/SP-4/build.sh live iphone account          # then seed, sync, dump, delete-zone, reset-local
+```
+
+`Sources/App/LiveRunner.swift` runs one step of the real engine per launch, with automatic sync off, keeps the replica and the engine's state in a file between launches, and prints counts, sizes, durations and codes. The Mac app stays local: a team-signed Mac build of the development identifiers raises a consent dialog on the build Mac that only the owner can answer.

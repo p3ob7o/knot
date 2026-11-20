@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct Replica: Sendable {
+struct Replica: Codable, Sendable {
     let device: UUID
     private(set) var notes: [UUID: NoteValue] = [:]
     private(set) var segments: [UUID: LocalSegment] = [:]
