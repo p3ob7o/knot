@@ -373,23 +373,24 @@ final class ProgressLog: Sendable {
         #expect(runs == 2 && text == ["a long first phrase", "then a short one"])
     }
 
-    /// A file nobody scripted reads as the default script, so that a recording made in a
-    /// preview has a transcript; one marked missing is unreadable; and with the default
-    /// turned off, an unscripted file is unreadable too (finding 74).
-    @Test func anUnscriptedFileReadsAsTheDefaultScript() async throws {
+    /// A file nobody scripted is unreadable unless the default script was asked for, so that a
+    /// test that forgets to script a file fails; once asked for, it reads as the default
+    /// script, as the preview's builder asks; a file marked missing stays unreadable
+    /// (findings 74 and 76).
+    @Test func anUnscriptedFileReadsOnlyOnceTheDefaultScriptIsAskedFor() async throws {
         let transcriber = ScriptedTranscriber()
         let made = URL(fileURLWithPath: "/recordings/made-in-a-preview.caf")
+        await #expect(throws: KnotError.audioUnreadable, "Unscripted, by default.") {
+            try await transcriber.transcribe(file: made, from: .zero, budget: nil)
+        }
+        transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
         let run = try await transcriber.transcribe(file: made, from: .zero, budget: nil)
-        #expect(!run.pieces.isEmpty && run.resumeAt == nil, "The default script answers.")
+        #expect(run.resumeAt == nil, "The default script answers in one run.")
         #expect(run.pieces.map(\.text) == ScriptedTranscriber.defaultScript.map(\.text))
         let missing = URL(fileURLWithPath: "/recordings/missing.caf")
         transcriber.scriptMissing(missing)
-        await #expect(throws: KnotError.audioUnreadable) {
+        await #expect(throws: KnotError.audioUnreadable, "A missing file, whatever the default.") {
             try await transcriber.transcribe(file: missing, from: .zero, budget: nil)
-        }
-        transcriber.scriptUnscriptedFiles(pieces: nil)
-        await #expect(throws: KnotError.audioUnreadable) {
-            try await transcriber.transcribe(file: made, from: .zero, budget: nil)
         }
     }
 

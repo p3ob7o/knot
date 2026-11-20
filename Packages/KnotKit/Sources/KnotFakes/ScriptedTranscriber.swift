@@ -6,7 +6,8 @@
     /// A `Transcriber` that says what a test scripts (docs/architecture.md §5): each readiness
     /// state and its changes, the pieces of each file over several runs, each failure, an
     /// empty file, a missing one, a cancellation during a run, and live text that is volatile
-    /// and then final. A file nobody scripted reads as `defaultScript`.
+    /// and then final. A file nobody scripted is unreadable, unless `defaultScript` was asked
+    /// for with `scriptUnscriptedFiles(pieces:)`.
     public final class ScriptedTranscriber: Transcriber {
         /// The provenance of every run, as a real transcript would carry it, with the locale
         /// the transcriber was given.
@@ -18,7 +19,7 @@
             var readiness: TranscriberReadiness
             var files: [URL: [TranscriptPiece]] = [:]
             var missing: Set<URL> = []
-            var unscripted: [TranscriptPiece]? = ScriptedTranscriber.defaultScript
+            var unscripted: [TranscriptPiece]?
             var failures: [KnotError] = []
             var installFailure: KnotError?
             var runDelay: Duration = .zero
@@ -42,15 +43,18 @@
         /// The phrases `file` holds, in its own time. A file with none is empty or silent.
         public func script(_ file: URL, pieces: [TranscriptPiece]) { state.withLock { $0.files[file] = pieces } }
 
-        /// What a file nobody scripted reads as, so that a recording made in a preview or by the
-        /// tracer has a transcript: three short synthetic phrases.
+        /// Three short synthetic phrases, for a file nobody scripted once asked for with
+        /// `scriptUnscriptedFiles(pieces:)`, as the preview's builder asks.
         public static let defaultScript: [TranscriptPiece] = [
             TranscriptPiece(text: "a scripted", range: .zero ..< .seconds(1)),
             TranscriptPiece(text: " transcript", range: .seconds(1) ..< .seconds(2)),
             TranscriptPiece(text: " of a recording", range: .seconds(2) ..< .seconds(3)),
         ]
 
-        /// What every file nobody scripted reads as; `nil` makes such a file unreadable.
+        /// What every file nobody scripted reads as. By default nothing: such a file is
+        /// `audio_unreadable`, so a test that forgets to script a file fails (finding 76). The
+        /// preview's builder asks for `defaultScript` here, so that a recording made in a
+        /// preview has a transcript; `nil` turns it off again.
         public func scriptUnscriptedFiles(pieces: [TranscriptPiece]?) {
             state.withLock { $0.unscripted = pieces }
         }
