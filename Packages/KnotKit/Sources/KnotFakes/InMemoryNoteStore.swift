@@ -202,7 +202,7 @@
 
         public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult {
             await waitIfHeld()
-            try check(capture)
+            try check(capture, ingesting: true)
             guard let endedAt = capture.endedAt else { throw KnotError.unexpected.about(capture: capture.id) }
             var next = state
             if next.captures[capture.id] == nil {
@@ -853,18 +853,19 @@
         /// Where an inbox item made in the app goes: the note its surface showed, or a new note
         /// when it showed none or that note can no longer take it (rules 10 and 11).
         private func inboxPlacement(_ capture: NewCapture, in next: State) -> AppendDecision? {
+            // A note deleted, purged, or with no live segment left counts as deleted (rules 11
+            // and 14): the item starts a new note rather than fail or join a hidden one, and it
+            // is not handed to the window, which would pick a note the item was not made in.
+            func gone(_ note: NoteID) -> Bool {
+                next.notes[note].map { $0.deletedAt != nil || !hasLiveSegment(note, in: next) } ?? true
+            }
             switch capture.placement {
             case .named(let note):
-                guard let named = next.notes[note], named.deletedAt == nil else {
-                    return .refused(KnotError.noteDeleted.with(.init(noteID: note)))
-                }
-                // A named note with no live segment left counts as deleted (rule 11): the item's
-                // content starts a new note rather than join a hidden one.
-                guard hasLiveSegment(note, in: next) else { return .newNote(.latestNoteDeleted) }
-                return .join(note, .namedNote)
+                return gone(note) ? .newNote(.latestNoteDeleted) : .join(note, .namedNote)
             case .newNote:
                 return .newNote(.newNoteAsked)
             case .window:
+                if let shown = capture.shownNote, gone(shown) { return .newNote(.latestNoteDeleted) }
                 return nil
             }
         }
@@ -1209,7 +1210,7 @@
 
         // MARK: - Helpers
 
-        private func check(_ capture: NewCapture) throws(KnotError) {
+        private func check(_ capture: NewCapture, ingesting: Bool = false) throws(KnotError) {
             let valid: Bool
             switch (capture.kind, capture.body) {
             case (.typed, .text): valid = true
@@ -1218,7 +1219,8 @@
             case (.voice, .none), (.ink, .none): valid = capture.endedAt == nil
             default: valid = false
             }
-            if case .named(let note) = capture.placement, state.notes[note] == nil {
+            // An inbox item's named note may be purged since: the item goes to a new note.
+            if !ingesting, case .named(let note) = capture.placement, state.notes[note] == nil {
                 throw KnotError.notFound.with(.init(captureID: capture.id, noteID: note))
             }
             guard valid, capture.body.isWellFormed, capture.arrival == .live || capture.endedAt != nil else {

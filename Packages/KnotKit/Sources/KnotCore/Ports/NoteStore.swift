@@ -68,8 +68,9 @@ public protocol NoteStore: Sendable {
     /// Reconciles a finished capture from `Inbox/`, as its manifest gives it, with what the
     /// store holds, in one transaction (docs/architecture.md §6, rules 2 and 6):
     ///
-    /// - no row: the row and the segments are made, placed as `record` places them, a named
-    ///   note that can no longer take the item giving a new note; a late delivery by rule 7.
+    /// - no row: the row and the segments are made, placed as `record` places them; a late
+    ///   delivery by rule 7. A named or shown note that is deleted, emptied or purged gives a
+    ///   new note: the item is never refused for it, nor handed to the window.
     /// - an open row: the content is applied by revision, and the capture ends.
     /// - a failed row: it becomes stored.
     /// - an ended row with the same content: nothing changes.

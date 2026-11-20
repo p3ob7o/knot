@@ -98,6 +98,7 @@ public enum NoteStoreContract {
         Check(name: "discard-not-final", run: aDiscardIsNotFinalForALaterSave),
         Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
         Check(name: "late-start", run: aLateStartDoesNotEndTheCaptureBeingMadeNow),
+        Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -1922,6 +1923,50 @@ public enum NoteStoreContract {
         let ended = try await h.store.end(h.endTyped(panel.id, "Typed in the panel", at: 10.5, revision: 2))
         #expect(ended.noteID == now.noteID && ended.outcome == .stored)
         #expect(try await h.store.openCaptures().isEmpty)
+    }
+
+    /// §6 rules 2 and 6, rules 11 and 14 (finding 63): an inbox item made inside a note, or
+    /// following the window while its surface showed a note, whose note was deleted, emptied or
+    /// purged before the ingest, is stored in a new note: never refused, never joined to
+    /// another note the window would pick.
+    public static func anInboxItemWhoseNoteIsGoneStartsANewNote(_ make: NoteStoreFactory) async throws {
+        enum Gone: CaseIterable { case deleted, emptied, purged }
+        for named in [true, false] {
+            for gone in Gone.allCases {
+                let h = await Harness(make)
+                // The note shown, then another note, which the window would join.
+                let target = try await h.store.record(h.typed("The note", from: 0, to: 0.1))
+                let other = try await h.store.record(h.typed("Another note", from: 10, to: 10.1))
+                var item = NewCapture(
+                    id: h.ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(h.device), surface: .app),
+                    launchID: h.launch, placement: named ? .named(target.noteID) : .window, startedAt: h.at(10.2),
+                    endedAt: h.at(10.25), body: .text("Typed while the store was busy"), revision: 1)
+                item.shownNote = target.noteID
+                switch gone {
+                case .deleted:
+                    _ = try await h.store.delete(.note(target.noteID))
+                case .emptied:
+                    _ = try await h.store.delete(.segment(SegmentID(target.captureID)))
+                case .purged:
+                    _ = try await h.store.delete(.note(target.noteID))
+                    h.clock.advance(by: 31 * 86_400)
+                    _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+                }
+                let label = "\(named ? "named" : "shown") note \(gone)"
+                let result: IngestResult
+                do {
+                    result = try await h.store.ingest(item)
+                } catch {
+                    Issue.record("The item whose \(label) was refused with \(error.code.rawValue).")
+                    continue
+                }
+                let receipt = result.receipt
+                #expect(result.applied && receipt.outcome == .stored, "\(label)")
+                #expect(!receipt.joinedExistingNote, "A new note for the item whose \(label).")
+                #expect(receipt.noteID != target.noteID && receipt.noteID != other.noteID, "\(label)")
+                #expect(try await h.store.note(receipt.noteID)?.isShown == true, "\(label)")
+            }
+        }
     }
 
     // MARK: Reading
