@@ -716,6 +716,10 @@ else
                     "Unset KNOT_XCODE, or name the Xcode that .xcode-version pins." "safe" "nothing"
             fi
             [[ -n $PACKAGE ]] || usage_fail "The gate needs the package: --package <ID> or --branch <name>. A detached head has no branch to read."
+            # The branch tells a proof step's note from the package's code: without it, a
+            # note's pull request would count as a code one, and the named tests of a package
+            # that has not merged would be asked for.
+            [[ -n $BRANCH ]] || usage_fail "The gate needs the branch, --branch <name>, beside --package: it tells a note's pull request from a code one, and a detached head has no branch to read."
             git -C "$KNOT_ROOT" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null ||
                 usage_fail "The base $BASE is not a commit here. Fetch it, or name another with --base."
             depth_out="$(cd "$KNOT_ROOT" && tool depth --base "$BASE")"

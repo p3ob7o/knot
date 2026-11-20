@@ -504,6 +504,8 @@ def cmd_named_tests(source, package=None, branch=None):
     counts as merged, so a package's last pull request is held to its tests at its own gate."""
     merged = merged_prs(source)
     if package and package != "contract":
+        if not branch:
+            print(f"named-tests: no branch was named, so this pull request counts as {package}'s code, not as a note")
         merged.append((package, is_note_branch(branch)))
     code = code_text()
     missing, required = [], 0
