@@ -188,4 +188,49 @@ import Testing
         manifest.payloadSHA256 = String(repeating: "p", count: Limits.manifestBytes)
         #expect(throws: KnotError.manifestTooLarge.about(capture: Self.capture)) { try manifest.encoded() }
     }
+
+    /// Bytes that are not UTF-8, put in the golden manifest in place of `marker`.
+    static func golden(withBytes bytes: [UInt8], at marker: String, in text: String) -> Data {
+        let parts = text.components(separatedBy: marker)
+        precondition(parts.count == 2, "The marker appears once.")
+        return Data(parts[0].utf8) + Data(bytes) + Data(parts[1].utf8)
+    }
+
+    /// A manifest is valid JSON as a whole, or it is unreadable: text that is not UTF-8 is
+    /// refused wherever it sits, and never repaired, in a field this build does not know as
+    /// in one it does, in a key, and in a value nested in an unknown member.
+    @Test(arguments: [
+        [0xFF] as [UInt8],  // never in UTF-8
+        [0xC3, 0x28],  // a lead byte without its continuation
+        [0x80],  // a continuation with no lead
+        [0xC0, 0xAF],  // an overlong "/"
+        [0xED, 0xA0, 0x80],  // a UTF-16 surrogate, encoded
+        [0xF4, 0x90, 0x80, 0x80],  // past U+10FFFF
+        [0xE2, 0x82],  // cut short
+    ])
+    func textThatIsNotUTF8IsRefusedWhereverItSits(bytes: [UInt8]) {
+        let unknown = String(
+            decoding: Self.golden(replacing: "future_note", with: #""a-MARK-b""#), as: UTF8.self)
+        let nested = String(
+            decoding: Self.golden(replacing: "future_list", with: #"[{"k":"a-MARK-b"}]"#), as: UTF8.self)
+        let key = String(decoding: Self.golden(replacing: "future-MARK-key", with: "1"), as: UTF8.self)
+        let known = CaptureManifestGolden.formatOne.replacingOccurrences(
+            of: #""surface":"watch""#, with: #""surface":"wa-MARK-tch""#)
+        for text in [unknown, nested, key, known] {
+            let data = Self.golden(withBytes: bytes, at: "-MARK-", in: text)
+            #expect(String(validating: data, as: UTF8.self) == nil)
+            #expect {
+                try CaptureManifest.decode(data)
+            } throws: { error in
+                (error as? KnotError)?.code == KnotError.inboxItemUnreadable.code
+            }
+        }
+    }
+
+    @Test func anUnknownMemberKeepsItsTextExactlyWhenItIsUTF8() throws {
+        let data = Self.golden(replacing: "future_note", with: #""café 東京 🙂 \u00e9""#)
+        let manifest = try CaptureManifest.decode(data)
+        #expect(manifest.unknownFields["future_note"] == #""café 東京 🙂 \u00e9""#)
+        #expect(try manifest.encoded() == data)
+    }
 }

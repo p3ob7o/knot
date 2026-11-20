@@ -96,3 +96,21 @@ public enum StreamRule {
         note.deletedAt == nil && segments.contains { $0.noteID == note.id && $0.deletedAt == nil }
     }
 }
+
+/// The order of the segments in a note (docs/product-spec.md §7): by the start of their
+/// capture, the pieces of one capture together and in position, and the ID as a fixed
+/// tie-break, never as a time.
+public enum SegmentOrder {
+    public static func precedes(_ lhs: Segment, _ rhs: Segment) -> Bool {
+        if lhs.startedAt != rhs.startedAt { return lhs.startedAt < rhs.startedAt }
+        let left = lhs.pieceOf ?? lhs.id
+        let right = rhs.pieceOf ?? rhs.id
+        if left != right { return left < right }
+        if lhs.piece != rhs.piece { return lhs.piece < rhs.piece }
+        return lhs.id < rhs.id
+    }
+
+    public static func sorted(_ segments: some Sequence<Segment>) -> [Segment] {
+        segments.sorted(by: precedes)
+    }
+}

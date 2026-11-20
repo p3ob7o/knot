@@ -7,9 +7,14 @@ public struct Note: Hashable, Sendable, Codable, Identifiable {
     public var createdAt: Date
     public var updatedAt: Date
     /// At most 200 characters (docs/architecture.md §4). It changes only through
-    /// `setTitle(_:origin:)`, which holds it to that bound.
+    /// `setTitle(_:origin:at:)`, which holds it to that bound.
     public private(set) var title: String?
     public private(set) var titleOrigin: TitleOrigin
+    /// Synced: the writing device's time of the last change to the title or its origin, a
+    /// person's edit, a proposed title, or a generated title dropped or put back when a segment
+    /// leaves or returns. Sync's rule that a title keeps the later edit compares it, since
+    /// `updatedAt` moves for other reasons. A note that never had a title has none.
+    public private(set) var titleEditedAt: Date?
     /// The time of the note's latest capture, by the captures' own timestamps. The stream
     /// is ordered by it, and editing never moves it (docs/product-spec.md §3, rule 9).
     public var lastCaptureEndedAt: Date
@@ -31,32 +36,40 @@ public struct Note: Hashable, Sendable, Codable, Identifiable {
         self.updatedAt = updatedAt ?? createdAt
         self.title = nil
         self.titleOrigin = .none
+        self.titleEditedAt = nil
         self.lastCaptureEndedAt = lastCaptureEndedAt ?? createdAt
         self.closedAt = closedAt
         self.deletedAt = deletedAt
         self.revision = revision
     }
 
-    /// A note with a title, which is held to its bound.
+    /// A note with a title, which is held to its bound. The title's time is `titleEditedAt`, or
+    /// the note's `updatedAt` when none is given.
     public init(
         id: NoteID, createdAt: Date, updatedAt: Date? = nil, title: String?, titleOrigin: TitleOrigin,
-        lastCaptureEndedAt: Date? = nil, closedAt: Date? = nil, deletedAt: Date? = nil, revision: Int64 = 0
+        titleEditedAt: Date? = nil, lastCaptureEndedAt: Date? = nil, closedAt: Date? = nil, deletedAt: Date? = nil,
+        revision: Int64 = 0
     ) throws(KnotError) {
         self.init(
             id: id, createdAt: createdAt, updatedAt: updatedAt, lastCaptureEndedAt: lastCaptureEndedAt,
             closedAt: closedAt, deletedAt: deletedAt, revision: revision)
-        try setTitle(title, origin: titleOrigin)
+        if title != nil || titleOrigin != .none {
+            try setTitle(title, origin: titleOrigin, at: titleEditedAt ?? self.updatedAt)
+        }
     }
 
-    /// Sets the title and who made it. A title past 200 characters is refused, never cut.
-    public mutating func setTitle(_ title: String?, origin: TitleOrigin) throws(KnotError) {
+    /// Sets the title and who made it, at the time the caller gives, which becomes
+    /// `titleEditedAt`. A title past 200 characters is refused, never cut.
+    public mutating func setTitle(_ title: String?, origin: TitleOrigin, at time: Date) throws(KnotError) {
         if let title { try Limits.checkTitle(title) }
         self.title = title
         self.titleOrigin = origin
+        self.titleEditedAt = time
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, createdAt, updatedAt, title, titleOrigin, lastCaptureEndedAt, closedAt, deletedAt, revision
+        case id, createdAt, updatedAt, title, titleOrigin, titleEditedAt, lastCaptureEndedAt, closedAt, deletedAt
+        case revision
     }
 
     /// Decodes a note, and refuses one whose title is past its bound.
@@ -71,6 +84,8 @@ public struct Note: Hashable, Sendable, Codable, Identifiable {
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         self.title = title
         self.titleOrigin = try container.decode(TitleOrigin.self, forKey: .titleOrigin)
+        // A note written without the field has no title time.
+        self.titleEditedAt = try container.decodeIfPresent(Date.self, forKey: .titleEditedAt)
         self.lastCaptureEndedAt = try container.decode(Date.self, forKey: .lastCaptureEndedAt)
         self.closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
         self.deletedAt = try container.decodeIfPresent(Date.self, forKey: .deletedAt)
@@ -89,6 +104,7 @@ public struct Note: Hashable, Sendable, Codable, Identifiable {
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(title, forKey: .title)
         try container.encode(titleOrigin, forKey: .titleOrigin)
+        try container.encodeIfPresent(titleEditedAt, forKey: .titleEditedAt)
         try container.encode(lastCaptureEndedAt, forKey: .lastCaptureEndedAt)
         try container.encodeIfPresent(closedAt, forKey: .closedAt)
         try container.encodeIfPresent(deletedAt, forKey: .deletedAt)

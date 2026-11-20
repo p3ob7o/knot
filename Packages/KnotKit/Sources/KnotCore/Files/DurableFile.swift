@@ -43,6 +43,9 @@ public protocol FileLayer: Sendable {
 /// writer may have made it and not yet synced its parent. Only then does the call return, so
 /// a database row that points to the file is committed after the file is on the drive. A
 /// crash at any point leaves either the old file or the new one whole, never part of one.
+///
+/// A store's code reaches it through `StoreLocations.durableFiles(layer:)`, which places
+/// each path under the root that holds it: a store can have two roots (`StoreFiles`).
 public struct DurableFile: Sendable {
     /// The suffix of a file being written, which `removePartials` clears after a crash.
     public static let partialSuffix = ".partial"

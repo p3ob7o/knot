@@ -164,6 +164,12 @@ public struct StoreLocations: Hashable, Sendable {
         recording.appending(path: "\(capture).\(format.fileExtension)", directoryHint: .notDirectory)
     }
 
+    /// A stopped recording converted to the stored format, beside its working file, until the
+    /// asset store takes it in.
+    public func convertedRecording(_ capture: CaptureID) -> URL {
+        recording.appending(path: "\(capture).\(AssetKind.audio.fileExtension)", directoryHint: .notDirectory)
+    }
+
     /// The manifest of a recording in the watch's outbox.
     public func outboxManifest(_ capture: CaptureID) -> URL {
         outbox.appending(path: "\(capture).json", directoryHint: .notDirectory)

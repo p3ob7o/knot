@@ -3,15 +3,21 @@
 /// ```
 /// draft ──end──► ready                 (empty draft ──► discarded)
 /// draft ──killed──► ready at relaunch
+/// draft ──its save failed──► failed ──a retry saved it──► ready
 /// ```
 public enum TypedState: String, Hashable, Sendable, CaseIterable {
     case draft
     case ready
     case discarded
+    /// The capture's save failed: its content is kept, in `Inbox/`, and it needs a person.
+    case failed
 }
 
-/// A step of a voice segment's processing.
+/// A step of a voice segment's life that can fail: the recording's own save, then its
+/// processing.
 public enum VoiceStep: String, Hashable, Sendable, CaseIterable {
+    /// The recording could not be saved as a capture; its audio is kept.
+    case record
     case transcribe
     case clean
 }

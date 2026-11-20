@@ -39,7 +39,7 @@ import Testing
         #expect(
             SettledRule.evaluate(
                 note: stored, segments: [], window: .default, now: at("09:58"), thisDevice: thisDevice,
-                speechNeverRunsHere: false)
+                speech: .ready)
                 == .unsettled(settlesAt: at("10:05")))
 
         // The one-second discard is measured between the presses: a stop press that the

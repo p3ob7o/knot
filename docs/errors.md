@@ -4,7 +4,7 @@ Every error that Knot reports has a stable code. This page has one entry for eac
 
 Each entry gives:
 
-- **Class.** A `failure` counts as an attempt. A `deferral` is a step that cannot run now and is never counted: the work runs again when the app comes forward or the model's availability changes. A `final` error is one that no retry on this device can fix: the job ends at once and is not tried again here (`docs/architecture.md` §4).
+- **Class.** A `failure` counts as an attempt. A `deferral` is a step that cannot run now and is never counted: the work runs again when the app comes forward or the model's availability changes. A `yield` is a step that was cancelled: it is not an attempt, not a decline and not an error, and the job stays queued. A `final` error is one that no retry on this device can fix: the job ends at once and is not tried again here (`docs/architecture.md` §4).
 - **Next.** What to do next, by its stable name.
 - **Retry.** Whether repeating the same call is safe, and how often it is worth it.
 - **Written.** What was written before the error.
@@ -113,6 +113,16 @@ The app group's container is missing, so `StoreLocations` has no place for `Inbo
 - Retry: not safe
 - Written: nothing
 - Exit code: 7
+
+### `asset_conflict`
+
+An asset ID already holds a file with other content. A stored recording or drawing is never replaced, so the new file is refused and the stored one stays.
+
+- Class: failure
+- Next: report_problem
+- Retry: not safe
+- Written: nothing
+- Exit code: 5
 
 ### `dev_store_folder_invalid`
 
@@ -330,11 +340,21 @@ The device is locked and the step needs it unlocked.
 - Written: nothing
 - Exit code: 1
 
+### `cancelled`
+
+A step was cancelled: the task that awaited it was cancelled, because background time ran out or the queue was asked to stop. It is a yield: not an attempt, not a decline and not an error, and nothing from the step was saved.
+
+- Class: yield
+- Next: none
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
 ## Inbox and watch
 
 ### `inbox_item_unreadable`
 
-An inbox item cannot be read. It becomes a failed segment that says so, and the file is kept.
+An inbox item cannot be read: its manifest, or a body that does not fit its kind, such as a file whose digest is not 64 hexadecimal digits. The store writes it as a failed segment that says so, and the file is kept.
 
 - Class: failure
 - Next: report_problem
@@ -446,6 +466,16 @@ The same capture ID with different content.
 - Written: nothing
 - Exit code: 5
 
+### `capture_invalid`
+
+A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a recording that ends stored with no file, or a negative content revision. `record`, `checkpoint` and `end` refuse it, and nothing was written. An inbox item that does not fit is `inbox_item_unreadable` instead.
+
+- Class: failure
+- Next: report_problem
+- Retry: not safe
+- Written: nothing
+- Exit code: 1
+
 ### `revision_stale`
 
 The segment or note changed since the revision the caller read.
@@ -522,6 +552,16 @@ The segment's capture is still open in the app, so it cannot be edited, deleted 
 
 - Class: failure
 - Next: wait_for_capture_to_end
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 5
+
+### `remove_recording_refused_no_text`
+
+"Remove recording" of a segment that has no text yet. The recording is all there is, and its transcribe job still needs it; once the segment has text, the recording can go and the text stays (`docs/product-spec.md` §7).
+
+- Class: failure
+- Next: wait_and_retry
 - Retry: safe, as often as needed
 - Written: nothing
 - Exit code: 5
@@ -612,7 +652,7 @@ A job was found running at launch twice. The process died inside it each time.
 
 ### `illegal_transition`
 
-A state machine was asked for a transition it does not have.
+A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, or a transcription run whose resume point is not after its start.
 
 - Class: failure
 - Next: report_problem
