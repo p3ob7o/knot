@@ -10,7 +10,7 @@ This page lists what a Mac needs to build and test Knot, with the version of eac
 | Xcode | The release Xcode 27 that `.xcode-version` pins | Install it from Apple's developer downloads beside any beta, at `/Applications/Xcode.app` or another `/Applications/Xcode*.app`. Then run it once, or run `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -runFirstLaunch`. |
 | iOS simulator runtime | The one that matches the pinned Xcode's iOS SDK | `DEVELOPER_DIR=<that Xcode>/Contents/Developer xcodebuild -downloadPlatform iOS` |
 | watchOS simulator runtime | The one that matches the pinned Xcode's watchOS SDK | `DEVELOPER_DIR=<that Xcode>/Contents/Developer xcodebuild -downloadPlatform watchOS` |
-| XcodeGen | 2.47.0 | `brew install xcodegen`, if Homebrew's version is 2.47.0. Otherwise download `xcodegen.zip` from the [2.47.0 release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.47.0), check its SHA-256 against `6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd`, and put `xcodegen/bin` on your `PATH`. |
+| XcodeGen | 2.47.0 | Download `xcodegen.zip` from the [2.47.0 release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.47.0), check its SHA-256 against `6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd`, and unpack it, as the zip unpacks, into `tools/xcodegen-2.47.0/` under the build folder. The scripts find it there: see [XcodeGen](#xcodegen) below. |
 | python3 and git | The ones that come with Xcode | `xcode-select --install` installs the command-line tools. Do not point `xcode-select` at an Xcode: the scripts choose the Xcode themselves. |
 
 GRDB, the one third-party library, comes through Swift Package Manager. Its version and its revision are pinned in `Packages/KnotKit/Package.swift`, and `scripts/verify.sh` checks both.
@@ -25,6 +25,20 @@ GRDB, the one third-party library, comes through Swift Package Manager. Its vers
 - `scripts/sdk-path.sh <platform> <framework>` prints where a framework's Swift interfaces are, for reading a declaration before using an OS 26 or OS 27 API (`docs/architecture.md` §21).
 
 Until the owner installs the release Xcode at gate G1, `.xcode-version` reads `pending` and every script asks for `KNOT_XCODE`.
+
+## XcodeGen
+
+The scripts choose their XcodeGen as they choose their Xcode, so a machine-wide upgrade cannot change it under a run. `knot_resolve_xcodegen` in `scripts/lib/common.sh` settles on one binary, in this order:
+
+1. `KNOT_XCODEGEN`, a path to the binary, for a copy kept elsewhere;
+2. the pinned release under the build folder, `tools/xcodegen-<version>/xcodegen/bin/xcodegen`;
+3. `xcodegen` on `PATH`.
+
+The way on any Mac is the second: the release, checked against the checksum in the table above, unpacked under the build folder's `tools/` with its `share/` beside `bin/`. Homebrew's copy serves only when there is no pinned copy and its version is the pinned one. Nobody relinks, pins or installs anything in Homebrew for the project: Homebrew on the build Mac is the owner's, and other projects keep their own tools.
+
+`scripts/doctor.sh` and `scripts/bootstrap.sh` say which of the three they chose. `knot_generate_project` checks the chosen binary's version again just before it generates. A tool that changed during a run fails the step with `infra-xcodegen-version` and generates nothing. A missing copy fails with `infra-xcodegen-missing`, and the scripts download nothing.
+
+The hosted workflows install XcodeGen the same way, from the release with its checksum, and put its `bin` on `PATH`. A runner has no build folder, so the third choice serves there.
 
 ## First build
 
