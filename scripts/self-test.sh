@@ -301,6 +301,19 @@ else
     fail "the Mac UI check judged $cases of 4 samples right"
 fi
 
+# Starting a tool that a system dialog holds ends at its time limit, with a message for the
+# owner, instead of hanging the run. The tool here only sleeps.
+printf '#!/bin/sh\nsleep 30\n' >"$scratch/hanging-tool"
+chmod +x "$scratch/hanging-tool"
+started=$(knot_now)
+status=0
+output="$(knot_start_tool 1 "$scratch/hanging-tool" --version)" || status=$?
+if [[ $status == 1 && $output == *"system dialog"* && $(($(knot_now) - started)) -lt 10 ]]; then
+    pass "a tool that does not answer ends at its time limit, naming a system dialog"
+else
+    fail "a tool that does not answer: status $status after $(($(knot_now) - started))s: $output"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

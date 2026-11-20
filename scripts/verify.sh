@@ -449,7 +449,7 @@ step_packaging() {
         [[ -x $tool ]] &&
             codesign --verify --strict --deep "$mac" &&
             codesign -d --entitlements - "$tool" 2>/dev/null | grep -e com.apple.security.app-sandbox >/dev/null &&
-            [[ "$("$tool" --version)" == "knot-dev $version (dev)" ]]
+            [[ "$(knot_start_tool "${KNOT_TOOL_START_LIMIT:-30}" "$tool" --version)" == "knot-dev $version (dev)" ]]
     }
     check "knot-dev embedded and signed in the Mac app, with its own sandbox, and runs" tool_embedded || failed=1
 

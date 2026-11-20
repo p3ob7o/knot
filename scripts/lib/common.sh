@@ -213,3 +213,35 @@ knot_mac_ui_ready() {
     fi
     return "$missing"
 }
+
+# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its output.
+# A start that a system dialog holds, such as a consent prompt, never returns, and nothing
+# but the owner can answer the dialog, so the limit turns that hang into a failure that says
+# so. Returns the tool's status, or 1 when the limit ran out.
+#   knot_start_tool <seconds> <tool> [arguments…]
+knot_start_tool() {
+    local seconds=$1 status=0 output pid ticks=0
+    shift
+    # The output goes to a file, not a pipe: a child that outlives a killed tool would hold a
+    # pipe open, and the caller would wait for it after all.
+    output="$(mktemp)"
+    "$@" >"$output" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        pkill -TERM -P "$pid" 2>/dev/null || true
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        cat "$output"
+        rm -f "$output"
+        echo "$(basename "$1") did not answer within ${seconds}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+        return 1
+    fi
+    wait "$pid" || status=$?
+    cat "$output"
+    rm -f "$output"
+    return "$status"
+}

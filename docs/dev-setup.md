@@ -126,6 +126,8 @@ The build products, the logs and the status line go to the tree's own `.build/`.
 
 It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. A comment `knot-lint: allow network` or `knot-lint: allow logged-text` on a line, followed by the reason, lets that line pass, as for a sink that logs a finished line as public by design. The review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule and three lines that must pass, and the self-test fails when the lint misses a case or flags one of those lines. It judges the fixture against a privacy manifest of its own, so the result does not change when a package adds a reason to a real manifest.
 
+**A tool that does not answer.** The packaging step starts the `knot-dev` that it built, with a limit of 30 seconds (`KNOT_TOOL_START_LIMIT`). A system dialog, such as a consent prompt, can hold every start of a new tool; then the step fails and says that a dialog may be waiting for the owner on this Mac. No agent answers such a dialog.
+
 ## The other scripts
 
 | Command | Does |
