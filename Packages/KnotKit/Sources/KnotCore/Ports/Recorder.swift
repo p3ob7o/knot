@@ -108,7 +108,8 @@ public protocol RecordingSession: AnyObject, Sendable {
     /// is on the drive, so that the "saved" cue can follow. The working file stays at
     /// `StoreLocations.recordingAudio(_:format:)`, named in the result, until
     /// `Recorder.removeWorkingFile(of:)`. Called again, or after the
-    /// recording ended by itself, it returns the same result. Cancelling the calling task does
+    /// recording ended by itself, it returns the same result; called at the same time, each
+    /// caller returns only once the first one's file is on the drive. Cancelling the calling task does
     /// not cancel the stop. It never throws: a failure is the result's `ending`.
     func stop() async -> RecordedAudio
 
@@ -121,8 +122,8 @@ public protocol RecordingSession: AnyObject, Sendable {
 public enum RecordingEvent: Hashable, Sendable {
     /// One per buffer of input, every 100 to 400 ms. Each is from 0 to 1.
     case level(peak: Float, average: Float)
-    /// After each sync of the working file: this many frames survive a power cut. It never
-    /// goes down.
+    /// After each sync of the working file: this many frames survive a power cut, and the
+    /// working file holds them. It never goes down.
     case durable(frames: Int64)
     /// The recording ended, with its result.
     case ended(RecordedAudio)

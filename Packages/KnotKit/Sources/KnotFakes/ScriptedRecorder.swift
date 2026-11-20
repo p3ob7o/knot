@@ -191,6 +191,10 @@
             var appended: Int64 = 0
             var durable: Int64 = 0
             var result: RecordedAudio?
+            /// True once the first ending's file is on the drive (or gone, for a discard).
+            var settled = false
+            /// Later callers of an ending, waiting for the first one's write.
+            var waiters: [CheckedContinuation<Void, Never>] = []
         }
 
         let captureID: CaptureID
@@ -225,29 +229,34 @@
                     if index > 0 { try? await Task.sleep(for: script.interval) }
                     guard append() else { return }
                 }
-                if let ending = script.endsBySelf { finish(ending, discarding: false) }
+                if let ending = script.endsBySelf { _ = finish(ending, discarding: false) }
             }
             feeder.withLock { $0 = task }
         }
 
-        /// Appends one buffer, as the tap does, and syncs it. False once the recording ended.
+        /// Appends one buffer, as the tap does, and syncs it: the working file holds every frame
+        /// that `.durable` reports (finding 72). False once the recording ended.
         private func append() -> Bool {
             let frames = Int64(script.framesPerBuffer)
             let samples = (0..<script.framesPerBuffer).map { Float(sin(Double($0) / 8)) * 0.25 }
             return state.withLock { state in
                 guard state.result == nil else { return false }
                 state.appended += frames
-                state.durable = state.appended
                 eventSink.yield(.level(peak: 0.25, average: 0.16))
                 audioSink.yield(AudioChunk(samples: samples, sampleRate: script.sampleRate))
+                // On the drive before it is reported durable. An ending waits for the lock, so it
+                // never writes while a buffer is being written.
+                write(state.appended)
+                state.durable = state.appended
                 eventSink.yield(.durable(frames: state.durable))
                 return true
             }
         }
 
-        /// Ends the recording once; later calls return the first result.
-        @discardableResult
-        private func finish(_ ending: RecordingEnding, discarding: Bool) -> RecordedAudio {
+        /// Ends the recording once: the first caller writes the file, or removes it for a
+        /// discard, and tells the ending; it returns with `first` true. A later caller gets the
+        /// first result at once, with `first` false, and waits with `settle()`.
+        private func finish(_ ending: RecordingEnding, discarding: Bool) -> (result: RecordedAudio, first: Bool) {
             let (result, first): (RecordedAudio, Bool) = state.withLock { state in
                 if let result = state.result { return (result, false) }
                 let result = RecordedAudio(
@@ -256,29 +265,49 @@
                 state.result = result
                 return (result, true)
             }
-            guard first else { return result }
+            guard first else { return (result, false) }
             feeder.withLock { $0?.cancel() }
             // The file is on the drive before the ending is told.
             if discarding { remove() } else { write(result.frames) }
+            let waiters = state.withLock { state in
+                state.settled = true
+                defer { state.waiters = [] }
+                return state.waiters
+            }
+            for waiter in waiters { waiter.resume() }
             eventSink.yield(.ended(result))
             eventSink.finish()
             audioSink.finish()
+            return (result, true)
+        }
+
+        /// Returns once the first ending's file is on the drive: a later stop never returns
+        /// before the first one's write (finding 72).
+        private func settle() async {
+            await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+                let settled = state.withLock { state in
+                    if !state.settled { state.waiters.append(waiter) }
+                    return state.settled
+                }
+                if settled { waiter.resume() }
+            }
+        }
+
+        private func end(_ ending: RecordingEnding, discarding: Bool) async -> RecordedAudio {
+            // The ending runs in a task of its own, so cancelling the caller does not cancel it.
+            let (result, first) = await Task { [self] in finish(ending, discarding: discarding) }.value
+            if !first { await settle() }
             return result
         }
 
-        func stop() async -> RecordedAudio {
-            // The stop runs in a task of its own, so cancelling the caller does not cancel it.
-            await Task { [self] in finish(.stopped, discarding: false) }.value
-        }
+        func stop() async -> RecordedAudio { await end(.stopped, discarding: false) }
 
-        func discard() async {
-            await Task { [self] in _ = finish(.discarded, discarding: true) }.value
-        }
+        func discard() async { _ = await end(.discarded, discarding: true) }
 
         /// The recording as recovery finds it after its launch died, if it had not ended.
         func recoverIfLive() -> RecordedAudio? {
             let live = state.withLock { $0.result == nil }
-            return live ? finish(.recovered, discarding: false) : nil
+            return live ? finish(.recovered, discarding: false).result : nil
         }
     }
 #endif

@@ -6,12 +6,45 @@ import Synchronization
 import Testing
 
 /// A scripted recorder writing through the power-cut layer, with its layer.
-func scriptedRecorder(script: ScriptedRecorder.Script = .init()) throws -> (ScriptedRecorder, PowerCutFileLayer) {
+func scriptedRecorder(script: ScriptedRecorder.Script = .init(), writeDelay: Duration? = nil) throws -> (
+    ScriptedRecorder, PowerCutFileLayer
+) {
     let layer = PowerCutFileLayer()
     try layer.createFolder(URL(fileURLWithPath: "/work", isDirectory: true))
     try layer.syncFolder(URL(fileURLWithPath: "/", isDirectory: true))
     let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/work", isDirectory: true))
-    return (ScriptedRecorder(locations: locations, layer: layer, clock: FakeClock(), script: script), layer)
+    let used: any FileLayer = writeDelay.map { SlowFileLayer(layer, delay: $0) } ?? layer
+    return (ScriptedRecorder(locations: locations, layer: used, clock: FakeClock(), script: script), layer)
+}
+
+/// A drive whose writes of content take a while, so that a race between two callers shows.
+final class SlowFileLayer: FileLayer {
+    let base: PowerCutFileLayer
+    let delay: Duration
+    init(_ base: PowerCutFileLayer, delay: Duration) {
+        self.base = base
+        self.delay = delay
+    }
+    func createFolder(_ url: URL) throws(KnotError) { try base.createFolder(url) }
+    func write(_ data: Data, to url: URL) throws(KnotError) {
+        if !data.isEmpty { Thread.sleep(forTimeInterval: delay / .seconds(1)) }
+        try base.write(data, to: url)
+    }
+    func syncFile(_ url: URL) throws(KnotError) { try base.syncFile(url) }
+    func rename(_ source: URL, to destination: URL) throws(KnotError) { try base.rename(source, to: destination) }
+    func syncFolder(_ url: URL) throws(KnotError) { try base.syncFolder(url) }
+    func remove(_ url: URL) throws(KnotError) { try base.remove(url) }
+    func read(_ url: URL) throws(KnotError) -> Data { try base.read(url) }
+    func exists(_ url: URL) -> Bool { base.exists(url) }
+    func entryKind(_ url: URL) -> FileEntryKind? { base.entryKind(url) }
+    func contents(of folder: URL) throws(KnotError) -> [String] { try base.contents(of: folder) }
+}
+
+func recorderSubject(writeDelay: Duration? = nil) throws -> RecorderSubject {
+    let (recorder, layer) = try scriptedRecorder(writeDelay: writeDelay)
+    return RecorderSubject(
+        recorder: recorder, locations: recorder.locations, exists: { layer.exists($0) },
+        size: { (try? layer.read($0))?.count })
 }
 
 func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -22,10 +55,12 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
 
 @Suite struct ScriptedRecorderTests {
     @Test(.tags(.contract)) func theContract() async throws {
-        try await RecorderContract.run {
-            let (recorder, layer) = try scriptedRecorder()
-            return RecorderSubject(recorder: recorder, locations: recorder.locations) { layer.exists($0) }
-        }
+        try await RecorderContract.run { try recorderSubject() }
+    }
+
+    /// The same suite on a drive whose writes are slow, where two stops at once race.
+    @Test(.tags(.contract)) func theContractOnASlowDrive() async throws {
+        try await RecorderContract.run { try recorderSubject(writeDelay: .milliseconds(40)) }
     }
 
     @Test(arguments: [

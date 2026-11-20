@@ -8,11 +8,17 @@ public struct RecorderSubject: Sendable {
     public let locations: StoreLocations
     /// Whether a file exists, read without the recorder.
     public let exists: @Sendable (URL) -> Bool
+    /// A file's size in bytes, or `nil` when there is none, read without the recorder.
+    public let size: @Sendable (URL) -> Int?
 
-    public init(recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool) {
+    public init(
+        recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
+        size: @escaping @Sendable (URL) -> Int?
+    ) {
         self.recorder = recorder
         self.locations = locations
         self.exists = exists
+        self.size = size
     }
 }
 
@@ -23,6 +29,7 @@ public enum RecorderContract {
     public static func run(_ make: @Sendable () async throws -> RecorderSubject) async throws {
         try await aRecordingStreamsStopsAndConverts(make)
         try await aStopIsFinalAndCannotBeCancelled(make)
+        try await twoStopsAtOnceBothWaitForTheFile(make)
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
     }
@@ -62,6 +69,8 @@ public enum RecorderContract {
                 #expect((0...1).contains(peak) && (0...1).contains(average), "Levels run from 0 to 1.")
             case .durable(let frames):
                 durable.append(frames)
+                // What is reported durable is in the working file (finding 72).
+                #expect(frames == 0 || (subject.size(working) ?? 0) > 0, "The working file holds what is durable.")
             case .ended:
                 Issue.record("The recording ended before it was stopped.")
             }
@@ -108,6 +117,31 @@ public enum RecorderContract {
         let first = await stopping.value
         #expect(first.ending == .stopped, "A cancelled caller does not cancel the stop.")
         #expect(await session.stop() == first, "A second stop returns the same result.")
+    }
+
+    /// Two stops at once return the same result, and neither returns before the file is on the
+    /// drive: a later caller waits for the first one's write (finding 72).
+    public static func twoStopsAtOnceBothWaitForTheFile(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let request = request()
+        let session = try await subject.recorder.start(request)
+        for await event in session.events {
+            if case .durable(let frames) = event, frames > 0 { break }
+        }
+        let working = subject.locations.recordingAudio(request.captureID, format: .caf)
+        let size = subject.size
+        let seen = await withTaskGroup(of: (RecordedAudio, Int?).self) { group in
+            for _ in 0..<2 { group.addTask { (await session.stop(), size(working)) } }
+            var seen: [(RecordedAudio, Int?)] = []
+            for await each in group { seen.append(each) }
+            return seen
+        }
+        let final = subject.size(working)
+        #expect(seen.count == 2 && seen.allSatisfy { $0.0 == seen[0].0 }, "Both stops return the same result.")
+        #expect((final ?? 0) > 0, "The stopped recording is on the drive.")
+        #expect(seen.allSatisfy { $0.1 == final }, "Neither stop returns before the file is written: \(seen.map(\.1)).")
     }
 
     /// A discard ends the recording and keeps nothing.
