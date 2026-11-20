@@ -476,9 +476,10 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
 | G3 | After wave 1 | One spike sitting: SP-1 has 12 rows, and the SP-2 spike app runs its 30 transfers itself | 45 |
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
-| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its consent dialog would fail the check for a reason that has nothing to do with the app group | 15 |
+| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its first start would raise a consent dialog that has nothing to do with the app group. On a Mac where no Knot Dev build has run, no signer's dialog is expected, and any dialog is the group's | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
 | G3 | With SP-4 | Sign two simulators into iCloud with his additional Apple ID, one that is not tied to his developer account, for the second stage of the sync spike, once his signing is set up | 10 |
+| G3 | With SP-4, after its first runs | Deploy the spike's schema to the production side of its throwaway container in the CloudKit Console, purge it, and change the account once | 15 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
@@ -507,7 +508,7 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
 - The owner makes the wave 0 recordings with Apple's Voice Memos, on the iPhone and on the Watch, and puts them in the one folder outside every worktree that `KNOT_LOCAL_FIXTURES` names.
-- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. He decided on 2026-11-20 that a pull request that touches speech or cleanup does not wait for them at the gate: it merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them. The orchestrator does not raise the recordings themselves.
+- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. He decided on 2026-11-20 that a pull request that touches speech or cleanup does not wait for them at the gate: it merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them. The orchestrator does not raise the recordings themselves before M2's close, or before the cleanup sitting of G4 needs them.
 - The owner's signing configuration is on the build Mac since 2026-11-20, in a file outside the repository that `KNOT_LOCAL_CONFIG` names. The team's ID never enters a tracked file, and the gate checks that.
 
 ## 11. Risks

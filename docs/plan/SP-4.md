@@ -55,7 +55,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
   - Does an existing sync layer over GRDB and CKSyncEngine, such as SQLiteData, meet those rules, and at what dependency cost?
 - The move from the development environment to production needs a schema on the production side of some container, and what is deployed there can only grow. On 2026-11-20 the owner allowed it in a throwaway iCloud container made only for this spike, such as `iCloud.com.p3ob7o.knot.spike4`. Stage 2 tests the move there.
   - The spike deploys nothing to the production side of the development container, and it never touches Knot's real container, `iCloud.com.p3ob7o.knot`, in either environment.
-  - How the deployment is made is settled: the owner was asked on 2026-11-20. A schema reaches the throwaway container's production side only by his own click in the CloudKit Console, at a sitting.
+  - The deployment is made by the owner's own click in the CloudKit Console, at a sitting. The orchestrator put that to him on 2026-11-20 with the two sittings, which he set for later. The spike uses neither `cktool` nor a management token.
 - Stage 2 signs two simulators into an additional Apple ID of the owner's, one that is not tied to his developer account. He decided so on 2026-11-20.
 - Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, read in the SDK and not measured, that a record stores at most 1 MB apart from its assets. The code half measures the limit in stage 2. Stage 1 could not reach CloudKit before its short note, so the note says so, and WP-02 PR 3 keeps the first values of `docs/architecture.md` §4, which leave about half of the read limit free. The report then confirms the limit, or a contract PR changes the sizes.
 - Fix the mechanism of account isolation, which WP-16 builds. A record counts as synced only for the account, the environment and the zone identity it was synced under, and the zone carries an identity written when it is made. So a record missing from the zone it was synced to is deleted locally, and a zone that is gone or new deletes nothing. A fetch that would delete more than a set share of the local notes pauses sync and asks.
@@ -80,7 +80,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
 
 ## Milestone evidence
 
-- Gate G3, with SP-4. The owner signs two simulators into iCloud, with his additional Apple ID, for the second stage of the sync spike, about 10 minutes, once his signing is set up. A schema reaches the throwaway container's production side by his own click in the CloudKit Console, at a sitting. Neither of the two sittings has taken place yet.
+- Gate G3, with SP-4. The owner signs two simulators into iCloud, with his additional Apple ID, for the second stage of the sync spike, about 10 minutes, once his signing is set up. A schema reaches the throwaway container's production side by his own click in the CloudKit Console, at a second sitting of about 15 minutes, with a purge and one change of account. On 2026-11-20 neither sitting had taken place.
 - A sitting with the spike's build starts when `scripts/install.sh` has reported success.
 - Gate G3. The owner reads the report and confirms its decision. Each spike is confirmed on its own.
 - Adding a dependency, such as an existing sync layer, stays the owner's decision under D30.
