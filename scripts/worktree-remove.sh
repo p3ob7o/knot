@@ -1,7 +1,8 @@
 #!/bin/bash
 # Removes a worktree with everything it made on this Mac (docs/architecture.md §18): its
-# simulators, its development store folder in the Mac's development container, and the
-# worktree itself with its .build/ and DerivedData.
+# simulators, its development store folder in the development app's own container, and the
+# worktree itself with its .build/ and DerivedData. It does not look in app group containers,
+# and says so.
 #
 #   scripts/worktree-remove.sh <worktree folder> [--force]
 #
@@ -75,11 +76,13 @@ for devices in json.load(sys.stdin)["devices"].values():
         echo "worktree-remove: deleted the simulator $simulator"
     done
 
-# 2. Its Mac development store: a folder named by its ID in the development app's own
-#    container (docs/architecture.md §7). Only a folder of exactly that name is removed.
-#    App group containers are not read: macOS guards another app's group container, and
-#    reading one can raise a consent dialog that only the owner can answer. A scan that
-#    cannot read the container does not stop the removal.
+# 2. Its Mac development store: a folder named by its ID. docs/architecture.md §7 puts the
+#    Mac store in the app group container when the build has a group, and in the app's own
+#    container when it has none, as a build made with the local signing configuration has
+#    none. Only the app's own container is read here: macOS guards another app's group container, and reading one
+#    can raise a consent dialog that only the owner can answer. So a store in the group is
+#    left, and the script says where. Only a folder of exactly the ID's name is removed, and
+#    a scan that cannot read the container does not stop the removal.
 container="$HOME/Library/Containers/com.p3ob7o.knot.dev"
 if [[ -d $container ]]; then
     while IFS= read -r -d '' store; do
@@ -88,6 +91,8 @@ if [[ -d $container ]]; then
         echo "worktree-remove: removed the development store $store"
     done < <(find "$container" -maxdepth 7 -type d -name "$id" -print0 2>/dev/null || true)
 fi
+echo "worktree-remove: app group containers were not looked at, since reading one can raise a consent dialog."
+echo "worktree-remove: a store of this worktree in ~/Library/Group Containers/group.com.p3ob7o.knot.dev, if a build put one there, is a folder named $id; remove it by hand."
 
 # 3. The worktree, with its .build/ and DerivedData inside it.
 if ((FORCE)); then
