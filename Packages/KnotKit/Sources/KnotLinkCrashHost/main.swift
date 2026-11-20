@@ -112,9 +112,9 @@ final class HostTransport: LinkTransport {
     func activate() async -> LinkSessionState { .ready }
     var state: LinkSessionState { .ready }
     var receivedContext: LinkContext? { nil }
-    func queueFile(_ url: URL, manifest: CaptureManifest, attempt: Int) {}
+    func queueFile(_ url: URL, manifest: CaptureManifest, attempt: LinkAttempt) {}
     func outstandingFiles() -> [OutstandingFile] { [] }
-    func cancelFile(captureID: CaptureID, attempt: Int) {}
+    func cancelFile(captureID: CaptureID, attempt: LinkAttempt) {}
     func setFileReceiver(_ receive: @escaping @Sendable (ReceivedFile) -> LinkMessage?) {}
     func send(_ message: LinkMessage) {}
     func updateContext(_ context: LinkContext) throws(KnotError) {}

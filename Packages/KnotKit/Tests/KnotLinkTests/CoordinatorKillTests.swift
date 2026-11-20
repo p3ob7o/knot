@@ -70,7 +70,7 @@
 
             let outboxNames = try FileManager.default.contentsOfDirectory(atPath: locations.outbox.path).sorted()
             #expect(
-                outboxNames == ["\(capture).json", "\(capture).m4a", "link-generation"],
+                outboxNames == ["\(capture).json", "\(capture).m4a"],
                 "Nothing else is left in the outbox.", sourceLocation: sourceLocation)
         }
 

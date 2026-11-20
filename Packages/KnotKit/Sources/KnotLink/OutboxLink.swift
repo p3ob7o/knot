@@ -32,7 +32,7 @@ public actor OutboxLink {
         /// deferred. Counted as waiting.
         case waiting
         /// Queued, or under way, in this attempt. Counted as waiting.
-        case queued(attempt: Int)
+        case queued(attempt: LinkAttempt)
         /// Its recording is missing or its manifest cannot be read: it cannot be sent, and it
         /// keeps its manifest. Counted as failed.
         case failed
@@ -52,13 +52,10 @@ public actor OutboxLink {
     private var activation: Task<LinkSessionState, Never>?
     private var session: LinkSessionState = .inactive
     private var hasReconciled = false
-    private var queued: [CaptureID: (attempt: Int, at: Date)] = [:]
-    /// This launch's generation, from the outbox, and how many transfers it has queued. An
-    /// attempt is the two together, so no two launches ever queue the same attempt: the end of
-    /// an earlier launch's transfer, which arrives after this launch's activation, is never
-    /// taken for one of this launch's.
-    private var generation: Int?
-    private var queuedInGeneration = 0
+    private var queued: [CaptureID: (attempt: LinkAttempt, at: Date)] = [:]
+    /// This launch's own ID, which every attempt it queues carries, and how many it has queued.
+    private let launch = UUID()
+    private var queuedInLaunch = 0
     /// Captures whose file the transport could not read, in this launch.
     private var unreadable: Set<CaptureID> = []
     /// Recordings the coordinator keeps in `Recording/` because they have not reached the
@@ -295,22 +292,22 @@ public actor OutboxLink {
         }
     }
 
-    private func finished(_ capture: CaptureID, attempt: Int, failure: LinkFailure?) {
+    private func finished(_ capture: CaptureID, attempt: LinkAttempt, failure: LinkFailure?) {
         // An end of an earlier attempt, or of a transfer this launch never knew, changes
         // nothing: the capture is queued again on the next trigger if it needs to be.
         guard queued[capture]?.attempt == attempt else {
-            log.capture(capture, "link_finished_stale", .number("attempt", attempt), level: .debug)
+            log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
             return
         }
         queued[capture] = nil
         defer { changed() }
         guard let failure else {
             // Not a delivery: the capture waits for its acknowledgement.
-            log.capture(capture, "link_finished", .number("attempt", attempt))
+            log.capture(capture, "link_finished", .number("attempt", attempt.number))
             return
         }
         log.capture(
-            capture, "link_transfer_failed", .number("attempt", attempt),
+            capture, "link_transfer_failed", .number("attempt", attempt.number),
             .flag("deferral", failure.handling == .deferral))
         switch failure.handling {
         case .deferral:
@@ -370,9 +367,10 @@ public actor OutboxLink {
         removeAcknowledged()
         let now = clock.now()
         // Adopt what the session still holds, an earlier launch's transfers included.
-        var outstanding: [CaptureID: Int] = [:]
+        var outstanding: [CaptureID: LinkAttempt] = [:]
         for file in transport.outstandingFiles() {
-            outstanding[file.captureID] = max(outstanding[file.captureID] ?? 0, file.attempt)
+            // In the order they were queued: a capture's latest transfer wins.
+            outstanding[file.captureID] = file.attempt
         }
         for capture in queued.keys where outstanding[capture] == nil {
             // Its end was lost, or has not arrived yet: it waits, and is queued again below.
@@ -381,13 +379,13 @@ public actor OutboxLink {
         for (capture, attempt) in outstanding {
             if queued[capture]?.attempt != attempt {
                 queued[capture] = (attempt, now)
-                log.capture(capture, "link_adopted", .number("attempt", attempt))
+                log.capture(capture, "link_adopted", .number("attempt", attempt.number))
             }
         }
         // A transfer with no end for too long, while the iPhone is in reach, is queued again.
         if session.isActivated, session.isReachable {
             for (capture, entry) in queued where now.timeIntervalSince(entry.at) > stallLimit {
-                log.capture(capture, "link_transfer_stalled", .number("attempt", entry.attempt))
+                log.capture(capture, "link_transfer_stalled", .number("attempt", entry.attempt.number))
                 transport.cancelFile(captureID: capture, attempt: entry.attempt)
                 queued[capture] = nil
             }
@@ -412,23 +410,14 @@ public actor OutboxLink {
         let capture = entry.captureID
         let attempt = nextAttempt()
         queued[capture] = (attempt, clock.now())
-        log.capture(capture, "link_queued", .number("attempt", attempt))
+        log.capture(capture, "link_queued", .number("attempt", attempt.number))
         transport.queueFile(outbox.recordingURL(capture), manifest: manifest, attempt: attempt)
     }
 
-    /// The next attempt: this launch's generation times a million, plus how many transfers
-    /// it has queued. The generation comes from the outbox once per launch, and a launch that
-    /// queues a million transfers takes a new one.
-    private func nextAttempt() -> Int {
-        if generation == nil || queuedInGeneration >= Self.attemptsPerGeneration - 1 {
-            generation = outbox.nextGeneration(log: log)
-            queuedInGeneration = 0
-        }
-        queuedInGeneration += 1
-        return (generation ?? 0) * Self.attemptsPerGeneration + queuedInGeneration
+    private func nextAttempt() -> LinkAttempt {
+        queuedInLaunch += 1
+        return LinkAttempt(launch: launch, number: queuedInLaunch)
     }
-
-    static let attemptsPerGeneration = 1_000_000
 
     private func changed() {
         changeSubscribers.yield(())

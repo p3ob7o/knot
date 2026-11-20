@@ -41,7 +41,7 @@
 
         struct Transfer: Sendable {
             var captureID: CaptureID
-            var attempt: Int
+            var attempt: LinkAttempt
             var url: URL
             var manifest: Data
             var from: Side
@@ -125,7 +125,7 @@
         /// Ends a transfer: the given attempt, or the capture's latest. False when there is
         /// no such transfer.
         @discardableResult
-        public func finish(_ capture: CaptureID, attempt: Int? = nil, as fate: Fate) -> Bool {
+        public func finish(_ capture: CaptureID, attempt: LinkAttempt? = nil, as fate: Fate) -> Bool {
             let transfer: Transfer? = state.withLock { state in
                 let index = state.outstanding.lastIndex {
                     $0.captureID == capture && (attempt == nil || $0.attempt == attempt)
@@ -213,7 +213,7 @@
             state.withLock { $0.activated.contains(ObjectIdentifier(launch)) }
         }
 
-        func queue(_ url: URL, manifest: CaptureManifest, attempt: Int, from side: Side) {
+        func queue(_ url: URL, manifest: CaptureManifest, attempt: LinkAttempt, from side: Side) {
             state.withLock { $0.queuedCount[manifest.captureID, default: 0] += 1 }
             guard let data = try? manifest.encoded(), FileManager.default.fileExists(atPath: url.path) else {
                 // A file that is not there fails at once, as WCErrorDomain 7013 does.
@@ -228,7 +228,7 @@
             }
         }
 
-        func cancel(_ capture: CaptureID, attempt: Int, from launch: FakeLinkTransport) {
+        func cancel(_ capture: CaptureID, attempt: LinkAttempt, from launch: FakeLinkTransport) {
             let removed = state.withLock { state in
                 let before = state.outstanding.count
                 state.outstanding.removeAll {
@@ -370,14 +370,14 @@
 
         public var receivedContext: LinkContext? { system.receivedContext(for: side) }
 
-        public func queueFile(_ url: URL, manifest: CaptureManifest, attempt: Int) {
+        public func queueFile(_ url: URL, manifest: CaptureManifest, attempt: LinkAttempt) {
             guard !hasEnded else { return }
             system.queue(url, manifest: manifest, attempt: attempt, from: side)
         }
 
         public func outstandingFiles() -> [OutstandingFile] { system.outstanding(from: side) }
 
-        public func cancelFile(captureID: CaptureID, attempt: Int) {
+        public func cancelFile(captureID: CaptureID, attempt: LinkAttempt) {
             guard !hasEnded else { return }
             system.cancel(captureID, attempt: attempt, from: self)
         }

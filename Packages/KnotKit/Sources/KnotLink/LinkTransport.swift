@@ -32,7 +32,7 @@ public protocol LinkTransport: Sendable {
     /// stays where it is; the transport keeps no copy. Nothing is thrown: a transfer that
     /// fails, at once or later, ends with `.fileFinished` and its failure. `attempt` tells
     /// this transfer's events from those of an earlier one of the same capture.
-    func queueFile(_ url: URL, manifest: CaptureManifest, attempt: Int)
+    func queueFile(_ url: URL, manifest: CaptureManifest, attempt: LinkAttempt)
 
     /// The transfers that are still queued or under way, the ones an earlier launch queued
     /// included, each named by the capture ID in its metadata.
@@ -40,7 +40,7 @@ public protocol LinkTransport: Sendable {
 
     /// Cancels a transfer at once. The session never reports a cancel, so the transport
     /// emits `.fileCancelled` itself and nothing waits for a call that will not come.
-    func cancelFile(captureID: CaptureID, attempt: Int)
+    func cancelFile(captureID: CaptureID, attempt: LinkAttempt)
 
     /// The iPhone's receiver. It runs before the system deletes the received file, so it must
     /// move the file durably and return; the transport then sends the message it returns,
@@ -88,9 +88,9 @@ public enum LinkEvent: Hashable, Sendable {
     case stateChanged(LinkSessionState)
     /// A transfer ended. Without a failure it is still not a delivery: only an
     /// acknowledgement says that the capture arrived.
-    case fileFinished(captureID: CaptureID, attempt: Int, failure: LinkFailure?)
+    case fileFinished(captureID: CaptureID, attempt: LinkAttempt, failure: LinkFailure?)
     /// A transfer was cancelled. The transport reports it itself, since the session does not.
-    case fileCancelled(captureID: CaptureID, attempt: Int)
+    case fileCancelled(captureID: CaptureID, attempt: LinkAttempt)
     /// A message from the other side: on the Watch, an acknowledgement.
     case message(LinkMessage)
     /// A new context from the iPhone, on the Watch.
@@ -135,15 +135,35 @@ public enum LinkFailure: String, Hashable, Sendable, CaseIterable {
     }
 }
 
+/// One transfer of a capture: the launch of the Watch app that queued it, and its number in
+/// that launch. A launch makes a fresh ID for itself, so no two launches ever queue the same
+/// attempt, and the end of an earlier launch's transfer, which arrives after the next launch's
+/// activation, is never taken for one of that launch's. It needs no file, so nothing about it
+/// can fail to be read. The real transport carries it in the transfer's metadata.
+public struct LinkAttempt: Hashable, Sendable, CustomStringConvertible {
+    /// The launch that queued the transfer.
+    public var launch: UUID
+    /// The transfer's number among those its launch queued, from 1.
+    public var number: Int
+
+    public init(launch: UUID, number: Int) {
+        self.launch = launch
+        self.number = number
+    }
+
+    public var description: String { "\(launch.uuidString.lowercased())#\(number)" }
+}
+
 /// A transfer that is still queued or under way.
 public struct OutstandingFile: Hashable, Sendable {
     public var captureID: CaptureID
-    public var attempt: Int
+    public var attempt: LinkAttempt
     /// From 0 to 1. In the simulator it stayed at 0 until the end, so nothing rests on it yet.
     public var fractionCompleted: Double
     public var isTransferring: Bool
 
-    public init(captureID: CaptureID, attempt: Int, fractionCompleted: Double = 0, isTransferring: Bool = true) {
+    public init(captureID: CaptureID, attempt: LinkAttempt, fractionCompleted: Double = 0, isTransferring: Bool = true)
+    {
         self.captureID = captureID
         self.attempt = attempt
         self.fractionCompleted = fractionCompleted

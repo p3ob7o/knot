@@ -252,7 +252,8 @@ import Testing
         let current = harness.outstanding(capture)
         #expect(current.count == 1, "One transfer of a capture at a time: \(current)")
         #expect(current.first?.attempt != first.attempt)
-        #expect(await link.states()[capture] == .queued(attempt: current.first?.attempt ?? -1))
+        let shown = await link.states()[capture]
+        #expect(current.first.map { shown == .queued(attempt: $0.attempt) } == true)
     }
 
     /// A manifest whose own capture ID is not its file's is damaged: it counts as failed under
@@ -343,6 +344,30 @@ import Testing
         await harness.settle(relaunched)
         #expect(!harness.inOutbox(capture))
         #expect(harness.phone.intactArrivals(capture) == 1)
+    }
+
+    /// Each launch's attempts carry its own ID, so two launches never queue the same attempt,
+    /// even when both number theirs from 1, and nothing in a file has to be read for it.
+    @Test func twoLaunchesNeverQueueTheSameAttempt() async throws {
+        let harness = LinkHarness()
+        let (first, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: first)
+        await harness.settle(first)
+        let earlier = try #require(harness.outstanding(capture).first)
+
+        harness.system.holdsEvents = true
+        let (second, _) = harness.launchWatch()
+        harness.system.finish(capture, attempt: earlier.attempt, as: .fails(.deliveryFailed))
+        await second.resume()
+        await harness.settle(second)
+        let current = try #require(harness.outstanding(capture).first)
+        #expect(current.attempt.number == earlier.attempt.number, "Both launches number from 1.")
+        #expect(current.attempt != earlier.attempt)
+        #expect(current.attempt.launch != earlier.attempt.launch)
+
+        harness.system.releaseHeld()
+        await harness.settle(second)
+        #expect(harness.outstanding(capture) == [current], "The earlier launch's end leaves this one alone.")
     }
 
     /// docs/notes/SP-2.md: the ends of transfers that finished while the app was not running
