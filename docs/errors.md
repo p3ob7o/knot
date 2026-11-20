@@ -568,11 +568,11 @@ A batch was over the server's limits. The adapter splits it and sends again.
 
 ### `sync_quota_exceeded`
 
-The user's iCloud storage is full. Sending stops until there is room, and the status says so.
+The user's iCloud storage is full. Sending stops until the person frees some, and the status says so. A retry after that is safe.
 
 - Class: failure
-- Next: none
-- Retry: not safe
+- Next: free_icloud_storage
+- Retry: safe, as often as needed
 - Written: nothing
 - Exit code: 1
 

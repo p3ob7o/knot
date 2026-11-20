@@ -247,9 +247,11 @@ extension KnotError {
     /// A batch was over the server's limits. The adapter splits it and sends again.
     public static let syncLimitExceeded = KnotError(
         code: "sync_limit_exceeded", next: .retry, retry: .safe, written: .nothing, exitStatus: .unexpected)
-    /// The user's iCloud storage is full. Sending stops until there is room.
+    /// The user's iCloud storage is full. Sending stops until there is room, and a retry after
+    /// the person freed some is safe.
     public static let syncQuotaExceeded = KnotError(
-        code: "sync_quota_exceeded", next: .none, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
+        code: "sync_quota_exceeded", next: .freeICloudStorage, retry: .safe, written: .nothing,
+        exitStatus: .unexpected)
     /// A record is gone from the server. The rule of a long absence decides what follows.
     public static let syncUnknownItem = KnotError(
         code: "sync_unknown_item", next: .none, retry: .notSafe, written: .nothing, exitStatus: .unexpected)

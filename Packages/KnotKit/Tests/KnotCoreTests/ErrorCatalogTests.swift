@@ -155,3 +155,11 @@ import Testing
         #expect(try JSONDecoder().decode(KnotError.self, from: data) == error)
     }
 }
+
+@Suite struct SyncQuotaTests {
+    /// A full iCloud storage needs the person to free it, after which a retry is safe.
+    @Test func aFullICloudStorageAsksForRoom() {
+        #expect(KnotError.syncQuotaExceeded.next.rawValue == "free_icloud_storage")
+        #expect(KnotError.syncQuotaExceeded.retry.isSafe)
+    }
+}
