@@ -144,6 +144,21 @@ public enum NoteStoreContract {
             try await h.store.end(h.endTyped(open.id, "Call the bank", at: 3, revision: 2))
         }
         #expect(try await h.text(SegmentID(open.id)) == "Call the vet")
+
+        // Identity is the content the ledger accepted, whatever happened to the text since: a
+        // replay after a person's edit is the same capture, and other content at a lower
+        // revision is a conflict (finding 35).
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: first.segmentIDs[0], text: "Buy soy milk", origin: .edited, writer: .app))
+        #expect(try await h.store.record(capture) == first, "A replay after an edit returns the first receipt.")
+        var older = h.tool("original", at: 5)
+        older.revision = 3
+        _ = try await h.store.record(older)
+        older.revision = 2
+        older.body = .text("independent")
+        await refuses(.captureIDConflict, "Other finished content at a lower revision.") {
+            try await h.store.record(older)
+        }
     }
 
     /// Two processes, or two tasks, recording the same capture at once make one capture.

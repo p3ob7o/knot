@@ -769,10 +769,24 @@
                 // The same start of a recording or a drawing.
                 return receipt
             case .text(let text):
-                // An older save of the same capture is superseded; the same save is the same.
+                // Identity is the content the ledger accepted, whatever a person did since to
+                // the segment's text.
+                let hash = contentHash(.typed, .text(text))
+                let accepted: Bool
+                switch row.outcome {
+                case .open: accepted = text == storedText(of: capture.id, in: state)
+                case .discardedEmpty: accepted = CaptureText.isEmpty(text)
+                case .stored, .failed: accepted = row.contentHash == hash
+                }
+                if capture.endedAt != nil {
+                    // A finished capture is the same only with the same content.
+                    guard accepted else { throw conflict }
+                    return receipt
+                }
+                // An open start: an older save of the same capture is superseded.
                 if capture.revision < row.revision { return receipt }
-                if capture.revision == row.revision, text == storedText(of: capture.id, in: state) { return receipt }
-                throw conflict
+                guard capture.revision == row.revision, accepted else { throw conflict }
+                return receipt
             case .file:
                 guard let content = capture.body.content, contentHash(capture.kind, content) == row.contentHash else {
                     throw conflict
