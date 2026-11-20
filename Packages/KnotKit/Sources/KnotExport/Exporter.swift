@@ -11,17 +11,54 @@ public struct DrawingImage: Hashable, Sendable {
     }
 
     /// The eight bytes that open every PNG file.
-    static let signature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    static let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
 
-    /// True when the data opens as a PNG file does.
-    var isPNG: Bool { png.starts(with: Self.signature) }
+    /// True when the data is a whole PNG file: the signature, then chunks that run from `IHDR`,
+    /// first and 13 bytes long, to `IEND`, empty and last, each within the data and with its
+    /// CRC-32 right, and nothing after `IEND`. It reads the file's structure and decodes no
+    /// pixel, so it needs no image framework. Anything less is not an image, and the drawing
+    /// leaves as its stored data.
+    var isPNG: Bool {
+        let bytes = [UInt8](png)
+        guard bytes.starts(with: Self.signature) else { return false }
+        var offset = Self.signature.count
+        var first = true
+        while bytes.count - offset >= 12 {
+            let length = Int(Self.uint32(bytes, at: offset))
+            guard length <= bytes.count - offset - 12 else { return false }
+            let type = Array(bytes[(offset + 4)..<(offset + 8)])
+            let end = offset + 8 + length
+            guard Self.crc32(bytes[(offset + 4)..<end]) == Self.uint32(bytes, at: end) else { return false }
+            if first {
+                guard type == Array("IHDR".utf8), length == 13 else { return false }
+                first = false
+            }
+            offset = end + 4
+            if type == Array("IEND".utf8) { return length == 0 && offset == bytes.count }
+        }
+        return false
+    }
+
+    private static func uint32(_ bytes: [UInt8], at offset: Int) -> UInt32 {
+        bytes[offset..<(offset + 4)].reduce(0) { $0 << 8 | UInt32($1) }
+    }
+
+    /// The CRC-32 that PNG uses, the one of ISO 3309.
+    private static func crc32(_ bytes: ArraySlice<UInt8>) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc & 1) == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
+    }
 }
 
 /// Gives the image of a stored drawing (docs/architecture.md §3 and §10).
 ///
 /// KnotExport does not draw: KnotInk does, and the command line cannot reach it. So the
 /// caller passes the images in, through this provider of KnotCore types. Where it gives none,
-/// or gives something that is not a PNG, export writes the drawing's stored data file under
+/// or gives something that is not a whole PNG (`DrawingImage.isPNG`), export writes the drawing's stored data file under
 /// its ID and names it in the list of what it left out. A drawing is never dropped.
 public protocol DrawingImageSource: Sendable {
     /// The image of the drawing that `asset` holds for `segment`, or `nil` when there is none.
@@ -179,7 +216,7 @@ public struct Exporter: Sendable {
     }
 
     /// What an export would write and what it could not, read from the store as `export(to:)`
-    /// reads it. It writes nothing, and asks for no image. A preview is true for the moment it
+    /// reads it, with each file found opened to see that it can be read. It writes nothing, and asks for no image. A preview is true for the moment it
     /// was read: the store may change before an export runs, and the report of `export(to:)`
     /// is what happened.
     public func preview() async throws(KnotError) -> ExportPreview {
@@ -189,7 +226,14 @@ public struct Exporter: Sendable {
             for segment in ExportedSegments.of(record) {
                 guard let assetID = segment.assetID else { continue }
                 switch try await locate(assetID, of: segment, in: record.note.id) {
-                case .here: preview.files += 1
+                case .here(let stored, let kind):
+                    if let reason = Self.readFailure(of: stored.url) {
+                        preview.missing.append(
+                            LeftOut(
+                                note: record.note.id, segment: segment.id, asset: assetID, kind: kind, reason: reason))
+                    } else {
+                        preview.files += 1
+                    }
                 case .leftOut(let leftOut): preview.missing.append(leftOut)
                 }
             }
@@ -321,13 +365,10 @@ public struct Exporter: Sendable {
             do {
                 data = try Data(contentsOf: stored.url, options: .mappedIfSafe)
             } catch {
-                // A file that went since it was found is not on this device; one that is still
-                // there and cannot be read is a failure of its own, and says so.
-                let gone = !FileManager.default.fileExists(atPath: stored.url.path(percentEncoded: false))
-                let reason: LeftOut.Reason = gone ? .notOnThisDevice : .unreadable
+                let reason = Self.reason(forUnreadable: stored.url)
                 report.leftOut.append(
                     LeftOut(note: note, segment: segment.id, asset: assetID, kind: kind, reason: reason))
-                return gone ? Self.notHereLine(kind, segment) : Self.unreadableLine(kind, segment)
+                return reason == .notOnThisDevice ? Self.notHereLine(kind, segment) : Self.unreadableLine(kind, segment)
             }
             let path = ExportNames.attachment(assetID, kind: kind)
             try await sink.write(data, at: path)
@@ -341,6 +382,27 @@ public struct Exporter: Sendable {
             }
             return .recording(path, duration: segment.duration)
         }
+    }
+
+    /// Why a file that was found cannot be read, or `nil` when it can. It opens the file and
+    /// reads one byte, the least that still proves it: a mode that refuses reading fails the
+    /// open, and a folder in place of the file fails the read. The preview asks this, so that
+    /// it lists what the export will leave out.
+    static func readFailure(of url: URL) -> LeftOut.Reason? {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            _ = try handle.read(upToCount: 1)
+            return nil
+        } catch {
+            return reason(forUnreadable: url)
+        }
+    }
+
+    /// The reason for a file that failed to be read: one that went since it was found is not on
+    /// this device, and one that is still there is unreadable.
+    static func reason(forUnreadable url: URL) -> LeftOut.Reason {
+        FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) ? .unreadable : .notOnThisDevice
     }
 
     /// The line of a file that is here and could not be read.

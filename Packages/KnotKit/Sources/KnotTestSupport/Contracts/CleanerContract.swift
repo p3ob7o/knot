@@ -16,6 +16,22 @@ public enum CleanerContract {
     ///   least. A cancelled request must come back in under half of it, which proves the
     ///   cancellation by what happens rather than by a bound that a loaded machine could miss
     ///   (finding 84).
+    /// Subscribers that join while the availability changes see the availability current when
+    /// they joined, then each later change, in order (finding 28). The real cleaner's
+    /// availability changes with the system, so the subject changes it through `change`.
+    public static func availabilityChangesInOrder(
+        _ cleaner: any Cleaner, change: @escaping @Sendable (CleanupAvailability) async -> Void
+    ) async throws {
+        let end = CleanupAvailability.unavailable(.deviceNotEligible)
+        try await JoiningSubscribers.check("The cleaner's availability", rounds: 16) { _ in
+            await change(.available)
+            return try await JoiningSubscribers.round(
+                "the cleaner's availability", subscribe: { cleaner.availabilityChanges() },
+                changes: (0..<16).map { step in { await change(step.isMultiple(of: 2) ? .notReady : .available) } },
+                last: { await change(end) }, isLast: { $0 == end })
+        }
+    }
+
     public static func run(longRunAtLeast: Duration, _ make: @Sendable () async -> any Cleaner) async throws {
         let cleaner = await make()
         let availability = await cleaner.availability()
