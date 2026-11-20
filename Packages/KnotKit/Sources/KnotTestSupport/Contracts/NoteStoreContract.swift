@@ -99,6 +99,7 @@ public enum NoteStoreContract {
         Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
         Check(name: "late-start", run: aLateStartDoesNotEndTheCaptureBeingMadeNow),
         Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
+        Check(name: "failed-recording-retry", run: aFailedRecordingsRetryIsStored),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2001,6 +2002,42 @@ public enum NoteStoreContract {
                 #expect(receipt.noteID != target.noteID && receipt.noteID != other.noteID, "\(label)")
                 #expect(try await h.store.note(receipt.noteID)?.isShown == true, "\(label)")
             }
+        }
+    }
+
+    /// A failed recording is not held: its retry, by `end` with its file or by `ingest`, stores
+    /// it, recorded, with its transcribe job (findings 44 and 65).
+    public static func aFailedRecordingsRetryIsStored(_ make: NoteStoreFactory) async throws {
+        for byIngest in [false, true] {
+            let h = await Harness(make)
+            let start = h.recordingStart(at: 0, surface: .app)
+            _ = try await h.store.record(start)
+            _ = try await h.store.end(
+                CaptureEnd(
+                    captureID: start.id, endedAt: h.at(1), outcome: .failed(KnotError.writeFailed.code), revision: 0))
+            let asset = h.asset(.audio, for: start.id)
+            let receipt: CaptureReceipt
+            if byIngest {
+                var item = start
+                item.endedAt = h.at(1)
+                item.body = .file(asset, duration: .seconds(60))
+                let result = try await h.store.ingest(item)
+                #expect(result.applied, "The ingest applies the retry.")
+                receipt = result.receipt
+            } else {
+                receipt = try await h.store.end(
+                    CaptureEnd(
+                        captureID: start.id, endedAt: h.at(1), outcome: .stored(.file(asset, duration: .seconds(60))),
+                        revision: 0))
+            }
+            let how = byIngest ? "by ingest" : "by end"
+            #expect(receipt.outcome == .stored, "The retry \(how) stores the recording.")
+            #expect(try await h.row(start.id)?.outcome == .stored)
+            let segment = try #require(try await h.store.segment(SegmentID(start.id))).segment
+            #expect(segment.state == .voice(.recorded) && segment.assetID == asset.id, "Recorded, \(how).")
+            #expect(
+                try await h.store.jobs(for: SegmentID(start.id)).map(\.id) == [.transcribe(of: SegmentID(start.id))],
+                "The recording stored \(how) has its transcribe job.")
         }
     }
 
