@@ -299,6 +299,33 @@ import Testing
         #expect(harness.phone.intactArrivals(capture) == 1)
     }
 
+    /// docs/notes/SP-2.md: the ends of transfers that finished while the app was not running
+    /// arrive at the next launch, after activation. Such an end names an earlier launch's
+    /// transfer, never the one this launch queued for the same capture.
+    @Test(arguments: [LinkFailure.deliveryFailed, .outboxFileMissing])
+    func anEndFromAnEarlierLaunchIsNotTakenForThisLaunchsTransfer(_ failure: LinkFailure) async throws {
+        let harness = LinkHarness()
+        let (first, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: first)
+        await harness.settle(first)
+        let earlier = try #require(harness.outstanding(capture).first)
+
+        // The app dies; the transfer fails while it is not running, and its end waits.
+        harness.system.holdsEvents = true
+        let (second, _) = harness.launchWatch()
+        harness.system.finish(capture, attempt: earlier.attempt, as: .fails(failure))
+        await second.resume()
+        await harness.settle(second)
+        let current = try #require(harness.outstanding(capture).first, "This launch queued the capture again.")
+
+        // The earlier launch's end arrives straight after activation.
+        harness.system.releaseHeld()
+        await harness.settle(second)
+        #expect(harness.outstanding(capture) == [current], "One transfer of a capture at a time.")
+        #expect(await second.states()[capture] == .queued(attempt: current.attempt))
+        #expect(await second.currentCounts() == (waiting: 1, failed: 0))
+    }
+
     @Test func aRelaunchQueuesWhatWasNeverQueued() async throws {
         let harness = LinkHarness()
         harness.system.activatesByItself = false

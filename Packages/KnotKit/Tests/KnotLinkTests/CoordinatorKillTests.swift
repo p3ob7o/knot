@@ -57,7 +57,9 @@
             #expect(manifest.origin.surface == .watch)
 
             let outboxNames = try FileManager.default.contentsOfDirectory(atPath: locations.outbox.path).sorted()
-            #expect(outboxNames == ["\(capture).json", "\(capture).m4a"], "Nothing else is left in the outbox.")
+            #expect(
+                outboxNames == ["\(capture).json", "\(capture).m4a", "link-generation"],
+                "Nothing else is left in the outbox.")
         }
 
         @Test func withoutAKillTheRecordingReachesTheOutboxInOneLaunch() throws {

@@ -53,7 +53,12 @@ public actor OutboxLink {
     private var session: LinkSessionState = .inactive
     private var hasReconciled = false
     private var queued: [CaptureID: (attempt: Int, at: Date)] = [:]
-    private var lastAttempt: [CaptureID: Int] = [:]
+    /// This launch's generation, from the outbox, and how many transfers it has queued. An
+    /// attempt is the two together, so no two launches ever queue the same attempt: the end of
+    /// an earlier launch's transfer, which arrives after this launch's activation, is never
+    /// taken for one of this launch's.
+    private var generation: Int?
+    private var queuedInGeneration = 0
     /// Captures whose file the transport could not read, in this launch.
     private var unreadable: Set<CaptureID> = []
     /// Acknowledged captures whose files are not yet all removed.
@@ -344,7 +349,6 @@ public actor OutboxLink {
                 queued[capture] = (attempt, now)
                 log.capture(capture, "link_adopted", .number("attempt", attempt))
             }
-            lastAttempt[capture] = max(lastAttempt[capture] ?? 0, attempt)
         }
         // A transfer with no end for too long, while the iPhone is in reach, is queued again.
         if session.isActivated, session.isReachable {
@@ -372,12 +376,25 @@ public actor OutboxLink {
     private func queue(_ entry: WatchOutbox.Entry) {
         guard let manifest = entry.manifest else { return }
         let capture = entry.captureID
-        let attempt = (lastAttempt[capture] ?? 0) + 1
-        lastAttempt[capture] = attempt
+        let attempt = nextAttempt()
         queued[capture] = (attempt, clock.now())
         log.capture(capture, "link_queued", .number("attempt", attempt))
         transport.queueFile(outbox.recordingURL(capture), manifest: manifest, attempt: attempt)
     }
+
+    /// The next attempt: this launch's generation times a million, plus how many transfers
+    /// it has queued. The generation comes from the outbox once per launch, and a launch that
+    /// queues a million transfers takes a new one.
+    private func nextAttempt() -> Int {
+        if generation == nil || queuedInGeneration >= Self.attemptsPerGeneration - 1 {
+            generation = outbox.nextGeneration(log: log)
+            queuedInGeneration = 0
+        }
+        queuedInGeneration += 1
+        return (generation ?? 0) * Self.attemptsPerGeneration + queuedInGeneration
+    }
+
+    static let attemptsPerGeneration = 1_000_000
 
     private func changed() {
         changeSubscribers.yield(())

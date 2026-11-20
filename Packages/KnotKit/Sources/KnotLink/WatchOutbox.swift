@@ -125,6 +125,28 @@ public struct WatchOutbox: Sendable {
         }
     }
 
+    /// The file that holds the link's last generation. Its name is not a capture ID, so the
+    /// outbox's listing and its sweep leave it alone.
+    public var generationURL: URL {
+        locations.outbox.appending(path: "link-generation", directoryHint: .notDirectory)
+    }
+
+    /// The link's next generation: one more than the last, placed durably before it is
+    /// returned, so that no two launches share one. When the outbox cannot keep it, a random
+    /// generation far above any a Watch reaches by counting stands in for it, and the line
+    /// says so.
+    func nextGeneration(log: KnotLog) -> Int {
+        let last = (try? layer.read(generationURL)).flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
+        let next = max(last, 0) + 1
+        do {
+            try files.place(Data(String(next).utf8), at: generationURL)
+            return next
+        } catch {
+            log.failure(error, "link_generation_not_kept")
+            return Int.random(in: 1_000_000_000...2_000_000_000)
+        }
+    }
+
     /// The capture IDs of the outbox's files with this extension. A name that is not a
     /// capture ID is not Knot's and is left alone.
     private func captureIDs(withExtension pathExtension: String) throws(KnotError) -> [CaptureID] {
