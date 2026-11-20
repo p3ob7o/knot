@@ -56,6 +56,10 @@ public actor OutboxLink {
     /// For each capture, every attempt that a resume found gone from the session before its end
     /// arrived, kept until the capture is acknowledged, fails, or is sent again.
     private var lostEnds: [CaptureID: Set<LinkAttempt>] = [:]
+    /// For each capture, the newest attempt whose end said something of the outbox's file: that
+    /// it was read (an end with no failure) or that it is missing for good. The newest such end
+    /// decides whether the capture fails, whatever order the ends arrive in.
+    private var newestSpoken: [CaptureID: LinkAttempt] = [:]
     /// This launch's own ID, which every attempt it queues carries, and how many it has queued.
     private let launch = UUID()
     private var queuedInLaunch = 0
@@ -126,6 +130,7 @@ public actor OutboxLink {
         // A new send replaces whatever was sent before: no end of an attempt given up before it
         // speaks for the recording it admitted.
         lostEnds[capture] = nil
+        newestSpoken[capture] = nil
         held[capture] = nil
         // Once this launch has adopted what the session holds, a new capture is queued at
         // once. Before that it waits for the resume, which adopts first.
@@ -351,25 +356,16 @@ public actor OutboxLink {
         // An end of an earlier attempt, or of a transfer this launch never knew, changes
         // nothing: the capture is queued again on the next trigger if it needs to be.
         guard queued[capture]?.attempt == attempt else {
-            if lostEnds[capture]?.contains(attempt) == true, failure?.handling == .failure {
-                // The end of a transfer that a resume took for lost, after the capture was
-                // queued again, once or more: a file missing for good is no less missing for
-                // that. The transfer queued in its place is cancelled, and the capture fails.
-                lostEnds[capture] = nil
-                if let current = queued[capture] {
-                    transport.cancelFile(captureID: capture, attempt: current.attempt)
-                    queued[capture] = nil
-                }
-                log.capture(capture, "link_transfer_failed_late", .number("attempt", attempt.number))
-                unreadable.insert(capture)
-                changed()
-                return
+            if lostEnds[capture]?.remove(attempt) != nil {
+                lateEnd(capture, attempt: attempt, failure: failure)
+            } else {
+                log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
             }
-            log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
             return
         }
         queued[capture] = nil
-        lostEnds[capture] = nil
+        if Self.speaksOfTheFile(failure) { newestSpoken[capture] = attempt }
+        if failure?.handling == .failure { lostEnds[capture] = nil }
         defer { changed() }
         guard let failure else {
             // Not a delivery: the capture waits for its acknowledgement.
@@ -391,6 +387,50 @@ public actor OutboxLink {
         }
     }
 
+    /// The end of an attempt that a resume gave up, which arrives after the capture was queued
+    /// again, once or more. Only an end that says something of the file can decide, and only
+    /// when it is newer than the newest that has: a file missing for good fails the capture and
+    /// cancels the transfer queued in its place; a file that was read lifts a failure that an
+    /// older attempt's "missing" made. Any other late end changes nothing.
+    private func lateEnd(_ capture: CaptureID, attempt: LinkAttempt, failure: LinkFailure?) {
+        guard Self.speaksOfTheFile(failure) else {
+            log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
+            return
+        }
+        if let newest = newestSpoken[capture], !Self.isNewer(attempt, than: newest) {
+            log.capture(capture, "link_finished_superseded", .number("attempt", attempt.number), level: .debug)
+            return
+        }
+        newestSpoken[capture] = attempt
+        if failure?.handling == .failure {
+            log.capture(capture, "link_transfer_failed_late", .number("attempt", attempt.number))
+            lostEnds[capture] = nil
+            if let current = queued[capture] {
+                transport.cancelFile(captureID: capture, attempt: current.attempt)
+                // Its own end may already have happened, and may still say the file was read.
+                lostEnds[capture, default: []].insert(current.attempt)
+                queued[capture] = nil
+            }
+            unreadable.insert(capture)
+        } else if unreadable.remove(capture) != nil {
+            log.capture(capture, "link_file_read_late", .number("attempt", attempt.number))
+        }
+        changed()
+    }
+
+    /// True for an end that says something of the outbox's file: read, or missing for good.
+    static func speaksOfTheFile(_ failure: LinkFailure?) -> Bool {
+        failure == nil || failure?.handling == .failure
+    }
+
+    /// True when `attempt` was queued after `other`: by number within one launch, else by the
+    /// time of queueing.
+    static func isNewer(_ attempt: LinkAttempt, than other: LinkAttempt) -> Bool {
+        if attempt.launch == other.launch { return attempt.number > other.number }
+        if attempt.queuedAt != other.queuedAt { return attempt.queuedAt > other.queuedAt }
+        return attempt.number > other.number
+    }
+
     private func acknowledge(_ capture: CaptureID) {
         let inOutbox = outbox.entry(capture) != nil
         guard inOutbox || acknowledged.contains(capture) else {
@@ -408,6 +448,7 @@ public actor OutboxLink {
         }
         queued[capture] = nil
         lostEnds[capture] = nil
+        newestSpoken[capture] = nil
         unreadable.remove(capture)
         removeAcknowledged()
         if isNew {

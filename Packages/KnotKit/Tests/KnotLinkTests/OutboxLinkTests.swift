@@ -360,6 +360,47 @@ import Testing
         #expect(harness.outstanding(capture) == [replacement], "The replacement's transfer stands.")
     }
 
+    /// A ends "file missing", a resume queues B, and B finishes without an error, so it read the
+    /// file. The newest attempt whose end says something of the file decides: in either order
+    /// of the two ends, the capture waits for its acknowledgement and is not failed.
+    @Test(arguments: [false, true])
+    func aLateEndAfterTheReplacementEndedIsTheSameInEitherOrder(_ reversed: Bool) async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))  // A
+        await link.resume()
+        await harness.settle(link)
+        harness.system.finish(capture, as: .neverArrives)  // B, which read the file
+        harness.system.releaseHeld { reversed ? $0.reversed() : $0 }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .waiting)
+        await link.resume()
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1, "It is queued again on the next trigger.")
+    }
+
+    /// The same, with the newer end the one that reports the file missing: in either order the
+    /// capture fails.
+    @Test(arguments: [false, true])
+    func aNewerFailureForGoodDecidesInEitherOrder(_ reversed: Bool) async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        harness.system.finish(capture, as: .neverArrives)  // A, which read the file
+        await link.resume()
+        await harness.settle(link)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))  // B
+        harness.system.releaseHeld { reversed ? $0.reversed() : $0 }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .failed)
+        #expect(harness.outstanding(capture).isEmpty)
+    }
+
     /// An end of a transfer that a resume took for lost, without a failure for good, changes
     /// nothing: the capture's new transfer stands.
     @Test(arguments: [LinkFailure?.none, .deliveryFailed, .counterpartFull])
