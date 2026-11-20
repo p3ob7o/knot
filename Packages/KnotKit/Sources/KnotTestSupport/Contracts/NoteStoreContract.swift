@@ -101,6 +101,11 @@ public enum NoteStoreContract {
         Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
         Check(name: "failed-recording-retry", run: aFailedRecordingsRetryIsStored),
         Check(name: "blank-repeat", run: aRepeatOfABlankCaptureChangesNothing),
+        Check(name: "saved-at-record", run: theFirstSaveIsOnTheRowAfterRecord),
+        Check(name: "run-not-last", run: aRunThatIsNotTheLastLeavesTheTranscriptGoing),
+        Check(name: "digest-63", run: aDigestOf63DigitsIsRefused),
+        Check(name: "remove-recording-change", run: removingARecordingIsAChange),
+        Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2061,6 +2066,80 @@ public enum NoteStoreContract {
         #expect(!again.applied && again.storedRevision == 2, "The same blank item ingested again changes nothing.")
         #expect(again.receipt == ingested.receipt)
         #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty)
+    }
+
+    /// Witness 67: the time of the first durable write is on the row right after `record`.
+    public static func theFirstSaveIsOnTheRowAfterRecord(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("First words", at: 0)
+        _ = try await h.store.record(draft)
+        #expect(try await h.row(draft.id)?.lastSavedAt == h.at(0), "A draft's first save is on its row.")
+        _ = try await h.store.end(h.endTyped(draft.id, "First words", at: 0.5, revision: 1))
+        let finished = h.typed("Done", from: 1, to: 1.5)
+        _ = try await h.store.record(finished)
+        #expect(try await h.row(finished.id)?.lastSavedAt == h.at(1.5), "A finished capture's save is on its row.")
+    }
+
+    /// Witness 67: after a run that is not the last, the transcript is still going.
+    public static func aRunThatIsNotTheLastLeavesTheTranscriptGoing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await h.store.record(h.watchRecording(from: 0, to: 2, arrival: .live))
+        let segment = receipt.segmentIDs[0]
+        let read = try await h.store.appendTranscript(
+            h.run("the first half", from: .zero, resumeAt: .seconds(60)), to: segment, job: .transcribe(of: segment))
+        #expect(read.segment.state != .voice(.transcribed), "Not transcribed until the last run.")
+        #expect(read.segment.state != .voice(.ready), "Not ready until the last run.")
+    }
+
+    /// Witness 67: `record` and `end` refuse a file whose digest has 63 digits.
+    public static func aDigestOf63DigitsIsRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        var recording = h.watchRecording(from: 0, to: 1, arrival: .live)
+        if case .file(var asset, let duration) = recording.body {
+            asset.sha256 = String(repeating: "a", count: 63)
+            recording.body = .file(asset, duration: duration)
+        }
+        await refuses(KnotError.unexpected, "record") { try await h.store.record(recording) }
+        #expect(try await h.row(recording.id) == nil, "Nothing is written.")
+        let start = h.recordingStart(at: 2, surface: .app)
+        _ = try await h.store.record(start)
+        var asset = h.asset(.audio, for: start.id)
+        asset.sha256 = String(repeating: "b", count: 63)
+        await refuses(KnotError.unexpected, "end") {
+            try await h.store.end(
+                CaptureEnd(
+                    captureID: start.id, endedAt: h.at(3), outcome: .stored(.file(asset, duration: .seconds(60))),
+                    revision: 0))
+        }
+        #expect(try await h.row(start.id)?.outcome == .open, "Nothing is written.")
+    }
+
+    /// Witness 67: `changes` reports a "Remove recording".
+    public static func removingARecordingIsAChange(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = receipt.segmentIDs[0]
+        _ = try await h.store.appendTranscript(
+            h.run("kept words", from: .zero, resumeAt: nil), to: segment, job: .transcribe(of: segment))
+        let cursor = try await h.store.cursor()
+        _ = try await h.store.removeRecording(of: segment)
+        let changes = try await h.store.changes(after: cursor, limit: 10).changes
+        #expect(changes.map(\.noteID) == [receipt.noteID], "The note is reported changed.")
+        #expect(changes.first?.record?.segments.first?.assetID == nil, "As it is now, without its recording.")
+    }
+
+    /// Witness 67: an `ingest` at a lower revision with the same text applies nothing and is
+    /// not a conflict.
+    public static func anOlderIngestOfTheSameTextAppliesNothing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("Same words", at: 0)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.end(h.endTyped(draft.id, "Same words", at: 1, revision: 3))
+        var item = draft
+        item.endedAt = h.at(1)
+        item.revision = 2
+        let result = try await h.store.ingest(item)
+        #expect(!result.applied && result.storedRevision == 3)
     }
 
     // MARK: Reading
