@@ -464,14 +464,15 @@ public actor StandardCaptureEngine: CaptureEngine {
         return await deadline.race { [notes] () async throws(KnotError) in try await notes.checkpoint(checkpoint) }
     }
 
-    /// Writes a typed capture's item in `Inbox/`. Throws when it did not reach the drive; the
-    /// save is then not acknowledged.
+    /// Writes a typed capture's item in `Inbox/`, with the time of this save, where ingest ends
+    /// the draft if a death leaves it open. Throws when it did not reach the drive; the save is
+    /// then not acknowledged.
     private func writeTypedItem(_ id: CaptureID, endedAt: Date?) throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let manifest = CaptureManifest(
             captureID: id, kind: .typed, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, placement: entry.placement, shownNoteID: entry.shownNote,
-            revision: entry.revision, followsCaptureID: entry.follows)
+            revision: entry.revision, followsCaptureID: entry.follows, lastSavedAt: clock.now())
         do throws(KnotError) {
             try inbox.writeTyped(manifest, text: entry.text)
         } catch {
@@ -608,7 +609,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             captureID: id, kind: .voice, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, duration: duration, placement: entry.placement,
             shownNoteID: entry.shownNote, revision: revision, payloadByteCount: stored.byteCount,
-            payloadSHA256: stored.sha256, followsCaptureID: entry.follows)
+            payloadSHA256: stored.sha256, followsCaptureID: entry.follows, lastSavedAt: clock.now())
         do throws(KnotError) {
             try inbox.writeRecording(manifest)
         } catch {

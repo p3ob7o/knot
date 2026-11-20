@@ -225,12 +225,13 @@ public actor InboxIngest {
     }
 
     /// The capture the item describes. A draft that an earlier launch left open ends at its
-    /// last durable save the store knows of, or at its start.
+    /// last durable save: the later of the item's last save and the store's, or at its start
+    /// when neither says (finding 40).
     private func newCapture(_ manifest: CaptureManifest, body: CaptureBody) async throws(KnotError) -> NewCapture {
         var endedAt = manifest.endedAt
         if endedAt == nil {
             let row = try await notes.capture(manifest.captureID)
-            endedAt = max(manifest.startedAt, row?.lastSavedAt ?? manifest.startedAt)
+            endedAt = [manifest.startedAt, manifest.lastSavedAt, row?.lastSavedAt].compactMap { $0 }.max()
         }
         return NewCapture(
             id: manifest.captureID, kind: manifest.kind, origin: manifest.origin, launchID: manifest.launchID,

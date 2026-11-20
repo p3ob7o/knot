@@ -384,6 +384,34 @@ import Testing
         let recording = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(b.captureID)))
         #expect(recording.followsCaptureID == a.captureID)
     }
+
+    // MARK: Finding 40: a draft that a crash left in `Inbox/`
+
+    /// Finding 40. A typed draft on the `Inbox/` path, saved twice, and the app dies before it
+    /// ends. Each save of the item records its time, and the next launch's ingest ends the draft
+    /// at the last of them, not at its start.
+    @Test func crashedDraftInTheInboxEndsAtItsLastSave() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let begun = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "a"))
+        #expect(begun.path == .inbox(KnotError.storeBusy.code))
+        let start = try #require(
+            try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(begun.captureID))).lastSavedAt)
+        r.clock.advance(by: 2)
+        _ = try await r.engine.update(begun.captureID, with: .text("ab"))
+        r.clock.advance(by: 3)
+        _ = try await r.engine.update(begun.captureID, with: .text("abc"))
+        let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(begun.captureID)))
+        #expect(item.lastSavedAt == start.addingTimeInterval(5), "Each save of the item records its time.")
+        // The process dies here; the next launch finds the draft open in `Inbox/`.
+        r.clock.advance(by: 60)
+        let next = r.relaunch()
+        _ = try await next.recovery.run(ingest: next.ingest)
+        let row = try #require(try await r.notes.capture(begun.captureID))
+        #expect(row.outcome == .stored)
+        #expect(row.endedAt == start.addingTimeInterval(5))
+        #expect(try await r.notes.segment(SegmentID(begun.captureID))?.text == "abc")
+    }
 }
 
 /// The rig's clock, for a store deadline made before the rig.
