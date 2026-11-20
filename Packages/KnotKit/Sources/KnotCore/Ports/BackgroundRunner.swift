@@ -14,7 +14,8 @@ public protocol BackgroundRunner: Sendable {
     var name: String { get }
 
     /// Runs `work` in this runner's time, and returns when it has finished. A failure of the
-    /// work is thrown as it is; the end of the time is `no_background_time`.
+    /// work is thrown as it is; the end of the time is `no_background_time`. A cancelled caller
+    /// cancels the work, and its yield, `cancelled`, comes back as it is.
     func run(_ work: BackgroundWork) async throws(KnotError)
 }
 

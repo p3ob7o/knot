@@ -382,7 +382,10 @@ final class ProgressLog: Sendable {
 
 @Suite struct ScriptedBackgroundRunnerTests {
     @Test(.tags(.contract)) func theContract() async throws {
-        try await BackgroundRunnerContract.run { ScriptedBackgroundRunner() }
+        try await BackgroundRunnerContract.run {
+            let runner = ScriptedBackgroundRunner()
+            return BackgroundRunnerSubject(runner: runner) { runner.endTimeNow() }
+        }
     }
 
     /// The time ends in the middle: the running step is cancelled as a yield, and the runner
