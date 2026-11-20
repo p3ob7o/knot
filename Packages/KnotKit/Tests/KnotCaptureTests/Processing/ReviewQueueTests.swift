@@ -56,4 +56,18 @@ import Testing
         #expect(await next.drain() == .idle)
         #expect(try await next.notes.segment(id)?.state == .voice(.ready))
     }
+
+    /// Finding 14. The first attempt waits 30 seconds before the job runs again.
+    @Test func firstAttemptWaitsThirtySeconds() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        r.transcriber.failNextRuns(with: .transcriptionFailed)
+        let failedAt = r.clock.now()
+        #expect(await r.drain() == .idle)
+        let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first)
+        #expect(job.attempts == 1)
+        #expect(job.notBefore == failedAt.addingTimeInterval(30))
+    }
 }
