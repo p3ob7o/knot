@@ -431,40 +431,55 @@ knot_sim_call() {
 
 # Starts an app that Knot built and waits up to <seconds> for its first window, which the
 # probe finds: the probe is called with the app's process ID appended, and prints the
-# windows it sees, or nothing. Then it ends the app and everything the app started. Prints
-# "windows: …" and returns 0 when a window came. Fails when the app exited first, or when no
-# window came in time, which on this Mac most likely means a system dialog holds the start.
+# windows it sees, or nothing. Then it ends the app and everything the app started. What the
+# app writes to standard error goes to the step's log. Prints "windows: …" and returns 0
+# when a window came. Fails when the app exited first; when the probe itself failed or did
+# not answer, saying so; and when no window came in time although the probe ran, which on
+# this Mac most likely means a system dialog holds the start.
 #   knot_start_app <seconds> <app executable> <probe…>
 knot_start_app() {
-    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out pid
+    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note=""
     shift 2
     out="$(mktemp)"
-    "$app" >/dev/null 2>&1 &
+    errors="$(mktemp)"
+    # The app runs in a subshell that records its status, disowned, so that ending it prints
+    # no job notice; its standard error is the step's.
+    ("$app" >/dev/null; echo "$?" >"$out.status") &
     pid=$!
+    disown "$pid" 2>/dev/null || true
     deadline=$(($(knot_now) + seconds))
     while (($(knot_now) < deadline)); do
         if ! kill -0 "$pid" 2>/dev/null; then
             exited=1
             break
         fi
-        knot_limit 15 "$@" "$pid" >"$out" 2>/dev/null || true
+        probe_status=0
+        knot_limit 15 "$@" "$(knot_descendants "$pid" | head -n 1)" >"$out" 2>"$errors" || probe_status=$?
         found="$(cat "$out")"
         [[ -n $found ]] && break
+        if ((KNOT_LIMIT_HIT)); then
+            probe_note="the window probe did not answer within 15s"
+        elif ((probe_status != 0)); then
+            probe_note="the window probe failed with status $probe_status: $(tail -n 1 "$errors")"
+        else
+            probe_note=""
+        fi
         sleep 0.5
     done
     if ((exited)); then
-        wait "$pid" || status=$?
+        status="$(cat "$out.status" 2>/dev/null || echo unknown)"
     else
         knot_end_process "$pid"
-        wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$out"
+    rm -f "$out" "$out.status" "$errors"
     if [[ -n $found ]]; then
         echo "windows: $found"
         return 0
     fi
     if ((exited)); then
         echo "$(basename "$app") exited with status $status before it showed a window."
+    elif [[ -n $probe_note ]]; then
+        echo "$(basename "$app") showed no window that the probe could see within ${seconds}s: $probe_note."
     else
         echo "$(basename "$app") showed no window within ${seconds}s. A system dialog, such as a consent prompt, may be holding its start and waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
     fi

@@ -439,6 +439,23 @@ else
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
+# The app's start says why it failed: a probe that cannot run is no system dialog, and what
+# the app writes to standard error reaches the step's log.
+printf '#!/bin/sh\necho "the probe cannot run" >&2\nexit 1\n' >"$lim/broken-probe"
+printf '#!/bin/sh\necho "the app says something" >&2\nsleep 30\n' >"$lim/talks"
+chmod +x "$lim/broken-probe" "$lim/talks"
+timed app_probe knot_start_app 2 "$lim/hangs" "$lim/broken-probe"
+timed app_talks knot_start_app 30 "$lim/talks" "$lim/a-window"
+probe_message="$(cat "$lim/app_probe.out")"
+if [[ $app_probe_status == 1 && $probe_message == *"probe"*"status 1"*"the probe cannot run"* && $probe_message != *"system dialog"* &&
+    $app_talks_status == 0 && "$(cat "$lim/app_talks.out")" == *"the app says something"* ]]; then
+    pass "the app's start tells a probe that cannot run from a window that has not come, and keeps the app's errors"
+else
+    fail "the app's start with a broken probe: $app_probe_status, $probe_message; with an app that talks: $app_talks_status, $(cat "$lim/app_talks.out")"
+fi
+pkill -KILL -f "$lim/hangs" 2>/dev/null || true
+pkill -KILL -f "$lim/talks" 2>/dev/null || true
+
 # A step that runs the package's tests has an outer limit (knot_swift_test_limited): a test
 # that hangs ends at it, and the failure names the step and says nothing of a dialog; a run
 # that passes is not slowed; a failing run keeps its status.
