@@ -35,6 +35,8 @@ public enum AudioPlayerContract {
 
         let loaded = try await player.load(file)
         #expect(loaded == length, "Loading gives the recording's length.")
+        // One subscription held across the changes, which must see them as they happen.
+        let watching = player.states()
         #expect(await current(player.states(), "the state") == .paused(at: .zero, of: length), "Paused at the start.")
         await player.play()
         guard case .playing(_, let playingLength)? = await current(player.states(), "the state") else {
@@ -42,6 +44,20 @@ public enum AudioPlayerContract {
             return
         }
         #expect(playingLength == length)
+        // A seek while playing keeps playing, from where it was sent.
+        await player.seek(to: length / 4)
+        guard case .playing(let from, _)? = await current(player.states(), "the state") else {
+            Issue.record("A seek while playing keeps playing.")
+            return
+        }
+        #expect(from >= length / 4 && from <= length, "It plays on from where it was sent.")
+        let sawSeek = await SuiteWait.value("a held subscription to see the seek") {
+            for await state in watching {
+                if case .playing(let at, _) = state, at >= length / 4 { return true }
+            }
+            return false
+        }
+        #expect(sawSeek == true, "A held subscription sees the changes.")
         await player.pause()
         guard case .paused(let at, _)? = await current(player.states(), "the state") else {
             Issue.record("Pause pauses.")
@@ -179,7 +195,14 @@ public enum SettingsStoreContract {
         var synced = Settings.defaults
         synced.appendWindow = try AppendWindow(minutes: 10)
         synced.launchAtLogin = false
+        let held = store.changes()
         try await subject.arriveBySync(synced)
+        let window = synced.appendWindow
+        let sawSync = await SuiteWait.value("a held subscription to see the synced change") {
+            for await settings in held where settings.appendWindow == window { return true }
+            return false
+        }
+        #expect(sawSync == true, "A held subscription sees a synced change.")
         let after = try await store.load()
         #expect(after.appendWindow == synced.appendWindow, "The append window syncs.")
         #expect(after.launchAtLogin, "Launch at login belongs to this device.")
