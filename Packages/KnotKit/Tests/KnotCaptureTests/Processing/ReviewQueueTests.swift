@@ -328,6 +328,49 @@ import Testing
         #expect(job.deaths == 0)
         #expect(job.lastErrorCode == KnotError.storeNotOpen.code)
     }
+
+    enum NotRunnableNow: String, CaseIterable, CustomTestStringConvertible {
+        /// The speech model is not installed: a deferral.
+        case deferred
+        /// The step failed once: the job waits for its retry time.
+        case waitingForItsRetry
+        var testDescription: String { rawValue }
+    }
+
+    /// Finding 33. A drain that stops on an error while the only queued job is one no drain
+    /// could run now, deferred or waiting for its retry time, says `idle`.
+    @Test(arguments: NotRunnableNow.allCases)
+    func drainThatStopsWithOnlyWorkThatCannotRunNowIsIdle(_ reason: NotRunnableNow) async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        switch reason {
+        case .deferred: r.transcriber.setReadiness(.notInstalled)
+        case .waitingForItsRetry: r.transcriber.failNextRuns(with: .transcriptionFailed)
+        }
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks)
+        let first = Mutex(true)
+        // Once the step's way out has saved the job queued, the queue's own read of that save
+        // goes through, and the drain's next read of the jobs meets a store that does not answer.
+        hooks.afterSave.withLock { hook in
+            hook = { job in
+                if job.state == .queued, job.lastErrorCode != nil,
+                    first.withLock({ f in
+                        defer { f = false }
+                        return f
+                    })
+                {
+                    hooks.failJobReads(2)
+                }
+            }
+        }
+        let result = await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first)
+        #expect(job.state == .queued)
+        #expect(result == .idle)
+    }
 }
 
 /// A runner whose work meets a store that does not answer.

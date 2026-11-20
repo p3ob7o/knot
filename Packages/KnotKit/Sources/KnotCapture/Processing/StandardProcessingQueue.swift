@@ -222,11 +222,15 @@ public actor StandardProcessingQueue: ProcessingQueue {
         }
     }
 
-    /// Whether a job of a kind the queue runs is still queued, or `nil` when the store does
-    /// not answer.
+    /// Whether a later drain could run a queued job now: one of a kind the queue runs, past its
+    /// retry time, that did not defer in this drain. `nil` when the store does not answer.
     private func hasQueuedWork() async -> Bool? {
         guard let all = try? await notes.jobs(for: nil) else { return nil }
-        return all.contains { $0.state == .queued && ($0.kind == .transcribe || $0.kind == .clean) }
+        let now = clock.now()
+        return all.contains { job in
+            job.state == .queued && (job.kind == .transcribe || job.kind == .clean)
+                && (job.notBefore ?? .distantPast) <= now && !deferred.contains(job.id)
+        }
     }
 
     private static func order(_ job: Job) -> (Int, JobID) {
