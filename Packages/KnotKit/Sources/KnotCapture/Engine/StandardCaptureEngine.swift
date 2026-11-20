@@ -50,6 +50,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// Set when a row that a store call commits late must be ended as empty: a recording
         /// discarded off the store path.
         var discardLateRow = false
+        /// True once a call of the engine has answered the capture as saved. Until then a
+        /// typed start on its surface is its retry; after, the surface was told its text is
+        /// saved, and a start never replaces it (findings 1 and 38).
+        var answered = false
     }
 
     private let notes: any NoteStore
@@ -194,6 +198,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 log.failure(error.about(capture: endAfterStart), "capture_not_ended")
             }
         }
+        entries[id]?.answered = true
         if let handoff { await settle(handoff, afterStartOf: id) }
         return state
     }
@@ -265,6 +270,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[capture]?.revision += 1
         entries[capture]?.text = text
         try await saveTyped(capture, ending: nil)
+        entries[capture]?.answered = true
         return publish(capture)
     }
 
@@ -345,8 +351,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         return publish(id)
     }
 
-    /// A typed start on the surface of the open typed capture: the same capture, its text saved
-    /// at the next revision. After a begin that reached no disk, this is the surface's retry.
+    /// The retry of a typed start that reached no disk, on its surface: the same capture, its
+    /// text saved at the next revision.
     private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState {
         await take(id)
         defer { release(id) }
@@ -354,6 +360,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id]?.revision += 1
         entries[id]?.text = text
         try await saveTyped(id, ending: nil)
+        entries[id]?.answered = true
         log.capture(id, "capture_begin_retried")
         // It has started now: rule 15 ends the capture it follows, as a first start does.
         await endCapturesFollowedBy(id)
@@ -635,7 +642,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     private enum Step {
         /// Nothing open stands in the way.
         case nothing
-        /// A typed start on the surface of the open typed capture, which goes on.
+        /// A typed start on the surface of an open typed capture that has reached no disk: its
+        /// retry.
         case retry(CaptureID)
         /// The open capture ends, and the new one follows it.
         case end(CaptureID)
@@ -655,11 +663,16 @@ public actor StandardCaptureEngine: CaptureEngine {
         switch decision {
         case .nothingOpen, .leaveOpen:
             return .nothing
-        case .continueOpen(let id) where open.kind == .typed && request.kind == .typed:
-            // The same kind on the same surface: the open capture goes on, and nothing new
-            // starts (rule 15). The surface's text is the capture's whole text, so the start is
-            // its next save: after a begin that reached no disk, the surface's retry.
+        case .continueOpen(let id) where open.kind == .typed && request.kind == .typed && !open.answered:
+            // The same kind on the same surface, and no call has answered the open capture as
+            // saved: the start is its retry, with the same ID, so a row its store call makes
+            // late and the retry are one capture (finding 1).
             return .retry(id)
+        case .continueOpen where open.kind == .typed && request.kind == .typed:
+            // A call answered the open capture as saved: a start never replaces text that was
+            // acknowledged. It is a capture of its own, which the store's rule 15 refuses, so
+            // it goes to `Inbox/`, and the open capture keeps its text.
+            return .nothing
         case .continueOpen(let id), .recordingPress(let id):
             throw KnotError.segmentCaptureOpen.about(capture: id)
         case .refused(let error):

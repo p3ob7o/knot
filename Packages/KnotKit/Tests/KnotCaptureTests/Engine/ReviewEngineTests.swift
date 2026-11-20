@@ -352,4 +352,22 @@ import Testing
         #expect(try await r.notes.capture(a.captureID)?.outcome == .stored)
         await expectError(.illegalTransition) { try await r.engine.update(a.captureID, with: .text("more")) }
     }
+
+    /// Finding 38, the re-check's N7. Two Shortcuts in a row through the intent surface, the
+    /// first still open: the second is a capture of its own, and the first keeps the text that
+    /// was acknowledged.
+    @Test func sameSurfaceStartKeepsTheAcknowledgedText() async throws {
+        let r = Rig()
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "buy milk"))
+        #expect(a.durableRevision == 1)
+        let b = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "call mom"))
+        #expect(b.captureID != a.captureID)
+        _ = try await r.engine.end(a.captureID)
+        _ = try await r.engine.end(b.captureID)
+        #expect(
+            await eventually("both texts to be stored") {
+                let texts = (try? await r.stream())?.notes.flatMap(\.liveSegments).map(\.text) ?? []
+                return Set(texts) == ["buy milk", "call mom"]
+            })
+    }
 }

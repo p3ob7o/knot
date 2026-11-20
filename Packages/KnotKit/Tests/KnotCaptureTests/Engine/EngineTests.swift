@@ -70,16 +70,18 @@ import Testing
 
     // MARK: Rule 15
 
-    /// A capture begun twice: a second typed start on the same surface is the open capture
-    /// going on, and no second capture starts (rule 15).
-    @Test func secondTypedStartOnTheSameSurfaceContinuesTheOpenCapture() async throws {
+    /// A capture begun twice (finding 38): a second typed start on the surface of an open typed
+    /// capture that has reached disk is a capture of its own. The store's rule 15 refuses it, so
+    /// it goes to `Inbox/`, and the open capture keeps its text: a start never replaces text that
+    /// was acknowledged.
+    @Test func secondTypedStartOnTheSameSurfaceIsACaptureOfItsOwn() async throws {
         let rig = Rig()
         let first = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "a"))
         let again = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "ab"))
-        #expect(again.captureID == first.captureID)
-        #expect(again.durableRevision == 2)
-        #expect(try await rig.notes.openCaptures().map(\.id) == [first.captureID])
-        #expect(try await rig.notes.segment(SegmentID(first.captureID))?.text == "ab")
+        #expect(again.captureID != first.captureID)
+        #expect(again.path == .inbox(KnotError.segmentCaptureOpen.code))
+        #expect(try await rig.notes.segment(SegmentID(first.captureID))?.text == "a")
+        #expect(rig.inboxText(again.captureID) == "ab")
     }
 
     /// While a recording runs, typing does not start, and a second press of record does not
