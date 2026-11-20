@@ -45,7 +45,10 @@ public enum UUIDv7 {
         let largest = Double((UInt64(1) << 48) - 1)
         let raw = (date.timeIntervalSince1970 * 1000).rounded(.down)
         let milliseconds = UInt64(raw.isNaN ? 0 : min(max(raw, 0), largest))
-        let random = (0..<10).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+        // On a copy, put back at the end, for Thread Sanitizer: see StoreSecret.make(using:).
+        var local = generator
+        defer { generator = local }
+        let random = (0..<10).map { _ in UInt8.random(in: .min ... .max, using: &local) }
         return make(milliseconds: milliseconds, random: random)
     }
 
