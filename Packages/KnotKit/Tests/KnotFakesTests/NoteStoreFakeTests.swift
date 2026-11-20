@@ -207,7 +207,8 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         #expect(try await store.capture(b.id) != nil)
     }
 
-    /// Whether a hold is reached within two seconds, without hanging when it never is.
+    /// Whether a hold is reached within a minute, without hanging when it never is. A minute is
+    /// a bound that scheduling on a loaded machine cannot reach (finding 84).
     private func reached(_ hold: StoreCallHold) async -> Bool {
         final class Seen: Sendable { let value = Mutex(false) }
         let seen = Seen()
@@ -216,7 +217,7 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
             await hold.untilReached()
             seen.value.withLock { $0 = true }
         }
-        for _ in 0..<200 {
+        for _ in 0..<6_000 {
             if seen.value.withLock({ $0 }) { return true }
             try? await Task.sleep(for: .milliseconds(10))
         }

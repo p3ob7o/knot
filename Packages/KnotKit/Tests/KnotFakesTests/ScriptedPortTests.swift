@@ -178,9 +178,10 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         try await TranscriberContract.run {
             let transcriber = Self.scripted()
             transcriber.script(Self.long, pieces: [TranscriptPiece(text: "long", range: .zero ..< .seconds(600))])
-            transcriber.setRunDelay(.seconds(30), for: Self.long)
+            transcriber.setRunDelay(.seconds(600), for: Self.long)
             return TranscriberSubject(
-                transcriber: transcriber, speech: Self.speech, long: Self.long, silence: Self.silence,
+                transcriber: transcriber, speech: Self.speech, long: Self.long, longRunAtLeast: .seconds(600),
+                silence: Self.silence,
                 missing: Self.missing, budget: .milliseconds(500),
                 liveChunks: Array(repeating: AudioChunk(samples: [0, 0.1], sampleRate: 16_000), count: 4))
         }
@@ -268,9 +269,9 @@ final class ProgressLog: Sendable {
 
 @Suite struct ScriptedCleanerTests {
     @Test(.tags(.contract)) func theContract() async throws {
-        try await CleanerContract.run {
+        try await CleanerContract.run(longRunAtLeast: .seconds(600)) {
             let cleaner = ScriptedCleaner()
-            cleaner.setDelay(.seconds(30), forTranscriptsLongerThan: 1_000)
+            cleaner.setDelay(.seconds(600), forTranscriptsLongerThan: 1_000)
             return cleaner
         }
     }
@@ -314,7 +315,9 @@ final class ProgressLog: Sendable {
 
     @Test func aRequestCancelledWhileItRunsIsAYield() async {
         let cleaner = ScriptedCleaner()
-        cleaner.setDelay(.seconds(30))
+        // Ten minutes: a request that saw no cancel would finish, and the test would fail by
+        // what happens, not by the wall clock (finding 84).
+        cleaner.setDelay(.seconds(600))
         let task = Task { try await cleaner.clean("text", proposeTitle: true) }
         try? await Task.sleep(for: .milliseconds(20))
         task.cancel()

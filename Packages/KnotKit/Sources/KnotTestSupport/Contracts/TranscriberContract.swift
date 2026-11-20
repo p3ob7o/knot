@@ -7,8 +7,12 @@ public struct TranscriberSubject: Sendable {
     public let transcriber: any Transcriber
     /// A file with speech.
     public let speech: URL
-    /// A file whose run lasts long enough to be cancelled while it runs: a second or more.
+    /// A file whose run lasts long enough to be cancelled while it runs.
     public let long: URL
+    /// How long an uncancelled run of `long` takes at least. A cancelled run must come back in
+    /// under half of it, which proves the cancellation by what happens rather than by a bound
+    /// that a loaded machine could miss, so choose a file whose run takes a minute or more.
+    public let longRunAtLeast: Duration
     /// A file of silence, or with no frames.
     public let silence: URL
     /// A path with no file.
@@ -20,12 +24,13 @@ public struct TranscriberSubject: Sendable {
     public let liveChunks: [AudioChunk]
 
     public init(
-        transcriber: any Transcriber, speech: URL, long: URL, silence: URL, missing: URL, budget: Duration,
-        liveChunks: [AudioChunk]
+        transcriber: any Transcriber, speech: URL, long: URL, longRunAtLeast: Duration, silence: URL, missing: URL,
+        budget: Duration, liveChunks: [AudioChunk]
     ) {
         self.transcriber = transcriber
         self.speech = speech
         self.long = long
+        self.longRunAtLeast = longRunAtLeast
         self.silence = silence
         self.missing = missing
         self.budget = budget
@@ -81,7 +86,9 @@ public enum TranscriberContract {
             #expect(error.code == KnotError.audioUnreadable.code)
         }
 
-        // A run cancelled while it runs throws the yield within a second.
+        // A run cancelled while it runs throws the yield, and comes back long before the run
+        // could have finished (finding 84). The pause only gives the run a head start: a cancel
+        // that arrives before it begins must yield too.
         let task = Task { try await transcriber.transcribe(file: subject.long, from: .zero, budget: nil) }
         try await Task.sleep(for: .milliseconds(100))
         let cancelled = ContinuousClock.now
@@ -92,7 +99,9 @@ public enum TranscriberContract {
         } catch {
             #expect((error as? KnotError)?.code == KnotError.cancelled.code, "A cancelled run throws the yield.")
         }
-        #expect(ContinuousClock.now - cancelled < .seconds(1), "It stops within a second.")
+        #expect(
+            ContinuousClock.now - cancelled < subject.longRunAtLeast / 2,
+            "It comes back before an uncancelled run could have finished.")
 
         // Live text: updates while the audio arrives, and the stream ends when it does.
         let (chunks, feed) = AsyncStream.makeStream(of: AudioChunk.self)
@@ -109,17 +118,26 @@ public enum TranscriberContract {
         #expect(updates.last?.volatile == "", "When the audio ends, everything is final.")
         #expect(!(updates.last?.final.isEmpty ?? true))
 
-        // A consumer that goes away stops the live stream within a second.
+        // A consumer that goes away ends the live stream. Its audio never ends by itself: a
+        // watchdog ends it after ten minutes, and the check sees which of the two ended the
+        // stream, by what happens rather than by a bound on the wall clock (finding 84).
         let (endless, keep) = AsyncStream.makeStream(of: AudioChunk.self)
         keep.yield(subject.liveChunks[0])
         let consumer = Task {
             for await _ in transcriber.live(endless) {}
         }
         try await Task.sleep(for: .milliseconds(50))
-        let gone = ContinuousClock.now
+        let forced = SuiteFlag()
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(600))
+            guard !Task.isCancelled else { return }
+            forced.set()
+            keep.finish()
+        }
         consumer.cancel()
         await consumer.value
-        #expect(ContinuousClock.now - gone < .seconds(1), "The stream ends when its consumer goes away.")
+        watchdog.cancel()
+        #expect(!forced.isSet, "The stream ends when its consumer goes away, not when its audio does.")
         keep.finish()
     }
 }

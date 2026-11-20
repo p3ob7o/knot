@@ -40,8 +40,8 @@ public enum BackgroundRunnerContract {
 
         // A cancelled caller cancels the work, which yields, and the caller sees the yield
         // (finding 73).
-        let sawCancellation = Flag()
-        let started = Flag()
+        let sawCancellation = SuiteFlag()
+        let started = SuiteFlag()
         let caller = Task { await outcome(of: runner, longWork(started: started, sawCancellation: sawCancellation)) }
         await waitUntil(started)
         caller.cancel()
@@ -53,8 +53,8 @@ public enum BackgroundRunnerContract {
 
         // The end of the time cancels the work, and `run` says the time ended (finding 73).
         let endSubject = await make()
-        let sawEnd = Flag()
-        let startedAgain = Flag()
+        let sawEnd = SuiteFlag()
+        let startedAgain = SuiteFlag()
         let endRunner = endSubject.runner
         let running = Task { await outcome(of: endRunner, longWork(started: startedAgain, sawCancellation: sawEnd)) }
         await waitUntil(startedAgain)
@@ -75,12 +75,13 @@ public enum BackgroundRunnerContract {
         }
     }
 
-    /// Work that runs until it is cancelled, and then yields.
-    static func longWork(started: Flag, sawCancellation: Flag) -> BackgroundWork {
+    /// Work that runs until it is cancelled, and then yields. Its wait is ten minutes, so that
+    /// work that saw no cancellation is told apart by what happens, however loaded the machine.
+    static func longWork(started: SuiteFlag, sawCancellation: SuiteFlag) -> BackgroundWork {
         BackgroundWork { _ throws(KnotError) in
             started.set()
             do {
-                try await Task.sleep(for: .seconds(30))
+                try await Task.sleep(for: .seconds(600))
             } catch {
                 sawCancellation.set()
                 throw KnotError.cancelled
@@ -88,13 +89,16 @@ public enum BackgroundRunnerContract {
         }
     }
 
-    static func waitUntil(_ flag: Flag) async {
-        for _ in 0..<2_000 where !flag.isSet { try? await Task.sleep(for: .milliseconds(1)) }
+    /// Waits until the work has begun, with no bound on the wall clock: a loaded machine may
+    /// take its time to start it (finding 84).
+    static func waitUntil(_ flag: SuiteFlag) async {
+        while !flag.isSet { try? await Task.sleep(for: .milliseconds(1)) }
     }
+}
 
-    final class Flag: Sendable {
-        private let value = Mutex(false)
-        var isSet: Bool { value.withLock { $0 } }
-        func set() { value.withLock { $0 = true } }
-    }
+/// A flag the suites set from one task and read from another.
+final class SuiteFlag: Sendable {
+    private let value = Mutex(false)
+    var isSet: Bool { value.withLock { $0 } }
+    func set() { value.withLock { $0 = true } }
 }
