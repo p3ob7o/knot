@@ -75,21 +75,19 @@ for devices in json.load(sys.stdin)["devices"].values():
         echo "worktree-remove: deleted the simulator $simulator"
     done
 
-# 2. Its Mac development store: a folder named by its ID in the development container or
-#    the development app group (docs/architecture.md §7). Only a folder of exactly that
-#    name, inside a container of the development bundle ID, is removed.
-for container in "$HOME/Library/Containers/com.p3ob7o.knot.dev" "$HOME"/Library/Group\ Containers/*com.p3ob7o.knot.dev*; do
-    [[ -d $container ]] || continue
-    find "$container" -maxdepth 7 -type d -name "$id" -print0 2>/dev/null |
-        while IFS= read -r -d '' store; do
-            case $store in
-                */com.p3ob7o.knot.dev/*/"$id" | *com.p3ob7o.knot.dev*/"$id") ;;
-                *) continue ;;
-            esac
-            rm -rf "$store"
-            echo "worktree-remove: removed the development store $store"
-        done
-done
+# 2. Its Mac development store: a folder named by its ID in the development app's own
+#    container (docs/architecture.md §7). Only a folder of exactly that name is removed.
+#    App group containers are not read: macOS guards another app's group container, and
+#    reading one can raise a consent dialog that only the owner can answer. A scan that
+#    cannot read the container does not stop the removal.
+container="$HOME/Library/Containers/com.p3ob7o.knot.dev"
+if [[ -d $container ]]; then
+    while IFS= read -r -d '' store; do
+        [[ $store == "$container"/*/"$id" ]] || continue
+        rm -rf "$store"
+        echo "worktree-remove: removed the development store $store"
+    done < <(find "$container" -maxdepth 7 -type d -name "$id" -print0 2>/dev/null || true)
+fi
 
 # 3. The worktree, with its .build/ and DerivedData inside it.
 if ((FORCE)); then
