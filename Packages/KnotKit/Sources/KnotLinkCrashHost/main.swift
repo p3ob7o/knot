@@ -12,9 +12,12 @@ import KnotLink
 //       synthetic audio, its stop, conversion and send. At <point>, one of the coordinator's
 //       kill points or `converting`, halfway through writing the converted file, it kills
 //       itself with SIGKILL.
-//   KnotLinkCrashHost relaunch --root <folder> --launch <uuid>
+//   KnotLinkCrashHost relaunch --root <folder> --launch <uuid> [--kill-at <point>]
 //       A later launch: the coordinator finishes what the killed one left, and the host
-//       prints one line per outbox entry and per file left in Recording/, then exits.
+//       prints one line per outbox entry and per file left in Recording/, then exits. With
+//       --kill-at it is killed at that point of its own recovery instead.
+//
+// Each conversion prints "converting <capture>" as it starts, so a test counts them.
 //
 // The recorder here takes injected audio and has no microphone. The transport activates at
 // once and delivers nothing, so the outbox keeps every capture.
@@ -75,7 +78,7 @@ case "record":
 case "relaunch":
     let coordinator = WatchCoordinator(
         recorder: recorder, link: link, ids: SystemIDGenerator(), clock: SystemWallClock(), launchID: launchID,
-        device: device)
+        device: device, killPoint: { point in if point.rawValue == killAt { die() } })
     await coordinator.launch()
     await link.resume()
     let outbox = WatchOutbox(locations: locations)
@@ -174,6 +177,7 @@ final class HostRecorder: Recorder {
         guard let working = recording.workingFile, let data = try? layer.read(working) else {
             throw KnotError.audioUnreadable.about(capture: recording.captureID)
         }
+        say("converting \(recording.captureID)")
         let output = Self.converted(data)
         let destination = locations.convertedRecording(recording.captureID)
         if killAt == "converting" {
