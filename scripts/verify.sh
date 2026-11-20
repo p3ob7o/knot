@@ -149,6 +149,36 @@ tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
 
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
+# ui_tests <what> <log> [destination name…] -- <xcodebuild arguments…>
+# Runs one UI test bundle, which the arguments name with -only-testing. xcodebuild's own test
+# limits are on, so a case that hangs fails after its allowance, and an outer limit round the
+# whole call (KNOT_UI_TEST_LIMIT, 20 minutes) ends a run that a system dialog holds. The
+# results are read first: a run that executed no test, a failed case, or a destination with
+# no pass fails (knot_xctest_result). Then xcodebuild's own status: a run whose cases passed
+# and that still exited with an error fails too.
+ui_tests() {
+    local what=$1 log=$2 limit=${KNOT_UI_TEST_LIMIT:-1200} status=0
+    local destinations=()
+    shift 2
+    while [[ $1 != -- ]]; do
+        destinations+=("$1")
+        shift
+    done
+    shift
+    knot_limit "$limit" xcb "$log" "$@" -test-timeouts-enabled YES \
+        -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 300 test ||
+        status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "$what" "$limit"
+        return 1
+    fi
+    knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"} || return 1
+    if ((status != 0)); then
+        echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
+        return 1
+    fi
+}
+
 check() {
     # check <what> <command…>: one line of a proof.
     local what=$1
@@ -519,12 +549,12 @@ step_launch() {
     iphone_name="$("$KNOT_SCRIPTS/sim.sh" list | awk '$1 == "iphone" { print $2 }')"
     ipad_name="$("$KNOT_SCRIPTS/sim.sh" list | awk '$1 == "ipad" { print $2 }')"
     echo "UI tests on $iphone_name and $ipad_name"
-    xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -destination "id=$ipad" \
-        -only-testing:Knot-iOS-UITests test || true
-    knot_xctest_result "$log" "$iphone_name" "$ipad_name"
+    ui_tests "The iOS UI tests" "$log" "$iphone_name" "$ipad_name" -- \
+        -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -destination "id=$ipad" \
+        -only-testing:Knot-iOS-UITests
     echo "UI tests on the Watch"
-    xcb "$watch_log" -scheme Knot-watchOS -configuration Debug -destination "id=$watch" test || true
-    knot_xctest_result "$watch_log"
+    ui_tests "The Watch UI tests" "$watch_log" -- \
+        -scheme Knot-watchOS -configuration Debug -destination "id=$watch" -only-testing:Knot-watchOS-UITests
 
     local ios bundle role udid
     ios="$(products Debug-iphonesimulator)/Knot.app"
@@ -564,12 +594,30 @@ step_launch() {
 # The Mac UI tests. They take over the desktop, so they hold the one exclusive Mac UI slot,
 # and they need Automation Mode, which doctor checks first.
 step_mac_ui() {
-    local log="$KNOT_LOGS/verify-mac-ui-tests.log"
+    local log="$KNOT_LOGS/verify-mac-ui-tests.log" status=0
     : >"$log"
     knot_generate_project
-    xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' test || true
-    # A run that executed no test fails, as one that failed does.
-    knot_xctest_result "$log"
+    ui_tests "The Mac UI tests" "$log" -- \
+        -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' -only-testing:Knot-macOS-UITests ||
+        status=$?
+    # The app and the test runner are started by the system, not by xcodebuild, so a run that
+    # was ended could leave them open on the owner's desktop. Only this worktree's are ended.
+    end_mac_test_hosts
+    return "$status"
+}
+
+# Ends the Mac app and the UI test runner that this worktree built, if either is still open.
+end_mac_test_hosts() {
+    local folder pids
+    folder="$(products Debug)/"
+    pids="$(pgrep -f "$folder" || true)"
+    [[ -z $pids ]] && return 0
+    echo "ending what the run left open from $folder: $(echo "$pids" | tr '\n' ' ')"
+    # shellcheck disable=SC2086
+    kill -TERM $pids 2>/dev/null || true
+    sleep 2
+    # shellcheck disable=SC2086
+    kill -KILL $pids 2>/dev/null || true
 }
 
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in

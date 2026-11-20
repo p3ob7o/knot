@@ -214,30 +214,24 @@ knot_mac_ui_ready() {
     return "$missing"
 }
 
-# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its standard
-# output; its standard error goes to standard error. A start that a system dialog holds, such
-# as a consent prompt, never returns, and nothing but the owner can answer the dialog, so the
-# limit turns that hang into a failure that says so, on standard error. Returns the tool's
-# status, or 1 when the limit ran out.
-#   knot_start_tool <seconds> <tool> [arguments…]
-knot_start_tool() {
-    local seconds=$1 status=0 output errors pid ticks=0 family
+# Runs a command with a time limit, and returns its status. At the limit the command and its
+# descendants, found before any of them ends, get TERM, then KILL two seconds later for those
+# that ignore it; the function then sets KNOT_LIMIT_HIT=1 and returns 124. The command's
+# output goes where the caller sends it: send it to a file, not a pipe that the caller reads,
+# since a process that outlives the kill would hold the pipe open.
+#   knot_limit <seconds> <command…>
+KNOT_LIMIT_HIT=0
+knot_limit() {
+    local seconds=$1 status=0 pid ticks=0 family
     shift
-    # The output goes to files, not pipes: a child that outlives a killed tool would hold a
-    # pipe open, and the caller would wait for it after all. The tool's standard output is
-    # what the caller compares; its standard error, and the message at the limit, go to
-    # standard error, which a step sends to its log.
-    output="$(mktemp)"
-    errors="$(mktemp)"
-    "$@" >"$output" 2>"$errors" &
+    KNOT_LIMIT_HIT=0
+    "$@" &
     pid=$!
     while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
         sleep 0.1
         ticks=$((ticks + 1))
     done
     if kill -0 "$pid" 2>/dev/null; then
-        # The tool and its descendants, found before any of them ends, get TERM, then KILL
-        # after two seconds for those that ignore it.
         family="$pid $(knot_descendants "$pid")"
         # shellcheck disable=SC2086
         kill -TERM $family 2>/dev/null || true
@@ -249,16 +243,10 @@ knot_start_tool() {
         # shellcheck disable=SC2086
         kill -KILL $family 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
-        cat "$output"
-        cat "$errors" >&2
-        rm -f "$output" "$errors"
-        echo "$(basename "$1") did not answer within ${seconds}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen." >&2
-        return 1
+        KNOT_LIMIT_HIT=1
+        return 124
     fi
     wait "$pid" || status=$?
-    cat "$output"
-    cat "$errors" >&2
-    rm -f "$output" "$errors"
     return "$status"
 }
 
@@ -269,6 +257,36 @@ knot_descendants() {
         echo "$child"
         knot_descendants "$child"
     done
+}
+
+# What a step says when a run outlives its limit: on this Mac, a system dialog that only the
+# owner can answer is the likely cause, and no agent answers it.
+knot_dialog_message() {
+    echo "$1 did not end within ${2}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+}
+
+# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its standard
+# output; its standard error goes to standard error. A start that a system dialog holds, such
+# as a consent prompt, never returns, and nothing but the owner can answer the dialog, so the
+# limit turns that hang into a failure that says so, on standard error. Returns the tool's
+# status, or 1 when the limit ran out.
+#   knot_start_tool <seconds> <tool> [arguments…]
+knot_start_tool() {
+    local seconds=$1 status=0 output errors
+    shift
+    # The tool's standard output is what the caller compares; its standard error, and the
+    # message at the limit, go to standard error, which a step sends to its log.
+    output="$(mktemp)"
+    errors="$(mktemp)"
+    knot_limit "$seconds" "$@" >"$output" 2>"$errors" || status=$?
+    cat "$output"
+    cat "$errors" >&2
+    rm -f "$output" "$errors"
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "$(basename "$1")" "$seconds" >&2
+        return 1
+    fi
+    return "$status"
 }
 
 # Takes the signing team's ID out of a build log, by pattern: Xcode writes the team's prefix
