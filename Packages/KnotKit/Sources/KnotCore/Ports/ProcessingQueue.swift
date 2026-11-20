@@ -6,9 +6,17 @@ import Foundation
 /// v1's tracer runs transcribe and clean jobs; recognition comes with `InkRecogniser`. The
 /// queue owns no background time: each drain takes a runner and a progress sink from its
 /// caller, who holds the time (`BackgroundRunner`).
+///
+/// The store writes a stored recording's transcribe job; the clean job is the queue's to
+/// write. It writes it when the transcription's last run is saved, and `resume()` writes it
+/// at launch for a transcribed recording that lacks one, so that a death between the two
+/// leaves no transcript without its cleanup. Writing it twice changes nothing: the queue
+/// looks for the segment's clean job first.
 public protocol ProcessingQueue: Sendable {
     /// Finds the jobs marked running at launch, which died with the process, and counts the
-    /// death (`JobMachine`). Called once, at launch.
+    /// death (`JobMachine`). It also writes the clean job of each transcribed recording that
+    /// lacks one, which a death after the last run's save and before the clean job's write
+    /// leaves behind; one that has its clean job is left as it is. Called once, at launch.
     func resume() async throws(KnotError)
 
     /// Wakes the queue for `segment`, whose job the store wrote: the store writes a stored
