@@ -123,6 +123,9 @@ public actor OutboxLink {
         }
         log.capture(capture, "link_admitted", .flag("replaced", failedBefore))
         unreadable.remove(capture)
+        // A new send replaces whatever was sent before: no end of an attempt given up before it
+        // speaks for the recording it admitted.
+        lostEnds[capture] = nil
         held[capture] = nil
         // Once this launch has adopted what the session holds, a new capture is queued at
         // once. Before that it waits for the resume, which adopts first.

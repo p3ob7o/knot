@@ -332,6 +332,34 @@ import Testing
         #expect(harness.outstanding(capture).isEmpty, "The transfer queued in A's place is cancelled.")
     }
 
+    /// The outbox's recording goes while a transfer is under way, a resume gives that attempt up
+    /// and the capture shows as failed, and a new send replaces the recording. The old transfer's
+    /// late "file missing" then changes nothing: the send forgot every attempt given up before it.
+    @Test func aLateFailureOfTheOldRecordingDoesNotFailTheSendThatReplacedIt() async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let (manifest, url) = try harness.convertedRecording()
+        let capture = manifest.captureID
+        try await link.send(manifest, file: url)
+        await harness.settle(link)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))  // A, held
+        try FileManager.default.removeItem(at: harness.outbox.recordingURL(capture))
+        await link.resume()
+        await harness.settle(link)
+        try #require(await link.states()[capture] == .failed)
+
+        try harness.files.place(Data("synthetic replacement".utf8), at: harness.locations.convertedRecording(capture))
+        try await link.send(manifest, file: harness.locations.convertedRecording(capture))
+        await harness.settle(link)
+        let replacement = try #require(harness.outstanding(capture).first, "The replacement is queued.")
+
+        harness.system.releaseHeld()
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .queued(attempt: replacement.attempt))
+        #expect(harness.outstanding(capture) == [replacement], "The replacement's transfer stands.")
+    }
+
     /// An end of a transfer that a resume took for lost, without a failure for good, changes
     /// nothing: the capture's new transfer stands.
     @Test(arguments: [LinkFailure?.none, .deliveryFailed, .counterpartFull])
