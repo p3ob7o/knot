@@ -282,6 +282,25 @@ else
     fail "the gate with KNOT_LOCAL_CONFIG set: status $status, earlier line $(ls "$gate_tree/.build/logs"), and: $output"
 fi
 
+# The Mac UI readiness check reads the second line of automationmodetool, which says whether
+# turning Automation Mode on needs authentication, and the whole phrase "currently enabled"
+# of DevToolsSecurity, since "disabled" holds "enabled". The samples are the two tools'
+# answers on this Mac before and after the owner's commands.
+ready_off=$'Automation Mode is disabled.\nThis device DOES NOT REQUIRE user authentication to enable Automation Mode.'
+ready_needs=$'Automation Mode is disabled.\nThis device requires user authentication to enable Automation Mode.'
+developer_on="Developer mode is currently enabled."
+developer_off="Developer mode is currently disabled."
+cases=0
+knot_mac_ui_ready "$ready_off" "$developer_on" >/dev/null && cases=$((cases + 1))
+knot_mac_ui_ready "$ready_needs" "$developer_on" >/dev/null || cases=$((cases + 1))
+knot_mac_ui_ready "$ready_off" "$developer_off" >/dev/null || cases=$((cases + 1))
+knot_mac_ui_ready "$ready_needs" "$developer_off" >/dev/null || cases=$((cases + 1))
+if ((cases == 4)); then
+    pass "the Mac UI check reads the authentication line and developer mode, not the mode of the moment"
+else
+    fail "the Mac UI check judged $cases of 4 samples right"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

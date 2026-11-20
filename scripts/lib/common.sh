@@ -190,3 +190,26 @@ knot_generate_project() {
     knot_write_worktree_config
     (cd "$KNOT_ROOT" && xcodegen generate --spec project.yml --quiet)
 }
+
+# Whether this Mac can run Mac UI tests, from the output of `automationmodetool` (no
+# arguments) and of `DevToolsSecurity -status`. Prints what is missing, one item a line, and
+# returns 1 when anything is.
+#
+# `automationmodetool` prints two lines (man automationmodetool): whether Automation Mode is
+# on now, and whether turning it on needs authentication. The first says "disabled" whenever
+# no UI test runs, because a test run turns it on and off. What matters is the second:
+# "This device DOES NOT REQUIRE user authentication to enable Automation Mode". Developer
+# mode must read "currently enabled"; "disabled" holds the word "enabled", so the whole
+# phrase is matched.
+knot_mac_ui_ready() {
+    local automation=$1 developer=$2 missing=0
+    if ! printf '%s\n' "$automation" | grep -i -e 'does not require user authentication to enable automation mode' >/dev/null; then
+        echo "enabling Automation Mode needs authentication: sudo automationmodetool enable-automationmode-without-authentication"
+        missing=1
+    fi
+    if ! printf '%s\n' "$developer" | grep -i -e 'developer mode is currently enabled' >/dev/null; then
+        echo "developer mode is off: sudo DevToolsSecurity -enable"
+        missing=1
+    fi
+    return "$missing"
+}
