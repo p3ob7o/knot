@@ -951,7 +951,7 @@
                     switch row.outcome {
                     case .open, .failed:
                         if next.segments[first] == nil {
-                            receipt.segmentIDs = [try remake(row, in: receipt.noteID, into: &next)]
+                            receipt.segmentIDs = [try remake(row, in: &receipt.noteID, into: &next)]
                         }
                         next.segments[first]?.endedAt = endingAt ?? now
                         next.segments[first]?.state = row.kind == .voice ? .voice(.recorded) : .ink(.recognising)
@@ -1208,7 +1208,15 @@
         }
 
         /// The first segment of a capture whose segments were removed, made again in its note.
-        private func remake(_ row: Capture, in note: NoteID, into next: inout State) throws(KnotError) -> SegmentID {
+        private func remake(_ row: Capture, in note: inout NoteID, into next: inout State) throws(KnotError)
+            -> SegmentID
+        {
+            if next.notes[note] == nil {
+                // The capture's note is gone: stored content takes a new one (finding 39).
+                note = ids.make()
+                next.notes[note] = Note(
+                    id: note, createdAt: row.startedAt, updatedAt: clock.now(), lastCaptureEndedAt: row.startedAt)
+            }
             let voice = row.kind == .voice
             let segment = try Segment(
                 id: SegmentID(row.id), noteID: note, kind: row.kind, origin: row.origin.source,

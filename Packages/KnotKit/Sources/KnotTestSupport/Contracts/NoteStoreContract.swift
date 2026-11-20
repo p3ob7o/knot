@@ -63,6 +63,7 @@ public enum NoteStoreContract {
         Check(name: "ingest", run: ingestReconcilesEachStateOfTheRow),
         Check(name: "shown-note", run: aCaptureGoesToTheNoteItsSurfaceShowed),
         Check(name: "named-gone", run: anItemNamingANoteThatCannotTakeItStartsANewNote),
+        Check(name: "note-gone", run: storedContentAlwaysHasANote),
         Check(name: "end-outcomes", run: endWithEachOutcome),
         Check(name: "failed", run: aFailedCaptureNeedsYouAndARetryStoresIt),
         Check(name: "recovery", run: recoveryOfTheThreeKinds),
@@ -590,6 +591,26 @@ public enum NoteStoreContract {
         #expect(result.receipt.noteID != gone.noteID && !result.receipt.joinedExistingNote, "It starts a new note.")
         #expect(try await h.text(SegmentID(item.id)) == "fallback")
         #expect(try await h.row(item.id)?.placement == .named(gone.noteID), "The row records what was asked.")
+    }
+
+    /// A save that stores content leaves it in a note that can be read, even when the capture's
+    /// note is gone: it then takes a new one (finding 39).
+    public static func storedContentAlwaysHasANote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let blank = h.typedDraft(" ", at: 0)
+        _ = try await h.store.record(blank)
+        _ = try await h.store.end(h.endTyped(blank.id, "", at: 1, revision: 2))
+        h.clock.advance(by: 31 * 86_400)
+        _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+
+        var text = blank
+        text.endedAt = h.at(1)
+        text.revision = 3
+        text.body = .text("only copy")
+        let saved = try await h.store.ingest(text)
+        #expect(saved.applied)
+        let note = try await h.store.note(saved.receipt.noteID)
+        #expect(note?.liveSegments.map(\.text) == ["only copy"], "The content is in a note that can be read.")
     }
 
     /// `end` with each outcome sets the segment's state: a voice file, a drawing, empty text,
