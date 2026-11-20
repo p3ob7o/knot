@@ -81,3 +81,53 @@ import Testing
         #expect(markdown.hasSuffix("\n*Recording: not on this device, not exported.*\n\nSaid.\n"))
     }
 }
+
+/// Finding 9: one segment's text must not change how the rest of the note reads.
+@Suite struct MarkdownContainmentTests {
+    /// A note of one typed segment with `text`, then a recording that is not here.
+    static func render(_ text: String) throws -> (markdown: String, plain: String) {
+        let note = Build.note(fixedID(0x80), at: t0)
+        let typed = try Build.typed(fixedID(0x81), in: note.id, from: t0, text: text, origin: .cli)
+        var voice = try Build.voice(
+            fixedID(0x82), in: note.id, from: t0.addingTimeInterval(5), transcript: "After.", device: thisDevice)
+        voice.duration = .seconds(3)
+        let both = record(note, [typed, voice])
+        return (
+            NoteMarkdown.render(both, files: [voice.id: .recordingNotHere(duration: .seconds(3))]),
+            NoteMarkdown.plainText(both)
+        )
+    }
+
+    @Test(arguments: [
+        ("```swift\nlet x = 1", "```swift\nlet x = 1\n```"),
+        ("~~~~\ncode\n~~~", "~~~~\ncode\n~~~\n~~~~"),
+        ("````\ncode\n```", "````\ncode\n```\n````"),
+        ("  ```\nindented by two", "  ```\nindented by two\n```"),
+        ("```\nclosed\n```", "```\nclosed\n```"),
+        ("```\nclosed by a longer one\n`````", "```\nclosed by a longer one\n`````"),
+        ("    ```\nan indented code block, not a fence", "    ```\nan indented code block, not a fence"),
+        ("``` a`b\nnot a fence: a backtick in its info", "``` a`b\nnot a fence: a backtick in its info"),
+        ("```\nfirst\n```\n\n~~~\nsecond", "```\nfirst\n```\n\n~~~\nsecond\n~~~"),
+    ])
+    func aFenceLeftOpenIsClosedInTheMarkdown(text: String, expected: String) throws {
+        let (markdown, plain) = try Self.render(text)
+        #expect(markdown.contains("\n\(expected)\n\n*Recording, 0:03: not on this device, not exported.*\n\nAfter.\n"))
+        #expect(plain == "\(text)\n\nAfter.\n")
+    }
+
+    @Test(arguments: [
+        ("Issue #", "# Issue \\#"),
+        ("###", "# \\###"),
+        ("Tag # #", "# Tag # \\#"),
+        ("Ends with ##  ", "# Ends with \\##"),
+        ("C#", "# C#"),
+        ("#hashtag", "# #hashtag"),
+    ])
+    func aTitleKeepsItsClosingHashes(title: String, expected: String) throws {
+        let note = try Note(id: fixedID(0x83), createdAt: t0, title: title, titleOrigin: .user)
+        let line = try Build.typed(fixedID(0x84), in: note.id, from: t0, text: "Body.", origin: .cli)
+        #expect(NoteMarkdown.render(record(note, [line])).contains("\n\n\(expected)\n\nBody.\n"))
+        #expect(
+            NoteMarkdown.plainText(record(note, [line])).hasPrefix("\(title.trimmingCharacters(in: .whitespaces))\n\n"))
+    }
+}

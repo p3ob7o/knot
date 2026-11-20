@@ -83,7 +83,9 @@ public enum SegmentFileLine: Hashable, Sendable {
 /// segment that leaves the note (`ExportedSegments`) is a paragraph of its own: the line of
 /// its recording or drawing when the caller gives one, then its text as it is, since a
 /// segment's text is already lightly styled Markdown (§7). Segments are separated by spacing
-/// alone, as in the note.
+/// alone, as in the note. One segment's text cannot change how the rest reads: a code fence it
+/// leaves open is closed after it, and a title's closing `#` characters are escaped, so the
+/// heading keeps them.
 public enum NoteMarkdown {
     /// The note as Markdown. `files` holds the line of each segment whose recording or drawing
     /// the caller exported or left out; a segment it does not name gets no such line, as when a
@@ -98,10 +100,10 @@ public enum NoteMarkdown {
             "---",
         ]
         var blocks: [String] = []
-        if let heading = heading(note.title) { blocks.append("# \(heading)") }
+        if let heading = heading(note.title) { blocks.append("# \(escapingClosingHashes(heading))") }
         for segment in ExportedSegments.of(record) {
             if let line = files[segment.id] { blocks.append(fileLine(line)) }
-            if let text = body(segment.text) { blocks.append(text) }
+            if let text = body(segment.text) { blocks.append(closingOpenFence(text)) }
         }
         if !blocks.isEmpty {
             lines.append("")
@@ -134,6 +136,44 @@ public enum NoteMarkdown {
         let line = title.split(whereSeparator: \.isNewline).joined(separator: " ")
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// A heading's text with a closing sequence escaped: a run of `#` at its end that a space
+    /// opens, or that is the whole text, would be read as the end of the heading and dropped.
+    static func escapingClosingHashes(_ heading: String) -> String {
+        let hashes = heading.reversed().prefix { $0 == "#" }.count
+        guard hashes > 0 else { return heading }
+        let before = heading.dropLast(hashes)
+        guard before.isEmpty || before.last == " " || before.last == "\t" else { return heading }
+        return before + "\\" + String(repeating: "#", count: hashes)
+    }
+
+    /// A segment's text with a code fence it opened and never closed closed after it, with the
+    /// fence's own character and length, so that it does not turn the rest of the note into
+    /// code. The fences are those of CommonMark: three or more backticks or tildes, indented by
+    /// at most three spaces, with no backtick after a backtick fence; a fence closes with the
+    /// same character, at least as many, and nothing after it but spaces. The plain text is
+    /// left as it is.
+    static func closingOpenFence(_ text: String) -> String {
+        var open: (character: Character, length: Int)?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let indent = line.prefix { $0 == " " }.count
+            guard indent <= 3 else { continue }
+            let rest = line.dropFirst(indent)
+            guard let mark = rest.first, mark == "`" || mark == "~" else { continue }
+            let length = rest.prefix { $0 == mark }.count
+            guard length >= 3 else { continue }
+            let after = rest.dropFirst(length)
+            if let fence = open {
+                if mark == fence.character, length >= fence.length, after.allSatisfy({ $0 == " " || $0 == "\t" }) {
+                    open = nil
+                }
+            } else if !(mark == "`" && after.contains("`")) {
+                open = (mark, length)
+            }
+        }
+        guard let fence = open else { return text }
+        return text + "\n" + String(repeating: fence.character, count: fence.length)
     }
 
     /// A segment's text as a paragraph: Windows and old Mac line endings become line feeds,
