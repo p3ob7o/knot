@@ -592,6 +592,10 @@
                 job.kind == .transcribe
             else { throw KnotError.notFound.with(.init(segmentID: segmentID, jobID: jobID)) }
             try refuseIfOpen(segmentID)
+            // A run that does not move on would add its words at every retry (finding 68).
+            if let resumeAt = run.resumeAt, resumeAt <= run.startsAt {
+                throw KnotError.illegalTransition.with(.init(segmentID: segmentID, jobID: jobID))
+            }
             // Applied only at the stored resume point, so a run applied twice is applied once.
             guard job.state != .done, run.startsAt == (job.resumeAt ?? .zero) else { return read(segment) }
             var next = state

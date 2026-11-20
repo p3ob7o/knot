@@ -199,7 +199,8 @@ public protocol NoteStore: Sendable {
     /// transcript, which only grows, its provenance with the first run, the text where it is
     /// still the raw transcript, and its resume time to `job`, the segment's own transcribe
     /// job. Idempotent: a run is applied only when it starts at the job's stored resume point,
-    /// so the same run applied twice adds its words once.
+    /// so the same run applied twice adds its words once. A run whose resume point is not after
+    /// its start is refused with `illegal_transition`, and nothing is written.
     func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
         -> SegmentRead
 

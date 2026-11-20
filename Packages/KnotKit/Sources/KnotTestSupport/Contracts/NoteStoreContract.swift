@@ -106,6 +106,7 @@ public enum NoteStoreContract {
         Check(name: "digest-63", run: aDigestOf63DigitsIsRefused),
         Check(name: "remove-recording-change", run: removingARecordingIsAChange),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
+        Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2140,6 +2141,27 @@ public enum NoteStoreContract {
         item.revision = 2
         let result = try await h.store.ingest(item)
         #expect(!result.applied && result.storedRevision == 3)
+    }
+
+    /// A run whose resume point is not after its start is refused with `illegal_transition`,
+    /// and nothing is written: applied, it would add its words at every retry (finding 68).
+    public static func aRunThatDoesNotMoveOnIsRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = receipt.segmentIDs[0]
+        let job = JobID.transcribe(of: segment)
+        for (start, resume) in [(Duration.zero, Duration.zero), (.seconds(5), .seconds(2))] {
+            if start != .zero {
+                _ = try await h.store.appendTranscript(
+                    h.run("hello", from: .zero, resumeAt: .seconds(5)), to: segment, job: job)
+            }
+            let before = try await h.store.segment(segment)?.segment.rawTranscript
+            await refuses(KnotError.illegalTransition, "resume \(resume) after a start at \(start)") {
+                try await h.store.appendTranscript(h.run("again", from: start, resumeAt: resume), to: segment, job: job)
+            }
+            #expect(try await h.store.segment(segment)?.segment.rawTranscript == before, "Nothing is written.")
+            #expect(try await h.store.jobs(for: segment).first?.resumeAt == (start == .zero ? nil : start))
+        }
     }
 
     // MARK: Reading
