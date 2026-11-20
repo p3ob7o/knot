@@ -332,7 +332,7 @@ public actor WatchCoordinator {
         manifest.duration = duration
         manifest.endedAt = started.startedAt.addingTimeInterval(Self.seconds(duration))
         do {
-            _ = try await link.send(manifest, file: file, afterRecording: { killPoint(.outboxRecording) })
+            try await link.send(manifest, file: file, afterRecording: { killPoint(.outboxRecording) })
         } catch {
             let error = error.about(capture: capture)
             log.failure(error, "watch_admission_failed")

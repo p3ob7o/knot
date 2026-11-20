@@ -60,14 +60,17 @@ public struct WatchOutbox: Sendable {
     /// as after a kill between the two steps, the manifest is placed for that recording. A
     /// recording that is nowhere fails with `write_failed` and `ENOENT`, and nothing is placed.
     ///
-    /// - Parameter afterRecording: runs between the two steps. Kill tests stop the process there.
+    /// - Parameters:
+    ///   - replacing: true to replace an entry that is already whole, as a new send of a
+    ///     capture that had failed does.
+    ///   - afterRecording: runs between the two steps. Kill tests stop the process there.
     @discardableResult
     public func admit(
-        _ manifest: CaptureManifest, recording: URL, afterRecording: () -> Void = {}
+        _ manifest: CaptureManifest, recording: URL, replacing: Bool = false, afterRecording: () -> Void = {}
     ) throws(KnotError) -> CaptureManifest {
         let capture = manifest.captureID
         let destination = recordingURL(capture)
-        if let entry = entry(capture), entry.hasRecording, let existing = entry.manifest {
+        if !replacing, let entry = entry(capture), entry.hasRecording, let existing = entry.manifest {
             return existing
         }
         if recording.standardizedFileURL != destination.standardizedFileURL, layer.entryKind(recording) == .file {
@@ -82,6 +85,11 @@ public struct WatchOutbox: Sendable {
         admitted.payloadSHA256 = digest.sha256
         try files.place(try admitted.encoded(), at: manifestURL(capture))
         return admitted
+    }
+
+    /// True when `url` is a file.
+    public func isFile(_ url: URL) -> Bool {
+        layer.entryKind(url) == .file
     }
 
     /// True when the outbox holds the capture's recording, with or without its manifest.

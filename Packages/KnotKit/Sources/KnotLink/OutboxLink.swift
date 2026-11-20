@@ -53,6 +53,9 @@ public actor OutboxLink {
     private var session: LinkSessionState = .inactive
     private var hasReconciled = false
     private var queued: [CaptureID: (attempt: LinkAttempt, at: Date)] = [:]
+    /// For each capture, the last attempt that a resume found gone from the session before its
+    /// end arrived.
+    private var lostEnds: [CaptureID: LinkAttempt] = [:]
     /// This launch's own ID, which every attempt it queues carries, and how many it has queued.
     private let launch = UUID()
     private var queuedInLaunch = 0
@@ -71,6 +74,7 @@ public actor OutboxLink {
     private var handledEvents = 0
     private let acknowledgementSubscribers = Subscribers<CaptureID>()
     private let changeSubscribers = Subscribers<Void>()
+    private let countPublisher: CountPublisher
 
     public init(
         outbox: WatchOutbox, transport: any LinkTransport, clock: any WallClock,
@@ -81,33 +85,43 @@ public actor OutboxLink {
         self.clock = clock
         self.stallLimit = stallLimit
         self.log = log
+        // Before this launch has done anything, what the outbox holds is the count.
+        let entries = (try? outbox.entries()) ?? []
+        let failed = entries.filter { !$0.isSendable }.count
+        self.countPublisher = CountPublisher(WatchLinkCounts(waiting: entries.count - failed, failed: failed))
     }
 
     // MARK: Sending
 
-    /// Admits a finished recording to the outbox and queues it. Returns the manifest as placed
-    /// once the capture is in the outbox, which says nothing about delivery, and without
-    /// waiting for the session: before the session's activation the capture is queued by the
-    /// resume that follows it. A new capture is a trigger, so every capture that waits is
-    /// queued with it.
-    @discardableResult
-    public func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError) -> CaptureManifest {
+    /// Admits a finished recording to the outbox and queues it (`WatchLink.send`). Returns once
+    /// the capture is in the outbox, which says nothing about delivery, and without waiting for
+    /// the session: before the session's activation the capture is queued by the resume that
+    /// follows it. A new capture is a trigger, so every capture that waits is queued with it.
+    ///
+    /// A file that is neither at `file` nor already in the outbox fails with
+    /// `outbox_file_missing`, and nothing is queued. A send of a capture that had failed
+    /// replaces its entry with this file, and the capture waits again. A send of a capture
+    /// whose transfer is still outstanding queues no second one.
+    public func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError) {
         try await send(manifest, file: file, afterRecording: {})
     }
 
-    func send(_ manifest: CaptureManifest, file: URL, afterRecording: @Sendable () -> Void) async throws(KnotError)
-        -> CaptureManifest
-    {
-        let admitted: CaptureManifest
+    func send(_ manifest: CaptureManifest, file: URL, afterRecording: @Sendable () -> Void) async throws(KnotError) {
+        let capture = manifest.captureID
+        guard outbox.isFile(file) || outbox.holdsRecording(capture) else {
+            let error = KnotError.outboxFileMissing.about(capture: capture)
+            log.failure(error, "link_send_file_missing")
+            throw error
+        }
+        let failedBefore = unreadable.contains(capture) || (outbox.entry(capture).map { !$0.isSendable } ?? false)
         do {
-            admitted = try outbox.admit(manifest, recording: file, afterRecording: afterRecording)
+            try outbox.admit(manifest, recording: file, replacing: failedBefore, afterRecording: afterRecording)
         } catch {
             let error = error.about(capture: manifest.captureID)
             log.failure(error, "link_admit_failed")
             throw error
         }
-        let capture = manifest.captureID
-        log.capture(capture, "link_admitted")
+        log.capture(capture, "link_admitted", .flag("replaced", failedBefore))
         unreadable.remove(capture)
         held[capture] = nil
         // Once this launch has adopted what the session holds, a new capture is queued at
@@ -119,7 +133,6 @@ public actor OutboxLink {
         }
         changed()
         trigger()
-        return admitted
     }
 
     /// Runs `resume()` without waiting for it, so that a caller never waits for the session.
@@ -156,20 +169,36 @@ public actor OutboxLink {
         reconcile()
     }
 
-    /// The Watch's background task: resumes, then runs until the session has no content
-    /// pending, or until `limit` has passed. True when nothing was left pending.
+    /// `WatchLink.resume(_:)`: every trigger alike.
+    public func resume(_ trigger: WatchLinkTrigger) async {
+        log.log(.debug, "link_resume", .flag("launch", trigger == .launch))
+        await resume()
+    }
+
+    /// The Watch's background task: resumes, then runs until nothing is pending, or until
+    /// `limit` has passed. True when nothing was left pending. Pending is content the session
+    /// still holds for this app, or a capture of the outbox that waits for its acknowledgement;
+    /// a failed one waits for nothing.
     public func runBackgroundTask(limit: Duration) async -> Bool {
         let deadline = ContinuousClock.now + limit
         trigger()
         while true {
-            if hasReconciled, !transport.state.hasContentPending { return true }
+            if isSettled() { return true }
             let left = deadline - ContinuousClock.now
             if left <= .zero { return false }
             do {
                 try await Task.sleep(for: min(left, .milliseconds(50)))
             } catch {
-                return hasReconciled && !transport.state.hasContentPending
+                return isSettled()
             }
+        }
+    }
+
+    private func isSettled() -> Bool {
+        guard hasReconciled, !transport.state.hasContentPending else { return false }
+        let entries = (try? outbox.entries()) ?? []
+        return !entries.contains {
+            $0.isSendable && !unreadable.contains($0.captureID) && !acknowledged.contains($0.captureID)
         }
     }
 
@@ -195,6 +224,13 @@ public actor OutboxLink {
     /// consumer goes away, its subscription ends.
     public nonisolated func acknowledgements() -> AsyncStream<CaptureID> {
         acknowledgementSubscribers.stream()
+    }
+
+    /// `WatchLink.counts()`: the current counts, then every change, each once and in order. A
+    /// subscriber is given the current counts under the same lock that records it, so one who
+    /// joins while changes run never sees a count go back.
+    public nonisolated func counts() -> AsyncStream<WatchLinkCounts> {
+        countPublisher.stream()
     }
 
     /// Yields each time what the outbox holds, or where a capture stands, may have changed.
@@ -312,10 +348,25 @@ public actor OutboxLink {
         // An end of an earlier attempt, or of a transfer this launch never knew, changes
         // nothing: the capture is queued again on the next trigger if it needs to be.
         guard queued[capture]?.attempt == attempt else {
+            if lostEnds[capture] == attempt, failure?.handling == .failure {
+                // The end of a transfer that a resume took for lost, after the capture was
+                // queued again: a file missing for good is no less missing for that. The
+                // transfer queued in its place is cancelled, and the capture fails.
+                lostEnds[capture] = nil
+                if let current = queued[capture] {
+                    transport.cancelFile(captureID: capture, attempt: current.attempt)
+                    queued[capture] = nil
+                }
+                log.capture(capture, "link_transfer_failed_late", .number("attempt", attempt.number))
+                unreadable.insert(capture)
+                changed()
+                return
+            }
             log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
             return
         }
         queued[capture] = nil
+        lostEnds[capture] = nil
         defer { changed() }
         guard let failure else {
             // Not a delivery: the capture waits for its acknowledgement.
@@ -390,8 +441,11 @@ public actor OutboxLink {
             // In the order they were queued: a capture's latest transfer wins.
             outstanding[file.captureID] = file.attempt
         }
-        for capture in queued.keys where outstanding[capture] == nil {
+        for (capture, entry) in queued where outstanding[capture] == nil {
             // Its end was lost, or has not arrived yet: it waits, and is queued again below.
+            // Its attempt is kept, so that an end that was only late still counts if it
+            // reports a file missing for good.
+            lostEnds[capture] = entry.attempt
             queued[capture] = nil
         }
         for (capture, attempt) in outstanding {
@@ -439,7 +493,48 @@ public actor OutboxLink {
     }
 
     private func changed() {
+        let counts = currentCounts()
+        countPublisher.publish(WatchLinkCounts(waiting: counts.waiting, failed: counts.failed))
         changeSubscribers.yield(())
+    }
+}
+
+extension OutboxLink: WatchLink {}
+
+/// The counts and their subscribers, under one lock: a subscriber is given the current counts
+/// as it is recorded, and every later change after it, each once and in order.
+final class CountPublisher: Sendable {
+    private struct State {
+        var current: WatchLinkCounts
+        var subscribers: [UUID: AsyncStream<WatchLinkCounts>.Continuation] = [:]
+    }
+
+    private let state: Mutex<State>
+
+    init(_ initial: WatchLinkCounts) {
+        state = Mutex(State(current: initial))
+    }
+
+    func stream() -> AsyncStream<WatchLinkCounts> {
+        let (stream, continuation) = AsyncStream.makeStream(of: WatchLinkCounts.self)
+        let id = UUID()
+        state.withLock { state in
+            state.subscribers[id] = continuation
+            continuation.yield(state.current)
+        }
+        continuation.onTermination = { [weak self] _ in
+            _ = self?.state.withLock { $0.subscribers.removeValue(forKey: id) }
+        }
+        return stream
+    }
+
+    /// Publishes `counts` when they differ from the current ones.
+    func publish(_ counts: WatchLinkCounts) {
+        state.withLock { state in
+            guard counts != state.current else { return }
+            state.current = counts
+            for continuation in state.subscribers.values { continuation.yield(counts) }
+        }
     }
 }
 

@@ -288,6 +288,46 @@ import Testing
         #expect(harness.outstanding(capture).isEmpty, "A capture with no file is never queued again.")
     }
 
+    /// A resume can run between a transfer's end and the link hearing of it, take the end for
+    /// lost and queue the capture again. When the end then arrives and reports a file missing
+    /// for good, the capture still fails, and the transfer queued in its place is cancelled.
+    @Test func aFailureForGoodThatArrivesAfterAResumeStillFailsTheCapture() async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))
+        await link.resume()
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1, "The resume took the end for lost and queued again.")
+
+        harness.system.releaseHeld()
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .failed)
+        #expect(harness.outstanding(capture).isEmpty, "The transfer queued in its place is cancelled.")
+    }
+
+    /// An end of a transfer that a resume took for lost, without a failure for good, changes
+    /// nothing: the capture's new transfer stands.
+    @Test(arguments: [LinkFailure?.none, .deliveryFailed, .counterpartFull])
+    func aPlainLateEndLeavesTheNewTransferAlone(_ failure: LinkFailure?) async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        harness.system.finish(capture, as: failure.map { .fails($0) } ?? .neverArrives)
+        await link.resume()
+        await harness.settle(link)
+        let current = try #require(harness.outstanding(capture).first)
+
+        harness.system.releaseHeld()
+        await harness.settle(link)
+        #expect(harness.outstanding(capture) == [current])
+        #expect(await link.states()[capture] == .queued(attempt: current.attempt))
+    }
+
     @Test func theTransportsReportOfAnUnreadableFileFailsTheCapture() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
