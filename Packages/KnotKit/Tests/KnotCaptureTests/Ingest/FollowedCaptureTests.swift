@@ -223,4 +223,87 @@ import Testing
         #expect(outcomes[two] == .stored(revision: 1))
         #expect(r.inboxFiles().isEmpty)
     }
+
+    // MARK: Re-check D's sequences that held
+
+    /// The re-check's D5. A chain of three on the `Inbox/` path, each start ending the one
+    /// before: one note.
+    @Test func chainOfThreeOnTheInboxPathIsOneNote() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "first"))
+        r.clock.advance(by: 1)
+        let b = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "second"))
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        r.clock.advance(by: 1)
+        let c = try await r.beginRecording(CaptureRequest(kind: .voice, surface: .control))
+        _ = try await r.engine.end(c.captureID)
+        let ib = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(b.captureID)))
+        let ic = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(c.captureID)))
+        #expect(ib.followsCaptureID == a.captureID)
+        #expect(ic.followsCaptureID == b.captureID)
+        _ = await r.ingest.ingestAll()
+        var notes: Set<NoteID> = []
+        for capture in [a, b, c] { notes.insert(try await Self.note(r, capture.captureID)) }
+        #expect(notes.count == 1)
+        #expect(r.inboxFiles().isEmpty)
+    }
+
+    /// The re-check's D6. The same handoff ingested by two runs one after the other, and again
+    /// at the next launch: each capture is stored once, in one note.
+    @Test func handoffIngestedTwiceIsStoredOnce() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        _ = try await r.engine.end(b.captureID)
+        _ = await r.ingest.ingestAll()
+        let again = await r.ingest.ingestAll()
+        #expect(again.isEmpty)
+        let next = r.relaunch()
+        _ = try await next.recovery.run(ingest: next.ingest)
+        #expect(try await Self.note(r, a.captureID) == Self.note(r, b.captureID))
+        #expect(try await r.stream().notes.count == 1)
+        #expect(r.inboxFiles().isEmpty)
+    }
+
+    /// The re-check's D8: the window of request 4. The app dies after the recorder wrote the
+    /// following recording's manifest and before the engine marked it, on the `Inbox/` path:
+    /// the typed capture's item is still open, and the recording's manifest names nothing.
+    /// Nothing is lost or made twice; with the window on, the window keeps the two together, and
+    /// with it off they are two notes. This changes with the contract pull request that puts
+    /// the link on `RecordingRequest`.
+    @Test(arguments: [true, false]) func deathBeforeTheMarkIsPlacedByTheWindow(windowOn: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        if !windowOn { await r.notes.setWindow(.off) }
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        let openItem = try r.layer.read(r.locations.inboxManifest(a.captureID))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        // Back to the files as the death left them: the typed item not yet ended, the
+        // recording's manifest not yet marked.
+        let files = r.locations.durableFiles(layer: r.layer)
+        try files.place(openItem, at: r.locations.inboxManifest(a.captureID))
+        var unmarked = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(b.captureID)))
+        unmarked.followsCaptureID = nil
+        try files.place(try unmarked.encoded(), at: r.locations.recordingManifest(b.captureID))
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[b.captureID] == .ended(.stored))
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .stored)
+        #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "draft")
+        #expect(try await r.notes.openCaptures().isEmpty)
+        #expect(r.inboxFiles().isEmpty)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(b.captureID)) == nil)
+        #expect((try await Self.note(r, a.captureID) == Self.note(r, b.captureID)) == windowOn)
+        // Recovery again changes nothing.
+        let again = try await next.recovery.run(ingest: next.ingest)
+        #expect(again.isEmpty)
+    }
 }
