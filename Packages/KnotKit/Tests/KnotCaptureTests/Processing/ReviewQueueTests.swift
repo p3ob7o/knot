@@ -70,4 +70,25 @@ import Testing
         #expect(job.attempts == 1)
         #expect(job.notBefore == failedAt.addingTimeInterval(30))
     }
+
+    /// The second opinion's `twoDrainsWithCallerCancellation`, which held: a drain whose
+    /// caller cancels it during a run yields, the drain waiting behind it finishes the job from
+    /// its last saved run, and the clean job is written once.
+    @Test func secondDrainFinishesAfterTheFirstIsCancelled() async throws {
+        let r = Rig(runBudget: .seconds(1))
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        r.transcriber.setRunDelay(.milliseconds(200))
+        let id = try await r.beginRecording().captureID
+        _ = try await r.engine.end(id)
+        let queue = r.queue
+        let first = Task { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        #expect(await eventually("a second run to start") { r.transcriber.runCount >= 2 })
+        let second = Task { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        first.cancel()
+        #expect(await SuiteWait.value("the first drain") { await first.value } == .yielded)
+        #expect(await SuiteWait.value("the second drain") { await second.value } == .idle)
+        let segment = try #require(try await r.notes.segment(SegmentID(id)))
+        #expect(segment.rawTranscript == "a scripted transcript of a recording")
+        #expect(try await r.notes.jobs(for: SegmentID(id)).filter { $0.kind == .clean }.count == 1)
+    }
 }

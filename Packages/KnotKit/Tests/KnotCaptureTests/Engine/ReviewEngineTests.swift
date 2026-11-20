@@ -216,4 +216,15 @@ import Testing
         await StoreDeadline.standard.wait()
         #expect(clock.now - started >= .milliseconds(100))
     }
+
+    /// The second opinion's `repeatedEndAndLateUpdate`, which held: a repeated end returns the
+    /// same state, and an update after the end is refused and changes nothing.
+    @Test func repeatedEndAndLateUpdate() async throws {
+        let r = Rig()
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first"))
+        let ended = try await r.engine.end(a.captureID)
+        #expect(try await r.engine.end(a.captureID) == ended)
+        await expectError(.illegalTransition) { try await r.engine.update(a.captureID, with: .text("later")) }
+        #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "first")
+    }
 }
