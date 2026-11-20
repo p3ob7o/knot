@@ -31,4 +31,21 @@ private final class CallbackClock: WallClock {
         }
         #expect(status == .paused(.accountChanged))
     }
+
+    /// Finding 16: a valid file sent again after a missing-file failure waits again.
+    @Test func aResentFileAfterAFailureWaitsAgain() async throws {
+        let link = ScriptedWatchLink()
+        let capture: CaptureID = Identifier(uuid: UUID())
+        let manifest = WatchLinkContract.manifest(capture)
+        let file = URL(fileURLWithPath: "/synthetic")
+        try await link.send(manifest, file: file)
+        link.failTransfer(capture, with: .outboxFileMissing)
+        try await link.send(manifest, file: file)
+        let counts = await SuiteWait.value("the outbox's counts") {
+            var iterator = link.counts().makeAsyncIterator()
+            return await iterator.next()
+        }
+        #expect(link.queueCount(capture) == 2)
+        #expect(counts == WatchLinkCounts(waiting: 1, failed: 0))
+    }
 }

@@ -34,7 +34,10 @@ public enum WatchLinkTrigger: String, Hashable, Sendable, Codable, CaseIterable 
 public protocol WatchLink: Sendable {
     /// Writes a finished recording to the outbox, the file and its manifest, and queues it.
     /// Returns once it is in the outbox, which says nothing about delivery. A file that is not
-    /// there fails with `outbox_file_missing`, and nothing is queued.
+    /// there fails with `outbox_file_missing`, and nothing is queued. A new send of a capture
+    /// whose earlier transfer failed replaces that entry: the capture waits again, is no longer
+    /// failed, and the counts say so. A send of a capture whose transfer is still outstanding
+    /// queues no second one.
     func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError)
 
     /// The captures the iPhone acknowledged, each as it arrives. When the consumer goes away,
@@ -44,10 +47,12 @@ public protocol WatchLink: Sendable {
     /// The current counts, then every change.
     func counts() -> AsyncStream<WatchLinkCounts>
 
-    /// Resumes on `trigger`: waits for the session's activation, adopts the transfers still
-    /// outstanding by the capture ID in their metadata, and queues again each outbox capture
-    /// that is neither acknowledged nor outstanding. A capture still outstanding is never queued
-    /// again, so a relaunch makes no duplicate.
+    /// Resumes on `trigger`, every trigger alike: waits for the session's activation, adopts the
+    /// transfers still outstanding by the capture ID in their metadata, and queues again every
+    /// outbox capture that waits and is neither acknowledged nor outstanding. A capture still
+    /// outstanding is never queued again, so a relaunch makes no duplicate. A full iPhone, or any
+    /// other deferral or attempt, leaves a capture waiting; only a file missing for good fails it,
+    /// and a failed capture is not queued again.
     func resume(_ trigger: WatchLinkTrigger) async
 
     /// The Watch's background task: runs until the session has no content pending, or until

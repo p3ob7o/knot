@@ -84,7 +84,8 @@
             let capture = manifest.captureID
             let result = state.withLock { state -> (WatchLinkCounts, [AsyncStream<WatchLinkCounts>.Continuation])? in
                 guard !state.missing.contains(file) else { return nil }
-                if state.outbox[capture] == nil { state.outbox[capture] = .waiting }
+                // A new send replaces the entry of a capture whose transfer failed: it waits again.
+                state.outbox[capture] = .waiting
                 if !state.outstanding.contains(capture) { state.queue(capture) }
                 return (state.counts, Array(state.countWatchers.values))
             }

@@ -105,6 +105,58 @@ public enum WatchLinkContract {
         await subject.acknowledge(fourth)
         let emptied = await SuiteWait.value("the background task to end") { await pending.value }
         #expect(emptied == true, "The task ends once the session has nothing pending.")
+
+        try await nothingStrands(subject)
+    }
+
+    /// No recording strands on the Watch (finding 16): every trigger queues again every capture
+    /// that waits, a full iPhone is a deferral, a file missing for good is not tried again, a
+    /// capture still outstanding is never queued twice, and a new send of a failed capture
+    /// replaces it.
+    static func nothingStrands(_ subject: WatchLinkSubject) async throws {
+        let link = subject.link
+        let a: CaptureID = Identifier(uuid: UUID())
+        let b: CaptureID = Identifier(uuid: UUID())
+        try await link.send(manifest(a), file: try await subject.makeFile(a))
+        try await link.send(manifest(b), file: try await subject.makeFile(b))
+        let start = await counts(of: link)
+
+        // Each trigger, the launch first of all, queues again every capture that waits.
+        for trigger in WatchLinkTrigger.allCases {
+            let before = (await subject.queueCount(a), await subject.queueCount(b))
+            await subject.finishTransfer(a)
+            await subject.finishTransfer(b)
+            await link.resume(trigger)
+            #expect(await subject.queueCount(a) == before.0 + 1, "\(trigger) queues every capture that waits.")
+            #expect(await subject.queueCount(b) == before.1 + 1, "\(trigger) queues every capture that waits.")
+        }
+
+        // A capture still outstanding is never queued a second time, whatever asks.
+        let outstanding = await subject.queueCount(a)
+        try await link.send(manifest(a), file: try await subject.makeFile(a))
+        await link.resume(.newCapture)
+        #expect(await subject.queueCount(a) == outstanding, "One transfer at a time for a capture.")
+
+        // A full iPhone is a deferral: the capture waits, and the next trigger queues it again.
+        await subject.failTransfer(a, .counterpartFull)
+        #expect(await counts(of: link) == start, "A full iPhone fails nothing.")
+        await link.resume(.reachabilityChanged)
+        #expect(await subject.queueCount(a) == outstanding + 1, "It is queued again.")
+
+        // A file missing for good fails its capture, which is not tried again.
+        await subject.failTransfer(b, .outboxFileMissing)
+        let missing = await subject.queueCount(b)
+        guard let start else { return }
+        #expect(
+            await counts(of: link) == WatchLinkCounts(waiting: start.waiting - 1, failed: start.failed + 1),
+            "A missing file fails its capture.")
+        await link.resume(.appForeground)
+        #expect(await subject.queueCount(b) == missing, "A file missing for good is not queued again.")
+
+        // A new send of a capture whose transfer failed replaces it: it waits again.
+        try await link.send(manifest(b), file: try await subject.makeFile(b))
+        #expect(await counts(of: link) == start, "It waits again, and is no longer failed.")
+        #expect(await subject.queueCount(b) == missing + 1, "And it is queued.")
     }
 
     /// The link's current counts.
