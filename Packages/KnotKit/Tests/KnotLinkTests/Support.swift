@@ -151,3 +151,15 @@ final class Box<Value: Sendable>: Sendable {
 
     func update(_ change: (inout Value) -> Void) { state.withLock { change(&$0) } }
 }
+
+/// A log sink that keeps every record, to check what a line names.
+final class KeptLog: LogSink {
+    private let records = Box<[LogRecord]>([])
+
+    func write(_ record: LogRecord) { records.update { $0.append(record) } }
+
+    var all: [LogRecord] { records.value }
+
+    /// The records of one event.
+    func lines(_ event: String) -> [LogRecord] { all.filter { $0.event == event } }
+}

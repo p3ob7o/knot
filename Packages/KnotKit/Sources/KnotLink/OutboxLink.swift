@@ -93,6 +93,7 @@ public actor OutboxLink {
         do {
             admitted = try outbox.admit(manifest, recording: file, afterRecording: afterRecording)
         } catch {
+            let error = error.about(capture: manifest.captureID)
             log.failure(error, "link_admit_failed")
             throw error
         }

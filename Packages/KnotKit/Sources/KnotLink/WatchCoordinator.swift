@@ -239,6 +239,7 @@ public actor WatchCoordinator {
         do {
             _ = try await link.send(manifest, file: converted.file, afterRecording: { killPoint(.outboxRecording) })
         } catch {
+            log.failure(error.about(capture: capture), "watch_admission_failed")
             unfinished[capture] = recording
             return .kept(capture, error.about(capture: capture))
         }
