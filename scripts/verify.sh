@@ -415,26 +415,29 @@ step_package_test() {
 # KnotTestSupport, run from two test targets.
 step_contract_two_targets() {
     knot_swiftpm_flags
-    local targets target output="$KNOT_LOGS/verify-contract-run.out" ran=0
-    targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null |
-        grep -e 'contractSuiteDummyPortTwoTestTargets' | cut -d. -f1 | sort -u)"
-    # Run the suite from each test target on its own, and count a target only when its
-    # run passed exactly that test.
-    for target in $targets; do
-        knot_swift_test_limited contract-two-targets \
-            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.contractSuiteDummyPortTwoTestTargets" >"$output" 2>&1 || {
-            echo "FAIL  the dummy contract suite failed in $target"
-            continue
-        }
-        if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
-            echo "ok    the dummy contract suite ran and passed in $target"
-            ran=$((ran + 1))
-        else
-            echo "FAIL  the dummy contract suite did not run in $target"
-        fi
-    done
-    echo "$ran test targets ran the dummy contract suite (two needed)"
-    ((ran >= 2))
+    local output="$KNOT_LOGS/verify-contract-run.out" suite=contractSuiteDummyPortTwoTestTargets
+    # Run the suite from each test target on its own, and count a target only when its run
+    # passed exactly that test. The listing and every run share one limit, whose message goes
+    # to the step's log, not to a target's output.
+    contract_runs() {
+        local targets target ran=0
+        targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null | grep -e "$suite" | cut -d. -f1 | sort -u)" # limit: contract_runs
+        for target in $targets; do
+            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
+                echo "FAIL  the dummy contract suite failed in $target"
+                continue
+            }
+            if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
+                echo "ok    the dummy contract suite ran and passed in $target"
+                ran=$((ran + 1))
+            else
+                echo "FAIL  the dummy contract suite did not run in $target"
+            fi
+        done
+        echo "$ran test targets ran the dummy contract suite (two needed)"
+        ((ran >= 2))
+    }
+    knot_swift_test_limited contract-two-targets contract_runs
 }
 
 # The named test scripts-self-test.
