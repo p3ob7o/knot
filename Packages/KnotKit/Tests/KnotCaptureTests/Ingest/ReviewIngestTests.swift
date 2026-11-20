@@ -120,4 +120,19 @@ import Testing
         #expect(segment.noteID == xEnded.noteID)
         #expect(segment.arrivedAt != nil)
     }
+
+    /// Finding 11. Ingest places an item in the note its surface showed, when that note can
+    /// still take it, even with appending off.
+    @Test func ingestKeepsTheNoteTheSurfaceShowed() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        let shown = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "shown"))
+        let note = try #require(try await r.engine.end(shown.captureID).noteID)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let item = try await r.engine.begin(
+            CaptureRequest(kind: .typed, surface: .app, shownNote: note, text: "added to it"))
+        _ = try await r.engine.end(item.captureID)
+        _ = await r.ingest.ingestAll()
+        #expect(try await r.notes.segment(SegmentID(item.captureID))?.noteID == note)
+    }
 }
