@@ -74,7 +74,7 @@ Each section puts first the points that block the earliest packages. Item IDs su
 
 29. **The thresholds that left WP-10 and WP-30.** `eng-031` takes the time thresholds out of the merge criteria of WP-10 and WP-30, and WP-42's brief now names them: with 10,000 notes on the Mac, a stream page against 16 ms and a search against 50 ms, and the iPhone's launch against its warm target. docs/product-spec.md §14 has rows for the search and the launch and none for the stream page. The orchestrator settles whether §14 gains that row before M1, the first milestone at which `--perf` measures.
 
-30. **Where an open drawing's saves go.** `CaptureEngine` publishes the revision of the content that is durably saved, and its comment names a drawing's checkpoint revision beside a typed capture's. `CaptureCheckpoint` carries text only, and an open drawing has no body in the store, so no operation of `NoteStore` makes the strokes of an open drawing durable. The ink types come with WP-02's third PR. It is settled there or with WP-18, before the first pull request that builds the canvas.
+30. **Where an open drawing's saves go.** `CaptureEngine` publishes the revision of the content that is durably saved, and its comment says that a drawing's saves are not in the contract yet. `CaptureCheckpoint` carries text only, and an open drawing has no body in the store, so no operation of `NoteStore` makes the strokes of an open drawing durable. The ink types come with WP-02's third PR. It is settled there or with WP-18, before the first pull request that builds the canvas.
 
 ## For the owner
 
