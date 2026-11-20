@@ -107,6 +107,7 @@ public enum NoteStoreContract {
         Check(name: "remove-recording-change", run: removingARecordingIsAChange),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
+        Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2173,6 +2174,43 @@ public enum NoteStoreContract {
             #expect(try await h.store.segment(segment)?.segment.rawTranscript == before, "Nothing is written.")
             #expect(try await h.store.jobs(for: segment).first?.resumeAt == (start == .zero ? nil : start))
         }
+    }
+
+    /// The purge's 30 days (finding 70): a deleted note, a deleted segment and an emptied note
+    /// younger than the date all survive it, to be restored. Once old, the deleted segment of
+    /// a live note goes, and the purge names its file, as it names those of a deleted note.
+    public static func thePurgeKeepsWhatIsYoungAndNamesOldFiles(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let deletedNote = try await h.store.record(h.typed("A note deleted", from: 0, to: 0.1))
+        let live = try await h.store.record(h.typed("A note that stays", from: 100, to: 100.1))
+        let voice = try await h.store.record(h.watchRecording(from: 101, to: 102, arrival: .live))
+        #expect(voice.noteID == live.noteID, "The recording joins the live note.")
+        let segment = voice.segmentIDs[0]
+        let assetID = try #require(try await h.store.segment(segment)?.segment.assetID)
+        let emptied = try await h.store.record(h.typed("A note emptied", from: 200, to: 200.1))
+        _ = try await h.store.delete(.note(deletedNote.noteID))
+        _ = try await h.store.delete(.segment(segment))
+        _ = try await h.store.delete(.segment(emptied.segmentIDs[0]))
+
+        h.clock.advance(by: 29 * 86_400)
+        let early = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(early.removed == 0 && early.assets.isEmpty, "Nothing younger than the date goes.")
+        #expect(try await h.store.note(deletedNote.noteID) != nil, "The deleted note survives.")
+        #expect(try await h.store.segment(segment) != nil, "The deleted segment survives.")
+        #expect(try await h.store.asset(assetID) != nil, "And its recording.")
+        #expect(try await h.store.note(emptied.noteID) != nil, "The emptied note survives.")
+        _ = try await h.store.restore(.segment(segment))
+        #expect(try await h.store.segment(segment)?.segment.deletedAt == nil, "And can be restored.")
+        _ = try await h.store.delete(.segment(segment))
+
+        h.clock.advance(by: 31 * 86_400)
+        let late = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(late.assets.map(\.id) == [assetID], "The old deleted segment's file is named.")
+        #expect(try await h.store.asset(assetID) == nil, "Its row goes.")
+        #expect(try await h.store.segment(segment) == nil, "The segment goes.")
+        #expect(try await h.store.note(live.noteID)?.isShown == true, "Its live note stays.")
+        #expect(try await h.store.note(deletedNote.noteID) == nil, "The old deleted note goes.")
+        #expect(try await h.store.note(emptied.noteID) == nil, "The old emptied note goes.")
     }
 
     // MARK: Reading
