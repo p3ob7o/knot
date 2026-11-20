@@ -134,6 +134,13 @@ extension Identifier where Tag == SegmentTag {
     }
 }
 
+/// The namespaces of the job IDs that came after `UUIDv5.Namespace` merged. They stay private
+/// to their derivations, so that the public enum never gains a case that would break a
+/// caller's exhaustive switch (finding 15). The values never change.
+private enum JobNamespace {
+    static let clean = UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a06")!
+}
+
 extension Identifier where Tag == JobTag {
     /// The transcribe job of a stored recording, which the store writes with every recording
     /// it stores. Derived from the segment's ID, so a repeat makes the same one.
@@ -145,7 +152,7 @@ extension Identifier where Tag == JobTag {
     /// last run is saved, or at launch for a transcribed recording that lacks one. Derived from
     /// the segment's ID, so a second write finds the first.
     public static func clean(of segment: SegmentID) -> JobID {
-        JobID(uuid: UUIDv5.make(namespace: .cleanJob, name: segment.description))
+        JobID(uuid: UUIDv5.make(namespace: JobNamespace.clean, name: segment.description))
     }
 }
 
