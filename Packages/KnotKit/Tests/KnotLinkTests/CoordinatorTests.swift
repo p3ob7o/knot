@@ -76,6 +76,35 @@ import Testing
         await SuiteWait.until("the capture acknowledged") { !harness.inOutbox(capture) }
     }
 
+    /// docs/product-spec.md §4.2: a recording also stops after 30 minutes, when a call takes
+    /// the audio, or when the disk fills. It is kept and sent like any other, and the next
+    /// press starts a new recording.
+    @Test(arguments: [RecordingEnding.limitReached, .interrupted, .diskFull])
+    func aRecordingThatEndsByItselfIsFinishedAndTheNextPressStarts(_ ending: RecordingEnding) async throws {
+        let harness = LinkHarness()
+        let recorder = ScriptedRecorder(
+            locations: harness.locations, layer: PosixFileLayer(), clock: harness.clock,
+            script: .init(endsBySelf: ending))
+        let (link, _) = harness.launchWatch()
+        let coordinator = WatchCoordinator(
+            recorder: recorder, link: link, ids: harness.ids, clock: harness.clock, launchID: harness.ids.make(),
+            device: harness.ids.make())
+        await coordinator.launch()
+        let capture = try await coordinator.start()
+        await SuiteWait.until("the recording that ended by itself in the outbox") {
+            harness.outbox.entry(capture)?.isSendable == true
+        }
+        await eventually("the coordinator idle") { await !coordinator.isRecording }
+        await SuiteWait.until("the working file removed") { recordingFolderNames(harness).isEmpty }
+
+        let next = await coordinator.press(Press(.tap, at: harness.clock.now().addingTimeInterval(60)))
+        guard case .started(let second) = next else {
+            Issue.record("The next press starts a new recording; it did \(next).")
+            return
+        }
+        #expect(second != capture)
+    }
+
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {
         let subject = makeSubject()
         let harness = subject.harness

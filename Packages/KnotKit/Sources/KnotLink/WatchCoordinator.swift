@@ -166,6 +166,7 @@ public actor WatchCoordinator {
             let session = try await recorder.start(request)
             activity = .recording(session, startedBy: press)
             log.capture(capture, "watch_recording_live")
+            watchForItsEnd(session)
             killPoint(.recordingLive)
             return capture
         } catch {
@@ -188,6 +189,33 @@ public actor WatchCoordinator {
         let outcome = await finish(recorded)
         await finishUnfinished(except: recorded.captureID)
         return outcome
+    }
+
+    /// The coordinator is the one consumer of a session's events. A recording that ends by
+    /// itself, at its limit, when a call takes the audio or when the disk fills, is finished
+    /// like a stopped one, and the coordinator is idle again, so the next press starts.
+    private func watchForItsEnd(_ session: any RecordingSession) {
+        let events = session.events
+        Task { [weak self] in
+            for await event in events {
+                guard case .ended(let recorded) = event else { continue }
+                await self?.ended(recorded)
+                return
+            }
+        }
+    }
+
+    /// A session's end. A stop or a discard has already taken the recording out of
+    /// `.recording`, so only an end that came by itself is finished here.
+    private func ended(_ recorded: RecordedAudio) async {
+        guard case .recording(let session, _) = activity, session.captureID == recorded.captureID else { return }
+        activity = .idle
+        log.capture(
+            recorded.captureID, "watch_recording_ended_by_itself", .duration("length", recorded.duration),
+            .flag("disk_full", recorded.ending == .diskFull), .flag("limit", recorded.ending == .limitReached))
+        killPoint(.stopped)
+        _ = await finish(recorded)
+        await finishUnfinished(except: recorded.captureID)
     }
 
     /// Discards the recording, as an accidental press. Returns its capture, or `nil` when
