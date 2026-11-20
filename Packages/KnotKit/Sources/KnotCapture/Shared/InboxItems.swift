@@ -47,15 +47,6 @@ struct InboxItems: Sendable {
         try files.place(try manifest.encoded(), at: locations.inboxManifest(manifest.captureID))
     }
 
-    /// Names, in the recorder's manifest of a started recording, the capture it follows. The
-    /// recorder's other fields, and fields this build does not know, stay as they are.
-    func markRecording(_ capture: CaptureID, follows: CaptureID) throws(KnotError) {
-        let url = locations.recordingManifest(capture)
-        var manifest = try CaptureManifest.decode(try layer.read(url))
-        manifest.followsCaptureID = follows
-        try files.place(try manifest.encoded(), at: url)
-    }
-
     /// The captures that have a manifest in `Inbox/`.
     func captureIDs() throws(KnotError) -> [CaptureID] {
         guard layer.entryKind(locations.inbox) == .folder else { return [] }
