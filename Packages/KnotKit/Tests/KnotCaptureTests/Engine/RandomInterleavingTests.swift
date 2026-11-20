@@ -21,11 +21,14 @@ import Testing
 /// acknowledged text is in the store, as the capture's text or the start of it, and no row is
 /// open. The seed decides every choice of the test; the order in which tasks run is the
 /// machine's, so a failing seed is printed with the calls it made, and replays the same
-/// choices. `KNOT_ENGINE_SEED` runs one seed alone.
+/// choices. `KNOT_ENGINE_SEED` runs one seed alone, and `KNOT_ENGINE_SEEDS` runs that many.
 @Suite struct RandomInterleavingTests {
     static let seeds: [UInt64] = {
-        if let value = ProcessInfo.processInfo.environment["KNOT_ENGINE_SEED"], let seed = UInt64(value) {
-            return [seed]
+        let environment = ProcessInfo.processInfo.environment
+        if let value = environment["KNOT_ENGINE_SEED"], let seed = UInt64(value) { return [seed] }
+        // A longer run, such as a night's: `KNOT_ENGINE_SEEDS=500`.
+        if let value = environment["KNOT_ENGINE_SEEDS"], let count = UInt64(value), count > 0 {
+            return Array(1...count)
         }
         return Array(1...24)
     }()
@@ -63,12 +66,10 @@ import Testing
         for index in models.indices { await models[index].finish(engine: engine, ledger: ledger) }
         await engine.retryConversions()
 
-        var settled = false
-        for _ in 0..<2000 where !settled {  // DEBUG-SETTLE
+        let settled = await eventually("every capture to be stored and Inbox/ to be empty") {
             _ = await r.ingest.ingestAll()
             let open = (try? await r.notes.openCaptures()) ?? [Capture]()
-            settled = open.isEmpty && r.inboxFiles().isEmpty
-            if !settled { try? await Task.sleep(for: .milliseconds(10)) }
+            return open.isEmpty && r.inboxFiles().isEmpty
         }
         let trace = ledger.trace()
         let replay = "Replay with KNOT_ENGINE_SEED=\(seed). The calls:\n\(trace.suffix(80).joined(separator: "\n"))"

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import KnotCore
+import Synchronization
 
 /// The items of `Inbox/`, as the engine writes them and ingest reads them
 /// (docs/architecture.md §6, rules 2 and 6).
@@ -32,15 +33,26 @@ struct InboxItems: Sendable {
         self.files = locations.durableFiles(layer: layer)
     }
 
-    /// Places a typed capture's item: the manifest, then the text.
+    /// Places a typed capture's item: the manifest, then the text. The two placings hold the
+    /// items' lock, so that ingest never removes an item between them: a payload placed after
+    /// its item was taken and removed would be left with no manifest.
     func writeTyped(_ manifest: CaptureManifest, text: String) throws(KnotError) {
         var manifest = manifest
         let payload = Data(text.utf8)
         manifest.payloadByteCount = Int64(payload.count)
         manifest.payloadSHA256 = Self.sha256(payload)
-        try files.place(try manifest.encoded(), at: locations.inboxManifest(manifest.captureID))
-        try files.place(payload, at: locations.inboxPayload(manifest.captureID, kind: .typed))
+        let encoded = try manifest.encoded()
+        try Self.lock.withLock { _ throws(KnotError) in
+            try files.place(encoded, at: locations.inboxManifest(manifest.captureID))
+            // A payload already on the drive with the same bytes is not placed again: it is durable.
+            let url = locations.inboxPayload(manifest.captureID, kind: .typed)
+            if layer.entryKind(url) == .file, (try? layer.read(url)) == payload { return }
+            try files.place(payload, at: url)
+        }
     }
+
+    /// Orders the engine's writing of an item and ingest's removal of one, in this process.
+    private static let lock = Mutex(())
 
     /// Places a recording's item: the manifest alone, which names the stored file's digest.
     func writeRecording(_ manifest: CaptureManifest) throws(KnotError) {
@@ -70,10 +82,12 @@ struct InboxItems: Sendable {
 
     /// Removes an item whose content the store holds: the payload, then the manifest.
     func remove(_ capture: CaptureID, kind: SegmentKind) throws(KnotError) {
-        let payload = locations.inboxPayload(capture, kind: kind)
-        if layer.entryKind(payload) != nil { try files.remove(payload) }
-        let manifest = locations.inboxManifest(capture)
-        if layer.entryKind(manifest) != nil { try files.remove(manifest) }
+        try Self.lock.withLock { _ throws(KnotError) in
+            let payload = locations.inboxPayload(capture, kind: kind)
+            if layer.entryKind(payload) != nil { try files.remove(payload) }
+            let manifest = locations.inboxManifest(capture)
+            if layer.entryKind(manifest) != nil { try files.remove(manifest) }
+        }
     }
 
     static func sha256(_ data: Data) -> String {

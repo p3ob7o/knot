@@ -1,9 +1,9 @@
 import Foundation
 import KnotCore
 
-/// The one capture engine (docs/architecture.md §5 and §6), the tracer's version: typed
-/// captures and recordings, through the one `NoteStore` operation for each save, with
-/// `Inbox/` behind every one of them.
+/// The one capture engine (docs/architecture.md §5 and §6): typed captures and recordings,
+/// through the one `NoteStore` operation for each save, with `Inbox/` behind every one of them.
+/// Drawings come with WP-11 PR 3: a drawing's `begin` throws `port_unavailable`.
 ///
 /// The paths. A capture begins on the store path, where the capture row is its first durable
 /// write. A recording writes its manifest first, through the `Recorder`, and its row after.
@@ -15,20 +15,30 @@ import KnotCore
 ///
 /// The engine passes the store only the placement asked for and the note the surface
 /// showed: the store decides where a capture lands. Saves of one capture never overlap: each
-/// waits for the one before it, so the store path sees them in revision order, and every
-/// item in `Inbox/` has a higher revision than any save the store was sent.
+/// waits for the one before it in the capture's line, so the store path sees them in revision
+/// order, and every item in `Inbox/` has a higher revision than any save the store was sent.
+///
+/// The lines. Each capture has a line, which orders its calls across their suspension points.
+/// No call waits for one capture's line while it holds another's: a call holds one line at a
+/// time and lets it go before it takes the next (`withLine`). So no two calls can each hold a
+/// line the other waits for, and every call returns once the store, the recorder and the drive
+/// answer, whatever runs beside it (findings 52 and 53). A start reaches disk before it waits
+/// for anything: its own line is new, so taking it never waits, and only after its first
+/// durable write does it let that line go and take the line of the capture it ends.
 ///
 /// When neither path takes a save, the call throws its error and nothing of that save is
 /// acknowledged: the surface keeps the text and says that it could not save
 /// (docs/product-spec.md §4.4), and the next save tries again with the whole text. A begin
-/// that reached no disk starts nothing; a row its store call commits later is ended as
-/// empty, since the next begin carries the text.
+/// that reached no disk starts nothing, and ends nothing: its next begin on the surface is
+/// its retry, with the same ID. A discard that reached no disk leaves the text as it was.
 ///
-/// Rule 15 (docs/product-spec.md §3). A start that the open capture refuses, a second typed
-/// capture on the same surface or anything while a recording runs, throws, and nothing is
-/// written. A start of another kind or on another surface ends the open capture: on the
-/// store path the record-a-capture transaction ends it and places the new one in its note;
-/// otherwise the engine ends it first.
+/// Rule 15 (docs/product-spec.md §3). A start that the open capture refuses, anything while a
+/// recording runs, throws, and nothing is written. A typed start on the surface of an open
+/// typed capture is that capture's retry while no call has answered it as saved, and a
+/// capture of its own after. A start of another kind or on another surface follows the open
+/// capture, decided once as it arrives (finding 54), and ends it once it has reached disk: on
+/// the store path the record-a-capture transaction ends it and places the new one in its
+/// note; otherwise the engine ends it at the new capture's start, on that capture's own path.
 public actor StandardCaptureEngine: CaptureEngine {
     private struct Entry {
         let id: CaptureID
@@ -50,6 +60,9 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// Set when a row that a store call commits late must be ended as empty: a recording
         /// discarded off the store path.
         var discardLateRow = false
+        /// True once the capture has a row: its start's store call answered, or committed after the
+        /// engine stopped waiting for it.
+        var hasRow = false
         /// True once a call of the engine has answered the capture as saved. Until then a
         /// typed start on its surface is its retry; after, the surface was told its text is
         /// saved, and a start never replaces it (findings 1 and 38).
@@ -72,6 +85,11 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let deadline: StoreDeadline
     private let ingest: InboxIngest?
     private let log: KnotLog
+    #if DEBUG || KNOT_FAKES
+        /// The kill-point hook of the kill tests and the soak, which only a debug build or one
+        /// that sets `KNOT_FAKES` has.
+        private let killPoints = KillPointHook()
+    #endif
     private let broadcast = Broadcast<CaptureState>()
     private var entries: [CaptureID: Entry] = [:]
     private var line = KeyedLine<CaptureID>()
@@ -112,6 +130,32 @@ public actor StandardCaptureEngine: CaptureEngine {
         self.deadline = deadline
         self.ingest = ingest
         self.log = log
+    }
+
+    #if DEBUG || KNOT_FAKES
+        /// The engine of the kill tests and the soak's child: `killPoint` is awaited at each
+        /// `EngineKillPoint`, with the capture's ID. A hook that never returns stops the engine
+        /// there, as a kill would. Only a debug build, or one that sets `KNOT_FAKES`, has it.
+        public init(
+            notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
+            clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, launchID: LaunchID,
+            locations: StoreLocations, layer: any FileLayer, deadline: StoreDeadline = .standard,
+            ingest: InboxIngest? = nil, log: KnotLog = KnotLog(.capture),
+            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void
+        ) {
+            self.init(
+                notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
+                deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
+                ingest: ingest, log: log)
+            killPoints.set(killPoint)
+        }
+    #endif
+
+    /// Awaits the kill-point hook at `point`. A release build has no hook, and this does nothing.
+    private func reach(_ point: EngineKillPoint, _ capture: CaptureID) async {
+        #if DEBUG || KNOT_FAKES
+            await killPoints.reach(point, capture)
+        #endif
     }
 
     // MARK: CaptureEngine
@@ -167,6 +211,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 request.kind == .typed
                 ? try await beginTyped(id, sameWay: sameWay != nil)
                 : try await recordRecording(id, sameWay: sameWay != nil)
+            await reach(.afterStart, id)
             entries[id]?.answered = true
             return state
         }
@@ -174,7 +219,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         // path the record-a-capture transaction did, and the engine then only reads the row;
         // otherwise the engine ends it at this capture's start. A start that reached no disk
         // threw above, and the open capture goes on.
-        if let follows { await endFollowed(follows, by: id) }
+        if let follows {
+            await reach(.beforeEndingFollowed, id)
+            await endFollowed(follows, by: id)
+        }
         return state
     }
 
@@ -237,6 +285,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[capture]?.revision += 1
             entries[capture]?.text = text
             try await saveTyped(capture, ending: nil)
+            await reach(.afterSave, capture)
             entries[capture]?.answered = true
             return publish(capture)
         }
@@ -257,6 +306,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         switch entry.kind {
         case .typed:
             try await saveTyped(capture, ending: endedAt ?? clock.now())
+            await reach(.afterTypedEnd, capture)
         default:
             try await endRecording(capture, at: endedAt)
         }
@@ -270,10 +320,20 @@ public actor StandardCaptureEngine: CaptureEngine {
             guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
             switch entry.kind {
             case .typed:
-                // Ended with no text, at a revision above every save, so that it wins.
+                // Ended with no text, at a revision above every save, so that it wins. A discard
+                // that reaches no disk leaves the capture with its text: the surface still holds
+                // it, and a later end, by the surface or by the next start, keeps it.
                 entries[capture]?.revision += 1
                 entries[capture]?.text = ""
-                try await saveTyped(capture, ending: clock.now())
+                do throws(KnotError) {
+                    try await saveTyped(capture, ending: clock.now())
+                } catch {
+                    // Its store call may still commit, at the discard's revision: the text's next
+                    // save goes above it.
+                    entries[capture]?.text = entry.text
+                    entries[capture]?.revision += 1
+                    throw error
+                }
             default:
                 try await discardRecording(capture)
             }
@@ -298,6 +358,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         switch answer {
         case .answered(let receipt):
             entries[id]?.noteID = receipt.noteID
+            entries[id]?.hasRow = true
             entries[id]?.durableRevision = entry.revision
             log.capture(id, "capture_began", .flag("store_path", true), .number("revision", Int(entry.revision)))
         case .refused, .timedOut:
@@ -462,6 +523,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.record(capture) }
         if case .answered(let receipt) = answer {
             entries[id]?.noteID = receipt.noteID
+            entries[id]?.hasRow = true
         } else {
             fallBack(id, answer)
         }
@@ -513,6 +575,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             return
         }
         pendingConversions[id] = nil
+        await reach(.afterRecordingMoved, id)
         let asset = Asset(
             id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
             sha256: stored.sha256)
@@ -525,6 +588,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 entries[id]?.outcome = receipt.outcome
                 entries[id]?.noteID = receipt.noteID
                 entries[id]?.session = nil
+                await reach(.afterRecordingEnded, id)
                 // The row points to the stored asset: the working file can go.
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
@@ -591,8 +655,9 @@ public actor StandardCaptureEngine: CaptureEngine {
             pendingDiscards.insert(id)
         }
         // Nothing is kept, so no item is written. A row a store call commits late is ended as
-        // empty when it arrives.
+        // empty when it arrives, and one that has arrived already is ended after this call.
         entries[id]?.discardLateRow = true
+        if entries[id]?.hasRow == true { pendingDiscards.insert(id) }
         log.capture(id, "recording_discarded", .flag("store_path", false))
     }
 
@@ -667,7 +732,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         do throws(KnotError) {
             try await withLine(open) { () async throws(KnotError) in
                 guard entries[open]?.outcome == .open else { return }
-                if onStorePath {
+                // Only a capture still on the store path is ended by the store's row: one that
+                // fell back since keeps its saves in `Inbox/`, and its item must end there too,
+                // or ingest leaves it as an open item.
+                if onStorePath, entries[open]?.path == .store {
                     let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(open) }
                     if case .answered(let row?) = answer, row.outcome != .open {
                         entries[open]?.outcome = row.outcome
@@ -710,6 +778,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func lateAnswer(of id: CaptureID, committed: Bool) async {
         guard committed, let entry = entries[id] else { return }
         log.capture(id, "store_answered_late")
+        entries[id]?.hasRow = true
         if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
             // A begin that reached no disk: its row, with the first text, is on the drive now.
             entries[id]?.durableRevision = 1
