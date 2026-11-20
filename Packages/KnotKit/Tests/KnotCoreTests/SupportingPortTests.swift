@@ -44,3 +44,32 @@ import Testing
         #expect(ZoneLoss.allCases.map(\.rawValue) == ["deleted", "purged", "encrypted_data_reset"])
     }
 }
+
+@Suite struct DevicePortTests {
+    /// A snapshot counts while its heartbeat is under three seconds old; an idle one always does.
+    @Test func aRecordingSnapshotIsFreshWhileItsHeartbeatIs() {
+        let beat = at("10:00:00")
+        let recording = RecordingStateSnapshot(phase: .recording, captureID: id(1), startedAt: beat, heartbeat: beat)
+        #expect(recording.isFresh(at: at("10:00:02")))
+        #expect(!recording.isFresh(at: at("10:00:03")), "A recorder silent for three seconds died.")
+        #expect(!RecordingStateSnapshot(phase: .stopping).isFresh(at: beat), "No heartbeat, no recorder.")
+        #expect(RecordingStateSnapshot.idle.isFresh(at: beat))
+    }
+
+    @Test func theUnavailableDevicePortsSayTheyAreNotThere() async {
+        await #expect(throws: KnotError.portUnavailable) {
+            try await UnavailableAudioPlayer().load(URL(fileURLWithPath: "/a.m4a"))
+        }
+        let asset = Asset(id: id(2), segmentID: id(3), kind: .audio, byteCount: 1, sha256: "", availability: .remote)
+        await #expect(throws: KnotError.portUnavailable.with(.init(assetID: asset.id))) {
+            try await UnavailableAssetFetcher().fetch(asset) { _ in }
+        }
+        #expect(UnavailableRecordingStateStore().read() == .idle)
+        #expect(!UnavailableRecordingActivity().isEnabled)
+        #expect(throws: RecordingActivityError.disabled) {
+            try UnavailableRecordingActivity().start(
+                captureID: id(4), content: RecordingActivityContent(phase: .recording, startedAt: at("10:00")))
+        }
+        await #expect(throws: KnotError.portUnavailable) { try await UnavailableSettingsStore().load() }
+    }
+}

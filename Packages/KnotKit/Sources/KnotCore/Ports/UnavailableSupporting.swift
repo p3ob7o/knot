@@ -59,3 +59,58 @@ public struct UnavailableWatchLink: WatchLink {
     public func resume(_ trigger: WatchLinkTrigger) async {}
     public func runBackgroundTask(limit: Duration) async -> Bool { true }
 }
+
+/// An `AudioPlayer` that is not there: nothing loads, and nothing plays.
+public struct UnavailableAudioPlayer: AudioPlayer {
+    public init() {}
+
+    public func load(_ file: URL) async throws(KnotError) -> Duration { throw KnotError.portUnavailable }
+    public func play() async {}
+    public func pause() async {}
+    public func seek(to position: Duration) async {}
+    public func states() -> AsyncStream<PlaybackState> {
+        AsyncStream { continuation in
+            continuation.yield(.empty)
+            continuation.finish()
+        }
+    }
+}
+
+/// An `AssetFetcher` that is not there: a file on another device stays there.
+public struct UnavailableAssetFetcher: AssetFetcher {
+    public init() {}
+
+    public func fetch(_ asset: Asset, progress: @escaping @Sendable (Double) -> Void) async throws(KnotError)
+        -> Asset
+    { throw KnotError.portUnavailable.with(.init(assetID: asset.id)) }
+}
+
+/// A `RecordingStateStore` that is not there: nothing records, and a write is lost.
+public struct UnavailableRecordingStateStore: RecordingStateStore {
+    public init() {}
+
+    public func read() -> RecordingStateSnapshot { .idle }
+    public func write(_ snapshot: RecordingStateSnapshot) {}
+}
+
+/// A `RecordingActivity` that is not there, as on the Mac and the Watch: Live Activities are off.
+public struct UnavailableRecordingActivity: RecordingActivity {
+    public init() {}
+
+    public var isEnabled: Bool { false }
+    public func start(captureID: CaptureID, content: RecordingActivityContent) throws(RecordingActivityError) {
+        throw .disabled
+    }
+    public func update(captureID: CaptureID, _ content: RecordingActivityContent) async {}
+    public func end(captureID: CaptureID, _ content: RecordingActivityContent, dismissAfter: Duration) async {}
+    public func endAll(except captureID: CaptureID?) async -> Int { 0 }
+}
+
+/// A `SettingsStore` that is not there yet.
+public struct UnavailableSettingsStore: SettingsStore {
+    public init() {}
+
+    public func load() async throws(KnotError) -> Settings { throw KnotError.portUnavailable }
+    public func save(_ settings: Settings) async throws(KnotError) { throw KnotError.portUnavailable }
+    public func changes() -> AsyncStream<Settings> { AsyncStream { $0.finish() } }
+}
