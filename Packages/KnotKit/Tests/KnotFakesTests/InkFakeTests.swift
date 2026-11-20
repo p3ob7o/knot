@@ -39,21 +39,19 @@ import Testing
         #expect(try await recogniser.recognise(drawing, language: language).text == "words")
     }
 
-    /// A recognition cancelled while it runs yields, and returns long before its scripted wait
-    /// could have ended: proved by what happens, not by the wall clock (finding 84).
+    /// A recognition cancelled while it runs yields. Proved by what happens (findings 84 and 22):
+    /// its scripted wait is an hour, longer than the suites' wait, so a recognition that missed
+    /// the cancel would still be waiting when `SuiteWait` gives up, and the check would fail.
     @Test func aRecognitionCancelledWhileItRunsYields() async throws {
         let recogniser = ScriptedInkRecogniser()
         let drawing = try Self.fixtureDrawing()
         recogniser.script(drawing, text: "words")
-        let wait: Duration = .seconds(600)
-        recogniser.setDelay(wait)
+        recogniser.setDelay(.seconds(3_600))
         let task = Task { try await recogniser.recognise(drawing, language: Locale.Language(identifier: "en")) }
         await SuiteWait.until("the recognition to begin") { recogniser.recognitionCount > 0 }
-        let started = ContinuousClock.now
         task.cancel()
         let outcome = await SuiteWait.value("the cancelled recognition to return") { await task.result }
         #expect(throws: KnotError.cancelled) { try outcome?.get() }
-        #expect(ContinuousClock.now - started < wait / 2, "It returned before the scripted wait could end.")
     }
 
     @Test func anUnscriptedDrawingIsUnreadable() async {

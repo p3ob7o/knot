@@ -100,7 +100,10 @@ public enum WatchLinkContract {
         try await link.send(manifest(fourth), file: try await subject.makeFile(fourth))
         // While a capture is pending, the task ends at its limit and says so. However long the
         // machine takes, the capture is still pending, so the answer is the same.
-        #expect(await link.runBackgroundTask(limit: .milliseconds(50)) == false, "Pending at the limit.")
+        let atLimit = await SuiteWait.value("the background task to end at its limit") {
+            await link.runBackgroundTask(limit: .milliseconds(50))
+        }
+        #expect(atLimit == false, "Pending at the limit.")
         let pending = Task { await link.runBackgroundTask(limit: SuiteWait.limit) }
         await subject.acknowledge(fourth)
         let emptied = await SuiteWait.value("the background task to end") { await pending.value }

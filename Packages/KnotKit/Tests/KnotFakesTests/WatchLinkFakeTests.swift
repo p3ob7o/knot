@@ -22,7 +22,10 @@ import Testing
         let link = ScriptedWatchLink()
         let capture: CaptureID = Identifier(uuid: UUID())
         try await link.send(WatchLinkContract.manifest(capture), file: URL(fileURLWithPath: "/outbox/a.m4a"))
-        #expect(await link.runBackgroundTask(limit: .milliseconds(20)) == false)
+        let ended = await SuiteWait.value("the background task to end") {
+            await link.runBackgroundTask(limit: .milliseconds(20))
+        }
+        #expect(ended == false)
         await link.resume(.launch)
         #expect(link.triggers == [.launch])
     }

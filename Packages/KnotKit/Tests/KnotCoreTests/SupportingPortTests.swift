@@ -1,5 +1,6 @@
 import Foundation
 import KnotCore
+import KnotTestSupport
 import Testing
 
 /// The ports and types of WP-02's third pull request, in KnotCore.
@@ -33,8 +34,12 @@ import Testing
 @Suite struct SyncPortTests {
     @Test func theUnavailableSyncEngineIsOff() async {
         let engine = UnavailableSyncEngine()
-        var statuses: [SyncStatus] = []
-        for await status in engine.statusUpdates() { statuses.append(status) }
+        let updates = engine.statusUpdates()
+        let statuses = await SuiteWait.value("the stream to end") {
+            var statuses: [SyncStatus] = []
+            for await status in updates { statuses.append(status) }
+            return statuses
+        }
         #expect(statuses == [.off])
         await #expect(throws: KnotError.portUnavailable) { try await engine.syncNow() }
     }
@@ -80,8 +85,12 @@ import Testing
         UnavailableCueEmitter().emit(.saved)
         #expect(UnavailableFreeSpaceProbe().availableBytes(forVolumeAt: URL(fileURLWithPath: "/")) == nil)
         #expect(throws: KnotError.portUnavailable) { try UnavailableInstallIdentity().installID() }
-        var notices = 0
-        for await _ in UnavailableProcessNotifier().storeChanges() { notices += 1 }
+        let changes = UnavailableProcessNotifier().storeChanges()
+        let notices = await SuiteWait.value("the stream to end") {
+            var notices = 0
+            for await _ in changes { notices += 1 }
+            return notices
+        }
         #expect(notices == 0)
         #expect(UnavailableLifecycle().isInForeground)
     }

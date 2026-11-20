@@ -59,20 +59,18 @@ private final class CallbackClock: WallClock {
     }
 
     /// Finding 19: a recognition begun in the foreground defers when the app leaves it before the
-    /// recognition returns, long before its scripted wait could end.
+    /// recognition returns. Its scripted wait is an hour, longer than the suites' wait, so a
+    /// recognition that went on would still be waiting when `SuiteWait` gives up (finding 22).
     @Test func aRecognitionDefersWhenTheAppLeavesTheForeground() async throws {
         let recogniser = ScriptedInkRecogniser()
         let drawing = InkDrawingData(bytes: Data([2]))
         recogniser.script(drawing, text: "word")
-        let wait: Duration = .seconds(600)
-        recogniser.setDelay(wait)
+        recogniser.setDelay(.seconds(3_600))
         let task = Task { try await recogniser.recognise(drawing, language: Locale.Language(identifier: "en")) }
         await SuiteWait.until("the recognition to begin") { recogniser.recognitionCount > 0 }
-        let left = ContinuousClock.now
         recogniser.setInForeground(false)
         let outcome = await SuiteWait.value("the recognition to return") { await task.result }
         #expect(throws: KnotError.appNotInForeground) { try outcome?.get() }
-        #expect(ContinuousClock.now - left < wait / 2, "It returned before the scripted wait could end.")
     }
 
     /// Finding 20: a fetch cancelled before it has returned throws the yield, even after its last

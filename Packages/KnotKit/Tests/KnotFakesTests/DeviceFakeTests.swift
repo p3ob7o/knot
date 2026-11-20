@@ -22,12 +22,21 @@ import Testing
         _ = try await player.load(file)
         await player.play()
         player.advance(by: .seconds(4))
-        var states = player.states().makeAsyncIterator()
-        #expect(await states.next() == .playing(at: .seconds(4), of: .seconds(10)))
+        let states = player.states()
         player.advance(by: .seconds(20))
-        #expect(await states.next() == .ended(.seconds(10)))
         await player.play()
-        #expect(await states.next() == .playing(at: .zero, of: .seconds(10)), "Play after the end starts again.")
+        let seen = await SuiteWait.value("the player's three states") {
+            var iterator = states.makeAsyncIterator()
+            var seen: [PlaybackState] = []
+            while seen.count < 3, let state = await iterator.next() { seen.append(state) }
+            return seen
+        }
+        #expect(
+            seen == [
+                .playing(at: .seconds(4), of: .seconds(10)), .ended(.seconds(10)),
+                .playing(at: .zero, of: .seconds(10)),
+            ],
+            "It ends at its length, and play after the end starts again.")
     }
 
     static func asset(_ availability: AssetAvailability) -> Asset {
@@ -45,12 +54,13 @@ import Testing
         }
     }
 
-    /// A fetch cancelled while it runs yields, long before its scripted wait could end.
+    /// A fetch cancelled while it runs yields. Its scripted wait is an hour, longer than the
+    /// suites' wait, so a fetch that missed the cancel would fail the check (finding 22).
     @Test func aFetchCancelledWhileItRunsYields() async {
         let fetcher = ScriptedAssetFetcher()
         let remote = Self.asset(.remote)
         fetcher.scriptRemote(remote.id)
-        fetcher.setDelay(.seconds(600))
+        fetcher.setDelay(.seconds(3_600))
         let task = Task { try await fetcher.fetch(remote) { _ in } }
         await SuiteWait.until("the fetch to begin") { fetcher.fetchCount > 0 }
         task.cancel()
