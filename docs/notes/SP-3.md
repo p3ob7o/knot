@@ -76,23 +76,41 @@ Not run: it needs the owner's word and an App Store Connect key. What the owner 
 
 The key lets Xcode make the explicit App IDs `com.p3ob7o.knot.dev` and `com.p3ob7o.knot.dev.cli` with App Groups, and their distribution profiles. On this Mac, development builds got only the wildcard team profile, which authorises no group, whatever the project asked.
 
-Before the upload, the report half drops the two counter-examples, `knot-dev-noplist` and `knot-dev-inherit`, from the app it uploads: each traps at launch by design. Then, from the worktree, with `KNOT_AGENT=1` and `KNOT_LOCAL_CONFIG` exported:
+Before the upload, the report half drops the two counter-examples, `knot-dev-noplist` and `knot-dev-inherit`, from the app it uploads: each traps at launch by design. Then, from the worktree, with `KNOT_AGENT=1` and `KNOT_LOCAL_CONFIG` exported, and the key's ID and the issuer's ID each in a file of its own beside the key:
 
 ```sh
 scripts/bootstrap.sh
-Spikes/SP-3/run.sh build --profiles        # generates the project; a development build
+Spikes/SP-3/run.sh build --profiles          # generates the project; a development build
+logs=.build/sp3/logs
+cat >.build/sp3/ExportOptions.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>destination</key><string>upload</string>
+  <key>testFlightInternalTestingOnly</key><true/>
+</dict></plist>
+EOF
+
+# The archive, signed for distribution. Nothing leaves the Mac yet.
 xcodebuild -project Spikes/SP-3/SP3.xcodeproj -scheme SP3 -configuration Release \
   -destination 'generic/platform=macOS' -archivePath .build/sp3/SP3.xcarchive \
   KNOT_SIGNING=team REGISTER_APP_GROUPS=YES KNOT_BUILD_NUMBER=<n> \
   -allowProvisioningUpdates -authenticationKeyPath <key.p8> \
-  -authenticationKeyID <key ID> -authenticationKeyIssuerID <issuer ID> archive
+  -authenticationKeyID "$(cat <key ID file>)" -authenticationKeyIssuerID "$(cat <issuer ID file>)" \
+  archive >"$logs/archive.log" 2>&1
+Spikes/SP-3/run.sh quote "$logs/archive.log" | tail -n 20
+
+# THE UPLOAD. The export sends the build to App Store Connect: this is where it leaves the Mac.
 xcodebuild -exportArchive -archivePath .build/sp3/SP3.xcarchive -exportPath .build/sp3/export \
-  -exportOptionsPlist <options made at run time, outside the repository> \
+  -exportOptionsPlist .build/sp3/ExportOptions.plist \
   -allowProvisioningUpdates -authenticationKeyPath <key.p8> \
-  -authenticationKeyID <key ID> -authenticationKeyIssuerID <issuer ID>
+  -authenticationKeyID "$(cat <key ID file>)" -authenticationKeyIssuerID "$(cat <issuer ID file>)" \
+  >"$logs/upload.log" 2>&1
+Spikes/SP-3/run.sh quote "$logs/upload.log" | tail -n 20
 ```
 
-The export options name the method `app-store-connect`, the destination `upload` and the team, read from the build settings at run time, so that no team ID is written down. Build output goes to a file and is filtered before anything is quoted.
+The export options name no team: the export takes the archive's. The key's ID and the issuer's are read from files when the command runs, so neither is typed or kept in the shell's history. Each command writes its output to a file under `.build/sp3/logs/`, because Xcode writes the team's prefix into a build's log, and `run.sh quote`, which masks the team, the home folder and a certificate's holder, is the only way any of it is shown. `testFlightInternalTestingOnly` keeps the build to internal testers, as the brief asks.
 
 **Where to run it.** Not on the build Mac. The upload reuses `com.p3ob7o.knot.dev` and `com.p3ob7o.knot.dev.cli`, whose data containers there list only the local and the development signers, so the TestFlight build is a new signer and its first start raises the same "not in ACL" dialog, for a reason that has nothing to do with the group. The owner runs the check on a Mac, or in a user account, where no Knot Dev build has ever run. There no signer's dialog is expected, and any dialog is the group's.
 
