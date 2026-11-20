@@ -158,3 +158,11 @@ public struct UnavailableLifecycle: Lifecycle {
     public var isInForeground: Bool { true }
     public func events() -> AsyncStream<LifecycleEvent> { AsyncStream { $0.finish() } }
 }
+
+/// `FeatureGates` that are not there: every gate is closed, so a process that registered no
+/// environment opens no feature.
+public struct UnavailableFeatureGates: FeatureGates {
+    public init() {}
+
+    public func isOpen(_ feature: Feature) -> Bool { false }
+}

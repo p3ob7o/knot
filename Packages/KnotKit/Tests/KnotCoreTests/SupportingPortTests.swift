@@ -93,3 +93,35 @@ import Testing
             ])
     }
 }
+
+@Suite struct EnvironmentSlotTests {
+    /// The ports of the third pull request have slots with unavailable defaults, so an
+    /// environment built with the initialiser of the second has them too.
+    @Test func theNewSlotsDefaultToUnavailable() async {
+        let environment = AppEnvironment.unavailable
+        #expect(environment.inkRecogniser is UnavailableInkRecogniser)
+        #expect(environment.drawingImages is UnavailableDrawingImages)
+        #expect(environment.sync is UnavailableSyncEngine)
+        #expect(environment.watchLink is UnavailableWatchLink)
+        #expect(environment.player is UnavailableAudioPlayer)
+        #expect(environment.fetcher is UnavailableAssetFetcher)
+        #expect(environment.recordingState is UnavailableRecordingStateStore)
+        #expect(environment.recordingActivity is UnavailableRecordingActivity)
+        #expect(environment.settings is UnavailableSettingsStore)
+        #expect(Feature.allCases.allSatisfy { !environment.gates.isOpen($0) }, "No gate is open.")
+        #expect(environment.surfaces is UnavailableSurfaceRouter)
+        #expect(environment.cues is UnavailableCueEmitter)
+        #expect(environment.freeSpace is UnavailableFreeSpaceProbe)
+        #expect(environment.installIdentity is UnavailableInstallIdentity)
+        #expect(environment.notifier is UnavailableProcessNotifier)
+        #expect(environment.lifecycle is UnavailableLifecycle)
+
+        var composed = AppEnvironment(
+            notes: environment.notes, assets: environment.assets, recorder: environment.recorder,
+            transcriber: environment.transcriber, cleaner: environment.cleaner, clock: environment.clock,
+            ids: environment.ids, engine: environment.engine, queue: environment.queue)
+        #expect(composed.sync is UnavailableSyncEngine, "The merged initialiser fills the new slots too.")
+        composed.gates = MilestoneGates(level: nil)
+        #expect(composed.gates.isOpen(.sync), "A composition sets what it fills in.")
+    }
+}
