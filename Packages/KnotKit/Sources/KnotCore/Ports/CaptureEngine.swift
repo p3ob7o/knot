@@ -86,8 +86,10 @@ public struct CaptureState: Hashable, Sendable {
     /// `open` while it is being made, then how it ended.
     public var outcome: CaptureOutcome
     public var path: CapturePath
-    /// The revision of the content that is durably saved: a typed capture's or a drawing's
-    /// checkpoint revision, or a recording's frames that survive a power cut.
+    /// The revision of the content that is durably saved: a typed capture's checkpoint
+    /// revision, or a recording's frames that survive a power cut. A drawing's saves are not
+    /// in the contract yet: no operation of `NoteStore` makes the strokes of an open drawing
+    /// durable, and they come with the ink types.
     public var durableRevision: Int64
 
     public init(
