@@ -28,6 +28,24 @@ public struct CleanupProvenance: Hashable, Sendable, Codable {
     }
 }
 
+/// What produced a drawing's recognised text (docs/architecture.md §4 and §10): the engine's
+/// version, `PKStrokeRecognizer.recognitionVersion`, the language it used and the OS build. In
+/// v1 no device recognises a stored drawing again; the provenance lets a later version decide
+/// which drawings to recognise again.
+public struct RecognitionProvenance: Hashable, Sendable, Codable {
+    public var engineVersion: Int
+    /// The language the engine used, in BCP 47, such as `en-GB`.
+    public var language: String
+    /// The OS build that ran the engine.
+    public var osBuild: String
+
+    public init(engineVersion: Int, language: String, osBuild: String) {
+        self.engineVersion = engineVersion
+        self.language = language
+        self.osBuild = osBuild
+    }
+}
+
 /// What a capture becomes inside a note (docs/architecture.md §4).
 public struct Segment: Hashable, Sendable, Codable, Identifiable {
     /// The capture's ID, or for a later piece of a long capture, one derived from it.
@@ -51,6 +69,9 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     public var transcription: TranscriptionProvenance?
     /// Voice only: the OS build whose model cleaned the text.
     public var cleanup: CleanupProvenance?
+    /// Ink only: what produced the recognised text. A stored property with a default, so that
+    /// no initialiser written before it changes.
+    public var recognition: RecognitionProvenance? = nil
     /// Voice only, synced: the device that runs the segment's jobs.
     public var processingOwner: DeviceID?
     /// Voice only, synced: rises each time the work moves to another device.
@@ -151,6 +172,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         try container.encodeIfPresent(rawTranscript, forKey: .rawTranscript)
         try container.encodeIfPresent(transcription, forKey: .transcription)
         try container.encodeIfPresent(cleanup, forKey: .cleanup)
+        try container.encodeIfPresent(recognition, forKey: .recognition)
         try container.encodeIfPresent(processingOwner, forKey: .processingOwner)
         try container.encode(ownerGeneration, forKey: .ownerGeneration)
         try container.encodeIfPresent(arrivedAt, forKey: .arrivedAt)
@@ -167,7 +189,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, noteID, kind, noteGeneration, origin, startedAt, endedAt, text, textOrigin, rawTranscript
         case transcription, cleanup, processingOwner, ownerGeneration, arrivedAt, state, assetID, duration
-        case conflictOf, deletedAt, revision, piece, pieceOf
+        case conflictOf, deletedAt, revision, piece, pieceOf, recognition
     }
 
     /// Decodes a segment, and refuses one whose text or raw transcript is past the size
@@ -195,6 +217,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.rawTranscript = rawTranscript
         self.transcription = try container.decodeIfPresent(TranscriptionProvenance.self, forKey: .transcription)
         self.cleanup = try container.decodeIfPresent(CleanupProvenance.self, forKey: .cleanup)
+        self.recognition = try container.decodeIfPresent(RecognitionProvenance.self, forKey: .recognition)
         self.processingOwner = try container.decodeIfPresent(DeviceID.self, forKey: .processingOwner)
         self.ownerGeneration = try container.decode(Int.self, forKey: .ownerGeneration)
         self.arrivedAt = try container.decodeIfPresent(Date.self, forKey: .arrivedAt)

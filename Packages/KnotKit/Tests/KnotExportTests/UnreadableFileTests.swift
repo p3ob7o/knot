@@ -58,3 +58,56 @@ struct FixedPlaceAssets: AssetStore {
         #expect(markdown.hasSuffix("\n*Recording, 0:07: not on this device, not exported.*\n\nSaid.\n"))
     }
 }
+
+/// Finding 20: the preview says what the export will leave out, an unreadable file included,
+/// since `knot export` refuses or not on what the preview says.
+@Suite struct PreviewReadabilityTests {
+    /// A world with one recording, which the asset store finds at `url`.
+    static func previewAndExport(findingAt url: URL) async throws -> (ExportPreview, ExportReport) {
+        let note = Build.note(fixedID(0xe0), at: t0)
+        var voice = try Build.voice(fixedID(0xe1), in: note.id, from: t0, transcript: "Said.", device: thisDevice)
+        voice.assetID = fixedID(0xe2)
+        let world = try World(seed: [record(note, [voice])])
+        let exporter = Exporter(notes: world.notes, assets: FixedPlaceAssets(url: url), timeZone: .gmt)
+        return (try await exporter.preview(), try await exporter.export(to: MemoryExportSink()))
+    }
+
+    @Test func aFileWithNoReadPermissionIsUnreadableInThePreviewToo() async throws {
+        let file = try freshFolder().appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try Data([1, 2, 3]).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path(percentEncoded: false))
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: file.path(percentEncoded: false))
+        }
+        try #require(!FileManager.default.isReadableFile(atPath: file.path(percentEncoded: false)))
+
+        let (preview, report) = try await Self.previewAndExport(findingAt: file)
+        #expect(report.leftOut.map(\.reason) == [.unreadable])
+        #expect(preview.missing == report.leftOut)
+        #expect(preview.files == 0)
+    }
+
+    @Test func aFolderInPlaceOfAFileIsUnreadableInThePreviewToo() async throws {
+        let (preview, report) = try await Self.previewAndExport(findingAt: try freshFolder())
+        #expect(report.leftOut.map(\.reason) == [.unreadable])
+        #expect(preview.missing == report.leftOut)
+        #expect(preview.files == 0)
+    }
+
+    @Test func aFileThatWentIsNotOnThisDeviceInThePreviewToo() async throws {
+        let gone = try freshFolder().appending(path: "gone.m4a", directoryHint: .notDirectory)
+        let (preview, report) = try await Self.previewAndExport(findingAt: gone)
+        #expect(report.leftOut.map(\.reason) == [.notOnThisDevice])
+        #expect(preview.missing == report.leftOut)
+        #expect(preview.files == 0)
+    }
+
+    @Test func aFileThatCanBeReadCountsInThePreview() async throws {
+        let file = try freshFolder().appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try FixtureBytes.recording().write(to: file)
+        let (preview, report) = try await Self.previewAndExport(findingAt: file)
+        #expect(preview.missing.isEmpty && report.leftOut.isEmpty)
+        #expect(preview.files == 1)
+    }
+}

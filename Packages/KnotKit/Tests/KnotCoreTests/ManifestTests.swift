@@ -1,7 +1,8 @@
 import Foundation
-import KnotCore
 import KnotTestSupport
 import Testing
+
+@testable import KnotCore
 
 @Suite struct CaptureManifestTests {
     static let capture = CaptureID(uuid: UUID(uuidString: "019a9b3c-7e00-7000-8000-000000000001")!)
@@ -27,6 +28,64 @@ import Testing
             String(decoding: encoded, as: UTF8.self)
                 == String(decoding: golden, as: UTF8.self))
         #expect(try CaptureManifest.decode(golden) == Self.manifest)
+    }
+
+    /// A recording begun by holding the Mac hotkey while typing, which ends the typed capture
+    /// it follows (rules 13 and 15 of docs/product-spec.md §3).
+    static let following = CaptureManifest(
+        captureID: capture, kind: .voice, origin: CaptureOrigin(source: .device(watch), surface: .macPanel),
+        launchID: launch, startedAt: Date(timeIntervalSince1970: 1_795_000_000),
+        endedAt: Date(timeIntervalSince1970: 1_795_000_012.25), duration: .milliseconds(12_250), placement: .window,
+        shownNoteID: note, revision: 0, payloadByteCount: 9_000, payloadSHA256: String(repeating: "cd", count: 32),
+        followsCaptureID: CaptureID(uuid: UUID(uuidString: "019a9b3c-7e00-7000-8000-000000000005")!))
+
+    /// A typed draft that a crash left open, with the time of its last durable save.
+    static let lastSaved = CaptureManifest(
+        captureID: capture, kind: .typed, origin: CaptureOrigin(source: .device(watch), surface: .app),
+        launchID: launch, startedAt: Date(timeIntervalSince1970: 1_795_000_000), placement: .window,
+        shownNoteID: note, revision: 7, lastSavedAt: Date(timeIntervalSince1970: 1_795_000_031.125))
+
+    /// Finding 27: each new field has its golden file, and a manifest without them keeps the
+    /// bytes of format 1 as they were.
+    @Test func eachNewFieldMatchesItsGoldenFile() throws {
+        for (manifest, golden) in [
+            (Self.following, CaptureManifestGolden.formatOneFollowingACapture),
+            (Self.lastSaved, CaptureManifestGolden.formatOneWithTheLastSave),
+        ] {
+            #expect(String(decoding: try manifest.encoded(), as: UTF8.self) == golden)
+            #expect(try CaptureManifest.decode(Data(golden.utf8)) == manifest)
+        }
+        for key in ["follows_capture_id", "last_saved_at"] {
+            #expect(!CaptureManifestGolden.formatOne.contains(key), "\(key) is absent when nil.")
+            #expect(!String(decoding: try Self.manifest.encoded(), as: UTF8.self).contains(key))
+        }
+    }
+
+    /// Finding 27: a build that does not know the new fields keeps them as unknown fields and
+    /// writes the manifest back byte for byte, so a build that knows them reads them again.
+    @Test func aBuildThatDoesNotKnowTheNewFieldsWritesThemBack() throws {
+        let newer: Set = ["follows_capture_id", "last_saved_at"]
+        for (manifest, golden) in [
+            (Self.following, CaptureManifestGolden.formatOneFollowingACapture),
+            (Self.lastSaved, CaptureManifestGolden.formatOneWithTheLastSave),
+        ] {
+            let older = try CaptureManifest.decode(Data(golden.utf8), notKnowing: newer)
+            #expect(older.followsCaptureID == nil && older.lastSavedAt == nil, "It does not read them.")
+            #expect(older.unknownFields.count == 1, "It keeps the one it does not know.")
+            let written = try older.encoded()
+            #expect(String(decoding: written, as: UTF8.self) == golden, "It writes it back byte for byte.")
+            #expect(try CaptureManifest.decode(written) == manifest)
+        }
+    }
+
+    @Test(arguments: [
+        ("follows_capture_id", #""not-an-id""#), ("follows_capture_id", "7"), ("last_saved_at", #""yesterday""#),
+        ("last_saved_at", "1795000031"),
+    ])
+    func aNewFieldThatIsNotWhatItSaysIsUnreadable(key: String, value: String) {
+        #expect(throws: KnotError.inboxItemUnreadable.about(capture: Self.capture)) {
+            try CaptureManifest.decode(Self.golden(replacing: key, with: value))
+        }
     }
 
     @Test func everyPlacementAndAnOpenCaptureRoundTrip() throws {

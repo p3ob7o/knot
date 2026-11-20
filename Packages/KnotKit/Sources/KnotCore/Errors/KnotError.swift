@@ -76,6 +76,10 @@ public enum NextAction: String, Hashable, Sendable, Codable {
     case unlockDevice = "unlock_device"
     /// Sign in to iCloud.
     case signInToICloud = "sign_in_to_icloud"
+    /// Free iCloud storage, which is full.
+    case freeICloudStorage = "free_icloud_storage"
+    /// Free space on the iPhone, which the Watch's recordings go to.
+    case freeIPhoneSpace = "free_iphone_space"
     /// Answer whether to upload the notes on this device.
     case answerUploadQuestion = "answer_upload_question"
     /// Read the note or segment again and use its current revision.

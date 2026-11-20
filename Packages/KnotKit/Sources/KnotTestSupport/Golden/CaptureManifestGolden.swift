@@ -13,4 +13,16 @@ public enum CaptureManifestGolden {
     public static let formatOneWithUnknownFields = #"""
         {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","format":1,"kind":"photo","launch_id":"019a9b3c-7e00-7000-8000-000000000002","lens":{"focal_mm":24,"front":false},"placement":"new_note","revision":0,"source":"cli","started_at":"2026-11-18T11:06:40.000Z","surface":"car_play","tags":["x",null]}
         """#
+
+    /// Format 1 with `follows_capture_id`: a recording begun by holding the Mac hotkey while
+    /// typing, which ended the typed capture it names.
+    public static let formatOneFollowingACapture = #"""
+        {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","duration_seconds":12.25,"ended_at":"2026-11-18T11:06:52.250Z","follows_capture_id":"019a9b3c-7e00-7000-8000-000000000005","format":1,"kind":"voice","launch_id":"019a9b3c-7e00-7000-8000-000000000002","payload_bytes":9000,"payload_sha256":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd","placement":"window","revision":0,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"mac_panel"}
+        """#
+
+    /// Format 1 with `last_saved_at`: a typed draft a crash left open, and when it was last
+    /// saved.
+    public static let formatOneWithTheLastSave = #"""
+        {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","format":1,"kind":"typed","last_saved_at":"2026-11-18T11:07:11.125Z","launch_id":"019a9b3c-7e00-7000-8000-000000000002","placement":"window","revision":7,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"app"}
+        """#
 }

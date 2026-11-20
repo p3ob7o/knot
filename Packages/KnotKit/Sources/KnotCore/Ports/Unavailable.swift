@@ -55,7 +55,8 @@ public struct UnavailableNoteStore: NoteStore {
     public func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError)
         -> CleanupApplied
     { throw missing }
-    public func saveJob(_ job: Job) async throws(KnotError) { throw missing }
+    @discardableResult
+    public func saveJob(_ job: Job) async throws(KnotError) -> Job { throw missing }
     public func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] { throw missing }
     public func purge(before date: Date) async throws(KnotError) -> PurgeResult { throw missing }
     public func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset { throw missing }

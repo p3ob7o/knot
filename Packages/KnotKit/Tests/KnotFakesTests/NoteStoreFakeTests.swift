@@ -134,10 +134,10 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         let hold = await store.holdNextCaptureWrite()
         let late = Task { try await store.record(request) }
         _ = await SuiteWait.value("the held write to reach its hold") { await hold.untilReached() }
-        _ = try await store.record(
-            NewCapture(
-                id: ids.make(), kind: .typed, origin: origin, launchID: launch, placement: .newNote,
-                startedAt: clock.now(), endedAt: clock.now(), body: .text("B")))
+        let b = NewCapture(
+            id: ids.make(), kind: .typed, origin: origin, launchID: launch, placement: .newNote,
+            startedAt: clock.now(), endedAt: clock.now(), body: .text("B"))
+        _ = try await duringTheHold("the record of B") { try await store.record(b) }
         hold.release()
         _ = try await SuiteWait.value("the held write to return") { await late.result }?.get()
         draft.endedAt = clock.now().addingTimeInterval(60)
@@ -208,6 +208,18 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         #expect(try await store.capture(b.id) != nil)
     }
 
+    /// A call made while a hold is in place, bounded by the suites' wait: a store that wrongly
+    /// makes it wait on the hold fails the check instead of hanging it (finding 25). Nil when
+    /// the wait ran out, which has already recorded the issue.
+    private func duringTheHold<T: Sendable>(
+        _ what: String, sourceLocation: SourceLocation = #_sourceLocation,
+        _ call: @escaping @Sendable () async throws -> T
+    ) async throws -> T? {
+        let task = Task { try await call() }
+        defer { task.cancel() }
+        return try await SuiteWait.value(what, sourceLocation: sourceLocation) { await task.result }?.get()
+    }
+
     /// Whether a hold is reached within the suites' ten minutes, without hanging when it never
     /// is (findings 84 and 85).
     private func reached(_ hold: StoreCallHold) async -> Bool {
@@ -234,7 +246,7 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
             id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .macPanel),
             launchID: launch, placement: .window, startedAt: clock.now(), body: .text("Typing in the panel now"),
             revision: 1)
-        _ = try await store.record(panel)
+        _ = try await duringTheHold("the record of the panel's capture") { try await store.record(panel) }
         hold.release()
         _ = try await SuiteWait.value("the held write to return") { await late.result }?.get()
         #expect(try await store.capture(panel.id)?.outcome == .open)
@@ -264,8 +276,9 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         let hold = await store.holdNextCaptureWrite()
         let late = Task { try await store.record(open) }
         _ = await SuiteWait.value("the held write to reach its hold") { await hold.untilReached() }
-        let ingested = try await store.ingest(item)
-        #expect(ingested.applied && ingested.storedRevision == 4)
+        let inboxItem = item
+        let ingested = try await duringTheHold("the ingest of the inbox item") { try await store.ingest(inboxItem) }
+        #expect(ingested?.applied == true && ingested?.storedRevision == 4)
         hold.release()
         let receipt = try #require(await SuiteWait.value("the held write to return") { await late.result }).get()
         #expect(receipt.outcome == .stored, "The late call returns the stored capture.")
