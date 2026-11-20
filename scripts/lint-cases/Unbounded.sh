@@ -56,6 +56,8 @@ step_one() {
     # expect: unbounded
     knot_fail "code" "$(xcodebuild -version)" "fix" "safe" "nothing"
     # expect: unbounded
+    printf x | xcrun simctl list
+    # expect: unbounded
     xcodebuild -scheme knot_limit_tests build
     # expect: unbounded
     swift test --filter knot_run_limited
