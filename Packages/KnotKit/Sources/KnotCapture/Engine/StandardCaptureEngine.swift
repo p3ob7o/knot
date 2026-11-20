@@ -355,7 +355,24 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id]?.text = text
         try await saveTyped(id, ending: nil)
         log.capture(id, "capture_begin_retried")
+        // It has started now: rule 15 ends the capture it follows, as a first start does.
+        await endCapturesFollowedBy(id)
         return publish(id)
+    }
+
+    /// Ends, at `id`'s start, each open capture that rule 15 ends for it, once `id` has reached
+    /// disk.
+    private func endCapturesFollowedBy(_ id: CaptureID) async {
+        guard let entry = entries[id] else { return }
+        let request = CaptureRequest(kind: entry.kind, surface: entry.surface)
+        while case .end(let open)? = try? nextStep(for: request, besides: id) {
+            do throws(KnotError) {
+                _ = try await end(open, at: entry.startedAt)
+            } catch {
+                log.failure(error.about(capture: open), "capture_not_ended")
+                return
+            }
+        }
     }
 
     /// Saves a typed capture's latest text on its path: a checkpoint, or the end when

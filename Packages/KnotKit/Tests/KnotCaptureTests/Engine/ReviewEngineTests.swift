@@ -334,4 +334,22 @@ import Testing
                 (try? await r.notes.capture(recording.captureID))?.outcome == .discardedEmpty
             })
     }
+
+    /// Finding 35, the re-check's N5. A typed start on another surface that reached no disk
+    /// leaves the open capture going on (finding 8); once its retry reaches disk, rule 15 ends
+    /// the open capture as a first start does, so one capture is open.
+    @Test func retryOfAStartEndsTheOpenCaptureOnceItHasStarted() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "first"))
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        r.layer.failNextWrite(with: .diskFull)
+        let request = CaptureRequest(kind: .typed, surface: .app, text: "second")
+        await expectError(.diskFull) { try await r.engine.begin(request) }
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .open)
+        let retry = try await r.engine.begin(request)
+        #expect(retry.durableRevision > 0)
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .stored)
+        await expectError(.illegalTransition) { try await r.engine.update(a.captureID, with: .text("more")) }
+    }
 }
