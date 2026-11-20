@@ -1,0 +1,160 @@
+# SP-3's spike app and its command-line tool, in every packaging the spike compares
+# (docs/plan/SP-3.md). This code stays on spike/agent-access and is never merged.
+#
+# Generate and build with Spikes/SP-3/run.sh, which signs with the owner's team through
+# Apps/Config/Base.xcconfig and the linked Local.xcconfig. No team ID is written here: the
+# entitlements name the group through build settings only.
+#
+# The identifiers are the development set of Apps/Config/Identifiers.xcconfig and no
+# others: the app com.p3ob7o.knot.dev, the tool com.p3ob7o.knot.dev.cli, the app group
+# group.com.p3ob7o.knot.dev. No iCloud and no push, so no container is registered.
+
+name: SP3
+
+options:
+  bundleIdPrefix: com.p3ob7o
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: ../../Apps/Config/Base.xcconfig
+  Release: ../../Apps/Config/Base.xcconfig
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    exactVersion: 7.12.0
+
+targets:
+  # The spike app. Sandboxed, with the development app group and nothing else.
+  SP3App:
+    type: application
+    platform: macOS
+    sources: [App, Shared]
+    settings:
+      base:
+        PRODUCT_NAME: Knot Dev
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID_dev)
+        INFOPLIST_FILE: Config/App-Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Config/App.entitlements
+    dependencies:
+      - package: GRDB
+      # T1: the bare executable, next to the app's own, as WP-01 placed it.
+      - target: knot-dev
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
+      # T3: the helper bundle, which can carry a provisioning profile.
+      - target: KnotDevCLI
+        embed: true
+        codeSign: false
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+      # The two counter-examples of packaging rule 1.
+      - target: knot-dev-noplist
+        embed: true
+        codeSign: false
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers/variants
+      - target: knot-dev-inherit
+        embed: true
+        codeSign: false
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers/variants
+
+  # T1: a bare executable with its own sandbox, the app group and an Info.plist embedded in
+  # its binary. It cannot carry a provisioning profile.
+  knot-dev:
+    type: tool
+    platform: macOS
+    sources: [Tool, Shared]
+    settings:
+      base:
+        PRODUCT_NAME: knot-dev
+        PRODUCT_MODULE_NAME: knot_dev
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID_dev).cli
+        INFOPLIST_FILE: Config/Tool-Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_ENTITLEMENTS: Config/Tool.entitlements
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: GRDB
+
+  # Rule 1, first counter-example: the same tool with no Info.plist in its binary.
+  knot-dev-noplist:
+    type: tool
+    platform: macOS
+    sources: [Tool, Shared]
+    settings:
+      base:
+        PRODUCT_NAME: knot-dev-noplist
+        PRODUCT_MODULE_NAME: knot_dev_noplist
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID_dev).cli
+        GENERATE_INFOPLIST_FILE: NO
+        CREATE_INFOPLIST_SECTION_IN_BINARY: NO
+        OTHER_CODE_SIGN_FLAGS: --identifier $(KNOT_BUNDLE_ID_dev).cli
+        CODE_SIGN_ENTITLEMENTS: Config/Tool.entitlements
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: GRDB
+
+  # Rule 1, second counter-example: the tool as Apple documents one that a sandboxed app
+  # starts, with only app-sandbox and inherit.
+  knot-dev-inherit:
+    type: tool
+    platform: macOS
+    sources: [Tool, Shared]
+    settings:
+      base:
+        PRODUCT_NAME: knot-dev-inherit
+        PRODUCT_MODULE_NAME: knot_dev_inherit
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID_dev).cli
+        INFOPLIST_FILE: Config/Tool-Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_ENTITLEMENTS: Config/Tool-inherit.entitlements
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: GRDB
+
+  # T3: the tool inside a helper bundle of its own, under the tool's ID, so that it can
+  # carry a provisioning profile that names the group. Its executable is knot-dev.
+  KnotDevCLI:
+    type: application
+    platform: macOS
+    sources: [Tool, Shared, Helper]
+    settings:
+      base:
+        PRODUCT_NAME: knot-dev
+        PRODUCT_MODULE_NAME: KnotDevCLI
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID_dev).cli
+        INFOPLIST_FILE: Config/Helper-Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Config/Helper.entitlements
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: GRDB
+
+schemes:
+  SP3:
+    build:
+      targets:
+        SP3App: all
