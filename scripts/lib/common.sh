@@ -277,35 +277,46 @@ knot_mac_ui_ready() {
 #   knot_limit <seconds> <command…>
 KNOT_LIMIT_HIT=0
 knot_limit() {
-    local seconds=$1 status=0 pid ticks=0 family
+    local seconds=$1 status=0 pid timer
     shift
     KNOT_LIMIT_HIT=0
     "$@" &
     pid=$!
-    while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
+    # The limit is wall-clock time: a timer process that sleeps for it, which a loaded Mac
+    # cannot stretch as it stretches a count of polls.
+    /bin/sleep "$seconds" &
+    timer=$!
+    while kill -0 "$pid" 2>/dev/null && kill -0 "$timer" 2>/dev/null; do
         sleep 0.1
-        ticks=$((ticks + 1))
     done
+    kill "$timer" 2>/dev/null || true
+    wait "$timer" 2>/dev/null || true
     if kill -0 "$pid" 2>/dev/null; then
-        family="$pid $(knot_descendants "$pid")"
-        # shellcheck disable=SC2086
-        kill -TERM $family 2>/dev/null || true
-        # The two seconds are for the whole family: when the command is a shell function,
-        # $pid is a subshell that dies at TERM at once, while what it started, such as
-        # xcodebuild ending its test session, still needs the time.
-        ticks=0
-        while knot_any_alive $family && ((ticks < 20)); do
-            sleep 0.1
-            ticks=$((ticks + 1))
-        done
-        # shellcheck disable=SC2086
-        kill -KILL $family 2>/dev/null || true
+        knot_end_process "$pid"
         wait "$pid" 2>/dev/null || true
         KNOT_LIMIT_HIT=1
         return 124
     fi
     wait "$pid" || status=$?
     return "$status"
+}
+
+# Ends a process and its descendants, found before any of them ends: TERM, then KILL two
+# seconds later for those that ignore it. The two seconds are for the whole family: when the
+# process is a shell function's subshell, it dies at TERM at once, while what it started,
+# such as xcodebuild ending its test session, still needs the time.
+knot_end_process() {
+    local family ticks=0
+    family="$1 $(knot_descendants "$1")"
+    # shellcheck disable=SC2086
+    kill -TERM $family 2>/dev/null || true
+    # shellcheck disable=SC2086
+    while knot_any_alive $family && ((ticks < 20)); do
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    # shellcheck disable=SC2086
+    kill -KILL $family 2>/dev/null || true
 }
 
 # Whether any of the processes named is still alive.
@@ -330,6 +341,149 @@ knot_descendants() {
 # owner can answer is the likely cause, and no agent answers it.
 knot_dialog_message() {
     echo "$1 did not end within ${2}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+}
+
+# Runs a command that starts something Knot built, such as xcodebuild running tests, with a
+# time limit. At the limit it prints knot_dialog_message for <what> and returns 124, with
+# KNOT_LIMIT_HIT set; otherwise it returns the command's status, so the caller can read the
+# results first and then fail on the status.
+#   knot_run_limited <what> <seconds> <command…>
+knot_run_limited() {
+    local what=$1 seconds=$2 status=0
+    shift 2
+    knot_limit "$seconds" "$@" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "$what" "$seconds"
+        return 124
+    fi
+    return "$status"
+}
+
+# The limit on a step that runs the package's tests, in seconds: 50 minutes, under the hour
+# that another run waits for a build slot. It is not long enough for every wait of a suite
+# to run out, and need not be: a suite's wait that runs out has failed the run already, and
+# the log keeps each failure as it happens. A run whose waits keep running out may be ended
+# by this limit first. What the limit catches is a test that hangs outside its waits, such
+# as in a deadlock, which would otherwise hold the step for ever.
+KNOT_SWIFT_TEST_LIMIT=${KNOT_SWIFT_TEST_LIMIT:-3000}
+
+# Runs a command that runs the package's tests, with KNOT_SWIFT_TEST_LIMIT. At the limit it
+# fails and names the step: a hung test, not a dialog. Otherwise it returns the command's
+# status.
+#   knot_swift_test_limited <step> <command…>
+knot_swift_test_limited() {
+    local step=$1 status=0
+    shift
+    knot_limit "$KNOT_SWIFT_TEST_LIMIT" "$@" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        echo "The step $step did not end within $(knot_duration "$KNOT_SWIFT_TEST_LIMIT") (KNOT_SWIFT_TEST_LIMIT). A test hangs, such as in a deadlock, or the suite's waits keep running out: the failures and the last test that started, above, say which."
+        return 124
+    fi
+    return "$status"
+}
+
+# Prints the fakes that a Mach-O file holds, one a line, and returns 0 when it holds any: the
+# KnotFakes module, by its mangled name in a symbol or its name in a string, as the scan has
+# looked for it since WP-01, and any type of one of this project's modules whose name begins
+# with Fake, such as KnotLink.FakeLinkSystem, which is how a fake outside KnotFakes is named
+# (docs/architecture.md §17). The types are matched in the demangled symbols and strings,
+# because Swift abbreviates repeated words in a mangled name (FakeLinkSystem in KnotLink is
+# 04FakeB6System). A symbol's debug-map path, such as Sources/KnotFakes/, is none of these.
+# An internal type that an optimised, stripped build keeps no symbol for can still go
+# unseen here; the lint is what catches a fake whose guard was lost (fake-unguarded).
+#   knot_fakes_in <Mach-O file>
+knot_fakes_in() {
+    local file=$1 symbols strings found
+    symbols="$(nm -a "$file" 2>/dev/null || true)"
+    strings="$(strings -a "$file" 2>/dev/null || true)"
+    found="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle |
+        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.Fake[A-Za-z0-9_]*' | sort -u || true)"
+    if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
+        found="${found:+$found$'\n'}the module KnotFakes"
+    fi
+    [[ -n $found ]] || return 1
+    printf '%s\n' "$found"
+}
+
+# The limit on one xcodebuild build, in seconds: 40 minutes. A build here takes 13 s for the
+# Debug apps and about 70 s for the two Release apps when DerivedData is warm, and a fresh
+# clone ran every step in under 10 minutes; codesign asking for a keychain is what could
+# hold one for ever. It stays under the hour another run waits for a build slot.
+KNOT_BUILD_LIMIT=${KNOT_BUILD_LIMIT:-2400}
+
+# Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
+# when it does not end in time or ends with a status other than zero. The failure goes to
+# standard error, which a step sends to its log, so a caller may drop the call's output.
+#   knot_sim_call <seconds> <what> <simulator name> <command…>
+knot_sim_call() {
+    local seconds=$1 what=$2 simulator=$3 status=0
+    shift 3
+    knot_limit "$seconds" "$@" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        echo "simctl $what on the simulator $simulator did not end within ${seconds}s. The simulator may be stuck booting, or a system dialog may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen; scripts/sim.sh shutdown ends this worktree's simulators." >&2
+        return 1
+    fi
+    if ((status != 0)); then
+        echo "simctl $what on the simulator $simulator failed with status $status." >&2
+        return 1
+    fi
+}
+
+# Starts an app that Knot built and waits up to <seconds> for its first window, which the
+# probe finds: the probe is called with the app's process ID appended, and prints the
+# windows it sees, or nothing. Then it ends the app and everything the app started. What the
+# app writes to standard error goes to the step's log. Prints "windows: …" and returns 0
+# when a window came. Fails when the app exited first; when the probe itself failed or did
+# not answer, saying so; and when no window came in time although the probe ran, which on
+# this Mac most likely means a system dialog holds the start.
+#   knot_start_app <seconds> <app executable> <probe…>
+knot_start_app() {
+    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note=""
+    shift 2
+    out="$(mktemp)"
+    errors="$(mktemp)"
+    # The app's standard error is the step's. It is started directly and waited for: a
+    # version that ran it in a disowned subshell hung the self-test on a hosted runner.
+    "$app" >/dev/null &
+    pid=$!
+    deadline=$(($(knot_now) + seconds))
+    while (($(knot_now) < deadline)); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            exited=1
+            break
+        fi
+        probe_status=0
+        knot_limit 15 "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
+        found="$(cat "$out")"
+        [[ -n $found ]] && break
+        if ((KNOT_LIMIT_HIT)); then
+            probe_note="the window probe did not answer within 15s"
+        elif ((probe_status != 0)); then
+            probe_note="the window probe failed with status $probe_status: $(tail -n 1 "$errors")"
+        else
+            probe_note=""
+        fi
+        sleep 0.5
+    done
+    if ((exited)); then
+        wait "$pid" || status=$?
+    else
+        knot_end_process "$pid"
+        wait "$pid" 2>/dev/null || true
+    fi
+    rm -f "$out" "$errors"
+    if [[ -n $found ]]; then
+        echo "windows: $found"
+        return 0
+    fi
+    if ((exited)); then
+        echo "$(basename "$app") exited with status $status before it showed a window."
+    elif [[ -n $probe_note ]]; then
+        echo "$(basename "$app") showed no window that the probe could see within ${seconds}s: $probe_note."
+    else
+        echo "$(basename "$app") showed no window within ${seconds}s. A system dialog, such as a consent prompt, may be holding its start and waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+    fi
+    return 1
 }
 
 # Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its standard

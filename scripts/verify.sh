@@ -144,12 +144,17 @@ xcb() {
     knot_xcodebuild_settings
     # Xcode writes the team's prefix into the log of every app build on a Mac that knows the
     # team, so the log is filtered as it is written (knot_filter_team).
-    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log"
+    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log" # limit: xcb
 }
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
 
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
+
+# xcodebuild's own test limits, for every run of tests in a simulator or on the desktop: a
+# case that hangs fails after its allowance, three minutes and five at most.
+KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
+    -maximum-test-execution-time-allowance 300)
 
 # ui_tests <what> <log> [destination name…] -- <xcodebuild arguments…>
 # Runs one UI test bundle, which the arguments name with -only-testing. xcodebuild's own test
@@ -167,13 +172,8 @@ ui_tests() {
         shift
     done
     shift
-    knot_limit "$limit" xcb "$log" "$@" -test-timeouts-enabled YES \
-        -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 300 test ||
-        status=$?
-    if ((KNOT_LIMIT_HIT)); then
-        knot_dialog_message "$what" "$limit"
-        return 1
-    fi
+    knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
+    ((KNOT_LIMIT_HIT == 0)) || return 1
     knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"} || return 1
     if ((status != 0)); then
         echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
@@ -231,7 +231,36 @@ step_links() { tool links; }
 
 # The synthetic fixtures match a fresh run, and the generated audio has its format and
 # length (Fixtures/README.md).
-step_fixtures() { "$KNOT_ROOT/Fixtures/tools/generate.sh" --check; }
+# The fixtures. When this tree lacks its generated audio, as a fresh checkout and the hosted
+# runner do, or the audio is stale (knot_tool.py fixtures-audio), the step speaks it first
+# with the generator as it is, so that the package tests that read Fixtures/generated/audio/
+# find it here as they would on a Mac that made it. Two runs in one tree must not speak at
+# once, since the generator writes the clips in place: the decision and the speaking hold a
+# lock in the tree's .build/, and a second run waits for it and then finds the audio made.
+step_fixtures() {
+    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
+    mkdir -p "$KNOT_BUILD"
+    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
+    if ((status == 75)); then
+        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
+        return 1
+    fi
+    ((status == 0)) || return "$status"
+    "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
+}
+
+# Speaks this tree's audio when it lacks it, and stamps it. step_fixtures runs it holding
+# the audio's lock; it is no step of its own.
+step_fixtures_audio() {
+    local why
+    if ! why="$(cd "$KNOT_ROOT" && tool fixtures-audio)"; then
+        echo "fixtures: $why. Speaking this tree's audio first: Fixtures/tools/generate.sh --audio"
+        "$KNOT_ROOT/Fixtures/tools/generate.sh" --audio
+        (cd "$KNOT_ROOT" && tool fixtures-audio --write-stamp)
+    else
+        echo "fixtures: $why"
+    fi
+}
 
 step_format() {
     (cd "$KNOT_ROOT" && xcrun swift-format lint --strict --recursive --parallel \
@@ -365,7 +394,8 @@ step_pins() {
     check_resolved "$KNOT_PACKAGE/Package.resolved" "$version" "$revision"
     echo "Xcode"
     knot_generate_project
-    xcb /dev/stdout -scheme Knot-iOS -resolvePackageDependencies
+    knot_run_limited "Resolving the packages for Xcode" "$KNOT_BUILD_LIMIT" \
+        xcb /dev/stdout -scheme Knot-iOS -resolvePackageDependencies
     check_resolved "$KNOT_SOURCE_PACKAGES/workspace-state.json" "$version" "$revision"
 }
 
@@ -382,8 +412,11 @@ step_package_test() {
         # knot_evalTests.
         filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
-    swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
-        ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"
+    package_tests() {
+        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
+            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
+    }
+    knot_swift_test_limited package-test package_tests
     # A run that matched no test is a failure, not a pass.
     if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
@@ -402,29 +435,46 @@ step_package_test() {
 # KnotTestSupport, run from two test targets.
 step_contract_two_targets() {
     knot_swiftpm_flags
-    local targets target output="$KNOT_LOGS/verify-contract-run.out" ran=0
-    targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null |
-        grep -e 'contractSuiteDummyPortTwoTestTargets' | cut -d. -f1 | sort -u)"
-    # Run the suite from each test target on its own, and count a target only when its
-    # run passed exactly that test.
-    for target in $targets; do
-        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.contractSuiteDummyPortTwoTestTargets" >"$output" 2>&1 || {
-            echo "FAIL  the dummy contract suite failed in $target"
-            continue
-        }
-        if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
-            echo "ok    the dummy contract suite ran and passed in $target"
-            ran=$((ran + 1))
-        else
-            echo "FAIL  the dummy contract suite did not run in $target"
-        fi
-    done
-    echo "$ran test targets ran the dummy contract suite (two needed)"
-    ((ran >= 2))
+    local output="$KNOT_LOGS/verify-contract-run.out" suite=contractSuiteDummyPortTwoTestTargets
+    # Run the suite from each test target on its own, and count a target only when its run
+    # passed exactly that test. The listing and every run share one limit, whose message goes
+    # to the step's log, not to a target's output.
+    contract_runs() {
+        local targets target ran=0
+        targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null | grep -e "$suite" | cut -d. -f1 | sort -u)" # limit: contract_runs
+        for target in $targets; do
+            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
+                echo "FAIL  the dummy contract suite failed in $target"
+                continue
+            }
+            if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
+                echo "ok    the dummy contract suite ran and passed in $target"
+                ran=$((ran + 1))
+            else
+                echo "FAIL  the dummy contract suite did not run in $target"
+            fi
+        done
+        echo "$ran test targets ran the dummy contract suite (two needed)"
+        ((ran >= 2))
+    }
+    knot_swift_test_limited contract-two-targets contract_runs
 }
 
 # The named test scripts-self-test.
-step_self_test() { "$KNOT_SCRIPTS/self-test.sh"; }
+# The scripts' self-test. Its output goes to a file that the step then prints, so that a
+# process one of its checks leaves behind can hold no pipe of the run open, and it has a
+# limit (KNOT_SELF_TEST_LIMIT, 10 minutes; it takes under a minute), so that a check that
+# hangs fails the step with its log instead of holding the run.
+step_self_test() {
+    local output="$KNOT_LOGS/verify-self-test.out" limit=${KNOT_SELF_TEST_LIMIT:-600} status=0
+    knot_limit "$limit" "$KNOT_SCRIPTS/self-test.sh" >"$output" 2>&1 || status=$?
+    cat "$output"
+    if ((KNOT_LIMIT_HIT)); then
+        echo "self-test: did not end within $(knot_duration "$limit"); the check after the last line above hangs."
+        return 1
+    fi
+    return "$status"
+}
 
 # Every app, Debug: the iOS app with the Watch app and both widget extensions in it, and
 # the Mac app with the `knot` tool in it.
@@ -433,9 +483,11 @@ step_apps() {
     : >"$log"
     knot_generate_project
     echo "Knot-iOS, Debug, iOS Simulator"
-    xcb "$log" -scheme Knot-iOS -configuration Debug -destination 'generic/platform=iOS Simulator' build
+    knot_run_limited "The Debug build of Knot-iOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-iOS -configuration Debug -destination 'generic/platform=iOS Simulator' build
     echo "Knot-macOS, Debug"
-    xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
+    knot_run_limited "The Debug build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
 }
 
 # The packaging that otherwise fails late, each proven with one trivial instance
@@ -445,8 +497,10 @@ step_packaging() {
     local log="$KNOT_LOGS/verify-packaging-release.log"
     : >"$log"
     echo "Knot-iOS and Knot-macOS, Release"
-    xcb "$log" -scheme Knot-iOS -configuration Release -destination 'generic/platform=iOS Simulator' build
-    xcb "$log" -scheme Knot-macOS -configuration Release -destination 'platform=macOS' build
+    knot_run_limited "The Release build of Knot-iOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-iOS -configuration Release -destination 'generic/platform=iOS Simulator' build
+    knot_run_limited "The Release build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Release -destination 'platform=macOS' build
 
     local ios mac failed=0
     ios="$(products Debug-iphonesimulator)/Knot.app"
@@ -489,17 +543,19 @@ step_packaging() {
 
     check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets || failed=1
 
-    # Scans every Mach-O file of an app bundle, its main executable included, for
-    # KnotFakes. It fails when it scanned nothing, so it cannot pass by finding no file.
-    # `want` is "none" for a release build and "some" for the debug control.
+    # Scans every Mach-O file of an app bundle, its main executable included, for fakes:
+    # the KnotFakes module, and any type of a Knot module named Fake…, such as a fake
+    # transport inside KnotLink (knot_fakes_in). It fails when it scanned nothing, so it
+    # cannot pass by finding no file. `want` is "none" for a release build and "some" for
+    # the debug control.
     scan_for_fakes() {
-        local app=$1 want=$2 f main scanned=0 main_seen=0 found=0
+        local app=$1 want=$2 f main scanned=0 main_seen=0 found=0 held
         main="$(main_executable "$app")"
         while IFS= read -r -d '' f; do
             scanned=$((scanned + 1))
             [[ $f == "$main" ]] && main_seen=1
-            if nm -a "$f" 2>/dev/null | grep -e 9KnotFakes >/dev/null || strings -a "$f" | grep -e KnotFakes >/dev/null; then
-                echo "      KnotFakes in $f"
+            if held="$(knot_fakes_in "$f")"; then
+                echo "      fakes in $f: $(tr '\n' ' ' <<<"$held" | cut -c1-200)"
                 found=$((found + 1))
             fi
         done < <(macho_files "$app")
@@ -515,20 +571,29 @@ step_packaging() {
 }
 
 # The tests hosted in the iOS app, in the worktree's iPhone simulator: the contract suites
-# that can run only there (docs/architecture.md §5). It holds a simulator slot.
+# that can run only there (docs/architecture.md §5). It holds a simulator slot. Like the UI
+# tests, the run has xcodebuild's own test limits and an outer limit round the whole call
+# (KNOT_HOSTED_TEST_LIMIT, 20 minutes), whose failure says that a system dialog may be
+# holding it. The results are read first, then xcodebuild's status.
 step_ios_hosted() {
-    local log="$KNOT_LOGS/verify-ios-hosted-tests.log" iphone
+    local log="$KNOT_LOGS/verify-ios-hosted-tests.log" iphone limit=${KNOT_HOSTED_TEST_LIMIT:-1200} status=0
     : >"$log"
     "$KNOT_SCRIPTS/sim.sh" ensure
     iphone="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
     trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
     knot_generate_project
-    xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -only-testing:Knot-iOS-Tests test
-    grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5
+    knot_run_limited "The hosted iOS tests" "$limit" xcb "$log" -scheme Knot-iOS -configuration Debug \
+        -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
+    ((KNOT_LIMIT_HIT == 0)) || return 1
+    grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."
         return 1
     }
+    if ((status != 0)); then
+        echo "The hosted iOS tests: xcodebuild exited with $status after the tests above. Its log is $log."
+        return 1
+    fi
 }
 
 # The three apps launch and show the placeholder: the UI tests on the iPhone, the iPad and
@@ -558,39 +623,41 @@ step_launch() {
     ui_tests "The Watch UI tests" "$watch_log" -- \
         -scheme Knot-watchOS -configuration Debug -destination "id=$watch" -only-testing:Knot-watchOS-UITests
 
-    local ios bundle role udid
+    # Each simctl call has a time limit (knot_sim_call), so a simulator that never finishes
+    # booting, or a start that a dialog holds, fails the step and names the simulator.
+    local ios bundle role udid name
     ios="$(products Debug-iphonesimulator)/Knot.app"
     bundle="$(plist_value "$ios/Info.plist" CFBundleIdentifier)"
     for role in iphone ipad watch; do
         udid="$("$KNOT_SCRIPTS/sim.sh" udid $role)"
-        xcrun simctl bootstatus "$udid" -b >/dev/null
+        name="$("$KNOT_SCRIPTS/sim.sh" list | awk -v role=$role '$1 == role { print $2 }')"
+        knot_sim_call 300 "bootstatus" "$name" xcrun simctl bootstatus "$udid" -b >/dev/null
         if [[ $role == watch ]]; then
-            xcrun simctl install "$udid" "$(find "$ios/Watch" -maxdepth 1 -name '*.app' | head -n 1)"
-            xcrun simctl launch "$udid" "$bundle.watchkitapp" >/dev/null
+            knot_sim_call 120 "install" "$name" \
+                xcrun simctl install "$udid" "$(find "$ios/Watch" -maxdepth 1 -name '*.app' | head -n 1)"
+            knot_sim_call 60 "launch" "$name" xcrun simctl launch "$udid" "$bundle.watchkitapp" >/dev/null
         else
-            xcrun simctl install "$udid" "$ios"
-            xcrun simctl launch "$udid" "$bundle" >/dev/null
+            knot_sim_call 120 "install" "$name" xcrun simctl install "$udid" "$ios"
+            knot_sim_call 60 "launch" "$name" xcrun simctl launch "$udid" "$bundle" >/dev/null
         fi
         sleep 4
-        xcrun simctl io "$udid" screenshot "$KNOT_LOGS/launch-$role.png" >/dev/null 2>&1
+        knot_sim_call 30 "screenshot" "$name" xcrun simctl io "$udid" screenshot "$KNOT_LOGS/launch-$role.png" >/dev/null
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen. This reads only what needs no Screen Recording
-    # permission; the Mac UI tests are the mac-ui step.
-    local mac pid windows="" i
+    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds (30). The
+    # probe reads only what needs no Screen Recording permission; the Mac UI tests are the
+    # mac-ui step. Afterwards neither the app nor anything it started may be left running.
+    local mac status=0
     mac="$(products Debug)/Knot.app"
-    "$mac/Contents/MacOS/Knot" >/dev/null 2>&1 &
-    pid=$!
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        sleep 1
-        windows="$(xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" "$pid" 2>/dev/null || true)"
-        [[ -n $windows ]] && break
-    done
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    echo "Mac app windows: ${windows:-none}"
-    [[ -n $windows ]]
+    knot_start_app "${KNOT_APP_START_LIMIT:-30}" "$mac/Contents/MacOS/Knot" \
+        xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
+    end_mac_test_hosts
+    if [[ -n "$(mac_test_hosts)" ]]; then
+        echo "The Mac app, or something it started, was still running after it was ended: $(mac_test_hosts | tr '\n' ' ')"
+        return 1
+    fi
+    return "$status"
 }
 
 # The Mac UI tests. They take over the desktop, so they hold the one exclusive Mac UI slot,
@@ -609,12 +676,17 @@ step_mac_ui() {
 }
 
 # Ends the Mac app and the UI test runner that this worktree built, if either is still open.
+# Prints the process IDs of whatever runs from this worktree's Debug products: the Mac app
+# and the UI test runner. A literal match on the command line: pgrep -f would read the path
+# as a pattern, in which a "." matches any character.
+mac_test_hosts() {
+    ps -axww -o pid=,command= | KNOT_MATCH="$(products Debug)/" awk 'index($0, ENVIRON["KNOT_MATCH"]) { print $1 }'
+}
+
 end_mac_test_hosts() {
     local folder pids
     folder="$(products Debug)/"
-    # A literal match on the command line: pgrep -f would read the path as a pattern, in
-    # which a "." matches any character.
-    pids="$(ps -axww -o pid=,command= | KNOT_MATCH="$folder" awk 'index($0, ENVIRON["KNOT_MATCH"]) { print $1 }')"
+    pids="$(mac_test_hosts)"
     [[ -z $pids ]] && return 0
     echo "ending what the run left open from $folder: $(echo "$pids" | tr '\n' ' ')"
     # shellcheck disable=SC2086
@@ -661,8 +733,11 @@ step_soak() {
 step_perf() {
     local scratch="$KNOT_BUILD/swiftpm-perf" output="$KNOT_LOGS/verify-perf.out"
     swift build --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES --build-tests
-    swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
-        --filter 'Performance' 2>&1 | tee "$output" || return 1
+    perf_tests() {
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
+            --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
+    }
+    knot_swift_test_limited perf perf_tests || return 1
     if grep -E 'Test run with [1-9][0-9]* tests?|Executed [1-9]' "$output" >/dev/null; then
         echo "perf: results in $output. Report each as a median and a 95th percentile of at least 20 runs."
     else
@@ -673,7 +748,8 @@ step_perf() {
 # The package tests under Thread Sanitizer, as the nightly run does (named test
 # package-tests-under-thread-sanitizer-nightly).
 step_tsan() {
-    swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
+    knot_swift_test_limited tsan \
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
 }
 
 # Reports a change in the on-device models since the last report, as the nightly run on
@@ -681,7 +757,14 @@ step_tsan() {
 step_model_report() {
     local last="$KNOT_BUILD_FOLDER/models-last.txt" now
     mkdir -p "$KNOT_BUILD_FOLDER"
-    now="$(xcrun swift "$KNOT_SCRIPTS/lib/models.swift")"
+    local output="$KNOT_LOGS/verify-model-report.out" status=0
+    knot_limit "${KNOT_MODEL_REPORT_LIMIT:-600}" xcrun swift "$KNOT_SCRIPTS/lib/models.swift" >"$output" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "The model report" "${KNOT_MODEL_REPORT_LIMIT:-600}"
+        return 1
+    fi
+    ((status == 0)) || return "$status"
+    now="$(cat "$output")"
     echo "$now"
     if [[ -f $last ]] && ! diff -u "$last" <(printf '%s\n' "$now") >/dev/null; then
         echo "model-report: the models or the system changed since the last report:"
