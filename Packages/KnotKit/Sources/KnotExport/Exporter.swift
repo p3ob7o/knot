@@ -123,9 +123,25 @@ public struct ExportReport: Hashable, Sendable {
 /// with no live segment left, stays behind, and so does a deleted segment. It reads the store
 /// a page at a time and writes each note before it reads the next page, so the export of a
 /// large stream holds one page in memory.
+///
+/// The store may change while an export runs: the app captures, sync applies what it fetched,
+/// a segment moves to a note of its own. The stream is paged by position, so a note that
+/// changes can move behind the export's position, where no later page returns it, or ahead
+/// of it, where a later page returns it again. Only a note that changed can do either, so the
+/// export takes the store's cursor before its first page, writes each note once, by its ID,
+/// and after the last page reads the notes changed since that cursor and writes those shown
+/// that it has not written. It repeats that from the cursor it reached until a pass writes
+/// nothing, at most `catchUpPasses` times. One pass is enough for every note that was shown
+/// when the export began and is still shown: one the pages missed changed before its page was
+/// read, so before the first pass. A further pass only takes notes that became shown during
+/// the export, such as one a new capture made, and the bound keeps a store that never stops
+/// changing from holding the export for ever. A note that changed after it was written leaves
+/// as it was when it was read.
 public struct Exporter: Sendable {
-    /// Notes read from the stream at a time.
+    /// Notes read from the stream, or changes read from the store, at a time.
     public static let pageSize = 100
+    /// The most passes over the notes that changed while the export ran (see above).
+    public static let catchUpPasses = 4
 
     private let notes: any NoteStore
     private let assets: any AssetStore
@@ -147,8 +163,10 @@ public struct Exporter: Sendable {
         self.log = log
     }
 
-    /// What an export would write and what it could not, read from the store. It writes
-    /// nothing, and asks for no image.
+    /// What an export would write and what it could not, read from the store as `export(to:)`
+    /// reads it. It writes nothing, and asks for no image. A preview is true for the moment it
+    /// was read: the store may change before an export runs, and the report of `export(to:)`
+    /// is what happened.
     public func preview() async throws(KnotError) -> ExportPreview {
         var preview = ExportPreview(notes: 0, files: 0, missing: [])
         try await forEachNote { record throws(KnotError) in
@@ -197,14 +215,32 @@ public struct Exporter: Sendable {
 
     // MARK: - Reading
 
-    /// Runs `body` on each note the stream shows, page by page, newest first.
+    /// Runs `body` once on each note the stream shows, page by page, newest first, then on each
+    /// note that changed while it ran and that it has not seen (see the type's comment).
     private func forEachNote(_ body: (NoteRecord) async throws(KnotError) -> Void) async throws(KnotError) {
+        var seen: Set<NoteID> = []
+        var since = try await notes.cursor()
         var position: StreamPosition?
         repeat {
             let page = try await notes.stream(after: position, limit: Self.pageSize)
-            for record in page.notes { try await body(record) }
+            for record in page.notes where seen.insert(record.note.id).inserted { try await body(record) }
             position = page.next
         } while position != nil
+        for _ in 0..<Self.catchUpPasses {
+            var added = false
+            var more = true
+            while more {
+                let page = try await notes.changes(after: since, limit: Self.pageSize)
+                for change in page.changes where !change.isDeleted {
+                    guard let record = change.record, seen.insert(change.noteID).inserted else { continue }
+                    added = true
+                    try await body(record)
+                }
+                since = page.cursor
+                more = page.hasMore
+            }
+            guard added else { return }
+        }
     }
 
     private enum Location {
