@@ -221,7 +221,7 @@ public final class NoteViewModel {
     /// Ends the typed capture: Done, ⌘↩, or the surface hiding (docs/product-spec.md §4.1).
     /// Empty text leaves nothing in the stream.
     public func endCapture() {
-        enqueue { model in await model.endTypedCapture() }
+        enqueue { model in _ = await model.endTypedCapture() }
     }
 
     /// "New note": forces a new note inside the window (rule 4). The text typed so far stays in
@@ -277,15 +277,22 @@ public final class NoteViewModel {
         }
     }
 
-    private func endTypedCapture() async {
+    /// Ends the typed capture, and returns false when the text stays on the surface instead.
+    ///
+    /// A capture ends only when what the field holds is what the engine answered as saved. When
+    /// the last save failed, the capture stays open with the text in the field, the surface says
+    /// it could not save, and the next save or Done carries the whole text again (§4.4).
+    @discardableResult
+    private func endTypedCapture() async -> Bool {
         guard let id = typedCapture else {
-            if fieldText.isEmpty { return }
+            if fieldText.isEmpty { return true }
             // Text that could not begin a capture stays in the field: try once more.
             await saveField()
-            guard typedCapture != nil else { return }
+            guard typedCapture != nil else { return false }
             return await endTypedCapture()
         }
         if fieldText != sentText { await saveField() }
+        guard fieldText == sentText else { return false }
         do {
             let state = try await environment.engine.end(id)
             capturePath = state.path
@@ -295,9 +302,11 @@ public final class NoteViewModel {
             clearSaveProblem()
             if let note = state.noteID, case .capture = mode, state.outcome == .stored { await show(note) }
             await refresh()
+            return true
         } catch {
             // The surface stays open with the text in it and says it could not save (§4.4).
             problem = .couldNotSave(error.code)
+            return false
         }
     }
 
@@ -342,8 +351,15 @@ public final class NoteViewModel {
 
     private func startRecording() async {
         // Starting a recording ends the typed capture: its text is saved as it stands, and the
-        // recording becomes the next segment of the same note (rule 15).
-        await endTypedCapture()
+        // recording becomes the next segment of the same note (rule 15). Text that cannot be
+        // saved is never left behind a recording, which would block the field: the recording
+        // does not start, and the surface keeps saying the text could not be saved.
+        guard await endTypedCapture() else {
+            recording = .idle
+            recordingPress = nil
+            announcer.announce(.recordingCouldNotStart)
+            return
+        }
         let request = CaptureRequest(kind: .voice, surface: surface, placement: placement, shownNote: record?.note.id)
         do {
             let state = try await environment.engine.begin(request)
