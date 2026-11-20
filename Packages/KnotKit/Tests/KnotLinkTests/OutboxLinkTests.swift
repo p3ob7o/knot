@@ -433,6 +433,26 @@ import Testing
         #expect(harness.outstanding(capture).count == 1 && again.attempt != first.attempt)
     }
 
+    /// docs/architecture.md §12 counts a stall from the queueing. A relaunch adopts the
+    /// transfer with its time of queueing, so relaunches every 30 seconds do not keep a
+    /// transfer that never moves from reaching a limit of 60.
+    @Test func aRelaunchKeepsTheTimeATransferWasQueued() async throws {
+        let harness = LinkHarness()
+        let (first, _) = harness.launchWatch(stallLimit: 60)
+        let capture = try await harness.sendNew(on: first)
+        await harness.settle(first)
+        let queued = try #require(harness.outstanding(capture).first)
+        for _ in 0..<3 {
+            harness.clock.advance(by: 30)
+            let (next, _) = harness.launchWatch(stallLimit: 60)
+            await next.resume()
+            await harness.settle(next)
+        }
+        #expect(harness.system.timesCancelled(capture) == 1, "Cancelled once, 90 seconds after it was queued.")
+        let again = try #require(harness.outstanding(capture).first)
+        #expect(harness.outstanding(capture).count == 1 && again.attempt != queued.attempt)
+    }
+
     @Test func noTransferStallsWhileTheIPhoneIsOutOfReach() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch(stallLimit: 60)

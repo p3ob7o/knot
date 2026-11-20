@@ -9,8 +9,8 @@ import Testing
 /// The fake transport behaves as docs/notes/SP-2.md found `WCSession` to behave.
 @Suite struct FakeLinkTests {
     static let launch = UUID()
-    static let first = LinkAttempt(launch: launch, number: 1)
-    static let second = LinkAttempt(launch: launch, number: 2)
+    static let first = LinkAttempt(launch: launch, number: 1, queuedAt: Date(timeIntervalSince1970: 1_795_000_000))
+    static let second = LinkAttempt(launch: launch, number: 2, queuedAt: Date(timeIntervalSince1970: 1_795_000_000))
 
     /// Collects a transport's events.
     final class Collector: Sendable {

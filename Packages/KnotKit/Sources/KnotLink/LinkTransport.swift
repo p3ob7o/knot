@@ -145,10 +145,15 @@ public struct LinkAttempt: Hashable, Sendable, CustomStringConvertible {
     public var launch: UUID
     /// The transfer's number among those its launch queued, from 1.
     public var number: Int
+    /// When it was queued, by the Watch's clock. A stall counts from here
+    /// (docs/architecture.md §12), so it travels with the transfer and comes back when a later
+    /// launch adopts it.
+    public var queuedAt: Date
 
-    public init(launch: UUID, number: Int) {
+    public init(launch: UUID, number: Int, queuedAt: Date) {
         self.launch = launch
         self.number = number
+        self.queuedAt = queuedAt
     }
 
     public var description: String { "\(launch.uuidString.lowercased())#\(number)" }

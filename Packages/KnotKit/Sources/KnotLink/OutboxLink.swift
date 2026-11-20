@@ -378,7 +378,8 @@ public actor OutboxLink {
         }
         for (capture, attempt) in outstanding {
             if queued[capture]?.attempt != attempt {
-                queued[capture] = (attempt, now)
+                // Its age counts from when it was queued, by whichever launch queued it.
+                queued[capture] = (attempt, attempt.queuedAt)
                 log.capture(capture, "link_adopted", .number("attempt", attempt.number))
             }
         }
@@ -409,14 +410,14 @@ public actor OutboxLink {
         guard let manifest = entry.manifest else { return }
         let capture = entry.captureID
         let attempt = nextAttempt()
-        queued[capture] = (attempt, clock.now())
+        queued[capture] = (attempt, attempt.queuedAt)
         log.capture(capture, "link_queued", .number("attempt", attempt.number))
         transport.queueFile(outbox.recordingURL(capture), manifest: manifest, attempt: attempt)
     }
 
     private func nextAttempt() -> LinkAttempt {
         queuedInLaunch += 1
-        return LinkAttempt(launch: launch, number: queuedInLaunch)
+        return LinkAttempt(launch: launch, number: queuedInLaunch, queuedAt: clock.now())
     }
 
     private func changed() {
