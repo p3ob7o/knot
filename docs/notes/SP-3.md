@@ -25,7 +25,7 @@ Everything here was signed for development with the owner's team, under the deve
 | How do two or three shipping Mac App Store apps deliver a CLI or an MCP server? | Answered here | Day One and DetailsPro, below. |
 | Can the sandboxed tool write to a folder the user names? If not, how does `knot export` deliver its output? | Answered here; the choice is the report's | No: `NSCocoaErrorDomain 513` in both places tried. Standard output works (`knot export - > …`, or a stream that `tar` unpacks), and so does a folder in the group container that the tool names and the user copies from. |
 | Where does the Mac store live? | Answered here for development; needs the check and the owner for shipping | In the group container. In a development build that is `~/Library/Group Containers/<team>.com.p3ob7o.knot.dev/`. Which form the milestone builds use waits for the distribution-signed check and the owner's decision. |
-| The Mac's app-group form | Needs the distribution-signed check, then the owner | A bare tool signed for development can use only the Team-ID form; a piece with a development profile that authorises the `group.` group may pass, untried. By the system's own log, the `group.` form passes a profile-validated, App Store or TestFlight signature, and no other that applies here. A DTS answer on Apple's forums, read through a search summary, says there is no way to move a group's content to another group, so the form the M4 milestone build ships is kept. |
+| The Mac's app-group form | Needs the distribution-signed check, then the owner | A bare tool signed for development can use only the Team-ID form; a piece with a development profile that authorises the `group.` group may pass, untried. By the system's own log, the `group.` form passes a profile-validated, App Store or TestFlight signature, and no other that applies here. A DTS answer on Apple's forums, read through a search summary and checked by no run here, says there is no way to move a group's content to another group. If that holds, the form the M4 milestone build ships is permanent. Copying the store through an app that claims both groups, as the spike's pieces do, was not tried. |
 
 ## What the runs showed
 
@@ -171,3 +171,4 @@ docs/architecture.md is the orchestrator's file, so this note does not edit it. 
 - The in-app route to PATH through an open panel, which needs a window and the owner.
 - A store in the group container under the app's own `KnotStore/` layout and `fullfsync`, with WP-10's real store; the spike used a synthetic store with the same settings.
 - `knot export -` as an archive: the spike streamed one Markdown file.
+- Moving a store from one form of the group to the other, by an app that claims both.
