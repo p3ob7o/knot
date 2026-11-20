@@ -82,6 +82,42 @@ import Testing
         #expect(!mentions(subject.log, capture).isEmpty)
     }
 
+    /// The phone places a recording by its own times. The start is the one written when the
+    /// recording began, which the coordinator holds for the recording it has open: a read
+    /// that fails at the stop, a day later by the clock, changes nothing.
+    @Test func aReadThatFailsAtTheStopDoesNotRedateTheRecording() async throws {
+        let subject = makeSubject()
+        let harness = subject.harness
+        await subject.coordinator.launch()
+        let capture = try await subject.coordinator.start()
+        await WatchCoordinatorTests().waitForAudio(capture, harness)
+        let manifest = harness.locations.recordingManifest(capture)
+        let written = try CaptureManifest.decode(Data(contentsOf: manifest))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: manifest.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: manifest.path) }
+        harness.clock.advance(by: 86_400)
+        _ = await subject.coordinator.stop()
+        let admitted = try #require(harness.outbox.entry(capture)?.manifest)
+        #expect(admitted.startedAt == written.startedAt)
+    }
+
+    /// Where the coordinator has nothing to go by, it keeps the recording and its manifest for
+    /// a later try, counted, and makes up no time.
+    @Test func aRecoveredRecordingWhoseManifestCannotBeReadIsKeptAndNotRedated() async throws {
+        let subject = makeSubject()
+        let harness = subject.harness
+        let capture: CaptureID = harness.ids.make()
+        try subject.recorder.leaveOrphan(capture, launch: harness.ids.make(), frames: 16_000)
+        let manifest = harness.locations.recordingManifest(capture)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: manifest.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: manifest.path) }
+        await subject.coordinator.launch()
+        #expect(harness.outbox.entry(capture) == nil, "Nothing is admitted with a made-up start.")
+        #expect(FileManager.default.fileExists(atPath: manifest.path))
+        #expect(await subject.link.states()[capture] == .waiting)
+        #expect(subject.log.lines("watch_recording_manifest_unreadable").map(\.fields.first) == [.capture(capture)])
+    }
+
     @Test func aRecoveredRecordingWithNoAudioIsEndedAndLogged() async throws {
         let orphan = Box<CaptureID?>(nil)
         let subject = makeSubject { inner in NoAudioRecorder(inner: inner, orphan: orphan) }

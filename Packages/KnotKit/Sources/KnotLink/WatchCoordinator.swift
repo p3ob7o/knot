@@ -87,6 +87,10 @@ public actor WatchCoordinator {
     /// recorder, so a second finish of the same capture would otherwise convert it twice at
     /// once.
     private var finishing: Set<CaptureID> = []
+    /// The manifests the recorder wrote for the recordings this launch started, read once the
+    /// recording is live. A recording keeps the start written when it began, even when a later
+    /// read of its manifest fails.
+    private var written: [CaptureID: CaptureManifest] = [:]
 
     /// - Parameters:
     ///   - launchID: this launch. Recovery finishes only the recordings of other launches.
@@ -176,6 +180,7 @@ public actor WatchCoordinator {
         do {
             let session = try await recorder.start(request)
             activity = .recording(session, startedBy: press)
+            written[capture] = readWrittenManifest(capture)
             log.capture(capture, "watch_recording_live")
             watchForItsEnd(session)
             killPoint(.recordingLive)
@@ -238,6 +243,7 @@ public actor WatchCoordinator {
         guard case .recording(let session, _) = activity else { return nil }
         activity = .stopping
         await session.discard()
+        written[session.captureID] = nil
         activity = .idle
         log.capture(session.captureID, "watch_recording_discarded")
         return session.captureID
@@ -282,15 +288,22 @@ public actor WatchCoordinator {
             await link.release(capture)
             return await removeWorkingFile(capture)
         }
+        guard link.outbox.holdsRecording(capture) || recording.workingFile != nil else {
+            // A manifest with no audio, which a start that failed can leave: nothing to keep.
+            return await endWithoutAudio(capture)
+        }
+        guard let started = writtenManifest(capture) else {
+            // Nothing to date it by: it is kept, with its manifest, for a later try, and no
+            // time is made up.
+            log.capture(capture, "watch_recording_manifest_unreadable", level: .error)
+            return await keep(recording, KnotError.inboxItemUnreadable.about(capture: capture))
+        }
         if link.outbox.holdsRecording(capture) {
             // The converted file reached the outbox and its manifest did not: admit that file,
             // which a move placed whole, rather than convert again.
             log.capture(capture, "watch_recording_found_in_outbox")
-            return await admit(recording, file: link.outbox.recordingURL(capture), duration: recording.duration)
-        }
-        guard recording.workingFile != nil else {
-            // A manifest with no audio, which a start that failed can leave: nothing to keep.
-            return await endWithoutAudio(capture)
+            return await admit(
+                recording, written: started, file: link.outbox.recordingURL(capture), duration: recording.duration)
         }
         let converted: ConvertedRecording
         do {
@@ -301,13 +314,17 @@ public actor WatchCoordinator {
             return await keep(recording, error)
         }
         killPoint(.converted)
-        return await admit(recording, file: converted.file, duration: converted.duration)
+        return await admit(recording, written: started, file: converted.file, duration: converted.duration)
     }
 
     /// Admits a converted recording to the outbox and removes its working file.
-    private func admit(_ recording: RecordedAudio, file: URL, duration: Duration) async -> StopOutcome {
+    private func admit(_ recording: RecordedAudio, written started: CaptureManifest, file: URL, duration: Duration)
+        async -> StopOutcome
+    {
         let capture = recording.captureID
-        let manifest = outboxManifest(for: recording, duration: duration)
+        var manifest = started
+        manifest.duration = duration
+        manifest.endedAt = started.startedAt.addingTimeInterval(Self.seconds(duration))
         do {
             _ = try await link.send(manifest, file: file, afterRecording: { killPoint(.outboxRecording) })
         } catch {
@@ -317,6 +334,7 @@ public actor WatchCoordinator {
         }
         killPoint(.sent)
         unfinished[capture] = nil
+        written[capture] = nil
         return await removeWorkingFile(capture)
     }
 
@@ -335,6 +353,7 @@ public actor WatchCoordinator {
     /// nowhere, so nothing stays in `Recording/` for ever.
     private func endWithoutAudio(_ capture: CaptureID) async -> StopOutcome {
         unfinished[capture] = nil
+        written[capture] = nil
         await link.release(capture)
         do {
             try await recorder.removeWorkingFile(of: capture)
@@ -349,6 +368,7 @@ public actor WatchCoordinator {
     /// marker that says so.
     private func removeAcknowledgedLeftovers(_ capture: CaptureID) async -> StopOutcome {
         unfinished[capture] = nil
+        written[capture] = nil
         await link.release(capture)
         do {
             try await recorder.removeWorkingFile(of: capture)
@@ -381,28 +401,18 @@ public actor WatchCoordinator {
         }
     }
 
-    /// The manifest the outbox holds: the one the recorder wrote before the first sample, with
-    /// the recording's end and length. The link adds the size and checksum.
-    private func outboxManifest(for recording: RecordedAudio, duration: Duration) -> CaptureManifest {
-        let capture = recording.captureID
-        let written = link.outbox.locations.recordingManifest(capture)
-        var manifest: CaptureManifest
-        if let data = try? Data(contentsOf: written), let read = try? CaptureManifest.decode(data),
+    /// The manifest the recorder wrote before the first sample: the one held since the
+    /// recording went live, or else the one in `Recording/`. `nil` when neither is there to read.
+    private func writtenManifest(_ capture: CaptureID) -> CaptureManifest? {
+        written[capture] ?? readWrittenManifest(capture)
+    }
+
+    private func readWrittenManifest(_ capture: CaptureID) -> CaptureManifest? {
+        let url = link.outbox.locations.recordingManifest(capture)
+        guard let data = try? Data(contentsOf: url), let read = try? CaptureManifest.decode(data),
             read.captureID == capture
-        {
-            manifest = read
-        } else {
-            // The recorder writes its manifest before the first sample, so this is a damaged
-            // one: the recording is still sent, dated back from now by its length.
-            log.capture(capture, "watch_recording_manifest_unreadable", level: .error)
-            manifest = CaptureManifest(
-                captureID: capture, kind: .voice, origin: CaptureOrigin(source: .device(device), surface: .watch),
-                launchID: launchID, startedAt: clock.now().addingTimeInterval(-Self.seconds(duration)),
-                placement: .window)
-        }
-        manifest.duration = duration
-        manifest.endedAt = manifest.startedAt.addingTimeInterval(Self.seconds(duration))
-        return manifest
+        else { return nil }
+        return read
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {
