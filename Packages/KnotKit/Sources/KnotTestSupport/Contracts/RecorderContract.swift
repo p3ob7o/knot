@@ -32,6 +32,7 @@ public enum RecorderContract {
         try await twoStopsAtOnceBothWaitForTheFile(make)
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
+        try await aStoppedRecordingThatWasNotConvertedIsAnOrphan(make)
     }
 
     static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -179,6 +180,33 @@ public enum RecorderContract {
     }
 
     /// Recovery finishes recordings of earlier launches and never one of the current launch.
+    /// A recording of an earlier launch that stopped and was never converted, or whose
+    /// conversion failed, leaves a working file, and it is among that launch's orphans: a later
+    /// launch's recovery returns it, read to its last complete frame, until `removeWorkingFile`
+    /// takes it. So a failed conversion is tried again at the next launch (finding 23).
+    public static func aStoppedRecordingThatWasNotConvertedIsAnOrphan(
+        _ make: @Sendable () async throws -> RecorderSubject
+    ) async throws {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        let later: LaunchID = Identifier(uuid: UUID())
+        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
+            $0.captureID == earlier.captureID
+        }
+        #expect(found != nil, "A stopped recording that was never converted is an orphan of its launch.")
+        #expect(found?.workingFile == stopped.workingFile && found?.frames == stopped.frames, "Read to its end.")
+        #expect(
+            try await recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
+            "It stays an orphan until its working file is removed.")
+        try await recorder.removeWorkingFile(of: earlier.captureID)
+        #expect(
+            try await !recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
+            "Once its working file is removed, it is not.")
+    }
+
     public static func recoveryNeverTouchesTheCurrentLaunch(_ make: @Sendable () async throws -> RecorderSubject)
         async throws
     {

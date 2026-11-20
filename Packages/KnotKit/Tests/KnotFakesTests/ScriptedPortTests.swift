@@ -136,8 +136,33 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         #expect(recovered.map(\.captureID) == [orphan])
         #expect(recovered.first?.ending == .recovered)
         #expect(recovered.first?.workingFile.map { layer.exists($0) } == true, "Its working file is there to convert.")
-        #expect(try await recorder.recoverOrphans(currentLaunch: current).isEmpty, "An orphan is recovered once.")
+        #expect(
+            try await recorder.recoverOrphans(currentLaunch: current).map(\.captureID) == [orphan],
+            "An orphan stays one until its working file is removed.")
+        try await recorder.removeWorkingFile(of: orphan)
+        #expect(try await recorder.recoverOrphans(currentLaunch: current).isEmpty, "Then it is gone.")
         #expect(await session.stop().ending == .stopped)
+    }
+
+    /// Finding 23: a recording that stopped and whose conversion failed is found again by the
+    /// next launch's recovery, so the conversion is tried again; once converted and its working
+    /// file removed, it is not.
+    @Test func aFailedConversionIsTriedAgainAtTheNextLaunch() async throws {
+        let (recorder, _) = try scriptedRecorder()
+        let launch: LaunchID = Identifier(uuid: UUID())
+        let session = try await recorder.start(recordingRequest(launch))
+        let stopped = await session.stop()
+        recorder.failNextConversions(with: .conversionFailed)
+        await #expect(throws: KnotError.conversionFailed.about(capture: stopped.captureID)) {
+            try await recorder.convert(stopped)
+        }
+        let next: LaunchID = Identifier(uuid: UUID())
+        let orphans = try await recorder.recoverOrphans(currentLaunch: next)
+        #expect(orphans.map(\.captureID) == [stopped.captureID], "The next launch finds it.")
+        let again = try #require(orphans.first)
+        _ = try await recorder.convert(again)
+        try await recorder.removeWorkingFile(of: again.captureID)
+        #expect(try await recorder.recoverOrphans(currentLaunch: next).isEmpty)
     }
 
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {

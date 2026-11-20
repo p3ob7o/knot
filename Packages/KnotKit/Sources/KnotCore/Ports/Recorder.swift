@@ -26,6 +26,12 @@ public protocol Recorder: Sendable {
 
     /// Finishes the recordings of earlier launches: each orphaned working file is read to its
     /// last complete frame. A recording of `currentLaunch` is never touched.
+    ///
+    /// Every working file of an earlier launch that `removeWorkingFile` has not removed is an
+    /// orphan: a recording that died while it ran, ended as `recovered`, and one that stopped
+    /// and was never converted, or whose conversion failed, as it ended. So a failed conversion
+    /// is tried again at the next launch. An orphan is returned again on each call until its
+    /// working file is removed.
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio]
 
     /// Converts a stopped recording's working file to the stored format, AAC mono in `.m4a`,
