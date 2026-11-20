@@ -22,3 +22,4 @@ WP-14	Packages/KnotKit/Tests/knot-evalTests/Cleanup*.swift	pull request 19
 WP-00	Packages/KnotKit/Sources/knot-eval/main.swift	pull request 19: shared by the two commands
 WP-00	Packages/KnotKit/Sources/knot-eval/EvalOptions.swift	pull request 19: shared by the two commands
 WP-00	Packages/KnotKit/Tests/knot-evalTests/knot-evalTests.swift	pull request 19: shared by the two commands
+WP-11	Packages/KnotKit/Sources/KnotCapture/Shared/	pull request 40: WP-15 asks the orchestrator for a change there
