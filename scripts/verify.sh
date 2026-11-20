@@ -567,39 +567,41 @@ step_launch() {
     ui_tests "The Watch UI tests" "$watch_log" -- \
         -scheme Knot-watchOS -configuration Debug -destination "id=$watch" -only-testing:Knot-watchOS-UITests
 
-    local ios bundle role udid
+    # Each simctl call has a time limit (knot_sim_call), so a simulator that never finishes
+    # booting, or a start that a dialog holds, fails the step and names the simulator.
+    local ios bundle role udid name
     ios="$(products Debug-iphonesimulator)/Knot.app"
     bundle="$(plist_value "$ios/Info.plist" CFBundleIdentifier)"
     for role in iphone ipad watch; do
         udid="$("$KNOT_SCRIPTS/sim.sh" udid $role)"
-        xcrun simctl bootstatus "$udid" -b >/dev/null
+        name="$("$KNOT_SCRIPTS/sim.sh" list | awk -v role=$role '$1 == role { print $2 }')"
+        knot_sim_call 300 "bootstatus" "$name" xcrun simctl bootstatus "$udid" -b >/dev/null
         if [[ $role == watch ]]; then
-            xcrun simctl install "$udid" "$(find "$ios/Watch" -maxdepth 1 -name '*.app' | head -n 1)"
-            xcrun simctl launch "$udid" "$bundle.watchkitapp" >/dev/null
+            knot_sim_call 120 "install" "$name" \
+                xcrun simctl install "$udid" "$(find "$ios/Watch" -maxdepth 1 -name '*.app' | head -n 1)"
+            knot_sim_call 60 "launch" "$name" xcrun simctl launch "$udid" "$bundle.watchkitapp" >/dev/null
         else
-            xcrun simctl install "$udid" "$ios"
-            xcrun simctl launch "$udid" "$bundle" >/dev/null
+            knot_sim_call 120 "install" "$name" xcrun simctl install "$udid" "$ios"
+            knot_sim_call 60 "launch" "$name" xcrun simctl launch "$udid" "$bundle" >/dev/null
         fi
         sleep 4
-        xcrun simctl io "$udid" screenshot "$KNOT_LOGS/launch-$role.png" >/dev/null 2>&1
+        knot_sim_call 30 "screenshot" "$name" xcrun simctl io "$udid" screenshot "$KNOT_LOGS/launch-$role.png" >/dev/null
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen. This reads only what needs no Screen Recording
-    # permission; the Mac UI tests are the mac-ui step.
-    local mac pid windows="" i
+    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds (30). The
+    # probe reads only what needs no Screen Recording permission; the Mac UI tests are the
+    # mac-ui step. Afterwards neither the app nor anything it started may be left running.
+    local mac status=0
     mac="$(products Debug)/Knot.app"
-    "$mac/Contents/MacOS/Knot" >/dev/null 2>&1 &
-    pid=$!
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        sleep 1
-        windows="$(xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" "$pid" 2>/dev/null || true)"
-        [[ -n $windows ]] && break
-    done
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    echo "Mac app windows: ${windows:-none}"
-    [[ -n $windows ]]
+    knot_start_app "${KNOT_APP_START_LIMIT:-30}" "$mac/Contents/MacOS/Knot" \
+        xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
+    end_mac_test_hosts
+    if [[ -n "$(mac_test_hosts)" ]]; then
+        echo "The Mac app, or something it started, was still running after it was ended: $(mac_test_hosts | tr '\n' ' ')"
+        return 1
+    fi
+    return "$status"
 }
 
 # The Mac UI tests. They take over the desktop, so they hold the one exclusive Mac UI slot,
@@ -618,12 +620,17 @@ step_mac_ui() {
 }
 
 # Ends the Mac app and the UI test runner that this worktree built, if either is still open.
+# Prints the process IDs of whatever runs from this worktree's Debug products: the Mac app
+# and the UI test runner. A literal match on the command line: pgrep -f would read the path
+# as a pattern, in which a "." matches any character.
+mac_test_hosts() {
+    ps -axww -o pid=,command= | KNOT_MATCH="$(products Debug)/" awk 'index($0, ENVIRON["KNOT_MATCH"]) { print $1 }'
+}
+
 end_mac_test_hosts() {
     local folder pids
     folder="$(products Debug)/"
-    # A literal match on the command line: pgrep -f would read the path as a pattern, in
-    # which a "." matches any character.
-    pids="$(ps -axww -o pid=,command= | KNOT_MATCH="$folder" awk 'index($0, ENVIRON["KNOT_MATCH"]) { print $1 }')"
+    pids="$(mac_test_hosts)"
     [[ -z $pids ]] && return 0
     echo "ending what the run left open from $folder: $(echo "$pids" | tr '\n' ' ')"
     # shellcheck disable=SC2086

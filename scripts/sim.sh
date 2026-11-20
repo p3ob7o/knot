@@ -206,8 +206,10 @@ case ${1:-} in
     udid) require_role "${2:-}"; echo ;;
     boot)
         udid="$(require_role "${2:-}")"
-        xcrun simctl bootstatus "$udid" -b >/dev/null ||
-            knot_fail "infra-simulator-boot" "The $2 simulator ($udid) did not boot." \
+        # A boot that never finishes would hold the run: it has a limit (knot_sim_call).
+        why="$(knot_sim_call "${KNOT_SIM_BOOT_LIMIT:-300}" "bootstatus" "$(name_of "$2")" \
+            xcrun simctl bootstatus "$udid" -b 2>&1 >/dev/null)" ||
+            knot_fail "infra-simulator-boot" "The $2 simulator ($udid) did not boot. $(tail -n 1 <<<"$why")" \
                 "Rerun the step. If it fails again, run scripts/sim.sh delete and scripts/sim.sh ensure." "safe" "nothing" ;;
     shutdown)
         devices | awk -F'\t' -v id="$KNOT_WORKTREE_ID" 'index($2, id "-") == 1 && $3 != "Shutdown" { print $1 }' |
