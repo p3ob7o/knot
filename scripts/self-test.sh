@@ -491,12 +491,19 @@ else
 fi
 
 # The fixtures step speaks this tree's audio when it lacks it (knot_tool.py fixtures-audio
-# decides): with no local manifest, with one from another generator version, or with a clip
-# missing or changed. A complete set is left as it is. The fixtures here are made up.
+# decides): with no local manifest, with one from another generator version, with a clip
+# missing or changed, or when what decides the audio in the committed manifest, such as a
+# clip's text, its voice or the speech rate, has changed since the step's stamp was made. A
+# complete, stamped set is left as it is. The fixtures here are made up.
 fa="$scratch/fixtures-audio/Fixtures"
 mkdir -p "$fa/generated/audio"
-printf '{"generatorVersion": 2, "generatedAudio": "generated/manifest.json", "audio": [{"file": "generated/audio/a.wav"}, {"file": "generated/audio/b.wav"}]}\n' >"$fa/manifest.json"
+committed_manifest() { # committed_manifest <text checksum> <voice> <rate>
+    printf '{"generatorVersion": 2, "speechRate": %s, "voices": [{"name": "%s"}], "generatedAudio": "generated/manifest.json", "audio": [{"file": "generated/audio/a.wav", "referenceSha256": "%s", "voice": "%s", "about": "one"}, {"file": "generated/audio/b.wav", "referenceSha256": "0", "voice": "%s"}]}\n' \
+        "$3" "$2" "$1" "$2" "$2" >"$fa/manifest.json"
+}
 audio_state() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" >/dev/null 2>&1 && echo present || echo missing; }
+stamp() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" --write-stamp >/dev/null 2>&1; }
+committed_manifest aaa Reed 175
 states="$(audio_state)"
 printf 'one\n' >"$fa/generated/audio/a.wav"
 printf 'two\n' >"$fa/generated/audio/b.wav"
@@ -505,15 +512,25 @@ write_local() { printf '{"generatorVersion": %s, "audio": [{"file": "generated/a
     "$1" "$(sum "$fa/generated/audio/a.wav")" "$(sum "$fa/generated/audio/b.wav")" >"$fa/generated/manifest.json"; }
 write_local 2
 states="$states $(audio_state)"
+stamp
+states="$states $(audio_state)"
+committed_manifest bbb Reed 175
+states="$states $(audio_state)"
+committed_manifest aaa Flo 175
+states="$states $(audio_state)"
+committed_manifest aaa Reed 200
+states="$states $(audio_state)"
+committed_manifest aaa Reed 175
+states="$states $(audio_state)"
 write_local 1
 states="$states $(audio_state)"
 write_local 2
 printf 'changed\n' >"$fa/generated/audio/b.wav"
 states="$states $(audio_state)"
-if [[ $states == "missing present missing missing" ]]; then
-    pass "the fixtures step finds this tree's audio missing, stale or changed, and complete when it is"
+if [[ $states == "missing missing present missing missing missing present missing missing" ]]; then
+    pass "the fixtures step finds this tree's audio missing, unstamped, stale by text, voice or rate, of another version or changed"
 else
-    fail "the local audio's state, with none, complete, another version and a changed clip: $states"
+    fail "the local audio's state, with none, unstamped, stamped, a new text, voice and rate, the same again, another version and a changed clip: $states"
 fi
 
 # A limit is wall-clock time, not a count of polls: with each poll's sleep slowed to 0.3 s,

@@ -977,12 +977,34 @@ def cmd_unbounded_calls(files):
 # ---------------------------------------------------------------- this tree's audio fixtures
 
 
-def cmd_fixtures_audio(fixtures):
-    """Whether this tree holds its generated audio, as Fixtures/tools/generate.sh --audio
-    makes it: Fixtures/generated/manifest.json made by the generator's version that the
-    committed manifest names, and every clip that the committed manifest lists, present and
-    matching the checksum the local manifest records. Prints what is missing and exits 1 when
-    the audio is not all there, so the fixtures step speaks it first."""
+AUDIO_STAMP = "verify-stamp.txt"  # under Fixtures/generated/, beside the audio
+NOT_AUDIO = ("about", "expectedSeconds", "toleranceSeconds")
+
+
+def audio_stamp(committed):
+    """A hash of everything in the committed manifest that decides the audio: the generator's
+    version, the speech rate and the voices, and each clip's entry, its text's checksum,
+    voice, format and seeds among it, all but its description and its expected length."""
+    import hashlib
+    decides = {
+        "generatorVersion": committed.get("generatorVersion"),
+        "speechRate": committed.get("speechRate"),
+        "voices": committed.get("voices"),
+        "audio": [{key: value for key, value in entry.items() if key not in NOT_AUDIO}
+                  for entry in committed.get("audio", [])],
+    }
+    return hashlib.sha256(json.dumps(decides, sort_keys=True).encode()).hexdigest()
+
+
+def cmd_fixtures_audio(fixtures, write_stamp=False):
+    """Whether this tree holds its generated audio, as the fixtures step wants it:
+    Fixtures/generated/manifest.json made by the generator's version that the committed
+    manifest names; every clip that the committed manifest lists, present and matching the
+    checksum the local manifest records; and the step's stamp beside the audio, which says
+    that nothing in the committed manifest that decides the audio, such as a clip's text, its
+    voice or the speech rate, has changed since the audio was spoken. Prints what is missing
+    and exits 1 when the audio is not all there, so the step speaks it again. With
+    --write-stamp, the step records the stamp after it has spoken the audio."""
     import hashlib
     fixtures = fixtures or "Fixtures"
     try:
@@ -991,9 +1013,14 @@ def cmd_fixtures_audio(fixtures):
     except (OSError, ValueError):
         print("Fixtures/manifest.json is missing or unreadable")
         return 1
-    local_path = os.path.join(fixtures, committed.get("generatedAudio", "generated/manifest.json"))
+    generated = os.path.dirname(os.path.join(fixtures, committed.get("generatedAudio", "generated/manifest.json")))
+    stamp_path = os.path.join(generated, AUDIO_STAMP)
+    if write_stamp:
+        os.makedirs(generated, exist_ok=True)
+        with open(stamp_path, "w") as f:
+            f.write(audio_stamp(committed) + "\n")
     try:
-        with open(local_path) as f:
+        with open(os.path.join(generated, "manifest.json")) as f:
             local = json.load(f)
     except (OSError, ValueError):
         print("no local audio")
@@ -1013,7 +1040,17 @@ def cmd_fixtures_audio(fixtures):
             if hashlib.sha256(f.read()).hexdigest() != sums[name]:
                 print("the local %s does not match its manifest" % name)
                 return 1
-    print("local audio present: %d clips" % len(committed.get("audio", [])))
+    try:
+        with open(stamp_path) as f:
+            stamp = f.read().strip()
+    except OSError:
+        print("the local audio has no stamp from the fixtures step")
+        return 1
+    if stamp != audio_stamp(committed):
+        print("what decides the audio in Fixtures/manifest.json, a clip's text, voice or format or the speech rate, "
+              "has changed since the local audio was spoken")
+        return 1
+    print("local audio present: %d clips, stamped" % len(committed.get("audio", [])))
     return 0
 
 
@@ -1065,7 +1102,7 @@ def main(argv):
     if command == "unbounded-calls":
         return cmd_unbounded_calls(args)
     if command == "fixtures-audio":
-        return cmd_fixtures_audio(option(args, "--fixtures"))
+        return cmd_fixtures_audio(option(args, "--fixtures"), "--write-stamp" in args)
     if command == "status":
         return cmd_status("--write" in args)
     print(__doc__)

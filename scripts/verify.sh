@@ -239,6 +239,7 @@ step_fixtures() {
     if ! why="$(cd "$KNOT_ROOT" && tool fixtures-audio)"; then
         echo "fixtures: $why. Speaking this tree's audio first: Fixtures/tools/generate.sh --audio"
         "$KNOT_ROOT/Fixtures/tools/generate.sh" --audio
+        (cd "$KNOT_ROOT" && tool fixtures-audio --write-stamp)
     fi
     "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
 }
