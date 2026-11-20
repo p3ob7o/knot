@@ -113,4 +113,44 @@ import Testing
         let startedAt = try await r.notes.capture(b.captureID)?.startedAt
         #expect(endedAt == startedAt)
     }
+
+    /// Finding 6. A discard the store refused does not say the store took it, and the engine
+    /// ends the row as empty when the store next answers, so no capture stays active.
+    @Test func discardTheStoreRefusedEndsTheRowLater() async throws {
+        let r = Rig()
+        let a = try await r.beginRecording()
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let discarded = try await r.engine.discard(a.captureID)
+        #expect(discarded.outcome == .discardedEmpty)
+        #expect(discarded.path == .inbox(KnotError.storeBusy.code))
+        _ = await r.ingest.ingestAll()
+        _ = try await r.engine.discard(a.captureID)
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+        #expect(try await r.notes.openCaptures().isEmpty)
+    }
+
+    /// Finding 6. The next start retries the discard first, so the row it left does not hold
+    /// rule 15 against the new capture.
+    @Test func nextStartEndsTheRowOfARefusedDiscard() async throws {
+        let r = Rig()
+        let a = try await r.beginRecording()
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        _ = try await r.engine.discard(a.captureID)
+        let typed = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
+        #expect(typed.path == .store)
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+    }
+
+    /// Finding 6. After a relaunch, recovery ends the row of a refused discard as empty: its
+    /// audio is gone, so nothing is kept.
+    @Test func recoveryEndsTheRowOfARefusedDiscard() async throws {
+        let r = Rig()
+        let a = try await r.beginRecording()
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        _ = try await r.engine.discard(a.captureID)
+        let next = r.relaunch()
+        _ = try await next.recovery.run(ingest: next.ingest)
+        #expect(try await next.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+        #expect(try await next.stream().notes.isEmpty)
+    }
 }

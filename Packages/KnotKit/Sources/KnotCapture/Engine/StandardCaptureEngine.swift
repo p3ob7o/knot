@@ -67,6 +67,10 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let broadcast = Broadcast<CaptureState>()
     private var entries: [CaptureID: Entry] = [:]
     private var line = KeyedLine<CaptureID>()
+    /// Recordings discarded while the store did not take their end: their audio is gone, and
+    /// their rows are ended as empty when the store next answers. Recovery ends them at the
+    /// next launch otherwise, since no file is left.
+    private var pendingDiscards: Set<CaptureID> = []
 
     /// - Parameters:
     ///   - deviceID: this device, the origin of every capture the engine makes.
@@ -100,6 +104,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     public nonisolated func states() -> AsyncStream<CaptureState> { broadcast.subscribe() }
 
     public func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+        await endPendingDiscards()
         switch request.kind {
         case .typed, .voice: break
         default:
@@ -149,6 +154,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        await endPendingDiscards()
         guard let entry = entries[capture] else { throw KnotError.notFound.about(capture: capture) }
         guard case .text(let text) = content, entry.kind == .typed else {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
@@ -164,7 +170,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
-        try await end(capture, at: nil)
+        await endPendingDiscards()
+        return try await end(capture, at: nil)
     }
 
     /// Ends a capture at `endedAt`, or now: rule 15 ends one at the next one's start.
@@ -183,6 +190,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+        await endPendingDiscards()
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
         await take(capture)
         defer { release(capture) }
@@ -478,6 +486,8 @@ public actor StandardCaptureEngine: CaptureEngine {
                 return
             }
             fallBack(id, answer)
+            // The row is open: it is ended as empty before the engine's next call.
+            pendingDiscards.insert(id)
         }
         // Nothing is kept, so no item is written. A row a store call commits late is ended as
         // empty when it arrives.
@@ -608,6 +618,26 @@ public actor StandardCaptureEngine: CaptureEngine {
             }
         } else if entry.outcome != .open {
             runIngest(id)
+        }
+    }
+
+    /// Ends as empty the rows of recordings discarded while the store did not take the end.
+    private func endPendingDiscards() async {
+        for id in pendingDiscards {
+            let end = CaptureEnd(
+                captureID: id, endedAt: clock.now(), outcome: .discardedEmpty,
+                revision: entries[id]?.durableRevision ?? 0)
+            let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
+            switch answer {
+            case .answered:
+                pendingDiscards.remove(id)
+                log.capture(id, "recording_discarded", .flag("store_path", true))
+            case .refused(let error) where error.code == KnotError.notFound.code:
+                // No row yet: a late record is ended when it arrives (`discardLateRow`).
+                pendingDiscards.remove(id)
+            default:
+                break
+            }
         }
     }
 
