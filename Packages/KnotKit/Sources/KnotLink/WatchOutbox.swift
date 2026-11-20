@@ -84,6 +84,11 @@ public struct WatchOutbox: Sendable {
         return admitted
     }
 
+    /// True when the outbox holds the capture's recording, with or without its manifest.
+    public func holdsRecording(_ capture: CaptureID) -> Bool {
+        layer.entryKind(recordingURL(capture)) == .file
+    }
+
     /// The capture's entry, or `nil` when its manifest is not in the outbox.
     public func entry(_ capture: CaptureID) -> Entry? {
         let url = manifestURL(capture)

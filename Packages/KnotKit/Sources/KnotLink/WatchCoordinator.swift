@@ -55,8 +55,11 @@ public actor WatchCoordinator {
     public enum StopOutcome: Hashable, Sendable {
         /// In the outbox, queued for the iPhone.
         case sent(CaptureID)
-        /// Kept as its working file, because a step failed. It is finished at the next launch.
+        /// Kept as its working file, because a step failed. It is counted as waiting, or as
+        /// failed after a final error, and tried again after the next stop and at the next launch.
         case kept(CaptureID, KnotError)
+        /// Its manifest had no audio, so it was ended and nothing is kept.
+        case endedWithoutAudio(CaptureID)
     }
 
     private enum Activity {
@@ -77,7 +80,7 @@ public actor WatchCoordinator {
     private var activity: Activity = .idle
     /// Recordings of this launch whose conversion or admission failed, tried again after the
     /// next stop and at the next launch.
-    private var unfinished: [CaptureID: RecordedAudio] = [:]
+    private var unfinished: [CaptureID: (recording: RecordedAudio, final: Bool)] = [:]
     /// The captures being finished now. The coordinator is reentrant while it awaits the
     /// recorder, so a second finish of the same capture would otherwise convert it twice at
     /// once.
@@ -252,7 +255,8 @@ public actor WatchCoordinator {
     // MARK: Convert and send
 
     /// Takes a stopped or recovered recording through conversion, the outbox and the removal
-    /// of its working file, from wherever it stands.
+    /// of its working file, from wherever it stands. Every way out that keeps the recording
+    /// writes a line with its capture ID.
     ///
     /// Returns `nil`, and does nothing, when the capture is being finished already.
     private func finish(_ recording: RecordedAudio) async -> StopOutcome? {
@@ -261,31 +265,71 @@ public actor WatchCoordinator {
         defer { finishing.remove(capture) }
         if let entry = link.outbox.entry(capture), entry.hasRecording, entry.manifest != nil {
             // Already in the outbox: only the working file is left to remove.
+            unfinished[capture] = nil
+            await link.release(capture)
             return await removeWorkingFile(capture)
         }
+        if link.outbox.holdsRecording(capture) {
+            // The converted file reached the outbox and its manifest did not: admit that file,
+            // which a move placed whole, rather than convert again.
+            log.capture(capture, "watch_recording_found_in_outbox")
+            return await admit(recording, file: link.outbox.recordingURL(capture), duration: recording.duration)
+        }
         guard recording.workingFile != nil else {
-            return .kept(capture, KnotError.audioUnreadable.about(capture: capture))
+            // A manifest with no audio, which a start that failed can leave: nothing to keep.
+            return await endWithoutAudio(capture)
         }
         let converted: ConvertedRecording
         do {
             converted = try await recorder.convert(recording)
         } catch {
-            log.failure(error.about(capture: capture), "watch_conversion_failed")
-            unfinished[capture] = recording
-            return .kept(capture, error.about(capture: capture))
+            let error = error.about(capture: capture)
+            log.failure(error, "watch_conversion_failed")
+            return await keep(recording, error)
         }
         killPoint(.converted)
-        let manifest = outboxManifest(for: recording, duration: converted.duration)
+        return await admit(recording, file: converted.file, duration: converted.duration)
+    }
+
+    /// Admits a converted recording to the outbox and removes its working file.
+    private func admit(_ recording: RecordedAudio, file: URL, duration: Duration) async -> StopOutcome {
+        let capture = recording.captureID
+        let manifest = outboxManifest(for: recording, duration: duration)
         do {
-            _ = try await link.send(manifest, file: converted.file, afterRecording: { killPoint(.outboxRecording) })
+            _ = try await link.send(manifest, file: file, afterRecording: { killPoint(.outboxRecording) })
         } catch {
-            log.failure(error.about(capture: capture), "watch_admission_failed")
-            unfinished[capture] = recording
-            return .kept(capture, error.about(capture: capture))
+            let error = error.about(capture: capture)
+            log.failure(error, "watch_admission_failed")
+            return await keep(recording, error)
         }
         killPoint(.sent)
         unfinished[capture] = nil
         return await removeWorkingFile(capture)
+    }
+
+    /// Keeps a recording in `Recording/` after a step failed. The link counts it as waiting
+    /// while a retry can succeed, and as failed after a final error, which is not tried again
+    /// in this launch. The next launch tries every kept recording again.
+    private func keep(_ recording: RecordedAudio, _ error: KnotError) async -> StopOutcome {
+        let capture = recording.captureID
+        unfinished[capture] = (recording, error.isFinal)
+        await link.hold(capture, failed: error.isFinal)
+        log.capture(capture, "watch_recording_kept", .code(error.code), .flag("final", error.isFinal))
+        return .kept(capture, error)
+    }
+
+    /// Ends a recording whose manifest has no audio: its manifest goes, and it is counted
+    /// nowhere, so nothing stays in `Recording/` for ever.
+    private func endWithoutAudio(_ capture: CaptureID) async -> StopOutcome {
+        unfinished[capture] = nil
+        await link.release(capture)
+        do {
+            try await recorder.removeWorkingFile(of: capture)
+            log.capture(capture, "watch_recording_without_audio_ended")
+        } catch {
+            log.failure(error.about(capture: capture), "watch_recording_without_audio_not_removed")
+        }
+        return .endedWithoutAudio(capture)
     }
 
     private func removeWorkingFile(_ capture: CaptureID) async -> StopOutcome {
@@ -299,9 +343,10 @@ public actor WatchCoordinator {
         return .sent(capture)
     }
 
+    /// Tries again the recordings this launch kept, apart from those a final error kept.
     private func finishUnfinished(except capture: CaptureID) async {
-        for (other, recording) in unfinished where other != capture {
-            _ = await finish(recording)
+        for (other, kept) in unfinished where other != capture && !kept.final {
+            _ = await finish(kept.recording)
         }
     }
 

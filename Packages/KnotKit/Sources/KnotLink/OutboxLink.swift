@@ -61,6 +61,9 @@ public actor OutboxLink {
     private var queuedInGeneration = 0
     /// Captures whose file the transport could not read, in this launch.
     private var unreadable: Set<CaptureID> = []
+    /// Recordings the coordinator keeps in `Recording/` because they have not reached the
+    /// outbox: true for those that a final error kept, which count as failed.
+    private var held: [CaptureID: Bool] = [:]
     /// Acknowledged captures whose files are not yet all removed.
     private var acknowledged: Set<CaptureID> = []
     private var context: LinkContext?
@@ -107,6 +110,7 @@ public actor OutboxLink {
         let capture = manifest.captureID
         log.capture(capture, "link_admitted")
         unreadable.remove(capture)
+        held[capture] = nil
         // Once this launch has adopted what the session holds, a new capture is queued at
         // once. Before that it waits for the resume, which adopts first.
         if hasReconciled, queued[capture] == nil, !acknowledged.contains(capture),
@@ -193,7 +197,21 @@ public actor OutboxLink {
         changeSubscribers.stream()
     }
 
-    /// Where each capture of the outbox stands.
+    /// Counts a recording that is on the watch but not in the outbox: kept in `Recording/`
+    /// after a step failed. It counts as failed when `failed`, and as waiting otherwise, until
+    /// it is admitted or released.
+    public func hold(_ capture: CaptureID, failed: Bool) {
+        held[capture] = failed
+        changed()
+    }
+
+    /// Stops counting a recording that `hold` counted.
+    public func release(_ capture: CaptureID) {
+        if held.removeValue(forKey: capture) != nil { changed() }
+    }
+
+    /// Where each capture on the watch stands: those of the outbox, and those the coordinator
+    /// holds in `Recording/`.
     public func states() -> [CaptureID: EntryState] {
         let entries: [WatchOutbox.Entry]
         do {
@@ -212,11 +230,15 @@ public actor OutboxLink {
                 states[entry.captureID] = .waiting
             }
         }
+        for (capture, failed) in held where states[capture] == nil {
+            states[capture] = failed ? .failed : .waiting
+        }
         return states
     }
 
-    /// How many captures wait and how many failed, counted from the outbox and its
-    /// acknowledgements, never from the session's queue.
+    /// How many captures wait and how many failed, counted from the outbox, the recordings
+    /// held in `Recording/` that have not reached it, and the acknowledgements, never from the
+    /// session's queue.
     public func currentCounts() -> (waiting: Int, failed: Int) {
         let states = states().values
         let failed = states.filter { $0 == .failed }.count
