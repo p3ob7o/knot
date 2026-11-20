@@ -29,6 +29,9 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private var writingCleanJob: Set<SegmentID> = []
     /// The jobs that deferred in the current drain.
     private var deferred: Set<JobID> = []
+    /// The jobs this process marked running and has not let go of: `resume()` leaves them
+    /// alone, since a job still marked running means a death only when no one here runs it.
+    private var runningHere: Set<JobID> = []
     private var autoDraining = false
     private var wokenWhileDraining = false
     private var availabilityWatch: Task<Void, Never>?
@@ -59,7 +62,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     public nonisolated func jobs() -> AsyncStream<Job> { broadcast.subscribe() }
 
     public func resume() async throws(KnotError) {
-        for job in try await notes.jobs(for: nil) where job.state == .running {
+        for job in try await notes.jobs(for: nil) where job.state == .running && !runningHere.contains(job.id) {
             guard let next = try? Self.reduce(job, .foundRunningAtLaunch) else { continue }
             try await notes.saveJob(next)
             await publish(job.id, of: job.segmentID)
@@ -181,6 +184,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
 
     private func transcribe(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
+        defer { runningHere.remove(queued.id) }
         var job = try await start(queued)
         await moveSegment(segment, .startTranscribing)
         do throws(KnotError) {
@@ -214,6 +218,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
 
     private func clean(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
+        defer { runningHere.remove(queued.id) }
         var job = try await start(queued)
         await moveSegment(segment, .startCleaning)
         let applied: CleanupApplied
@@ -242,6 +247,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private func start(_ job: Job) async throws(KnotError) -> Job {
         let running = try Self.reduce(job, .start)
         try await notes.saveJob(running)
+        runningHere.insert(job.id)
         let stored = try await reread(running)
         broadcast.send(stored)
         return stored

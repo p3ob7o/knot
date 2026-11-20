@@ -91,4 +91,28 @@ import Testing
         #expect(segment.rawTranscript == "a scripted transcript of a recording")
         #expect(try await r.notes.jobs(for: SegmentID(id)).filter { $0.kind == .clean }.count == 1)
     }
+
+    /// Finding 19, the second review's R4. `resume()` while this process's drain runs a job
+    /// counts no death: it leaves alone what this process started, and does not wait for the
+    /// drain.
+    @Test func resumeDuringADrainCountsNoDeath() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        r.transcriber.setRunDelay(.milliseconds(300))
+        _ = try await r.engine.end(begun.captureID)
+        let segment = SegmentID(begun.captureID)
+        let queue = r.queue
+        let drain = Task { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        #expect(
+            await eventually("the transcribe job to run") {
+                (try? await r.notes.jobs(for: segment))?.first?.state == .running
+            })
+        try await r.queue.resume()
+        #expect(try await r.notes.jobs(for: segment).first { $0.kind == .transcribe }?.state == .running)
+        #expect(await SuiteWait.value("the drain") { await drain.value } == .idle)
+        let job = try #require(try await r.notes.jobs(for: segment).first { $0.kind == .transcribe })
+        #expect(job.deaths == 0)
+        #expect(try await r.notes.jobs(for: segment).contains { $0.kind == .clean })
+    }
 }
