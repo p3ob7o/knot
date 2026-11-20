@@ -68,4 +68,33 @@ import Testing
         #expect(await r.ingest.ingestAll() == [begun.captureID: .kept(KnotError.checksumMismatch.code)])
         #expect(try await r.notes.capture(begun.captureID) == nil)
     }
+
+    /// Finding 7. A typed item whose text cannot be read becomes a failed segment that says so,
+    /// and its file is kept (docs/architecture.md §6, rule 2).
+    @Test func unreadableTypedItemBecomesAFailedSegment() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "draft"))
+        _ = try await r.engine.end(a.captureID)
+        try r.locations.durableFiles(layer: r.layer).place(
+            Data([255]), at: r.locations.inboxPayload(a.captureID, kind: .typed))
+        let next = r.relaunch()
+        _ = try await next.recovery.run(ingest: next.ingest)
+        #expect(try await next.notes.capture(a.captureID)?.outcome == .failed(KnotError.inboxItemUnreadable.code))
+        #expect(try await next.notes.segment(SegmentID(a.captureID))?.state == .typed(.failed))
+        #expect(next.inboxFiles().count == 2, "The file is kept.")
+        // Ingested again, nothing changes.
+        #expect(await next.ingest.ingestAll() == [a.captureID: .kept(KnotError.inboxItemUnreadable.code)])
+    }
+
+    /// Finding 7. A manifest that cannot be read names no capture to hand to the store: the
+    /// tracer keeps both files and reports the item kept. What becomes of such files is an
+    /// open point of the documents ("The files of an unreadable inbox item").
+    @Test func unreadableManifestIsKept() async throws {
+        let r = Rig(engineIngests: false)
+        let id: CaptureID = r.ids.make()
+        try r.locations.durableFiles(layer: r.layer).place(Data("{".utf8), at: r.locations.inboxManifest(id))
+        #expect(await r.ingest.ingestAll() == [id: .kept(KnotError.inboxItemUnreadable.code)])
+        #expect(r.inboxFiles() == ["\(id).json"])
+    }
 }

@@ -90,7 +90,9 @@ public actor InboxIngest {
             guard let read = try items.readManifest(capture) else { return .removedEmpty }
             manifest = read
         } catch {
-            // Unreadable, or written by a newer Knot: kept for a person or an update.
+            // Unreadable, or written by a newer Knot: kept for a person or an update. A manifest
+            // that cannot be read names no capture to hand to the store, so nothing is written
+            // for it; what becomes of its files is an open point of the documents.
             log.failure(error.about(capture: capture), "inbox_item_kept")
             return .kept(error.code)
         }
@@ -127,6 +129,11 @@ public actor InboxIngest {
             return .removedEmpty
         }
         guard let text = String(validating: payload, as: UTF8.self) else {
+            // Text that cannot be read: handed to the store with a body that does not fit its
+            // kind, so that it writes a failed segment that says so, and the file is kept
+            // (docs/architecture.md §6, rule 2). The store's call fails with
+            // `inbox_item_unreadable`, and a second ingest changes nothing.
+            _ = try await notes.ingest(try await newCapture(manifest, body: .none))
             return .kept(KnotError.inboxItemUnreadable.code)
         }
         if whole == false {
