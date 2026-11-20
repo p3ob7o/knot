@@ -108,6 +108,31 @@ import Testing
         #expect(await link.states()[capture] != .failed, "B, newer than A, read the file.")
     }
 
+    /// The order of attempts never rests on the wall clock. The Watch's clock is set back between
+    /// two launches: X is queued by the first, adopted and given up by the second, which queues Y.
+    /// Y read the file and X's late end says "missing". Y, made by this launch, is the newer.
+    @Test(arguments: [false, true])
+    func recheckIAnAttemptQueuedAfterTheClockWentBackIsStillTheNewer(_ reversed: Bool) async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (first, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: first)
+        await harness.settle(first)
+        try #require(harness.outstanding(capture).count == 1)  // X
+        harness.clock.advance(by: -3_600)
+        let (second, _) = harness.launchWatch()
+        await second.resume()
+        await harness.settle(second)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))  // X
+        await second.resume()
+        await harness.settle(second)
+        try #require(harness.outstanding(capture).count == 1)  // Y
+        harness.system.finish(capture, as: .neverArrives)  // Y, which read the file
+        harness.system.releaseHeld { reversed ? $0.reversed() : $0 }
+        await harness.settle(second)
+        #expect(await second.states()[capture] != .failed, "Y was queued after X and read the file.")
+    }
+
     /// Two captures, each with given-up attempts: one's late "missing" leaves the other alone.
     @Test func recheckIOneCapturesLateEndLeavesTheOtherAlone() async throws {
         let harness = LinkHarness()

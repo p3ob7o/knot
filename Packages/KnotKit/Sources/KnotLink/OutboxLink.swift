@@ -397,7 +397,7 @@ public actor OutboxLink {
             log.capture(capture, "link_finished_stale", .number("attempt", attempt.number), level: .debug)
             return
         }
-        if let newest = newestSpoken[capture], !Self.isNewer(attempt, than: newest) {
+        if let newest = newestSpoken[capture], !isNewer(attempt, than: newest) {
             log.capture(capture, "link_finished_superseded", .number("attempt", attempt.number), level: .debug)
             return
         }
@@ -406,7 +406,7 @@ public actor OutboxLink {
             log.capture(capture, "link_transfer_failed_late", .number("attempt", attempt.number))
             // Only the attempts older than this one are done with: a newer one given up may still
             // end and say the file was read, and then it decides.
-            lostEnds[capture] = lostEnds[capture]?.filter { Self.isNewer($0, than: attempt) }
+            lostEnds[capture] = lostEnds[capture]?.filter { isNewer($0, than: attempt) }
             if let current = queued[capture] {
                 transport.cancelFile(captureID: capture, attempt: current.attempt)
                 // Its own end may already have happened, and may still say the file was read.
@@ -425,12 +425,21 @@ public actor OutboxLink {
         failure == nil || failure?.handling == .failure
     }
 
-    /// True when `attempt` was queued after `other`: by number within one launch, else by the
-    /// time of queueing.
-    static func isNewer(_ attempt: LinkAttempt, than other: LinkAttempt) -> Bool {
-        if attempt.launch == other.launch { return attempt.number > other.number }
-        if attempt.queuedAt != other.queuedAt { return attempt.queuedAt > other.queuedAt }
-        return attempt.number > other.number
+    /// True when `attempt` was queued after `other`. The order never rests on the wall clock,
+    /// which can be set back between launches. An attempt this launch made is newer than one it
+    /// adopted from an earlier launch, and this launch's own attempts are ordered by their number.
+    ///
+    /// Two adopted attempts of one capture are never compared, and if they were, neither would be
+    /// the newer. A launch adopts at most one attempt per capture: the link never queues a capture
+    /// that is outstanding, and a cancel takes a transfer out of the session's queue at once
+    /// (docs/notes/SP-2.md), so the session never holds two transfers of one capture, and no
+    /// launch finds two to adopt.
+    nonisolated func isNewer(_ attempt: LinkAttempt, than other: LinkAttempt) -> Bool {
+        switch (attempt.launch == launch, other.launch == launch) {
+        case (true, true): attempt.number > other.number
+        case (true, false): true
+        case (false, true), (false, false): false
+        }
     }
 
     private func acknowledge(_ capture: CaptureID) {
