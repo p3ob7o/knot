@@ -240,9 +240,12 @@ public enum RecorderContract {
         let died = orphans.first { $0.captureID == unended.captureID }
         #expect(died != nil, "A recording that never ended is an orphan of its launch, beside the stopped one.")
         #expect(died?.ending == .recovered, "It is finished as recovered.")
+        for capture in [earlier.captureID, unended.captureID] {
+            #expect(orphans.filter { $0.captureID == capture }.count == 1, "Each orphan comes back once in a call.")
+        }
         #expect(
-            try await recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
-            "It stays an orphan until its working file is removed.")
+            try await recorder.recoverOrphans(currentLaunch: later).filter { $0.captureID == earlier.captureID }.count
+                == 1, "It stays an orphan until its working file is removed, once in each call.")
         try await recorder.removeWorkingFile(of: earlier.captureID)
         #expect(
             try await !recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
