@@ -186,6 +186,12 @@ public protocol NoteStore: Sendable {
     /// (docs/architecture.md §4 and §5). If it is no longer in that note, nothing moves and the
     /// result says where it is. Refused for an open capture, a deleted segment, a conflict
     /// copy, and the only live segment of its note apart from its own conflict copies.
+    ///
+    /// The pieces of one long capture (`Segment.piece`, `pieceOf`) are one capture, split only
+    /// by the size limit. Naming any one piece moves every live piece of that capture in `note`,
+    /// with their conflict copies, and the history keeps the move under the first piece. The
+    /// refusal counts a capture's pieces as one segment: a capture whose pieces are its note's
+    /// only live segments is the only segment, and moving one of them is refused.
     func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult
 
     /// Returns a moved segment to the note it left, for 30 days, on the device that moved it.
@@ -193,7 +199,8 @@ public protocol NoteStore: Sendable {
     /// can be returned. Refused, changing nothing, when the segment is not in `note` or its
     /// note has changed since the move, and when the note it left is deleted, gone, or has no
     /// live segment left (rule 11). The note the segment leaves by the return is held to the
-    /// title rule as a move holds it.
+    /// title rule as a move holds it. Naming any one piece of a long capture returns every
+    /// piece that moved with it, as `move` moved them together.
     func returnToFormerNote(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveOutcome
 
     // MARK: Processing
