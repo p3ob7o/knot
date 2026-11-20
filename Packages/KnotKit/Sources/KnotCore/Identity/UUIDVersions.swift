@@ -70,6 +70,8 @@ public enum UUIDv5 {
         case transcribeJob
         /// A late save of a capture that a person's edit kept out, kept as a conflict copy.
         case keptSave
+        /// The clean job of a transcribed recording.
+        case cleanJob
 
         var uuid: UUID {
             switch self {
@@ -78,6 +80,7 @@ public enum UUIDv5 {
             case .conflictCopy: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a03")!
             case .transcribeJob: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a04")!
             case .keptSave: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a05")!
+            case .cleanJob: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a06")!
             }
         }
     }

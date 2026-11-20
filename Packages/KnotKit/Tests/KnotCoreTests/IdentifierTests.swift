@@ -53,6 +53,16 @@ import Testing
         #expect(piece.uuid != successor.uuid)
     }
 
+    /// A segment's two jobs have IDs derived from its own, each in its namespace, so the queue's
+    /// write of the clean job, like the store's of the transcribe job, is idempotent by its ID.
+    @Test func aSegmentsJobsAreDerivedFromItsID() {
+        let segment: SegmentID = id(6)
+        #expect(JobID.clean(of: segment) == JobID.clean(of: segment))
+        #expect(JobID.clean(of: segment).isDerived)
+        #expect(JobID.clean(of: segment) != JobID.transcribe(of: segment))
+        #expect(JobID.clean(of: segment) != JobID.clean(of: id(7)))
+    }
+
     @Test func textFormAndFolderName() throws {
         let note = NoteID(uuid: UUID(uuidString: "01234567-89AB-7FFF-BFFF-FFFFFFFFFF3C")!)
         #expect(note.description == "01234567-89ab-7fff-bfff-ffffffffff3c")

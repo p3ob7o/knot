@@ -140,6 +140,13 @@ extension Identifier where Tag == JobTag {
     public static func transcribe(of segment: SegmentID) -> JobID {
         JobID(uuid: UUIDv5.make(namespace: .transcribeJob, name: segment.description))
     }
+
+    /// The clean job of a transcribed recording, which the queue writes when the transcription's
+    /// last run is saved, or at launch for a transcribed recording that lacks one. Derived from
+    /// the segment's ID, so a second write finds the first.
+    public static func clean(of segment: SegmentID) -> JobID {
+        JobID(uuid: UUIDv5.make(namespace: .cleanJob, name: segment.description))
+    }
 }
 
 extension Identifier where Tag == NoteTag {
