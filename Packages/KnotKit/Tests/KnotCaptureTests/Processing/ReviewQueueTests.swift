@@ -328,6 +328,24 @@ import Testing
         #expect(r.transcriber.runCount == 1)
     }
 
+    /// Finding 43. The queue takes each job's next revision from what the store answers, never
+    /// from a guess: over a store whose job revisions go up by two, a recording is transcribed
+    /// and cleaned, and every job ends done with no death.
+    @Test func queueTakesEachRevisionFromTheStore() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        let hooks = JobHooks()
+        hooks.saveJobsTwice.withLock { $0 = true }
+        let queue = Self.hookedQueue(r, hooks)
+        #expect(
+            await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } } == .idle)
+        let jobs = try await r.notes.jobs(for: SegmentID(begun.captureID))
+        #expect(Set(jobs.map(\.kind)) == [.transcribe, .clean])
+        #expect(jobs.allSatisfy { $0.state == .done && $0.deaths == 0 }, "\(jobs.map { ($0.kind, $0.state) })")
+    }
+
     enum NotRunnableNow: String, CaseIterable, CustomTestStringConvertible {
         /// The speech model is not installed: a deferral.
         case deferred
