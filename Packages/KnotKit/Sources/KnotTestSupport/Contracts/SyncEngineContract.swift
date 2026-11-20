@@ -12,6 +12,10 @@ public struct SyncEngineSubject: Sendable {
     public let pause: @Sendable (SyncQuestion) async -> Void
     /// The next manual sync meets this condition.
     public let failNextSync: @Sendable (KnotError) async -> Void
+    /// The next manual sync's send finds the zone missing, for this reason: CloudKit's
+    /// `userDeletedZone` for `.purged`, its `zoneNotFound` with
+    /// `CKErrorUserDidResetEncryptedDataKey` for `.encryptedDataReset`.
+    public let zoneMissingOnNextSend: @Sendable (ZoneLoss) async -> Void
     /// An event of the run before the last stop arrives now.
     public let deliverLateEvent: @Sendable () async -> Void
 
@@ -19,12 +23,14 @@ public struct SyncEngineSubject: Sendable {
         engine: any SyncEngine, setPending: @escaping @Sendable (Int) async -> Void,
         pause: @escaping @Sendable (SyncQuestion) async -> Void,
         failNextSync: @escaping @Sendable (KnotError) async -> Void,
+        zoneMissingOnNextSend: @escaping @Sendable (ZoneLoss) async -> Void,
         deliverLateEvent: @escaping @Sendable () async -> Void
     ) {
         self.engine = engine
         self.setPending = setPending
         self.pause = pause
         self.failNextSync = failNextSync
+        self.zoneMissingOnNextSend = zoneMissingOnNextSend
         self.deliverLateEvent = deliverLateEvent
     }
 }
@@ -71,6 +77,14 @@ public enum SyncEngineContract {
         await refuses(.syncQuotaExceeded) { try await engine.syncNow() }
         #expect(await first(of: engine) == .failed(KnotError.syncQuotaExceeded.code))
         try await engine.syncNow()
+
+        // A send that finds the zone missing leads to the zone-removed pause, with its reason.
+        for loss in [ZoneLoss.purged, .encryptedDataReset] {
+            await subject.zoneMissingOnNextSend(loss)
+            await refuses(.syncZoneMissing, "\(loss)") { try await engine.syncNow() }
+            #expect(await first(of: engine) == .paused(.zoneRemoved(loss)), "The zone-removed pause, \(loss).")
+            await engine.answer(.zoneRemoved(loss), .upload)
+        }
 
         // A pause asks, keeps sync paused until answered, and takes the two answers.
         let question = SyncQuestion.zoneRemoved(.purged)

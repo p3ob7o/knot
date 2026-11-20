@@ -13,7 +13,8 @@
             var lastSuccess: Date?
             var generation = 0
             var pending = 0
-            var failures: [KnotError] = []
+            /// Each scripted condition, with the loss of a zone found missing.
+            var failures: [(error: KnotError, loss: ZoneLoss?)] = []
             var watchers: [UUID: AsyncStream<SyncStatus>.Continuation] = [:]
             var syncs = 0
         }
@@ -31,7 +32,14 @@
         public func setPending(_ count: Int) { state.withLock { $0.pending = count } }
 
         /// The next manual syncs throw these conditions, in order.
-        public func failNextSyncs(with errors: KnotError...) { state.withLock { $0.failures += errors } }
+        public func failNextSyncs(with errors: KnotError...) {
+            state.withLock { $0.failures += errors.map { ($0, nil) } }
+        }
+
+        /// The next manual sync's send finds the zone missing, for `loss`.
+        public func zoneMissingOnNextSend(_ loss: ZoneLoss) {
+            state.withLock { $0.failures.append((KnotError.syncZoneMissing, loss)) }
+        }
 
         /// The engine meets a pause, as its source reports one: an account change, a removed
         /// zone, a large delete. A stopped engine has no source, and the event is dropped.
@@ -97,8 +105,10 @@
             default: break
             }
             deliver(.fetching, from: generation)
-            if let failure {
-                if failure.code == KnotError.syncTransient.code {
+            if let (failure, loss) = failure {
+                if let loss {
+                    deliver(.paused(.zoneRemoved(loss)), from: generation)
+                } else if failure.code == KnotError.syncTransient.code {
                     deliver(.waiting(until: failure.context.retryAt), from: generation)
                 } else {
                     deliver(.failed(failure.code), from: generation)

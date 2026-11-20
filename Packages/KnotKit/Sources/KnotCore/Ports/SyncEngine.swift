@@ -77,6 +77,13 @@ public protocol SyncEngine: Sendable {
     /// Fetches, then sends. It throws a sync condition, `sync_transient` to
     /// `sync_final`, with the time to retry in `context.retryAt` when the server gave one. While
     /// sync is off or paused it does nothing.
+    ///
+    /// A send that finds the zone missing throws `sync_zone_missing`, and the status becomes the
+    /// zone-removed pause, `paused(.zoneRemoved(loss))`: `.purged` when the user deleted the zone
+    /// (CloudKit's `userDeletedZone`), and `.encryptedDataReset` when it went with a reset of the
+    /// encrypted data (`zoneNotFound` with `CKErrorUserDidResetEncryptedDataKey`;
+    /// docs/notes/SP-4.md). Any other condition leaves `waiting(until:)` for `sync_transient`, and
+    /// `failed` with its code for the rest.
     func syncNow() async throws(KnotError)
 
     /// Answers the question of a pause. An answer to a question that is not asked changes

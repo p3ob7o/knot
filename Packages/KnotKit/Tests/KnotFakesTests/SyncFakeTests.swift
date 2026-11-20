@@ -10,7 +10,9 @@ import Testing
             let engine = ScriptedSyncEngine(clock: FakeClock())
             return SyncEngineSubject(
                 engine: engine, setPending: { engine.setPending($0) }, pause: { engine.pause($0) },
-                failNextSync: { engine.failNextSyncs(with: $0) }, deliverLateEvent: { engine.deliverLateEvent() })
+                failNextSync: { engine.failNextSyncs(with: $0) },
+                zoneMissingOnNextSend: { engine.zoneMissingOnNextSend($0) },
+                deliverLateEvent: { engine.deliverLateEvent() })
         }
     }
 }
