@@ -293,13 +293,29 @@ knot_start_tool() {
 # into the log of every app build on a Mac that knows the team, whatever the signing, as
 # TeamIdentifierPrefix, AppIdentifierPrefix and the entitlements it prints, such as
 # application-identifier. No run needs the ID, and most do not know it, so a team ID is
-# matched by its shape, ten capitals and digits, where those keys or an identifier put it.
+# matched by its shape, ten capitals and digits, where those keys or an identifier put it:
+# before `.com.` or `.*`, as a plist's whole string, as codesign's `[String]` value, and as
+# the parenthesised end of a certificate's name. A run that names the owner's configuration,
+# with KNOT_TEAM_CONFIG or KNOT_LOCAL_CONFIG, knows the ID: the filter reads it from that file
+# itself, never prints it, and masks it wherever it stands.
 #   … | knot_filter_team
 KNOT_TEAM_FILTER='
+    BEGIN {
+        my $config = $ENV{KNOT_TEAM_CONFIG} || $ENV{KNOT_LOCAL_CONFIG} || "";
+        if ($config ne "" && open(my $file, "<", $config)) {
+            local $/;
+            my $text = <$file>;
+            ($main::team) = $text =~ /^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]{10})\s*$/m;
+        }
+    }
     s/((?:TeamIdentifierPrefix|AppIdentifierPrefix)\\?[=:]\s*"?)[A-Z0-9]{10}(?=[."\s]|$)/$1<TEAM>/g;
     s/(DEVELOPMENT_TEAM\w*\s*\\?[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
     s/((?:team-identifier|TeamIdentifier|com\.apple\.developer\.team-identifier)"?\s*[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
-    s/\b[A-Z0-9]{10}(?=\.(?:com|group|iCloud|org|net|\*)\b)/<TEAM>/g;
+    s/\b[A-Z0-9]{10}(?=\.(?:(?:com|group|iCloud|org|net)\b|\*))/<TEAM>/g;
+    s/(<string>\s*)[A-Z0-9]{10}(?=\s*<\/string>)/$1<TEAM>/g;
+    s/(\[String\]\s+)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/\([A-Z0-9]{10}\)/(<TEAM>)/g;
+    s/\Q$main::team\E/<TEAM>/g if defined $main::team;
 '
 knot_filter_team() { perl -pe "$KNOT_TEAM_FILTER"; }
 

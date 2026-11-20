@@ -369,6 +369,24 @@ else
     fail "the team filter left an ID or took too much: $filtered"
 fi
 
+# Four more forms that a signed build or codesign can print, and the ID wherever it stands
+# when the run names the owner's configuration and so knows it. The configuration here is
+# made up, with the same made-up ID.
+forms="$(
+    printf '%s\n' '"'"$fake_team"'.*"' "<string>$fake_team</string>" \
+        "        [String] $fake_team" 'Apple Development: Someone ('"$fake_team"')' |
+        env -u KNOT_TEAM_CONFIG -u KNOT_LOCAL_CONFIG bash -c 'source "$1"; knot_filter_team' _ "$KNOT_SCRIPTS/lib/common.sh"
+)"
+printf 'DEVELOPMENT_TEAM = %s\n' "$fake_team" >"$scratch/Owner.xcconfig"
+loose="a note that names $fake_team where no key stands before it"
+literal="$(printf '%s\n' "$loose" | KNOT_TEAM_CONFIG="$scratch/Owner.xcconfig" bash -c 'source "$1"; knot_filter_team' _ "$KNOT_SCRIPTS/lib/common.sh")"
+unknown="$(printf '%s\n' "$loose" | env -u KNOT_TEAM_CONFIG -u KNOT_LOCAL_CONFIG bash -c 'source "$1"; knot_filter_team' _ "$KNOT_SCRIPTS/lib/common.sh")"
+if [[ $forms != *"$fake_team"* && $(grep -c -e '<TEAM>' <<<"$forms") == 4 && $literal == "${loose/$fake_team/<TEAM>}" && $unknown == "$loose" ]]; then
+    pass "the filter masks the quoted wildcard, a plist string, codesign's value and a certificate's name, and the known ID anywhere"
+else
+    fail "the filter left an ID in: $forms / $literal"
+fi
+
 # A UI test run counts only when its cases ran and passed: a run that executed 0 tests, one
 # with a failed case, and one with no pass on a destination it should have run on all fail.
 xct="$scratch/xctest"
