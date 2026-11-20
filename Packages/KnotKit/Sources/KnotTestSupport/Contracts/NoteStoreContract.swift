@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
         Check(name: "grow-all", run: aGrowingCheckpointWritesEveryPiece),
         Check(name: "short-tail", run: aShortCheckpointDropsTheOldTail),
         Check(name: "three-moves", run: threeMovesAndThreeReturns),
@@ -1726,6 +1727,19 @@ public enum NoteStoreContract {
         let segments = try #require(try await h.store.note(receipt.noteID)).segments
         #expect(segments.map(\.id) == (0..<3).map { SegmentID.piece($0, of: draft.id) }, "Three pieces, in place.")
         #expect(segments.map(\.text).joined() == text, "Nothing is cut.")
+    }
+
+    /// Witness 51: the pieces a checkpoint grows name their first piece and their position.
+    public static func grownPiecesNameTheirFirst(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("short", at: 0)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.checkpoint(
+            CaptureCheckpoint(captureID: draft.id, text: Harness.longText(pieces: 3), revision: 2))
+        for position in 1..<3 {
+            let piece = try #require(try await h.store.segment(.piece(position, of: draft.id))).segment
+            #expect(piece.pieceOf == SegmentID(draft.id) && piece.piece == position)
+        }
     }
 
     // MARK: Reading
