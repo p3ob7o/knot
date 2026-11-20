@@ -11,7 +11,11 @@ public protocol ProcessingQueue: Sendable {
     /// death (`JobMachine`). Called once, at launch.
     func resume() async throws(KnotError)
 
-    /// Queues the work of a stored recording that has none yet: transcribe, then clean.
+    /// Wakes the queue for `segment`, whose job the store wrote: the store writes a stored
+    /// recording's transcribe job itself, in the transaction that stores it (`NoteStore.end`,
+    /// `record` and `ingest`), so `enqueue` writes no job. The queue reads the segment's queued
+    /// jobs from the store and runs them in its next drain, transcribe and then clean. Calling
+    /// it again, or for a segment with no queued job, changes nothing.
     func enqueue(_ segment: SegmentID) async throws(KnotError)
 
     /// Runs the queued jobs that may run now inside `runner`'s time, until none can or the time
