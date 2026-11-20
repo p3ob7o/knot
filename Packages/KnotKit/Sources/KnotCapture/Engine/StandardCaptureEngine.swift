@@ -829,6 +829,9 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     private func take(_ id: CaptureID) async {
         guard !line.take(id) else { return }
+        // IDs only. The call is in the line once this is logged: nothing suspends between the
+        // two, so a test can order a later call after it.
+        log.capture(id, "call_waits_for_line")
         await withCheckedContinuation { line.enqueue(id, $0) }
     }
 

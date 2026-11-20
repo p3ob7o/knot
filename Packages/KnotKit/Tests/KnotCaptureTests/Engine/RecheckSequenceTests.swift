@@ -205,6 +205,8 @@ extension RecheckSequenceTests {
 
     /// G5. A start waits as the retry of a capture that reached no disk, behind a discard of
     /// that capture. Once it holds the line the capture is gone, so it is a capture of its own.
+    /// The discard is in the capture's line before the start begins: the test makes that order
+    /// with the engine's log line, since two tasks started one after the other keep none.
     @Test func startWaitingBehindADiscardIsACaptureOfItsOwn() async throws {
         let r = Rig()
         let hooks = JobHooks()
@@ -219,6 +221,7 @@ extension RecheckSequenceTests {
         let asked = try #require(hooks.captureWrites.withLock { $0.first })
         let firstID = try #require(CaptureID(String(asked.dropFirst("record ".count))))
         let discard = Task { try await engine.discard(firstID) }
+        #expect(await eventually("the discard to wait for the line") { r.logs.logged("call_waits_for_line", firstID) })
         let two = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "two")) }
         #expect(await eventually("the second start to wait") { r.logs.logged("start_waits_to_retry", firstID) })
         hold.release()
@@ -226,7 +229,7 @@ extension RecheckSequenceTests {
         let discarded = try #require(try await Self.returned("the discard", discard)?.get())
         #expect(discarded.outcome == .discardedEmpty)
         let b = try #require(try await Self.returned("two", two)?.get())
-        #expect(b.captureID != firstID)
+        try #require(b.captureID != firstID, "The start came before the discard.")
         _ = try await bounded.end(b.captureID)
         #expect(await eventually("the text to be stored") { await Self.texts(r) == ["two"] })
     }
