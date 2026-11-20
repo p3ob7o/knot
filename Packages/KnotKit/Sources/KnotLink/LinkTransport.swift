@@ -117,7 +117,8 @@ public enum LinkFailure: String, Hashable, Sendable, CaseIterable {
 
     /// What the outbox does after it.
     public enum Handling: Hashable, Sendable {
-        /// The capture waits, uncounted, and is queued again on the next trigger.
+        /// The capture waits, counted as waiting and not as failed, and is queued again on the
+        /// next trigger. A deferral is never counted as an attempt.
         case deferral
         /// The capture is queued again at once.
         case attempt
