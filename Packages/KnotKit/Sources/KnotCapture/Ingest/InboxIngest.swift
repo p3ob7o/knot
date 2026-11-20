@@ -141,13 +141,25 @@ public actor InboxIngest {
         let id = manifest.captureID
         let assetID = AssetID.ofCapture(id)
         var stored = try await assets.find(assetID, kind: .audio)
-        if stored == nil, try items.readPayload(id, kind: .voice) != nil {
-            // A file delivered beside its manifest, as the watch's: into the store's assets.
-            stored = try await assets.move(
-                items.locations.inboxPayload(id, kind: .voice), as: assetID, kind: .audio)
+        if let payload = try items.readPayload(id, kind: .voice) {
+            // A file delivered beside its manifest, as the watch's. Its digest is checked before
+            // it takes the asset's place, so a damaged delivery never blocks an intact one, and an
+            // intact one replaces a damaged copy (docs/architecture.md §12).
+            let digest = InboxItems.sha256(payload)
+            if let expected = manifest.payloadSHA256, expected != digest {
+                return .kept(KnotError.checksumMismatch.code)
+            }
+            if let damaged = stored, damaged.sha256 != digest {
+                try await assets.remove(assetID, kind: .audio)
+                stored = nil
+            }
+            if stored == nil {
+                stored = try await assets.move(
+                    items.locations.inboxPayload(id, kind: .voice), as: assetID, kind: .audio)
+            }
         }
         guard let stored else { return .kept(KnotError.notFound.code) }
-        if let digest = manifest.payloadSHA256, digest != stored.sha256 {
+        if let expected = manifest.payloadSHA256, expected != stored.sha256 {
             return .kept(KnotError.checksumMismatch.code)
         }
         let asset = Asset(
