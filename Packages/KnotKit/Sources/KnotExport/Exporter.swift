@@ -159,11 +159,12 @@ public struct Exporter: Sendable {
     private let log: KnotLog
 
     /// - Parameters:
-    ///   - timeZone: the zone of the day in each Markdown file's name. The front matter is in
-    ///     UTC whatever it is.
+    ///   - timeZone: the zone of the day in each Markdown file's name: the person's own, or a
+    ///     note made in the evening is named for the next day. It has no default, so that no
+    ///     caller forgets it. The front matter is in UTC whatever it is.
     public init(
         notes: any NoteStore, assets: any AssetStore, drawings: any DrawingImageSource = NoDrawingImages(),
-        timeZone: TimeZone = .gmt, log: KnotLog = KnotLog(.export)
+        timeZone: TimeZone, log: KnotLog = KnotLog(.export)
     ) {
         self.notes = notes
         self.assets = assets

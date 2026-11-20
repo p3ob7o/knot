@@ -69,7 +69,7 @@ struct World {
     }
 
     func exporter(drawings: any DrawingImageSource = NoDrawingImages(), log: KnotLog = KnotLog(.export)) -> Exporter {
-        Exporter(notes: notes, assets: assets, drawings: drawings, log: log)
+        Exporter(notes: notes, assets: assets, drawings: drawings, timeZone: .gmt, log: log)
     }
 }
 

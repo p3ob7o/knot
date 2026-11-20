@@ -43,7 +43,8 @@ public struct ShareItem: Hashable, Sendable {
 
 /// The share items of notes, recordings and drawings (docs/product-spec.md §8). "Copy note"
 /// and sharing a note as text use `text(of:)`; sharing it as Markdown, and the Mac's drag of a
-/// note into Finder, use `markdown(of:timeZone:)`.
+/// note into Finder, use `markdown(of:timeZone:)`. A shared file's name opens with a day, in the
+/// zone the caller names, which has no default, as for `Exporter`.
 public enum ShareItems {
     /// A note as plain text: its title and the text of its segments.
     public static func text(of record: NoteRecord) -> ShareItem {
@@ -53,7 +54,7 @@ public enum ShareItems {
 
     /// A note as a Markdown file, named as an export names it. Its recordings and drawings stay
     /// behind: sharing sends those on their own.
-    public static func markdown(of record: NoteRecord, timeZone: TimeZone = .gmt) -> ShareItem {
+    public static func markdown(of record: NoteRecord, timeZone: TimeZone) -> ShareItem {
         ShareItem(
             content: .data(Data(NoteMarkdown.render(record).utf8)), typeIdentifier: ShareItem.markdownType,
             suggestedName: ExportNames.markdownFile(for: record, timeZone: timeZone).name)
@@ -62,7 +63,7 @@ public enum ShareItems {
     /// A voice segment's recording as a file, or `nil` when it has none or it is not on this
     /// device, which the caller then fetches first. It never downloads.
     public static func recording(
-        of segment: Segment, assets: any AssetStore, timeZone: TimeZone = .gmt
+        of segment: Segment, assets: any AssetStore, timeZone: TimeZone
     ) async throws(KnotError) -> ShareItem? {
         guard segment.kind == .voice, let assetID = segment.assetID,
             let stored = try await assets.find(assetID, kind: .audio)
@@ -78,7 +79,7 @@ public enum ShareItems {
     /// as a file. `nil` when it has no drawing or the drawing is not on this device.
     public static func drawing(
         of segment: Segment, assets: any AssetStore, drawings: any DrawingImageSource = NoDrawingImages(),
-        timeZone: TimeZone = .gmt
+        timeZone: TimeZone
     ) async throws(KnotError) -> ShareItem? {
         guard segment.kind == .ink, let assetID = segment.assetID,
             let stored = try await assets.find(assetID, kind: .ink)
