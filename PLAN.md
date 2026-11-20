@@ -472,7 +472,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G2 | Wave 0 | Review the brief, run the Claude Design direction step, choose a direction | 60 |
 | G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode, which he did on 2026-11-19; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
 | G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build | 10 |
-| G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt. The signing on the build Mac he set up on 2026-11-20 | 5 |
+| G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt. Signing on the build Mac was set up on 2026-11-20 | 5 |
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
 | G3 | After wave 1 | One spike sitting: SP-1 has 12 rows, and the SP-2 spike app runs its 30 transfers itself | 45 |
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
@@ -507,7 +507,7 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
 - The owner makes the wave 0 recordings with Apple's Voice Memos, on the iPhone and on the Watch, and puts them in the one folder outside every worktree that `KNOT_LOCAL_FIXTURES` names.
-- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. `AGENTS.md` has the orchestrator run the local evaluation at the gate for a pull request that touches speech or cleanup, so such a pull request waits there. The orchestrator raises the recordings with him again when the first one waits, and not before.
+- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. No pull request waits for them. `AGENTS.md` has the orchestrator run the local evaluation at the gate for a pull request that touches speech or cleanup, and the briefs of WP-13 and WP-14 say what happens while the recordings are missing: the numbers on them are taken at the gate, or as soon as the recordings are on the Mac if that is later, and M2 does not close without them. The orchestrator raises the recordings with him again when M2's close or the cleanup sitting waits for them, and not before.
 - The owner's signing configuration is on the build Mac since 2026-11-20, in a file outside the repository that `KNOT_LOCAL_CONFIG` names. The team's ID never enters a tracked file, and the gate checks that.
 
 ## 11. Risks
