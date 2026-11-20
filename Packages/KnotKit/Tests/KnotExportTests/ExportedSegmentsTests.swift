@@ -88,3 +88,29 @@ struct CopyShape: CustomTestStringConvertible, Sendable {
         #expect(ids == [0x11, 0x12, 0x13, 0x14].map { fixedID($0) as SegmentID })
     }
 }
+
+/// Finding 5: a copy shares its original's start, so only the move after the original keeps
+/// it there when its ID sorts first.
+@Suite struct CopyPlacementTests {
+    @Test func aCopyWhoseIDSortsFirstStillFollowsItsSegment() throws {
+        let segments = [try shapeSegment(0x05, copyOf: 0x50), try shapeSegment(0x50)]
+        let ids = ExportedSegments.of(record(Build.note(fixedID(0x100), at: t0), segments)).map(\.id)
+        #expect(ids == [0x50, 0x05].map { fixedID($0) as SegmentID })
+    }
+
+    /// The pieces of one long capture hold one text, so a copy of its first piece goes after
+    /// the last piece.
+    @Test func aCopyOfAPieceGoesAfterTheWholeCapture() throws {
+        let first = try shapeSegment(0x60)
+        var second = try Segment(
+            id: .piece(1, of: CaptureID(first.id)), noteID: first.noteID, kind: .typed, origin: .cli,
+            startedAt: first.startedAt, endedAt: first.endedAt, text: "Second piece.", textOrigin: .typed,
+            state: .typed(.ready), revision: 1, piece: 1, pieceOf: first.id)
+        second.noteGeneration = first.noteGeneration
+        let copy = try shapeSegment(0x06, copyOf: 0x60)
+        let later = try shapeSegment(0x70, offset: 30)
+        let segments = [later, copy, second, first]
+        let ids = ExportedSegments.of(record(Build.note(fixedID(0x100), at: t0), segments)).map(\.id)
+        #expect(ids == [first.id, second.id, copy.id, later.id])
+    }
+}

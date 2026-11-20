@@ -36,6 +36,21 @@ import Testing
         #expect(try String(contentsOf: other, encoding: .utf8) == "not the export's")
     }
 
+    /// Finding 5: a file of an earlier export is replaced through a new file, never written
+    /// over in place, so another name for the old file keeps the old content.
+    @Test func aReplacedFileIsANewFile() async throws {
+        let world = try await GoldenWorld.make()
+        let root = try freshFolder()
+        let stale = root.appending(path: Golden.n1File)
+        try Data("an earlier export".utf8).write(to: stale)
+        let otherName = root.appending(path: "another name.txt")
+        try FileManager.default.linkItem(at: stale, to: otherName)
+
+        _ = try await world.exporter().export(to: FolderExportSink(root: root))
+        #expect(try String(contentsOf: stale, encoding: .utf8) == Golden.n1Exported)
+        #expect(try String(contentsOf: otherName, encoding: .utf8) == "an earlier export")
+    }
+
     /// Finding 2: a symbolic link named `attachments` inside the folder would send the
     /// recordings and drawings to wherever it points. It is refused before anything is written
     /// through it.

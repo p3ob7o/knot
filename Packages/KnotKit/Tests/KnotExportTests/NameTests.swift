@@ -62,7 +62,7 @@ let hostileTitles: [String] = [
         let label = name.dropFirst("2026-11-18 ".count).dropLast(" 0000007a.md".count)
         #expect(!label.isEmpty)
         #expect(label.utf8.count <= ExportNames.labelBytes)
-        #expect(label.first != " " && label.last != " " && label.last != ".")
+        #expect(label.first != " " && label.first != "." && label.last != " " && label.last != ".")
 
         // One plain file at the root of the export, and nothing beside the export.
         let manager = FileManager.default
