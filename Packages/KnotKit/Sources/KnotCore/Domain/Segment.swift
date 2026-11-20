@@ -65,11 +65,12 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     public var deletedAt: Date?
     /// Local, never synced: rises each time the text changes.
     public var revision: Int64
-    /// The position of this segment among the pieces of a capture whose text ran past the
-    /// size limit: 0 for the first, which shares the capture's ID.
+    /// Synced: the position of this segment among the pieces of a capture whose text ran past
+    /// the size limit, 0 for the first, which shares the capture's ID. Another device must see
+    /// the pieces as one capture, so that they move together there too.
     public var piece: Int
-    /// For a later piece, the first piece of its capture. The pieces of one capture share a
-    /// start, so `SegmentOrder` keeps them together and in position.
+    /// Synced: for a later piece, the first piece of its capture. The pieces of one capture
+    /// share a start, so `SegmentOrder` keeps them together and in position.
     public var pieceOf: SegmentID?
 
     public init(
