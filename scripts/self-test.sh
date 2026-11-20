@@ -119,6 +119,9 @@ assert k.classify(["Something/New.txt"])[0] == "everything"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[2] is True       # the soak
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[2] is False
 assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True                  # Mac UI tests
+# The Mac UI step itself and a new Xcode pin reach the Mac UI tests (review of PR 38).
+assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
+assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[4] is False
 assert k.matches("scripts/verify.sh", "scripts/") and not k.matches("scriptsx/a", "scripts/")

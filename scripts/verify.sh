@@ -855,6 +855,8 @@ count_tests() {
 export KNOT_VERIFY_TIER=$TIER KNOT_VERIFY_MODULE=$MODULE KNOT_VERIFY_TEST_TARGET=$TEST_TARGET \
     KNOT_VERIFY_PACKAGE=$PACKAGE KNOT_VERIFY_BASE=$BASE KNOT_VERIFY_SEED=$SEED
 
+# The steps whose logs hold test results, which the summary counts, whether they pass or fail.
+COUNTED_STEPS="package-test tsan soak ios-hosted launch mac-ui"
 for step in $STEPS; do
     log="$KNOT_LOGS/verify-$step.log"
     step_start=$(knot_now)
@@ -891,13 +893,14 @@ for step in $STEPS; do
             # The paths the orchestrator allowed by hand show on the console, not only in the log.
             grep -E '^ownership: allowed by hand: ' "$log" | sed 's/^ownership: /        /' || true
         fi
-        [[ " package-test tsan soak ios-hosted launch mac-ui " == *" $step "* ]] && count_tests "$log"
+        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        [[ $step == package-test || $step == tsan || $step == soak ]] && count_tests "$log"
+        # A failed step's tests count too, so the summary shows its failed cases.
+        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
         [[ -n $MODULE && $step == package-* ]] && rerun="scripts/verify.sh --module $MODULE"
