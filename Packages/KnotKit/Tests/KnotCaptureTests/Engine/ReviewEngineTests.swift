@@ -18,7 +18,7 @@ import Testing
         let request = CaptureRequest(kind: .typed, surface: .app, text: "book the room")
         let error = await expectError(.diskFull) { try await r.engine.begin(request) }
         let id = try #require(error?.context.captureID)
-        await pending.untilReached()
+        await reached(pending)
         if lateRowFirst {
             pending.release()
             #expect(await eventually("the late row") { r.logs.logged("store_answered_late", id) })
@@ -49,7 +49,7 @@ import Testing
             try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "g"))
         }
         let id = try #require(error?.context.captureID)
-        await pending.untilReached()
+        await reached(pending)
         pending.release()
         let acknowledged = await SuiteWait.value("the late row to be acknowledged") {
             for await state in states where state.captureID == id && state.durableRevision == 1 { return true }
@@ -261,7 +261,7 @@ import Testing
         let hold = await r.notes.holdNextCaptureWrite()
         let begun = try await r.beginRecording()
         #expect(begun.path == .inbox(KnotError.storeNotOpen.code))
-        _ = await SuiteWait.value("the record call to reach the hold") { await hold.untilReached() }
+        _ = await SuiteWait.value("the record call to reach the hold") { await reached(hold) }
         #expect(try await r.engine.discard(begun.captureID).outcome == .discardedEmpty)
         #expect(try await r.notes.capture(begun.captureID) == nil)
         hold.release()

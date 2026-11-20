@@ -41,7 +41,7 @@ import Testing
         let rig = Rig(deadline: .immediate, engineIngests: false)
         let hold = await rig.notes.holdNextCaptureWrite()
         let begun = try await rig.engine.begin(CaptureRequest(kind: .voice, surface: .app))
-        await hold.untilReached()
+        await reached(hold)
         #expect(rig.layer.entryKind(rig.locations.recordingManifest(begun.captureID)) == .file)
         #expect(try await rig.notes.capture(begun.captureID) == nil)
         #expect(begun.path == .inbox(KnotError.storeNotOpen.code))

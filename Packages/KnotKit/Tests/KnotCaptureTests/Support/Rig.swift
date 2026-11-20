@@ -258,3 +258,10 @@ func bounded<T: Sendable>(
     guard let answer else { throw KnotError.unexpected }
     return try answer.get()
 }
+
+/// Waits, within `SuiteWait`'s limit, until a held store call has reached its hold.
+func reached(_ hold: StoreCallHold, sourceLocation: SourceLocation = #_sourceLocation) async {
+    _ = await SuiteWait.value("the held call to reach its hold", sourceLocation: sourceLocation) {
+        await hold.untilReached()
+    }
+}

@@ -82,7 +82,7 @@ import Testing
         // The store answers now. The migration's held calls commit late, in the order the
         // captures began; then ingest stores each capture once, where its item says.
         for (hold, capture) in zip(holds, [typed.captureID, recording.captureID]) {
-            await hold.untilReached()
+            await reached(hold)
             hold.release()
             #expect(await eventually("the late record to commit") { (try? await rig.notes.capture(capture)) != nil })
         }
@@ -118,7 +118,7 @@ import Testing
         let begun = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
         let id = begun.captureID
         #expect(begun.path == .inbox(KnotError.storeNotOpen.code))
-        await hold.untilReached()
+        await reached(hold)
         _ = try await rig.engine.update(id, with: .text("tell the neighbour"))
 
         switch order {

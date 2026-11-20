@@ -109,7 +109,11 @@ import Testing
             await eventually("the transcribe job to run") {
                 (try? await r.notes.jobs(for: segment))?.first?.state == .running
             })
-        try await r.queue.resume()
+        let queueToResume = r.queue
+        let resumed = await SuiteWait.value("resume() while the drain runs") { () async -> Bool in
+            (try? await queueToResume.resume()) != nil
+        }
+        #expect(resumed == true)
         #expect(try await r.notes.jobs(for: segment).first { $0.kind == .transcribe }?.state == .running)
         #expect(await SuiteWait.value("the drain") { await drain.value } == .idle)
         let job = try #require(try await r.notes.jobs(for: segment).first { $0.kind == .transcribe })
