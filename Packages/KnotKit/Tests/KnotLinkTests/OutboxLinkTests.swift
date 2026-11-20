@@ -319,15 +319,26 @@ import Testing
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch(stallLimit: 60)
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        let queued = try #require(harness.outstanding(capture).first)
 
         var away = LinkSessionState.ready
         away.isReachable = false
         harness.system.setState(away, of: .watch)
+        // Quiet means the link has handled the change of reachability.
+        await harness.settle(link)
         harness.clock.advance(by: 3_600)
-        await eventually("the state seen") { await link.states()[capture] != nil }
         await link.resume()
+        await harness.settle(link)
         #expect(harness.system.timesCancelled(capture) == 0)
+        #expect(harness.outstanding(capture) == [queued])
+
+        // Back in reach, the same transfer has stalled.
+        harness.system.setState(.ready, of: .watch)
+        await harness.settle(link)
+        await link.resume()
+        await harness.settle(link)
+        #expect(harness.system.timesCancelled(capture) >= 1)
     }
 
     // MARK: Background task and context
