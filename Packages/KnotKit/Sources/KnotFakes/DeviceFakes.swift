@@ -146,6 +146,8 @@
                 }
                 progress(Double(step) / 4)
             }
+            // A fetch cancelled before it has returned yields, even after its last progress.
+            if Task.isCancelled { throw KnotError.cancelled.with(context) }
             var fetched = asset
             fetched.availability = .local
             return fetched

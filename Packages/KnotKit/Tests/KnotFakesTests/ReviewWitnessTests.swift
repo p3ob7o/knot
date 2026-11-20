@@ -74,4 +74,17 @@ private final class CallbackClock: WallClock {
         #expect(throws: KnotError.appNotInForeground) { try outcome?.get() }
         #expect(ContinuousClock.now - left < wait / 2, "It returned before the scripted wait could end.")
     }
+
+    /// Finding 20: a fetch cancelled before it has returned throws the yield, even after its last
+    /// progress report; the asset is local only once the fetch has returned it.
+    @Test func aFetchCancelledAtItsLastProgressYields() async throws {
+        let fetcher = ScriptedAssetFetcher()
+        let asset = DeviceFakeTests.asset(.remote)
+        fetcher.scriptRemote(asset.id)
+        let task = Task {
+            try await fetcher.fetch(asset) { if $0 == 1 { withUnsafeCurrentTask { $0?.cancel() } } }
+        }
+        let outcome = await SuiteWait.value("the fetch to return") { await task.result }
+        #expect(throws: KnotError.cancelled.with(.init(assetID: asset.id))) { try outcome?.get() }
+    }
 }

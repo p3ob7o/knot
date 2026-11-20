@@ -88,6 +88,7 @@ public enum AssetFetcherContract {
         #expect(fetched.availability == .local, "A fetched asset is on this device.")
         let steps = progress.values
         #expect(steps == steps.sorted() && steps.last == 1, "Progress rises to 1: \(steps).")
+        #expect(steps.allSatisfy { (0...1).contains($0) }, "Progress stays between 0 and 1: \(steps).")
 
         let again = ValueLog()
         #expect(try await fetcher.fetch(fetched) { again.add($0) } == fetched, "A local asset returns at once.")
@@ -107,6 +108,14 @@ public enum RecordingStateStoreContract {
             ownerLaunch: Identifier(uuid: UUID()), ownerPID: 42)
         store.write(recording)
         #expect(store.read() == recording, "A write is read back whole.")
+        // Every phase is kept as written, the stopping one too, which a widget shows until the
+        // recorder has stopped (finding 20).
+        for phase in RecordingPhase.allCases {
+            var snapshot = recording
+            snapshot.phase = phase
+            store.write(snapshot)
+            #expect(store.read() == snapshot, "\(phase) is kept.")
+        }
         store.write(.idle)
         #expect(store.read() == .idle)
     }
@@ -115,13 +124,14 @@ public enum RecordingStateStoreContract {
 /// A `RecordingActivity` under test, with a way to see the activities that run.
 public struct RecordingActivitySubject: Sendable {
     public let activity: any RecordingActivity
-    /// The capture IDs whose activities run.
-    public let running: @Sendable () async -> Set<CaptureID>
+    /// The activities that run, with the content each shows.
+    public let running: @Sendable () async -> [CaptureID: RecordingActivityContent]
     /// An activity that a launch that died left.
     public let leaveActivity: @Sendable (CaptureID) async -> Void
 
     public init(
-        activity: any RecordingActivity, running: @escaping @Sendable () async -> Set<CaptureID>,
+        activity: any RecordingActivity,
+        running: @escaping @Sendable () async -> [CaptureID: RecordingActivityContent],
         leaveActivity: @escaping @Sendable (CaptureID) async -> Void
     ) {
         self.activity = activity
@@ -139,18 +149,21 @@ public enum RecordingActivityContract {
         #expect(activity.isEnabled)
         let start = Date(timeIntervalSince1970: 1_795_000_000)
         let capture: CaptureID = Identifier(uuid: UUID())
-        try activity.start(captureID: capture, content: RecordingActivityContent(phase: .recording, startedAt: start))
-        #expect(await subject.running() == [capture], "The activity of the capture runs.")
-        await activity.update(captureID: capture, RecordingActivityContent(phase: .saving, startedAt: start))
+        let recording = RecordingActivityContent(phase: .recording, startedAt: start)
+        try activity.start(captureID: capture, content: recording)
+        #expect(await subject.running() == [capture: recording], "The activity of the capture runs.")
+        let saving = RecordingActivityContent(phase: .saving, startedAt: start)
+        await activity.update(captureID: capture, saving)
+        #expect(await subject.running() == [capture: saving], "An update shows (finding 20).")
         await activity.update(
             captureID: Identifier(uuid: UUID()), RecordingActivityContent(phase: .saved, startedAt: start))
-        #expect(await subject.running() == [capture], "An update of no activity changes nothing.")
+        #expect(await subject.running() == [capture: saving], "An update of no activity changes nothing.")
 
         // At launch, every activity but the current recording's ends.
         let orphan: CaptureID = Identifier(uuid: UUID())
         await subject.leaveActivity(orphan)
         #expect(await activity.endAll(except: capture) == 1, "The activity that a dead launch left ends.")
-        #expect(await subject.running() == [capture])
+        #expect(await subject.running().keys.sorted() == [capture])
         await activity.end(
             captureID: capture, RecordingActivityContent(phase: .saved, startedAt: start), dismissAfter: .seconds(4))
         #expect(await subject.running().isEmpty, "The end ends it.")
@@ -194,31 +207,41 @@ public enum SettingsStoreContract {
         // A synced change takes the synced settings and leaves this device's own.
         var synced = Settings.defaults
         synced.appendWindow = try AppendWindow(minutes: 10)
+        synced.cleanupEnabled = !changed.cleanupEnabled
+        synced.englishVariant = .locale("en_GB")
         synced.launchAtLogin = false
         let held = store.changes()
         try await subject.arriveBySync(synced)
         let window = synced.appendWindow
+        // The first change after the current value is the synced one, with its window.
         let sawSync = await SuiteWait.value("a held subscription to see the synced change") {
-            for await settings in held where settings.appendWindow == window { return true }
-            return false
+            var iterator = held.dropFirst().makeAsyncIterator()
+            return await iterator.next()?.appendWindow == window
         }
         #expect(sawSync == true, "A held subscription sees a synced change.")
         let after = try await store.load()
         #expect(after.appendWindow == synced.appendWindow, "The append window syncs.")
+        #expect(after.cleanupEnabled == synced.cleanupEnabled, "The cleanup switch syncs (finding 20).")
+        #expect(after.englishVariant == synced.englishVariant, "The English variant syncs.")
         #expect(after.launchAtLogin, "Launch at login belongs to this device.")
     }
 }
 
 /// The contract suite of `FeatureGates` (docs/architecture.md §5 and §18): each gate answers as
-/// the build says, and the same way every time it is asked.
+/// its configuration says, and the same way every time it is asked. Several configurations, so
+/// that gates with a fixed answer fail (finding 20).
 public enum FeatureGatesContract {
-    public static func run(expectedOpen: Set<Feature>, _ make: @Sendable () async throws -> any FeatureGates)
-        async throws
-    {
-        let gates = try await make()
-        for feature in Feature.allCases {
-            #expect(gates.isOpen(feature) == expectedOpen.contains(feature), "\(feature)")
-            #expect(gates.isOpen(feature) == gates.isOpen(feature), "A gate answers the same way twice.")
+    /// - Parameter configurations: gates, each with the features it must open.
+    public static func run(
+        _ configurations: @Sendable () async throws -> [(gates: any FeatureGates, open: Set<Feature>)]
+    ) async throws {
+        let configurations = try await configurations()
+        #expect(Set(configurations.map(\.open)).count > 1, "More than one configuration.")
+        for (gates, open) in configurations {
+            for feature in Feature.allCases {
+                #expect(gates.isOpen(feature) == open.contains(feature), "\(feature) in \(open)")
+                #expect(gates.isOpen(feature) == gates.isOpen(feature), "A gate answers the same way twice.")
+            }
         }
     }
 }

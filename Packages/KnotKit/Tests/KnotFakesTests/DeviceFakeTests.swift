@@ -66,7 +66,7 @@ import Testing
         try await RecordingActivityContract.run {
             let activity = ScriptedRecordingActivity()
             return RecordingActivitySubject(
-                activity: activity, running: { Set(activity.activities.keys) },
+                activity: activity, running: { activity.activities },
                 leaveActivity: {
                     activity.leaveActivity(
                         of: $0, RecordingActivityContent(phase: .recording, startedAt: Date(timeIntervalSince1970: 0)))
@@ -95,9 +95,20 @@ import Testing
     }
 
     @Test(.tags(.contract)) func theFeatureGatesContract() async throws {
-        try await FeatureGatesContract.run(expectedOpen: [.sync, .commandLine]) {
-            ScriptedFeatureGates(closed: [.ink])
+        try await FeatureGatesContract.run {
+            [
+                (ScriptedFeatureGates(closed: []), Set(Feature.allCases)),
+                (ScriptedFeatureGates(closed: [.ink]), Set<Feature>([.sync, .commandLine])),
+                (ScriptedFeatureGates(closed: [.sync, .commandLine]), Set<Feature>([.ink])),
+                (ScriptedFeatureGates(closed: Set(Feature.allCases)), Set<Feature>()),
+            ]
         }
-        try await FeatureGatesContract.run(expectedOpen: [.sync, .commandLine]) { MilestoneGates(level: .m4) }
+        try await FeatureGatesContract.run {
+            [
+                (MilestoneGates(level: .m4), Set<Feature>([.sync, .commandLine])),
+                (MilestoneGates(level: .m3), Set<Feature>()),
+                (MilestoneGates(level: nil), Set(Feature.allCases)),
+            ]
+        }
     }
 }
