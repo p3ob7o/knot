@@ -592,6 +592,7 @@
                 segment.revision += 1
             }
             job.resumeAt = run.resumeAt
+            job.revision += 1
             if run.resumeAt == nil {
                 // The last run: the job is done and the segment transcribed, together.
                 job.state = .done
@@ -646,7 +647,19 @@
             guard state.segments[job.segmentID] != nil else {
                 throw KnotError.notFound.with(.init(segmentID: job.segmentID, jobID: job.id))
             }
-            state.jobs[job.id] = job
+            var saved = job
+            if let stored = state.jobs[job.id] {
+                let context = ErrorContext(segmentID: job.segmentID, jobID: job.id)
+                guard job.revision == stored.revision else { throw KnotError.revisionStale.with(context) }
+                if stored.state == .done, job.state != .done { throw KnotError.illegalTransition.with(context) }
+                var retried = false
+                if case .failed = stored.state, job.state == .queued { retried = true }
+                if !retried, job.attempts < stored.attempts || job.deaths < stored.deaths {
+                    throw KnotError.illegalTransition.with(context)
+                }
+                saved.revision = stored.revision + 1
+            }
+            state.jobs[job.id] = saved
         }
 
         public func jobs(for segment: SegmentID?) throws(KnotError) -> [Job] {

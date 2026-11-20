@@ -91,6 +91,7 @@ public enum NoteStoreContract {
         Check(name: "emptied", run: anEmptyCaptureLeavesAnEmptiedNote),
         Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
         Check(name: "recording-job", run: aStoredRecordingAlwaysHasItsJob),
+        Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "stream-search", run: streamAndSearch),
     ]
 
@@ -1591,6 +1592,36 @@ public enum NoteStoreContract {
             _ = try await h.store.ingest(item)
             try await expectOneJob(SegmentID(item.id), open ? "ingest onto an open row" : "ingest with no row")
         }
+    }
+
+    /// A job's saved state only moves forward: a snapshot older than what is stored is
+    /// refused, a done job stays done, and its counters never fall (finding 45).
+    public static func aJobOnlyMovesForward(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let recording = try await h.store.record(h.watchRecording(from: 0, to: 1))
+        let segment = recording.segmentIDs[0]
+        let read = try #require(try await h.store.jobs(for: segment).first)
+        let run = h.run("phrase", from: .zero, resumeAt: nil)
+        _ = try await h.store.appendTranscript(run, to: segment, job: read.id)
+        await refuses(.revisionStale, "A snapshot read before the last run is refused.") {
+            try await h.store.saveJob(read)
+        }
+        _ = try await h.store.appendTranscript(run, to: segment, job: read.id)
+        #expect(try await h.text(segment) == "phrase", "Finished work is not reopened.")
+        var done = try #require(try await h.store.jobs(for: segment).first)
+        #expect(done.state == .done && done.revision > read.revision)
+        done.state = .queued
+        await refuses(.illegalTransition, "A done job stays done.") { try await h.store.saveJob(done) }
+
+        let other = try await h.store.record(h.watchRecording(from: 5, to: 6))
+        var job = try #require(try await h.store.jobs(for: other.segmentIDs[0]).first)
+        job = try JobMachine.reduce(job, .start)
+        job = try JobMachine.reduce(job, .stepFailed(.transcriptionFailed, retryAt: nil))
+        try await h.store.saveJob(job)
+        var lowered = try #require(try await h.store.jobs(for: other.segmentIDs[0]).first)
+        #expect(lowered.attempts == 1)
+        lowered.attempts = 0
+        await refuses(.illegalTransition, "Counters never fall.") { try await h.store.saveJob(lowered) }
     }
 
     // MARK: Reading

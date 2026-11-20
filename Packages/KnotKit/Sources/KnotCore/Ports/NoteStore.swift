@@ -193,7 +193,11 @@ public protocol NoteStore: Sendable {
     /// note has no title, and the title fits the note (`TitleRule`).
     func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError) -> CleanupApplied
 
-    /// Adds or replaces a job.
+    /// Adds a job, or saves a job read before. A job's saved state only moves forward: a save
+    /// that names an older revision than the one stored is refused with `revision_stale`, a
+    /// done job stays done, and its attempts and deaths never fall except through the retry of
+    /// a failed job (`JobMachine`), all refused with `illegal_transition`. Each save raises
+    /// the job's revision.
     func saveJob(_ job: Job) async throws(KnotError)
 
     /// The jobs of one segment, or every job.
