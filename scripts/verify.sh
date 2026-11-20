@@ -382,8 +382,11 @@ step_package_test() {
         # knot_evalTests.
         filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
-    swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
-        ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"
+    package_tests() {
+        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
+            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"
+    }
+    knot_swift_test_limited package-test package_tests
     # A run that matched no test is a failure, not a pass.
     if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
@@ -408,7 +411,8 @@ step_contract_two_targets() {
     # Run the suite from each test target on its own, and count a target only when its
     # run passed exactly that test.
     for target in $targets; do
-        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.contractSuiteDummyPortTwoTestTargets" >"$output" 2>&1 || {
+        knot_swift_test_limited contract-two-targets \
+            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.contractSuiteDummyPortTwoTestTargets" >"$output" 2>&1 || {
             echo "FAIL  the dummy contract suite failed in $target"
             continue
         }
@@ -677,8 +681,11 @@ step_soak() {
 step_perf() {
     local scratch="$KNOT_BUILD/swiftpm-perf" output="$KNOT_LOGS/verify-perf.out"
     swift build --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES --build-tests
-    swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
-        --filter 'Performance' 2>&1 | tee "$output" || return 1
+    perf_tests() {
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
+            --filter 'Performance' 2>&1 | tee "$output"
+    }
+    knot_swift_test_limited perf perf_tests || return 1
     if grep -E 'Test run with [1-9][0-9]* tests?|Executed [1-9]' "$output" >/dev/null; then
         echo "perf: results in $output. Report each as a median and a 95th percentile of at least 20 runs."
     else
@@ -689,7 +696,8 @@ step_perf() {
 # The package tests under Thread Sanitizer, as the nightly run does (named test
 # package-tests-under-thread-sanitizer-nightly).
 step_tsan() {
-    swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
+    knot_swift_test_limited tsan \
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
 }
 
 # Reports a change in the on-device models since the last report, as the nightly run on

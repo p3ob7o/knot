@@ -354,6 +354,29 @@ knot_run_limited() {
     return "$status"
 }
 
+# The limit on a step that runs the package's tests, in seconds: two hours. The suites end
+# every wait after SuiteWait.limit, ten minutes, and the most waits one test can run in turn
+# is 11, in RecorderContract.run, so a run in which every wait runs out ends after 110
+# minutes, while the other tests run beside it. A test that hangs outside a wait, such as a
+# deadlock, would otherwise hold the step for ever. The self-test checks that no test can
+# run more waits in turn than fit in this limit.
+KNOT_SWIFT_TEST_LIMIT=${KNOT_SWIFT_TEST_LIMIT:-7200}
+
+# Runs a command that runs the package's tests, with KNOT_SWIFT_TEST_LIMIT. At the limit it
+# fails and names the step: a hung test, not a dialog. Otherwise it returns the command's
+# status.
+#   knot_swift_test_limited <step> <command…>
+knot_swift_test_limited() {
+    local step=$1 status=0
+    shift
+    knot_limit "$KNOT_SWIFT_TEST_LIMIT" "$@" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        echo "The step $step did not end within $((KNOT_SWIFT_TEST_LIMIT / 60)) minutes (KNOT_SWIFT_TEST_LIMIT), longer than a run in which every wait of a suite runs out. A test hangs outside its waits, such as in a deadlock: the last test that started, above, is the one to read."
+        return 124
+    fi
+    return "$status"
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

@@ -439,6 +439,30 @@ else
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
+# A step that runs the package's tests has an outer limit (knot_swift_test_limited): a test
+# that hangs ends at it, and the failure names the step and says nothing of a dialog; a run
+# that passes is not slowed; a failing run keeps its status.
+timed swift_hang env KNOT_SWIFT_TEST_LIMIT=1 bash -c 'source "$1"; knot_swift_test_limited package-test "$2"' _ \
+    "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+timed swift_pass knot_swift_test_limited package-test "$lim/passes"
+timed swift_fail knot_swift_test_limited package-test "$lim/fails"
+swift_message="$(cat "$lim/swift_hang.out")"
+if [[ $swift_hang_status == 124 && $swift_message == *"The step package-test did not end"* && $swift_message != *dialog* &&
+    $swift_hang_seconds -lt 6 && $swift_pass_status == 0 && $swift_pass_seconds -lt 2 && $swift_fail_status == 65 ]]; then
+    pass "a step of package tests ends at its limit naming the step, is not slowed when it passes, and keeps its status"
+else
+    fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
+fi
+# The limit outlasts a run in which every wait of a suite runs out: no test can run more
+# SuiteWait waits in turn, each ten minutes, a contract's run counted as all of its waits and
+# a wait of SuiteWait.limit * n as n, than fit in KNOT_SWIFT_TEST_LIMIT.
+longest="$(python3 -I "$KNOT_SCRIPTS/lib/suite_waits.py" "$KNOT_ROOT/Packages/KnotKit" || true)"
+if [[ $longest =~ ^[0-9]+\  ]] && ((${longest%% *} * 600 < KNOT_SWIFT_TEST_LIMIT)); then
+    pass "the package tests' limit outlasts the longest run of waits in one test: ${longest%% *} of ten minutes, in ${longest#* }"
+else
+    fail "the package tests' limit, ${KNOT_SWIFT_TEST_LIMIT}s, does not outlast the longest run of waits in one test: ${longest:-not counted}"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
