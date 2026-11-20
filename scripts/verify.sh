@@ -612,7 +612,9 @@ step_mac_ui() {
 end_mac_test_hosts() {
     local folder pids
     folder="$(products Debug)/"
-    pids="$(pgrep -f "$folder" || true)"
+    # A literal match on the command line: pgrep -f would read the path as a pattern, in
+    # which a "." matches any character.
+    pids="$(ps -axww -o pid=,command= | KNOT_MATCH="$folder" awk 'index($0, ENVIRON["KNOT_MATCH"]) { print $1 }')"
     [[ -z $pids ]] && return 0
     echo "ending what the run left open from $folder: $(echo "$pids" | tr '\n' ' ')"
     # shellcheck disable=SC2086

@@ -92,7 +92,8 @@ if [[ -d $container ]]; then
     done < <(find "$container" -maxdepth 7 -type d -name "$id" -print0 2>/dev/null || true)
 fi
 echo "worktree-remove: app group containers were not looked at, since reading one can raise a consent dialog."
-echo "worktree-remove: a store of this worktree in ~/Library/Group Containers/group.com.p3ob7o.knot.dev, if a build put one there, is a folder named $id; remove it by hand."
+echo "worktree-remove: a store of this worktree in the development app group, if a build put one there,"
+echo "worktree-remove: is ~/Library/Group Containers/group.com.p3ob7o.knot.dev/…/$id; remove it by hand."
 
 # 3. The worktree, with its .build/ and DerivedData inside it.
 if ((FORCE)); then
