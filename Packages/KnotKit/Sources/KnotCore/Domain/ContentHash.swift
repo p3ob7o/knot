@@ -16,7 +16,13 @@ public struct StoreSecret: Hashable, Sendable {
 
     /// A new secret drawn from `generator`.
     public static func make(using generator: inout some RandomNumberGenerator) -> StoreSecret {
-        StoreSecret(bytes: (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        // The draw works on a copy, put back at the end. The system's generator is an empty
+        // value, and a caller that does not specialise this function passes no real address
+        // for it; Thread Sanitizer checks every inout access, and one to that address can
+        // crash the run or report a race that is not there. The copy has an address of its own.
+        var local = generator
+        defer { generator = local }
+        return StoreSecret(bytes: (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &local) })
     }
 }
 
