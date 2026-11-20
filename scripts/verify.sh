@@ -232,16 +232,34 @@ step_links() { tool links; }
 # The synthetic fixtures match a fresh run, and the generated audio has its format and
 # length (Fixtures/README.md).
 # The fixtures. When this tree lacks its generated audio, as a fresh checkout and the hosted
-# runner do, the step speaks it first with the generator as it is, so that the package tests
-# that read Fixtures/generated/audio/ find it here as they would on a Mac that made it.
+# runner do, or the audio is stale (knot_tool.py fixtures-audio), the step speaks it first
+# with the generator as it is, so that the package tests that read Fixtures/generated/audio/
+# find it here as they would on a Mac that made it. Two runs in one tree must not speak at
+# once, since the generator writes the clips in place: the decision and the speaking hold a
+# lock in the tree's .build/, and a second run waits for it and then finds the audio made.
 step_fixtures() {
+    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
+    mkdir -p "$KNOT_BUILD"
+    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
+    if ((status == 75)); then
+        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
+        return 1
+    fi
+    ((status == 0)) || return "$status"
+    "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
+}
+
+# Speaks this tree's audio when it lacks it, and stamps it. step_fixtures runs it holding
+# the audio's lock; it is no step of its own.
+step_fixtures_audio() {
     local why
     if ! why="$(cd "$KNOT_ROOT" && tool fixtures-audio)"; then
         echo "fixtures: $why. Speaking this tree's audio first: Fixtures/tools/generate.sh --audio"
         "$KNOT_ROOT/Fixtures/tools/generate.sh" --audio
         (cd "$KNOT_ROOT" && tool fixtures-audio --write-stamp)
+    else
+        echo "fixtures: $why"
     fi
-    "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
 }
 
 step_format() {
