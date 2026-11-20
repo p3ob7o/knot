@@ -72,6 +72,18 @@ public actor InboxIngest {
         return await scanWhileAsked()
     }
 
+    /// Recovery's step: ingests every item, and returns only once a scan that began after the
+    /// call has finished. A run in flight is waited for, then this call runs its own, so the
+    /// launch order of docs/architecture.md §13 holds whoever else started a run (finding 47).
+    /// The wait ends with the run in flight, whose store calls end.
+    public func ingestAllInLaunchOrder() async -> [CaptureID: ItemOutcome] {
+        while inFlight {
+            log.log(.info, "launch_ingest_waits_for_run")
+            await withCheckedContinuation { runEnded.append($0) }
+        }
+        return await ingestAll()
+    }
+
     /// Ingests the item of one capture, unless a run is in flight, which then takes it.
     public func ingest(_ capture: CaptureID) async -> ItemOutcome {
         guard !inFlight else {
@@ -87,9 +99,14 @@ public actor InboxIngest {
 
     private var inFlight = false
     private var rescan = false
+    /// The calls waiting for the run in flight to end.
+    private var runEnded: [CheckedContinuation<Void, Never>] = []
 
     private func endRun() {
         inFlight = false
+        let waiting = runEnded
+        runEnded = []
+        for waiter in waiting { waiter.resume() }
     }
 
     /// Scans `Inbox/` until no call asked for another scan meanwhile, or the store stops

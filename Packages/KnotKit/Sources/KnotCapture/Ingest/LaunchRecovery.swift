@@ -102,10 +102,11 @@ public struct LaunchRecovery: Sendable {
         return outcomes
     }
 
-    /// Steps 1 to 3 in their order.
+    /// Steps 1 to 3 in their order. Step 2 returns only once a scan of `Inbox/` that began
+    /// after it was asked has finished, whoever else started a run (finding 47).
     public func run(ingest: InboxIngest) async throws(KnotError) -> [CaptureID: Outcome] {
         let recovered = try await recoverRecordings()
-        let ingested = await ingest.ingestAll()
+        let ingested = await ingest.ingestAllInLaunchOrder()
         return try await finishOpenCaptures(recovered: recovered, ingested: ingested)
     }
 

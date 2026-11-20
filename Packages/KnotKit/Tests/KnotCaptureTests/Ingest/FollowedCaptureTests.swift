@@ -4,6 +4,7 @@ import KnotCapture
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// A capture that names the capture it follows is the next segment of that capture's note
@@ -99,6 +100,43 @@ import Testing
         #expect(b.path == .inbox(KnotError.storeBusy.code))
         _ = try await r.engine.end(b.captureID)
         _ = await r.ingest.ingestAll()
+        #expect(try await Self.note(r, a.captureID) == Self.note(r, b.captureID))
+        #expect(r.inboxFiles().isEmpty)
+    }
+
+    /// Finding 47, the re-check's D4. An ingest run is in flight at launch, as one the app's
+    /// coming forward starts, held in the store on the typed capture's item. Recovery's ingest
+    /// step waits for it and scans again, so the launch order of architecture §13 holds:
+    /// recovery finishes the orphaned recording after that item is in the store, in its note.
+    @Test func recoveryDuringAnotherIngestRunKeepsTheLaunchOrder() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        // The process dies here, mid-recording.
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        let hold = await next.notes.holdNextCaptureWrite()
+        let ingest = next.ingest
+        let running = Task { await ingest.ingestAll() }
+        await reached(hold)
+        let recovery = next.recovery
+        let finished = Mutex(false)
+        let recovering = Task {
+            defer { finished.withLock { $0 = true } }
+            return try await recovery.run(ingest: ingest)
+        }
+        #expect(
+            await eventually("recovery to wait for the run in flight, or to return") {
+                next.logs.logged("launch_ingest_waits_for_run") || finished.withLock { $0 }
+            })
+        hold.release()
+        _ = await SuiteWait.value("the held run") { await running.value }
+        let outcomes = try #require(await SuiteWait.value("recovery") { try? await recovering.value } ?? nil)
+        #expect(outcomes[b.captureID] == .ended(.stored), "Recovery finished the recording in the launch order.")
         #expect(try await Self.note(r, a.captureID) == Self.note(r, b.captureID))
         #expect(r.inboxFiles().isEmpty)
     }
