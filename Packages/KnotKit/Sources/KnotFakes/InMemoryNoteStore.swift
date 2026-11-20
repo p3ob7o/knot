@@ -686,6 +686,33 @@
                 textReplaced: textReplaced, titleSet: titleSet)
         }
 
+        public func applyRecognition(_ recognition: InkRecognition, to segmentID: SegmentID) throws(KnotError)
+            -> SegmentRead
+        {
+            guard var segment = state.segments[segmentID] else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            guard segment.kind == .ink else { throw KnotError.illegalTransition.with(.init(segmentID: segmentID)) }
+            try refuseIfOpen(segmentID)
+            let before = segment
+            // A person's text stays; the recognised text replaces only recognised text.
+            if TextPrecedence.mayReplace(segment.textOrigin, with: .recognised) {
+                if segment.text != recognition.text {
+                    try segment.replaceText(recognition.text, origin: .recognised)
+                    segment.revision += 1
+                }
+                segment.recognition = recognition.provenance
+            }
+            if case .ink(.recognising) = segment.state { segment.state = .ink(.ready) }
+            guard segment != before else { return read(segment) }
+            var next = state
+            next.segments[segmentID] = segment
+            next.counter += 1
+            touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
+            commit(next)
+            return read(segment)
+        }
+
         public func saveJob(_ job: Job) throws(KnotError) {
             guard state.segments[job.segmentID] != nil else {
                 throw KnotError.notFound.with(.init(segmentID: job.segmentID, jobID: job.id))

@@ -61,6 +61,11 @@ import Testing
         #expect(JobID.clean(of: segment).isDerived)
         #expect(JobID.clean(of: segment) != JobID.transcribe(of: segment))
         #expect(JobID.clean(of: segment) != JobID.clean(of: id(7)))
+        #expect(JobID.recognise(of: segment) == JobID.recognise(of: segment))
+        #expect(JobID.recognise(of: segment).isDerived)
+        #expect(
+            Set([JobID.transcribe(of: segment), JobID.clean(of: segment), JobID.recognise(of: segment)]).count == 3,
+            "Each job of a segment has its own ID.")
     }
 
     @Test func textFormAndFolderName() throws {

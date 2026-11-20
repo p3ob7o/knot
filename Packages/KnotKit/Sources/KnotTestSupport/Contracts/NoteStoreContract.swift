@@ -113,6 +113,7 @@ public enum NoteStoreContract {
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
         Check(name: "unreadable-item", run: anUnreadableInboxItemIsAFailedSegment),
         Check(name: "small-ones", run: theSmallOnes),
+        Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2303,6 +2304,40 @@ public enum NoteStoreContract {
         }
         #expect(try await h.text(SegmentID(draft.id)) == "Draft", "Nothing is written.")
         #expect(try await h.row(draft.id)?.outcome == .open)
+    }
+
+    /// The counterpart of `applyCleanup` for ink: a recognition sets the text with the origin
+    /// `recognised` and its provenance, and the drawing is ready; applied twice it changes
+    /// nothing; and it never replaces text a person edited.
+    public static func aRecognitionIsAppliedOnce(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let drawing = h.drawingStart(at: 0)
+        _ = try await h.store.record(drawing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: drawing.id, endedAt: h.at(1),
+                outcome: .stored(.file(h.asset(.ink, for: drawing.id), duration: nil)), revision: 0))
+        let segment = SegmentID(drawing.id)
+        let before = try #require(try await h.store.segment(segment))
+        let provenance = RecognitionProvenance(engineVersion: 2, language: "en-GB", osBuild: "build 1")
+        let applied = try await h.store.applyRecognition(
+            InkRecognition(text: "milk eggs bread", provenance: provenance), to: segment)
+        #expect(applied.segment.text == "milk eggs bread" && applied.segment.textOrigin == .recognised)
+        #expect(applied.segment.recognition == provenance, "Its provenance is kept beside the text.")
+        #expect(applied.segment.state == .ink(.ready), "The drawing is ready.")
+        #expect(applied.revision.value > before.revision.value, "The text changed, so its revision rose.")
+
+        let cursor = try await h.store.cursor()
+        let again = try await h.store.applyRecognition(
+            InkRecognition(text: "milk eggs bread", provenance: provenance), to: segment)
+        #expect(again.revision == applied.revision, "Applied twice, it changes nothing.")
+        #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Nor any note.")
+
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "milk and eggs", origin: .edited, writer: .app))
+        let later = try await h.store.applyRecognition(
+            InkRecognition(text: "something else", provenance: provenance), to: segment)
+        #expect(later.segment.text == "milk and eggs" && later.segment.textOrigin == .edited, "A person's text stays.")
     }
 
     // MARK: Reading

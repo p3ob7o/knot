@@ -139,6 +139,7 @@ extension Identifier where Tag == SegmentTag {
 /// caller's exhaustive switch (finding 15). The values never change.
 private enum JobNamespace {
     static let clean = UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a06")!
+    static let recognise = UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a07")!
 }
 
 extension Identifier where Tag == JobTag {
@@ -153,6 +154,12 @@ extension Identifier where Tag == JobTag {
     /// the segment's ID, so a second write finds the first.
     public static func clean(of segment: SegmentID) -> JobID {
         JobID(uuid: UUIDv5.make(namespace: JobNamespace.clean, name: segment.description))
+    }
+
+    /// The recognise job of a stored drawing. Derived from the segment's ID, so a second write
+    /// finds the first.
+    public static func recognise(of segment: SegmentID) -> JobID {
+        JobID(uuid: UUIDv5.make(namespace: JobNamespace.recognise, name: segment.description))
     }
 }
 

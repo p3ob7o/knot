@@ -223,6 +223,17 @@ public protocol NoteStore: Sendable {
     /// note has no title, and the title fits the note (`TitleRule`).
     func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError) -> CleanupApplied
 
+    /// Writes a recognised drawing's text in one transaction, the counterpart of `applyCleanup`
+    /// for ink: the text, with the origin `recognised` and its provenance, where the text is still
+    /// the recognised one, and the drawing ready. It never replaces text a person edited, and
+    /// applied twice it changes nothing. Refused with `illegal_transition` for a segment that is
+    /// not a drawing, and while its capture is open.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`: a store written against that pull request still conforms.
+    func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
+        -> SegmentRead
+
     /// Adds a job, or saves a job read before. A job's saved state only moves forward: a save
     /// that names an older revision than the one stored is refused with `revision_stale`, a
     /// done job stays done, and its attempts and deaths never fall except through the retry of
@@ -240,6 +251,13 @@ public protocol NoteStore: Sendable {
     /// rows of what it removed go too, and the result names their files for the caller to
     /// remove through the `AssetStore`.
     func purge(before date: Date) async throws(KnotError) -> PurgeResult
+}
+
+extension NoteStore {
+    /// The default of an operation added after the second pull request: not there yet.
+    public func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
+        -> SegmentRead
+    { throw KnotError.portUnavailable.with(.init(segmentID: segment)) }
 }
 
 // MARK: - Capturing
