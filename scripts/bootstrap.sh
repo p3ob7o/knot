@@ -87,11 +87,15 @@ step "resolved GRDB for SwiftPM and for Xcode"
 # not allow committing it (Fixtures/README.md). It goes to Fixtures/generated/, which git
 # ignores.
 mkdir -p "$KNOT_LOGS"
-"$KNOT_ROOT/Fixtures/tools/generate.sh" --audio >"$KNOT_LOGS/bootstrap-fixtures.log" 2>&1 ||
-    knot_fail "bootstrap-fixtures" "Fixtures/tools/generate.sh --audio failed. Its log is $KNOT_LOGS/bootstrap-fixtures.log." \
+# It goes through the fixtures step's own path (verify.sh's fixtures-audio, under the same
+# lock), which speaks only when the audio is missing or stale and then stamps it, so that the
+# first verify run does not speak it again.
+/usr/bin/lockf -k -t "${KNOT_FIXTURES_LOCK_WAIT:-1800}" "$KNOT_BUILD/fixtures-audio.lock" \
+    "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio >"$KNOT_LOGS/bootstrap-fixtures.log" 2>&1 ||
+    knot_fail "bootstrap-fixtures" "The fixtures' audio was not made and stamped. Its log is $KNOT_LOGS/bootstrap-fixtures.log." \
         "Read the log. The audio needs the macOS system voices that Fixtures/README.md names." "safe" \
         "part of Fixtures/generated/, which git ignores"
-step "spoke the fixtures' audio into Fixtures/generated/"
+step "the fixtures' audio: $(tail -n 1 "$KNOT_LOGS/bootstrap-fixtures.log" | sed 's/^fixtures: //')"
 
 step "done in $(knot_duration $(($(knot_now) - START)))"
 
