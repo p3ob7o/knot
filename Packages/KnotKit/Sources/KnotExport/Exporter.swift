@@ -200,8 +200,12 @@ public struct Exporter: Sendable {
         return preview
     }
 
-    /// Exports every note the stream shows into `sink`. A failed write stops the export and
-    /// throws, leaving what was written before it.
+    /// Exports every note the stream shows into `sink`. A failure stops the export and throws,
+    /// leaving what was written before it: a write that fails, or a store that refuses to be
+    /// read, as one restored from a kept copy refuses the export's cursor. An error after at least
+    /// one file was written says so (docs/product-spec.md §10): what was written up to the
+    /// failure is kept, and a retry is safe, since an export again replaces its files. Its code,
+    /// its next action and its exit status stay the case's own.
     public func export(to sink: some ExportSink) async throws(KnotError) -> ExportReport {
         var report = ExportReport(written: [], notes: 0, leftOut: [])
         var names = ExportNameBook(timeZone: timeZone)
@@ -220,12 +224,20 @@ public struct Exporter: Sendable {
             }
         } catch {
             log.failure(error, "export_failed", .number("notes", report.notes), .number("files", report.written.count))
-            throw error
+            throw report.written.isEmpty ? error : Self.afterPartialWrite(error)
         }
         log.log(
             .info, "export_finished", .number("notes", report.notes), .number("files", report.written.count),
             .number("left_out", report.leftOut.count))
         return report
+    }
+
+    /// The same error, saying that the files written before it are kept and that a retry is
+    /// safe. KnotCore's taxonomy has the outcome for a partial write, `kept_up_to_failure`.
+    static func afterPartialWrite(_ error: KnotError) -> KnotError {
+        KnotError(
+            code: error.code, errorClass: error.errorClass, next: error.next, retry: .safe,
+            written: .keptUpToFailure, exitStatus: error.exitStatus, context: error.context)
     }
 
     // MARK: - Reading
