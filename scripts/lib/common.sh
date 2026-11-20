@@ -245,3 +245,27 @@ knot_start_tool() {
     rm -f "$output"
     return "$status"
 }
+
+# Takes the signing team's ID out of a build log, by pattern: Xcode writes the team's prefix
+# into the log of every app build on a Mac that knows the team, whatever the signing, as
+# TeamIdentifierPrefix, AppIdentifierPrefix and the entitlements it prints, such as
+# application-identifier. No run needs the ID, and most do not know it, so a team ID is
+# matched by its shape, ten capitals and digits, where those keys or an identifier put it.
+#   … | knot_filter_team
+KNOT_TEAM_FILTER='
+    s/((?:TeamIdentifierPrefix|AppIdentifierPrefix)\\?[=:]\s*"?)[A-Z0-9]{10}(?=[."\s]|$)/$1<TEAM>/g;
+    s/(DEVELOPMENT_TEAM\w*\s*\\?[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/((?:team-identifier|TeamIdentifier|com\.apple\.developer\.team-identifier)"?\s*[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/\b[A-Z0-9]{10}(?=\.(?:com|group|iCloud|org|net|\*)\b)/<TEAM>/g;
+'
+knot_filter_team() { perl -pe "$KNOT_TEAM_FILTER"; }
+
+# Rewrites, in place, every log that a run kept in a folder, through knot_filter_team.
+knot_scrub_logs() {
+    local folder=$1 log
+    [[ -d $folder ]] || return 0
+    for log in "$folder"/*; do
+        [[ -f $log ]] || continue
+        perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
+    done
+}

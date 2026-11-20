@@ -128,6 +128,8 @@ It cannot know what a value holds. A value named `noteID` that holds text passes
 
 **A tool that does not answer.** The packaging step starts the `knot-dev` that it built, with a limit of 30 seconds (`KNOT_TOOL_START_LIMIT`). A system dialog, such as a consent prompt, can hold every start of a new tool; then the step fails and says that a dialog may be waiting for the owner on this Mac. No agent answers such a dialog.
 
+**The team's ID in build logs.** On a Mac whose Xcode knows the owner's team, every app build writes the team's prefix into its log, whatever the signing: `TeamIdentifierPrefix`, `AppIdentifierPrefix` and the entitlements it prints, such as `application-identifier`. So `scripts/verify.sh` filters every log it keeps, and everything it prints from them, through `knot_filter_team` in `scripts/lib/common.sh`, and at the start of each run it rewrites the logs that earlier runs left in `.build/logs`. The filter knows no ID: it masks ten capitals and digits where those keys, `DEVELOPMENT_TEAM` or an identifier such as `<ID>.com.…` put them, as `<TEAM>`. Xcode's own logs in DerivedData keep the prefix; the scripts never print them, and nothing from a build log goes into a note, a commit or a pull request unfiltered.
+
 ## The other scripts
 
 | Command | Does |

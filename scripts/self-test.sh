@@ -314,6 +314,27 @@ else
     fail "a tool that does not answer: status $status after $(($(knot_now) - started))s: $output"
 fi
 
+# The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
+# Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
+# scrub rewrites a kept log in place.
+fake_team="ZZ9QX42K7T"
+team_log="$scratch/build.log"
+{
+    echo 'export TeamIdentifierPrefix\='"$fake_team"'. AppIdentifierPrefix\='"$fake_team"'.'
+    echo '    "application-identifier" = "'"$fake_team"'.com.p3ob7o.knot.dev";'
+    echo '    "com.apple.developer.team-identifier" = '"$fake_team"';'
+    echo 'DEVELOPMENT_TEAM = '"$fake_team"
+    echo 'keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52 KNOT_WORKTREE'
+} >"$team_log"
+filtered="$(knot_filter_team <"$team_log")"
+knot_scrub_logs "$scratch"
+if [[ $filtered != *"$fake_team"* && $filtered == *"keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52"* &&
+    $(grep -c -e '<TEAM>' "$team_log") == 4 ]] && ! grep -e "$fake_team" "$team_log" >/dev/null; then
+    pass "the team's ID leaves a build log, by pattern, and the rest stays"
+else
+    fail "the team filter left an ID or took too much: $filtered"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

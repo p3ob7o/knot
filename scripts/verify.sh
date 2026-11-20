@@ -140,7 +140,9 @@ xcb() {
     local log=$1
     shift
     knot_xcodebuild_settings
-    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" >>"$log" 2>&1
+    # Xcode writes the team's prefix into the log of every app build on a Mac that knows the
+    # team, so the log is filtered as it is written (knot_filter_team).
+    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log"
 }
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
@@ -757,6 +759,8 @@ else
 fi
 
 mkdir -p "$KNOT_LOGS"
+# Logs that earlier runs kept, before the filter existed, lose the team's ID too.
+knot_scrub_logs "$KNOT_LOGS"
 START=$(knot_now)
 PASSED=0
 SKIPPED_STEPS=0
@@ -788,12 +792,19 @@ for step in $STEPS; do
     if [[ $options == none ]]; then
         # A light step runs in a background subshell, so that `set -e` holds inside it:
         # bash ignores -e in a function that runs as the condition of an `if`.
-        ("step_${step//-/_}") >"$log" 2>&1 &
+        # Its output is filtered for the team's ID, as every log of the run is.
+        (
+            set -o pipefail
+            ("step_${step//-/_}") 2>&1 | knot_filter_team
+        ) >"$log" &
     else
         # A heavy step runs in its own process, holding a build slot.
         # shellcheck disable=SC2086
-        "$KNOT_SCRIPTS/build-slot.sh" run $( [[ $TIER == gate ]] && echo --gate ) $options --label "$step" \
-            -- "$KNOT_SCRIPTS/verify.sh" --in-step "$step" >"$log" 2>&1 &
+        (
+            set -o pipefail
+            "$KNOT_SCRIPTS/build-slot.sh" run $( [[ $TIER == gate ]] && echo --gate ) $options --label "$step" \
+                -- "$KNOT_SCRIPTS/verify.sh" --in-step "$step" 2>&1 | knot_filter_team
+        ) >"$log" &
     fi
     code=0
     wait $! || code=$?
