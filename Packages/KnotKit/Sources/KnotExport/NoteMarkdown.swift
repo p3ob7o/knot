@@ -87,9 +87,10 @@ public enum SegmentFileLine: Hashable, Sendable {
 /// segment that leaves the note (`ExportedSegments`) is a paragraph of its own: the line of
 /// its recording or drawing when the caller gives one, then its text as it is, since a
 /// segment's text is already lightly styled Markdown (§7). Segments are separated by spacing
-/// alone, as in the note. One segment's text cannot change how the rest reads: a code fence it
-/// leaves open is closed after it, and a title's closing `#` characters are escaped, so the
-/// heading keeps them.
+/// alone, as in the note. A code fence that a segment's text leaves open is closed after it, so
+/// that it does not turn the rest of the note into code, and a title's closing `#` characters
+/// are escaped, so the heading keeps them. Nothing else in a segment's text is closed: an HTML
+/// comment or block it leaves open, such as `<!--` or `<pre>`, still reaches past it.
 public enum NoteMarkdown {
     /// The note as Markdown. `files` holds the line of each segment whose recording or drawing
     /// the caller exported or left out; a segment it does not name gets no such line, as when a
