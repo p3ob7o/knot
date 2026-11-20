@@ -47,8 +47,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// A typed capture's latest text.
         var text = ""
         var session: (any RecordingSession)?
-        /// Set when a row that a store call commits late must be ended as empty: a begin that
-        /// reached no disk, or a recording discarded off the store path.
+        /// Set when a row that a store call commits late must be ended as empty: a recording
+        /// discarded off the store path.
         var discardLateRow = false
     }
 
@@ -106,7 +106,13 @@ public actor StandardCaptureEngine: CaptureEngine {
             // Drawings come with the ink types: no operation of `NoteStore` saves an open one yet.
             throw KnotError.portUnavailable
         }
-        let handoff = try await endOpenCapture(before: request)
+        let handoff: CaptureID?
+        switch try await endOpenCapture(before: request) {
+        case .retry(let pending):
+            return try await retryBegin(pending, text: request.text ?? "")
+        case .start(let open):
+            handoff = open
+        }
         let id: CaptureID = ids.make()
         var entry = Entry(
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
@@ -196,11 +202,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             do throws(KnotError) {
                 try writeTypedItem(id, endedAt: nil)
             } catch {
-                // Nothing reached a disk: the capture never started. A row its store call
-                // commits later is ended as empty, since the surface keeps the text and its
-                // next begin carries it.
-                entries[id]?.discardLateRow = true
-                entries[id]?.outcome = .discardedEmpty
+                // Nothing reached a disk. The capture stays, with nothing durable: the surface
+                // keeps the text, and its next begin on the same surface is this capture's
+                // retry, with the same ID, so that a row its store call makes late and the
+                // retry are one capture.
                 log.failure(error, "capture_not_saved")
                 throw error.about(capture: id)
             }
@@ -208,6 +213,19 @@ public actor StandardCaptureEngine: CaptureEngine {
                 id, "capture_began", .flag("store_path", false),
                 .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
         }
+        return publish(id)
+    }
+
+    /// A typed start on the surface of the open typed capture: the same capture, its text saved
+    /// at the next revision. After a begin that reached no disk, this is the surface's retry.
+    private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState {
+        await take(id)
+        defer { release(id) }
+        guard entries[id]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: id) }
+        entries[id]?.revision += 1
+        entries[id]?.text = text
+        try await saveTyped(id, ending: nil)
+        log.capture(id, "capture_begin_retried")
         return publish(id)
     }
 
@@ -433,17 +451,29 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// Applies rule 15 to the capture open on this device before `request` starts. Returns
     /// the open capture that the new one's record-a-capture transaction ends, if any, whose
     /// line the caller then holds until `settle`.
-    private func endOpenCapture(before request: CaptureRequest) async throws(KnotError) -> CaptureID? {
+    private enum StartPlan {
+        /// A new capture, with the open capture whose line the caller holds until `settle`.
+        case start(handoff: CaptureID?)
+        /// A typed start on the surface of the open typed capture, which goes on.
+        case retry(CaptureID)
+    }
+
+    private func endOpenCapture(before request: CaptureRequest) async throws(KnotError) -> StartPlan {
         // The newest open capture: while one start ends another, two can be open for a moment.
         let open = entries.values.filter { $0.outcome == .open }.max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
-        guard let open else { return nil }
+        guard let open else { return .start(handoff: nil) }
         let decision = OpenCaptureRule.decide(
             open: OpenCapture(
                 captureID: open.id, noteID: open.noteID ?? NoteID(open.id), kind: open.kind, surface: open.surface),
             start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
         switch decision {
         case .nothingOpen, .leaveOpen:
-            return nil
+            return .start(handoff: nil)
+        case .continueOpen(let id) where open.kind == .typed:
+            // The same kind on the same surface: the open capture goes on, and nothing new
+            // starts (rule 15). The surface's text is the capture's whole text, so the start is
+            // its next save: after a begin that reached no disk, the surface's retry.
+            return .retry(id)
         case .continueOpen(let id), .recordingPress(let id):
             throw KnotError.segmentCaptureOpen.about(capture: id)
         case .refused(let error):
@@ -456,7 +486,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // Unless it is still the one open capture, on the store path, another start ran
                 // while this one waited: rule 15 is applied again to what is open now.
                 let stillTheOne = entries.values.filter { $0.outcome == .open }.map(\.id) == [open.id]
-                if stillTheOne, case .store = entries[open.id]?.path { return open.id }
+                if stillTheOne, case .store = entries[open.id]?.path { return .start(handoff: open.id) }
                 release(open.id)
                 return try await endOpenCapture(before: request)
             }
@@ -513,7 +543,11 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func lateAnswer(of id: CaptureID, committed: Bool) async {
         guard committed, let entry = entries[id] else { return }
         log.capture(id, "store_answered_late")
-        if entry.discardLateRow {
+        if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
+            // A begin that reached no disk: its row, with the first text, is on the drive now.
+            entries[id]?.durableRevision = 1
+            publish(id)
+        } else if entry.discardLateRow {
             let revision = (entries[id]?.revision ?? 0) + 1
             entries[id]?.revision = revision
             let end = CaptureEnd(captureID: id, endedAt: clock.now(), outcome: .discardedEmpty, revision: revision)

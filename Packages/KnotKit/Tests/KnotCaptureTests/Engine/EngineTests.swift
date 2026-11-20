@@ -70,16 +70,16 @@ import Testing
 
     // MARK: Rule 15
 
-    /// A capture begun twice: a second typed capture on the same surface does not start, and
-    /// nothing is written for it.
-    @Test func secondTypedStartOnTheSameSurfaceIsRefused() async throws {
+    /// A capture begun twice: a second typed start on the same surface is the open capture
+    /// going on, and no second capture starts (rule 15).
+    @Test func secondTypedStartOnTheSameSurfaceContinuesTheOpenCapture() async throws {
         let rig = Rig()
         let first = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "a"))
-        await expectError(.segmentCaptureOpen) {
-            try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "b"))
-        }
+        let again = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "ab"))
+        #expect(again.captureID == first.captureID)
+        #expect(again.durableRevision == 2)
         #expect(try await rig.notes.openCaptures().map(\.id) == [first.captureID])
-        #expect(try await rig.notes.segment(SegmentID(first.captureID))?.text == "a")
+        #expect(try await rig.notes.segment(SegmentID(first.captureID))?.text == "ab")
     }
 
     /// While a recording runs, typing does not start, and a second press of record does not
@@ -157,39 +157,22 @@ import Testing
 
     // MARK: Neither path
 
-    /// When neither the store nor `Inbox/` takes a begin, it throws, and nothing started: the
-    /// surface keeps the text and says that it could not save (docs/product-spec.md §4.4).
+    /// When neither the store nor `Inbox/` takes a begin, it throws and nothing is durable: the
+    /// surface keeps the text and says that it could not save (docs/product-spec.md §4.4). Its
+    /// next begin on the same surface is the same capture, and saves the whole text.
     @Test func beginThatReachesNoDiskThrows() async throws {
         let rig = Rig()
         await rig.notes.failNextCaptureWrites(with: .storeBusy)
         rig.layer.failNextWrite(with: .diskFull)
-        await expectError(.diskFull) {
+        let failed = await expectError(.diskFull) {
             try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "f"))
         }
         #expect(try await rig.notes.openCaptures().isEmpty)
         #expect(rig.inboxFiles().isEmpty)
-        // The next begin, with the whole text, works.
         let retried = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "fix the gate"))
-        #expect(retried.path == .store)
-    }
-
-    /// A begin that reached no disk, whose store call commits later: that row is ended as
-    /// empty, since the surface's next begin carries the text.
-    @Test func lateRowOfABeginThatReachedNoDiskIsEnded() async throws {
-        let rig = Rig(deadline: .immediate)
-        let hold = await rig.notes.holdNextCaptureWrite()
-        rig.layer.failNextWrite(with: .diskFull)
-        let failed = await expectError(.diskFull) {
-            try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "g"))
-        }
-        let id = try #require(failed?.context.captureID)
-        await hold.untilReached()
-        hold.release()
-        #expect(
-            await eventually("the late row to be ended as empty") {
-                (try? await rig.notes.capture(id))?.outcome == .discardedEmpty
-            })
-        #expect(try await rig.stream().notes.isEmpty)
+        #expect(retried.captureID == failed?.context.captureID)
+        #expect(retried.path == .inbox(KnotError.storeBusy.code))
+        #expect(rig.inboxText(retried.captureID) == "fix the gate")
     }
 
     /// A save that neither path takes is not acknowledged: the update throws, the durable
