@@ -762,6 +762,24 @@ else
     fail "the lock check through verify's loop (status, reads, stand-in, slots): locked '$locked_run', unlocked '$unlocked_run', silent '$silent_run', locked then unlocked '$flips_run', a run without the step '$plan_run'"
 fi
 
+# The doctor reads the screen's lock only in a run that has the Mac UI step, and says what it
+# read as a note: with a stub ioreg that counts its reads and never answers, a doctor without
+# --mac-ui reads nothing, and one with it reads once, within its limit, and notes it.
+dl="$scratch/doctor-lock"
+mkdir -p "$dl/stub"
+printf '#!/bin/sh\necho x >>"%s/reads"\nexec sleep 30\n' "$dl" >"$dl/stub/ioreg"
+chmod +x "$dl/stub/ioreg"
+env PATH="$dl/stub:$PATH" KNOT_CONSOLE_READ_LIMIT=2 "$KNOT_SCRIPTS/doctor.sh" >"$dl/plain.out" 2>&1 || true
+plain_reads=$( [[ -f $dl/reads ]] && wc -l <"$dl/reads" | tr -d ' ' || echo 0)
+env PATH="$dl/stub:$PATH" KNOT_CONSOLE_READ_LIMIT=2 "$KNOT_SCRIPTS/doctor.sh" --mac-ui >"$dl/mac-ui.out" 2>&1 || true
+all_reads=$( [[ -f $dl/reads ]] && wc -l <"$dl/reads" | tr -d ' ' || echo 0)
+if [[ $plain_reads == 0 && $all_reads == 1 && "$(cat "$dl/mac-ui.out")" == *"note  screen"*"could not"* ]]; then
+    pass "the doctor reads the screen's lock only for a run with the Mac UI step, and notes what it read"
+else
+    fail "the doctor and the lock: reads without --mac-ui $plain_reads, in all $all_reads; $(grep -e screen "$dl/mac-ui.out" || echo 'no screen line')"
+fi
+pkill -KILL -f "$dl/stub/ioreg" 2>/dev/null || true
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

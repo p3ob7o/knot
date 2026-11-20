@@ -34,6 +34,7 @@ esac
 FAILED=0
 ok() { printf 'doctor: ok    %-12s %s\n' "$1" "$2"; }
 warn() { printf 'doctor: warn  %-12s %s\n' "$1" "$2"; }
+note() { printf 'doctor: note  %-12s %s\n' "$1" "$2"; }
 bad() { FAILED=1; knot_report "$@" || true; }
 
 # 1. No folder that a cloud file provider syncs. That is where the stray "… 2" copies in
@@ -130,10 +131,16 @@ runtime_for watchOS watchsimulator
 #    password: Automation Mode that turns on without authentication, and developer mode.
 #    Automation Mode itself reads "disabled" between test runs; a run turns it on.
 missing="$(knot_mac_ui_ready "$(automationmodetool 2>&1 || true)" "$(DevToolsSecurity -status 2>&1 || true)" || true)"
-# The Mac UI tests also need the screen unlocked. That is no failure here, since most runs
-# have no Mac UI step; the step itself fails at once on a locked screen.
-[[ "$(knot_console_state)" != locked ]] ||
-    warn screen "locked: the Mac UI tests need it unlocked, and the owner has to unlock it"
+# The Mac UI tests also need the screen unlocked. Only a run that has the Mac UI step reads
+# it, and the doctor says what it read as a note, not a failure: the step itself fails at
+# once on a locked screen.
+if ((MAC_UI)); then
+    case "$(knot_console_state)" in
+        locked) note screen "locked: the Mac UI tests need it unlocked, and the owner has to unlock it" ;;
+        unlocked) note screen "unlocked" ;;
+        *) note screen "could not read whether it is locked; the Mac UI step will tell" ;;
+    esac
+fi
 if [[ -z $missing ]]; then
     ok automation "Mac UI tests can run: Automation Mode needs no authentication, and developer mode is on"
 else
