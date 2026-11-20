@@ -2,14 +2,15 @@ import Foundation
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// The in-memory store on the contract's setup, with its hook for a change sync applies.
 func inMemoryStore(_ faults: InMemoryNoteStore.Faults = []) -> NoteStoreFactory {
     { setup in
         let store = InMemoryNoteStore(
-            clock: setup.clock, ids: setup.ids, deviceID: setup.deviceID, window: setup.window, seed: setup.seed,
-            faults: faults)
+            clock: setup.clock, ids: setup.ids, deviceID: setup.deviceID, window: setup.window,
+            generation: setup.generation, seed: setup.seed, faults: faults)
         return NoteStoreSubject(store: store) { segment, note in
             try await store.applySyncedNoteChange(segment, to: note)
         }
@@ -177,6 +178,49 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         await #expect(throws: KnotError.storeNotOpen.about(capture: draft.id)) { try await store.ingest(item) }
         #expect(try await store.capture(draft.id)?.outcome == .open, "Nothing is written.")
         #expect(try await store.ingest(item).applied)
+    }
+
+    /// A second hold does not drop one that was never reached: each holds the next capture
+    /// write in turn (finding 75).
+    @Test func twoHoldsHoldTwoWritesInTurn() async throws {
+        let clock = FakeClock()
+        let ids = SeededIDGenerator(seed: 14, clock: clock)
+        let device: DeviceID = ids.make()
+        let store = InMemoryNoteStore(clock: clock, ids: ids, deviceID: device)
+        let launch: LaunchID = ids.make()
+        func tool(_ text: String) -> NewCapture {
+            NewCapture(
+                id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .cli, surface: .commandLine),
+                launchID: launch, placement: .window, startedAt: clock.now(), endedAt: clock.now(), body: .text(text))
+        }
+        let first = await store.holdNextCaptureWrite()
+        let second = await store.holdNextCaptureWrite()
+        let (a, b) = (tool("A"), tool("B"))
+        let writeA = Task { try await store.record(a) }
+        #expect(await reached(first), "The first write meets the first hold.")
+        let writeB = Task { try await store.record(b) }
+        #expect(await reached(second), "The second write meets the second hold.")
+        second.release()
+        first.release()
+        _ = try await (writeA.value, writeB.value)
+        #expect(try await store.capture(a.id) != nil)
+        #expect(try await store.capture(b.id) != nil)
+    }
+
+    /// Whether a hold is reached within two seconds, without hanging when it never is.
+    private func reached(_ hold: StoreCallHold) async -> Bool {
+        final class Seen: Sendable { let value = Mutex(false) }
+        let seen = Seen()
+        // Unstructured, so that a hold never reached leaves the test to fail instead of waiting.
+        Task {
+            await hold.untilReached()
+            seen.value.withLock { $0 = true }
+        }
+        for _ in 0..<200 {
+            if seen.value.withLock({ $0 }) { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 
     /// The reviewer's sequence for finding 62: hold the record of a typed capture begun in the

@@ -198,8 +198,9 @@ extension KnotError {
         code: "capture_id_conflict", next: .useNewCaptureID, retry: .notSafe, written: .nothing,
         exitStatus: .conflict)
     /// A capture, or its end, that does not fit its kind: a body of another kind, a file whose
-    /// digest is not 64 hexadecimal digits, or a recording or drawing that starts with its file.
-    /// Refused by `record` and `end`, with nothing written.
+    /// digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a
+    /// recording that ends stored with no file, or a negative content revision. Refused by
+    /// `record`, `checkpoint` and `end`, with nothing written.
     public static let captureInvalid = KnotError(
         code: "capture_invalid", next: .reportProblem, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
     /// The segment or note changed since the revision the caller read.

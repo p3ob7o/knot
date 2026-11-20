@@ -107,7 +107,7 @@
         private var window: AppendWindow
         private var state = State()
         private let signals = Signals()
-        private var pendingHold: StoreCallHold?
+        private var pendingHolds: [StoreCallHold] = []
         private var captureWriteFailures: [KnotError] = []
 
         /// - Parameters:
@@ -147,8 +147,9 @@
         /// is released, so that a test can let another call commit first, as when a store call
         /// commits after its capture fell back to `Inbox/`.
         public func holdNextCaptureWrite() -> StoreCallHold {
+            // A second hold queues behind one not reached yet, and never drops it (finding 75).
             let hold = StoreCallHold()
-            pendingHold = hold
+            pendingHolds.append(hold)
             return hold
         }
 
@@ -243,6 +244,7 @@
             guard let row = state.captures[checkpoint.captureID] else {
                 throw KnotError.notFound.about(capture: checkpoint.captureID)
             }
+            if checkpoint.revision < 0 { throw KnotError.captureInvalid.about(capture: row.id) }
             guard row.kind == .typed else { return CheckpointResult(applied: false, storedRevision: row.revision) }
             var next = state
             let applied = try save(
@@ -264,6 +266,13 @@
             case .stored(.none): incoming = .asItStands
             case .discardedEmpty: incoming = .discard
             case .failed(let code): incoming = .failed(code)
+            }
+            // A negative revision, or a recording that ends stored with no file, is refused
+            // (finding 75): a drawing ended as it stands goes on to recognition.
+            let row = state.captures[end.captureID]
+            let recordingWithoutFile = row?.kind == .voice && row?.outcome == .open && end.outcome == .stored(.none)
+            if end.revision < 0 || recordingWithoutFile {
+                throw KnotError.captureInvalid.about(capture: end.captureID)
             }
             if case .stored(let body) = end.outcome, !body.isWellFormed {
                 throw KnotError.captureInvalid.about(capture: end.captureID)
@@ -303,7 +312,8 @@
                     lastCaptureEndedAt: position.lastCaptureEndedAt)
                 shown = shown.filter { StreamRule.precedes(marker, $0.note) }
             }
-            let page = Array(shown.prefix(max(limit, 0)))
+            // A page below one is a page of one, as `changes` treats it (finding 75).
+            let page = Array(shown.prefix(max(limit, 1)))
             let next = shown.count > page.count ? page.last.map { StreamPosition($0.note) } : nil
             return StreamPage(notes: page, next: next)
         }
@@ -1287,6 +1297,7 @@
             default: valid = false
             }
             return valid && capture.body.isWellFormed && (capture.arrival == .live || capture.endedAt != nil)
+                && capture.revision >= 0
         }
 
         /// An inbox item that does not fit its kind (§6 rule 2, finding 71): it is written as a
@@ -1557,9 +1568,8 @@
         }
 
         private func waitIfHeld() async {
-            guard let hold = pendingHold else { return }
-            pendingHold = nil
-            await hold.wait()
+            guard !pendingHolds.isEmpty else { return }
+            await pendingHolds.removeFirst().wait()
         }
 
         private func commit(_ next: State) {

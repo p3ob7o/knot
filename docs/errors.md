@@ -468,7 +468,7 @@ The same capture ID with different content.
 
 ### `capture_invalid`
 
-A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, or a recording or drawing that starts with its file. `record` and `end` refuse it, and nothing was written. An inbox item that does not fit is `inbox_item_unreadable` instead.
+A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a recording that ends stored with no file, or a negative content revision. `record`, `checkpoint` and `end` refuse it, and nothing was written. An inbox item that does not fit is `inbox_item_unreadable` instead.
 
 - Class: failure
 - Next: report_problem

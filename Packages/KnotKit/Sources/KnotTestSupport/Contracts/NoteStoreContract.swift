@@ -14,6 +14,9 @@ public struct NoteStoreSetup: Sendable {
     /// copies and generated titles, which only sync and the queue make. The real store seeds
     /// them through the interface sync uses.
     public let seed: [NoteRecord]
+    /// The generation the store starts at, as after a restore from a backup: what it stamps on
+    /// every cursor and revision.
+    public let generation: StoreGeneration
 }
 
 /// A store under test, with a way to apply what sync applies.
@@ -109,6 +112,7 @@ public enum NoteStoreContract {
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
         Check(name: "unreadable-item", run: anUnreadableInboxItemIsAFailedSegment),
+        Check(name: "small-ones", run: theSmallOnes),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2252,6 +2256,51 @@ public enum NoteStoreContract {
         #expect(try await h.store.note(emptied.noteID) == nil, "The old emptied note goes.")
     }
 
+    /// Finding 75: a stream page below one is a page of one, as `changes` treats it; an end
+    /// that stores no file for a recording is refused; every stamp carries the store's own
+    /// generation; and a negative content revision is refused.
+    public static func theSmallOnes(_ make: NoteStoreFactory) async throws {
+        for generation in [3, 8] {
+            let h = await Harness(make, generation: generation)
+            let receipt = try await h.store.record(h.tool("One", at: 0))
+            _ = try await h.store.record(h.tool("Two", at: 10))
+            #expect(try await h.store.cursor().generation == generation, "The cursor carries the generation.")
+            #expect(receipt.cursor.generation == generation && receipt.revision.generation == generation)
+            let read = try #require(try await h.store.segment(receipt.segmentIDs[0]))
+            #expect(read.revision.generation == generation, "A read's revision carries it too.")
+
+            let zero = try await h.store.stream(after: nil, limit: 0)
+            let one = try await h.store.stream(after: nil, limit: 1)
+            #expect(zero == one && zero.notes.count == 1 && zero.next != nil, "A page below one is a page of one.")
+        }
+
+        let h = await Harness(make)
+        let start = h.recordingStart(at: 0, surface: .control)
+        _ = try await h.store.record(start)
+        await refuses(.captureInvalid, "A recording's end with no file.") {
+            try await h.store.end(
+                CaptureEnd(captureID: start.id, endedAt: h.at(1), outcome: .stored(.none), revision: 0))
+        }
+        #expect(try await h.row(start.id)?.outcome == .open, "Nothing is written.")
+        _ = try await h.store.end(
+            CaptureEnd(captureID: start.id, endedAt: h.at(1), outcome: .discardedEmpty, revision: 0))
+
+        var negative = h.typed("Words", from: 5, to: 5.1)
+        negative.revision = -1
+        await refuses(.captureInvalid, "record") { try await h.store.record(negative) }
+        await refuses(.inboxItemUnreadable, "ingest") { try await h.store.ingest(negative) }
+        let draft = h.typedDraft("Draft", at: 6)
+        _ = try await h.store.record(draft)
+        await refuses(.captureInvalid, "checkpoint") {
+            try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "Draft more", revision: -1))
+        }
+        await refuses(.captureInvalid, "end") {
+            try await h.store.end(h.endTyped(draft.id, "Done", at: 7, revision: -1))
+        }
+        #expect(try await h.text(SegmentID(draft.id)) == "Draft", "Nothing is written.")
+        #expect(try await h.row(draft.id)?.outcome == .open)
+    }
+
     // MARK: Reading
 
     /// The stream shows notes newest first in pages; search finds whole words and their
@@ -2348,7 +2397,7 @@ struct Harness {
 
     init(
         _ make: NoteStoreFactory, device: DeviceID = DeviceID(uuid: UUID()), window: AppendWindow = .default,
-        seed: [NoteRecord] = []
+        seed: [NoteRecord] = [], generation: StoreGeneration = 3
     ) async {
         let clock = FakeClock(Self.base)
         let ids = SeededIDGenerator(seed: 42, clock: clock)
@@ -2356,7 +2405,9 @@ struct Harness {
         self.ids = ids
         self.device = device
         self.launch = ids.make()
-        self.subject = await make(NoteStoreSetup(clock: clock, ids: ids, deviceID: device, window: window, seed: seed))
+        self.subject = await make(
+            NoteStoreSetup(
+                clock: clock, ids: ids, deviceID: device, window: window, seed: seed, generation: generation))
     }
 
     func at(_ minutes: Double) -> Date { Self.base.addingTimeInterval(minutes * 60) }

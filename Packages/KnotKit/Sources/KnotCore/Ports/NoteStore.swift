@@ -108,7 +108,8 @@ public protocol NoteStore: Sendable {
     /// capture, by `end` or `ingest`, stores it through the same precedence: a person's text
     /// since the failure stays, and the retry's content is kept as a conflict copy. A segment's
     /// revision is the store's own: never taken from a producer's content revision, and it
-    /// only rises.
+    /// only rises. A recording that ends stored with no file, or a negative revision, is refused
+    /// with `capture_invalid`; a drawing ended as it stands goes on to recognition.
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt
 
     /// The captures whose rows are open, of every launch. Recovery finishes those of other
@@ -131,7 +132,7 @@ public protocol NoteStore: Sendable {
     func asset(_ id: AssetID) async throws(KnotError) -> Asset?
 
     /// One page of the stream: the notes it shows, newest first (rules 9 and 11), after
-    /// `position`, or from the start.
+    /// `position`, or from the start. A limit below one is a page of one, as for `changes`.
     func stream(after position: StreamPosition?, limit: Int) async throws(KnotError) -> StreamPage
 
     /// The shown notes whose title or live segments hold every word of `query`, each as a
