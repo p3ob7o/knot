@@ -40,6 +40,10 @@ extension KnotError {
     public static let agentRefusedMilestoneStore = KnotError(
         code: "agent_refused_milestone_store", next: .useDevelopmentBuild, retry: .notSafe, written: .nothing,
         exitStatus: .needsOwner)
+    /// An asset ID already holds a file with other content. A stored recording or drawing is
+    /// never replaced, so the new file is refused and the stored one stays.
+    public static let assetConflict = KnotError(
+        code: "asset_conflict", next: .reportProblem, retry: .notSafe, written: .nothing, exitStatus: .conflict)
     /// A development build on the Mac names no worktree folder for its store, or one that is
     /// not safe as a folder name. Development builds from two worktrees never share a store.
     public static let devStoreFolderInvalid = KnotError(
@@ -138,6 +142,12 @@ extension KnotError {
         code: "device_locked", errorClass: .deferral, next: .unlockDevice, retry: .safe, written: .nothing,
         exitStatus: .unexpected)
 
+    /// A step was cancelled: the task that awaited it was cancelled, because background time
+    /// ran out or the queue was asked to stop. It is a yield (docs/architecture.md §4): not an
+    /// attempt, not a decline and not an error, and nothing from the step was saved.
+    public static let cancelled = KnotError(
+        code: "cancelled", errorClass: .yield, next: .none, retry: .safe, written: .nothing, exitStatus: .unexpected)
+
     // MARK: Inbox and watch
 
     /// An inbox item cannot be read. It becomes a failed segment that says so, and the file is kept.
@@ -187,6 +197,12 @@ extension KnotError {
     public static let captureIDConflict = KnotError(
         code: "capture_id_conflict", next: .useNewCaptureID, retry: .notSafe, written: .nothing,
         exitStatus: .conflict)
+    /// A capture, or its end, that does not fit its kind: a body of another kind, a file whose
+    /// digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a
+    /// recording that ends stored with no file, or a negative content revision. Refused by
+    /// `record`, `checkpoint` and `end`, with nothing written.
+    public static let captureInvalid = KnotError(
+        code: "capture_invalid", next: .reportProblem, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
     /// The segment or note changed since the revision the caller read.
     public static let revisionStale = KnotError(
         code: "revision_stale", next: .readAgain, retry: .notSafe, written: .nothing, exitStatus: .conflict)
@@ -212,6 +228,11 @@ extension KnotError {
     /// The segment's capture is still open in the app, so it cannot be edited, deleted or moved.
     public static let segmentCaptureOpen = KnotError(
         code: "segment_capture_open", next: .waitForCaptureToEnd, retry: .safe, written: .nothing,
+        exitStatus: .conflict)
+    /// "Remove recording" of a segment that has no text yet: the recording is all there is,
+    /// and its transcribe job still needs it.
+    public static let removeRecordingRefusedNoText = KnotError(
+        code: "remove_recording_refused_no_text", next: .waitAndRetry, retry: .safe, written: .nothing,
         exitStatus: .conflict)
 
     // MARK: Moves and returns (docs/architecture.md §5)
@@ -247,7 +268,8 @@ extension KnotError {
     public static let jobDiedTwice = KnotError(
         code: "job_died_twice", next: .retry, retry: .safe(times: 1), written: .contentKept,
         exitStatus: .unexpected)
-    /// A state machine was asked for a transition it does not have.
+    /// A state machine was asked for a transition it does not have, or the store for a change
+    /// its rules do not allow.
     public static let illegalTransition = KnotError(
         code: "illegal_transition", next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)
@@ -279,16 +301,18 @@ extension KnotError {
     /// Every case of the taxonomy, in the order of docs/errors.md.
     public static let catalog: [KnotError] = [
         diskFull, storeBusy, storeDamaged, storeNewerThanBuild, storeOlderThanTool, storeNotCreatedByKnot,
-        storeNotOpen, writeFailed, groupContainerMissing, agentRefusedMilestoneStore, devStoreFolderInvalid,
+        storeNotOpen, writeFailed, groupContainerMissing, agentRefusedMilestoneStore, assetConflict,
+        devStoreFolderInvalid,
         microphonePermissionRefused, noInputDevice, audioSessionBusy, tooLittleSpace, captureStoppedDiskFull,
         conversionFailed, captureBlockedByRecording,
         speechModelNotInstalled, audioUnreadable, speechUnavailable, transcriptionFailed, cleanupModelNotReady,
         cleanupModelUnavailable, cleanupDeclined, cleanupTimedOut, recognitionFailed,
-        requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked,
+        requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked, cancelled,
         inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch,
         syncSignedOut, syncAccountChanged, syncZoneRemoved, syncMassDeletePaused, syncUploadNeedsConsent,
-        textTooLong, captureIDConflict, revisionStale, revisionForeign, cursorForeign, cursorAheadOfStore,
-        notFound, idAmbiguous, noteDeleted, segmentCaptureOpen,
+        textTooLong, captureIDConflict, captureInvalid, revisionStale, revisionForeign, cursorForeign,
+        cursorAheadOfStore,
+        notFound, idAmbiguous, noteDeleted, segmentCaptureOpen, removeRecordingRefusedNoText,
         moveRefusedOpenCapture, moveRefusedDeletedSegment, moveRefusedConflictCopy, moveRefusedOnlySegment,
         returnRefusedNoteChanged, returnRefusedNoteGone, returnRefusedNoMove,
         jobDiedTwice, illegalTransition,

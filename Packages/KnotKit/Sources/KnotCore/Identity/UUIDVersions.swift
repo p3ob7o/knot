@@ -66,12 +66,18 @@ public enum UUIDv5 {
         case deletedNoteSuccessor
         /// A conflict copy of a segment.
         case conflictCopy
+        /// The transcribe job of a stored recording.
+        case transcribeJob
+        /// A late save of a capture that a person's edit kept out, kept as a conflict copy.
+        case keptSave
 
         var uuid: UUID {
             switch self {
             case .textPiece: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a01")!
             case .deletedNoteSuccessor: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a02")!
             case .conflictCopy: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a03")!
+            case .transcribeJob: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a04")!
+            case .keptSave: UUID(uuidString: "5d0b9c52-62a4-4c0e-9a51-6d3f5f2f0a05")!
             }
         }
     }

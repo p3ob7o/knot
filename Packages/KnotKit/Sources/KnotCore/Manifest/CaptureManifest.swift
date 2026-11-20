@@ -125,7 +125,12 @@ public struct CaptureManifest: Hashable, Sendable {
         }
         let known = Set(Key.allCases.map(\.rawValue))
         for member in members where !known.contains(member.key) {
-            manifest.unknownFields[member.key] = String(decoding: member.raw, as: UTF8.self)
+            // Kept exactly as written. The scanner has refused a document that is not UTF-8,
+            // and a member that is not is refused here too, never repaired.
+            guard let raw = String(validating: member.raw, as: UTF8.self) else {
+                throw KnotError.inboxItemUnreadable.with(context)
+            }
+            manifest.unknownFields[member.key] = raw
         }
         return manifest
     }

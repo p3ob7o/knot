@@ -4,8 +4,9 @@ import Foundation
 ///
 /// `CaptureManifest` reads them so that a field this build does not know is kept exactly as
 /// it was written, a number past a Double's precision included. The scanner checks the whole
-/// grammar of RFC 8259 as it goes, so a document it accepts is valid JSON as a whole, and
-/// what is written back from it is too.
+/// grammar of RFC 8259 as it goes, and that the whole document is UTF-8 (RFC 8259 §8.1), so a
+/// document it accepts is valid JSON as a whole, and what is written back from it is too.
+/// Nothing is repaired: bytes that are not UTF-8, wherever they sit, make it malformed.
 enum JSONMembers {
     enum Failure: Error {
         case malformed
@@ -15,6 +16,8 @@ enum JSONMembers {
     /// The members of the object `data` holds, in order. A key named twice is refused.
     static func split(_ data: Data) throws(Failure) -> [(key: String, raw: Data)] {
         let bytes = [UInt8](data)
+        // Checked once for the whole document, so no member's text is ever repaired.
+        guard String(validating: bytes, as: UTF8.self) != nil else { throw .malformed }
         var index = 0
         skipSpace(bytes, &index)
         guard index < bytes.count, bytes[index] == UInt8(ascii: "{") else { throw .malformed }

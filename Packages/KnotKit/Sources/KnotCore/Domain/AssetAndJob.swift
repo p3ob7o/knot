@@ -80,10 +80,17 @@ public struct Job: Hashable, Sendable, Codable, Identifiable {
     /// The job does not run before this time.
     public var notBefore: Date?
     public var lastErrorCode: ErrorCode?
+    /// For a transcribe job, where its next run starts in the file. The store saves it with
+    /// the run's pieces, so an interrupted job goes on from its last run (docs/architecture.md §9).
+    public var resumeAt: Duration?
+    /// The store's revision of the job, which rises with each save. A save must name the
+    /// revision it read, so a snapshot older than what is stored is refused.
+    public var revision: Int64
 
     public init(
         id: JobID, segmentID: SegmentID, kind: JobKind, state: JobState = .queued, attempts: Int = 0,
-        deaths: Int = 0, notBefore: Date? = nil, lastErrorCode: ErrorCode? = nil
+        deaths: Int = 0, notBefore: Date? = nil, lastErrorCode: ErrorCode? = nil, resumeAt: Duration? = nil,
+        revision: Int64 = 0
     ) {
         self.id = id
         self.segmentID = segmentID
@@ -93,5 +100,7 @@ public struct Job: Hashable, Sendable, Codable, Identifiable {
         self.deaths = deaths
         self.notBefore = notBefore
         self.lastErrorCode = lastErrorCode
+        self.resumeAt = resumeAt
+        self.revision = revision
     }
 }

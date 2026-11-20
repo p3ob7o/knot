@@ -37,6 +37,10 @@ public enum JobMachine {
         case (.running, .succeeded):
             next.state = .done
             next.lastErrorCode = nil
+        case (.running, .stepFailed(let error, _)) where error.isYield:
+            // A cancelled step is a yield, whichever way it reaches the queue: not counted,
+            // and the job stays queued with nothing from the step saved.
+            next.state = .queued
         case (.running, .stepFailed(let error, let retryAt)):
             next.lastErrorCode = error.code
             if error.isFinal || error.code == KnotError.cleanupDeclined.code {
