@@ -10,6 +10,8 @@ final class WatchedRecorder: Recorder, Sendable {
     let base: ScriptedRecorder
     /// How long each conversion takes before it answers.
     let conversionDelay = Mutex<Duration>(.zero)
+    /// While closed, every conversion waits at it.
+    let conversionGate = Gate()
     private let log = Mutex<[String]>([])
 
     init(_ base: ScriptedRecorder) { self.base = base }
@@ -33,6 +35,7 @@ final class WatchedRecorder: Recorder, Sendable {
         log.withLock { $0.append("convert") }
         let delay = conversionDelay.withLock { $0 }
         if delay > .zero { try? await Task.sleep(for: delay) }
+        await conversionGate.pass()
         return try await base.convert(recording)
     }
 
@@ -49,5 +52,34 @@ extension Rig {
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: .patient,
                 ingest: ingest, log: KnotLog(.capture, sink: logs)))
+    }
+}
+
+/// A gate that holds whoever passes it while closed. It starts open.
+final class Gate: Sendable {
+    private let state = Mutex<(closed: Bool, waiting: [CheckedContinuation<Void, Never>])>((false, []))
+
+    func close() { state.withLock { $0.closed = true } }
+
+    func open() {
+        let waiting = state.withLock { state in
+            state.closed = false
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for waiter in waiting { waiter.resume() }
+    }
+
+    /// True while someone waits at the gate.
+    var isHolding: Bool { state.withLock { !$0.waiting.isEmpty } }
+
+    func pass() async {
+        await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+            let closed = state.withLock { state in
+                if state.closed { state.waiting.append(waiter) }
+                return state.closed
+            }
+            if !closed { waiter.resume() }
+        }
     }
 }

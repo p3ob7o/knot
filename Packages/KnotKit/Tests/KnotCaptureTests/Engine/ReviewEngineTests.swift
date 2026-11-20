@@ -285,21 +285,23 @@ import Testing
         #expect(try await r.stream().notes.isEmpty)
     }
 
-    /// Finding 34. A start does no old work ahead of its own write: the recorder starts the
-    /// new recording before it converts an old one whose conversion failed, and that old one is
-    /// still stored afterwards.
-    @Test func startConvertsNoOldRecordingFirst() async throws {
+    /// Finding 34. A start does no old work ahead of its own write: while the conversion of an
+    /// old recording whose conversion failed is held, a new recording still starts and its
+    /// begin returns; the old one is stored once the conversion goes on.
+    @Test func startWaitsForNoOldConversion() async throws {
         let r = Rig()
         let recorder = WatchedRecorder(r.recorder)
         let engine = r.engine(recorder: recorder)
         let first = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
         r.recorder.failNextConversions(with: .conversionFailed)
         #expect(try await engine.end(first.captureID).outcome == .failed(KnotError.conversionFailed.code))
+        recorder.conversionGate.close()
         r.clock.advance(by: 31)
-        recorder.conversionDelay.withLock { $0 = .milliseconds(300) }
-        let before = recorder.calls.count
         let second = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
-        #expect(recorder.calls.dropFirst(before).first == "start", "\(recorder.calls)")
+        #expect(second.outcome == .open)
+        #expect(recorder.calls.contains("start"))
+        #expect(try await r.notes.capture(first.captureID)?.outcome == .failed(KnotError.conversionFailed.code))
+        recorder.conversionGate.open()
         #expect(
             await eventually("the old recording to be stored") {
                 (try? await r.notes.capture(first.captureID))?.outcome == .stored
