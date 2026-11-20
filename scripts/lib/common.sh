@@ -277,15 +277,20 @@ knot_mac_ui_ready() {
 #   knot_limit <seconds> <command…>
 KNOT_LIMIT_HIT=0
 knot_limit() {
-    local seconds=$1 status=0 pid ticks=0
+    local seconds=$1 status=0 pid timer
     shift
     KNOT_LIMIT_HIT=0
     "$@" &
     pid=$!
-    while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
+    # The limit is wall-clock time: a timer process that sleeps for it, which a loaded Mac
+    # cannot stretch as it stretches a count of polls.
+    /bin/sleep "$seconds" &
+    timer=$!
+    while kill -0 "$pid" 2>/dev/null && kill -0 "$timer" 2>/dev/null; do
         sleep 0.1
-        ticks=$((ticks + 1))
     done
+    kill "$timer" 2>/dev/null || true
+    wait "$timer" 2>/dev/null || true
     if kill -0 "$pid" 2>/dev/null; then
         knot_end_process "$pid"
         wait "$pid" 2>/dev/null || true
@@ -371,7 +376,7 @@ knot_swift_test_limited() {
     shift
     knot_limit "$KNOT_SWIFT_TEST_LIMIT" "$@" || status=$?
     if ((KNOT_LIMIT_HIT)); then
-        echo "The step $step did not end within $((KNOT_SWIFT_TEST_LIMIT / 60)) minutes (KNOT_SWIFT_TEST_LIMIT), longer than a run in which every wait of a suite runs out. A test hangs outside its waits, such as in a deadlock: the last test that started, above, is the one to read."
+        echo "The step $step did not end within $(knot_duration "$KNOT_SWIFT_TEST_LIMIT") (KNOT_SWIFT_TEST_LIMIT), longer than a run in which every wait of a suite runs out. A test hangs outside its waits, such as in a deadlock: the last test that started, above, is the one to read."
         return 124
     fi
     return "$status"

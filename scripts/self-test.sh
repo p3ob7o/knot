@@ -532,6 +532,19 @@ else
     fail "the local audio's state, with none, complete, another version and a changed clip: $states"
 fi
 
+# A limit is wall-clock time, not a count of polls: with each poll's sleep slowed to 0.3 s,
+# as a loaded Mac slows it, a 2-second limit still ends near 2 seconds. A limit under a
+# minute is stated in seconds.
+timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 2 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+timed short_limit env KNOT_SWIFT_TEST_LIMIT=1 bash -c 'source "$1"; knot_swift_test_limited package-test "$2"' _ \
+    "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+if [[ $slow_polls_status == 124 && $slow_polls_seconds -le 4 && "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
+    pass "a limit is wall-clock time, however slow each poll, and a short one is stated in seconds"
+else
+    fail "a 2 s limit with slow polls ended after ${slow_polls_seconds}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
+fi
+pkill -KILL -f "$lim/hangs" 2>/dev/null || true
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
