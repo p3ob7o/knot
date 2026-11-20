@@ -43,6 +43,57 @@ KNOT_BUILD_FOLDER="${KNOT_BUILD_FOLDER:-$HOME/knot-build}"
 # Pinned tools.
 KNOT_XCODEGEN_VERSION="2.47.0"
 
+# XcodeGen is chosen by the scripts, as the Xcode is, and not by whatever PATH holds, which a
+# machine-wide upgrade can change under a run (docs/dev-setup.md). knot_resolve_xcodegen
+# settles on one binary, as an absolute path, in this order:
+#   1. KNOT_XCODEGEN, a path to the binary, when it is set;
+#   2. the pinned release unpacked under the build folder's tools/, when it is there;
+#   3. xcodegen on PATH, as on a hosted runner.
+# It sets KNOT_XCODEGEN_PATH, empty when none was found, and KNOT_XCODEGEN_FROM, which says
+# which of the three it chose.
+knot_resolve_xcodegen() {
+    local pinned="$KNOT_BUILD_FOLDER/tools/xcodegen-$KNOT_XCODEGEN_VERSION/xcodegen/bin/xcodegen" found=""
+    KNOT_XCODEGEN_PATH=""
+    if [[ -n ${KNOT_XCODEGEN:-} ]]; then
+        KNOT_XCODEGEN_FROM="KNOT_XCODEGEN"
+        found=$KNOT_XCODEGEN
+    elif [[ -x $pinned ]]; then
+        KNOT_XCODEGEN_FROM="the build folder's tools/"
+        found=$pinned
+    else
+        KNOT_XCODEGEN_FROM="PATH"
+        found="$(command -v xcodegen || true)"
+    fi
+    if [[ -n $found && -f $found && -x $found ]]; then
+        KNOT_XCODEGEN_PATH="$(cd "$(dirname "$found")" && pwd -P)/$(basename "$found")"
+    fi
+}
+
+# Resolves XcodeGen and checks its version: one start of the binary. Returns 0 when it is
+# the pinned version. Otherwise it sets KNOT_XCODEGEN_CODE, KNOT_XCODEGEN_WHAT and
+# KNOT_XCODEGEN_FIX for a failure report, and returns 1.
+knot_check_xcodegen() {
+    local version where
+    knot_resolve_xcodegen
+    where="the build folder's tools/xcodegen-$KNOT_XCODEGEN_VERSION/ ($KNOT_BUILD_FOLDER/tools/xcodegen-$KNOT_XCODEGEN_VERSION/xcodegen/bin/xcodegen)"
+    KNOT_XCODEGEN_FIX="Unpack the XcodeGen $KNOT_XCODEGEN_VERSION release, checked against its SHA-256 in docs/dev-setup.md, under $where, or name a copy with KNOT_XCODEGEN. Do not change Homebrew for the project."
+    if [[ -z $KNOT_XCODEGEN_PATH ]]; then
+        KNOT_XCODEGEN_CODE="infra-xcodegen-missing"
+        if [[ $KNOT_XCODEGEN_FROM == KNOT_XCODEGEN ]]; then
+            KNOT_XCODEGEN_WHAT="KNOT_XCODEGEN names $KNOT_XCODEGEN, which is not an executable file."
+        else
+            KNOT_XCODEGEN_WHAT="XcodeGen $KNOT_XCODEGEN_VERSION is not in the build folder, and no xcodegen is on PATH."
+        fi
+        return 1
+    fi
+    version="$("$KNOT_XCODEGEN_PATH" --version 2>/dev/null | awk '{ print $2 }' || true)"
+    if [[ $version != "$KNOT_XCODEGEN_VERSION" ]]; then
+        KNOT_XCODEGEN_CODE="infra-xcodegen-version"
+        KNOT_XCODEGEN_WHAT="XcodeGen at $KNOT_XCODEGEN_PATH, chosen from $KNOT_XCODEGEN_FROM, is ${version:-of no version it states}, not $KNOT_XCODEGEN_VERSION."
+        return 1
+    fi
+}
+
 knot_now() { date +%s; }
 
 # Prints a duration in seconds as "1m05s".
@@ -185,10 +236,14 @@ knot_write_worktree_config() {
     fi
 }
 
-# Generates Knot.xcodeproj from project.yml.
+# Generates Knot.xcodeproj from project.yml, with the XcodeGen that knot_resolve_xcodegen
+# chooses. Its version is checked again just before it generates, so a tool that changed
+# since the doctor's check fails the step and never generates with another version.
 knot_generate_project() {
     knot_write_worktree_config
-    (cd "$KNOT_ROOT" && xcodegen generate --spec project.yml --quiet)
+    knot_check_xcodegen ||
+        knot_fail "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
+    (cd "$KNOT_ROOT" && "$KNOT_XCODEGEN_PATH" generate --spec project.yml --quiet)
 }
 
 # Whether this Mac can run Mac UI tests, from the output of `automationmodetool` (no
