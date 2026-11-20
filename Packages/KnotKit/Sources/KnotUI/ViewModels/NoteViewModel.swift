@@ -98,6 +98,8 @@ public final class NoteViewModel {
     private var chain: Task<Void, Never>?
     private var sentText = ""
     private var recordingPress: Press?
+    /// Follows the running recording's capture, which can end by itself.
+    private var recordingWatch: Task<Void, Never>?
     private var arrivalsCleared = false
 
     public init(
@@ -361,9 +363,12 @@ public final class NoteViewModel {
             return
         }
         let request = CaptureRequest(kind: .voice, surface: surface, placement: placement, shownNote: record?.note.id)
+        // Subscribed before the start, so that a recording that ends at once is not missed.
+        let states = environment.engine.states()
         do {
             let state = try await environment.engine.begin(request)
             recording = .recording(state.captureID)
+            watchRecording(state.captureID, in: states)
             capturePath = state.path
             isNewNote = false
             if problem != nil, case .couldNotStartRecording = problem { problem = nil }
@@ -377,7 +382,34 @@ public final class NoteViewModel {
         }
     }
 
+    /// A recording can end by itself: at its limit, when a call interrupts it, or when it cannot
+    /// be saved further. The surface then leaves the recording state with the same cue as a
+    /// stop, and takes typing again (docs/product-spec.md §4.2 and §4.5).
+    private func watchRecording(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
+        recordingWatch?.cancel()
+        recordingWatch = Task { [weak self] in
+            for await state in states where state.captureID == id && state.outcome != .open {
+                self?.recordingEndedByItself(state)
+                return
+            }
+        }
+    }
+
+    private func recordingEndedByItself(_ state: CaptureState) {
+        // A stop the person pressed is already on its way, and says its own cue.
+        guard recording == .recording(state.captureID) else { return }
+        recording = .idle
+        recordingPress = nil
+        announcer.announce(state.outcome == .discardedEmpty ? .recordingDiscarded : .recordingStopped)
+        enqueue { model in
+            if let note = state.noteID, state.outcome == .stored { await model.show(note) }
+            await model.refresh()
+        }
+    }
+
     private func stopRecording(_ id: CaptureID, discard: Bool) async {
+        recordingWatch?.cancel()
+        recordingWatch = nil
         let state: CaptureState?
         if discard {
             state = try? await environment.engine.discard(id)

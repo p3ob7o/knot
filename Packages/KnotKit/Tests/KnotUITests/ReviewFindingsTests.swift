@@ -78,6 +78,44 @@ import Testing
         // Once its queue has run, nothing holds the view model.
         #expect(await eventually("the view model to be released") { released == nil })
     }
+
+    /// Finding 3. Product spec §4.2 and §4.5: a recording stops after 30 minutes or when a call
+    /// interrupts it, with the stop cue. The surface leaves the recording state and takes typing
+    /// again.
+    @Test func aRecordingThatEndsByItselfLeavesTheRecordingState() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let recorder = try #require(rig.environment.recorder as? ScriptedRecorder)
+        recorder.setScript(.init(buffers: 25, interval: .milliseconds(2), endsBySelf: .limitReached))
+        let model = rig.capture()
+        await model.refresh()
+        model.press(.holdStart)
+        await settled(model)
+        guard case .recording(let id) = model.recording else {
+            Issue.record("No recording started: \(String(describing: model.problem))")
+            return
+        }
+        let notes = rig.environment.notes
+        // The engine ends the capture by itself.
+        #expect(
+            await eventually("the engine to end the recording") {
+                let capture = try? await notes.capture(id)
+                return capture.map { $0.outcome != .open } ?? false
+            })
+        #expect(await eventually("the surface to leave the recording state") { model.recording == .idle })
+        await settled(model)
+        #expect(model.fieldAcceptsTyping)
+        #expect(model.offersNewNote)
+        #expect(rig.announcer.heard == [.recordingStarted, .recordingStopped])
+        // The next press starts a new recording; it does not stop the one that ended.
+        model.press(.holdStart)
+        await settled(model)
+        guard case .recording(let next) = model.recording else {
+            Issue.record("No second recording started")
+            return
+        }
+        #expect(next != id)
+    }
 }
 
 /// The real engine, whose text saves and ends can be made to fail.
