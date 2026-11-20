@@ -102,8 +102,12 @@ public struct Capture: Hashable, Sendable, Codable, Identifiable {
     /// The revision of the content the store holds: the producer's own sequence, which rises
     /// with each save of the capture. It is not stamped with the store's generation.
     public var revision: Int64
-    /// When the store committed the capture's last durable save, by its own clock. Recovery
-    /// ends a recovered capture there (docs/architecture.md §5).
+    /// When the store committed the capture's last durable save, by its own clock. An open
+    /// recording's or drawing's row has none: their content is not in the store until it ends.
+    /// Recovery (docs/architecture.md §5) ends a typed capture there, and a recording at the
+    /// end of the audio its file holds. For a drawing, the suite's `recoveryOfTheThreeKinds`
+    /// has recovery end it with its saved drawing, at the time recovery gives in its `end`,
+    /// and it goes on to recognition.
     public var lastSavedAt: Date?
 
     public init(
