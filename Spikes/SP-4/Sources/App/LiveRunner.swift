@@ -173,7 +173,8 @@ enum LiveRunner {
     }
 
     static func seed(_ store: SpikeStore, notes: Int, segments: Int, textBytes: Int?, voice: Bool) async {
-        let start = Date()
+        // Every date is in the past, a second apart per note, as captures would be.
+        let start = Date().addingTimeInterval(-Double(notes) - 60)
         await store.write { replica in
             for n in 0..<notes {
                 let note = UUID()

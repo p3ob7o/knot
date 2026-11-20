@@ -178,7 +178,7 @@ case ${1:-} in
         ;;
     live)
         role=${2:?role}; shift 2
-        knot_with_timeout 900 xcrun simctl launch --console-pty --terminate-running-process \
+        knot_with_timeout "${SP4_LIVE_TIMEOUT:-900}" xcrun simctl launch --console-pty --terminate-running-process \
             "$(udid "$role")" "$BUNDLE_ID" -SP4Live "$@" | grep '^sp4live:' | tee -a "$LOGS/live-$role.log"
         ;;
     *)

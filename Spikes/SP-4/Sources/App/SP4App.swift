@@ -4,8 +4,42 @@
 
 import SwiftUI
 
+#if os(iOS)
+import UIKit
+
+/// Registers for remote notifications only when asked, so statement 5 can compare the
+/// engine's scheduled fetches with and without a registration.
+final class PushDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        if CommandLine.arguments.contains("-SP4RegisterPush") {
+            application.registerForRemoteNotifications()
+            print("sp4live: push registration requested")
+        }
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        print("sp4live: push registered tokenBytes=\(deviceToken.count)")
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        print("sp4live: push registration failed \((error as NSError).code)")
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any])
+        async -> UIBackgroundFetchResult {
+        print("sp4live: push received at \(Date().timeIntervalSince1970)")
+        return .newData
+    }
+}
+#endif
+
 @main
 struct SP4App: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
+    #endif
     init() {
         if CommandLine.arguments.contains("-SP4SelfTest") {
             var harness = Harness()

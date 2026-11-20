@@ -141,7 +141,14 @@ actor SpikeStore: SyncStoreSink {
                 lines.append("zone.lost \(loss.zone) reason=\(loss.reason.rawValue)")
                 if loss.zone == Zones.stream.zoneName {
                     zoneSaved = false
-                    questions.append(.zoneRemoved(loss.reason))
+                    // A fresh engine state reports zone deletions from before this store
+                    // synced anything. A zone that is gone deletes nothing and asks nothing
+                    // unless records were synced under it (§11, account isolation).
+                    if replica.synced.isEmpty {
+                        lines.append("zone.lost ignored: nothing was synced under it")
+                    } else {
+                        questions.append(.zoneRemoved(loss.reason))
+                    }
                 }
             }
         case .fetchStarted:
