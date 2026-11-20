@@ -10,7 +10,7 @@ This page lists what a Mac needs to build and test Knot, with the version of eac
 | Xcode | The release Xcode 27 that `.xcode-version` pins | Install it from Apple's developer downloads beside any beta, at `/Applications/Xcode.app` or another `/Applications/Xcode*.app`. Then run it once, or run `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -runFirstLaunch`. |
 | iOS simulator runtime | The one that matches the pinned Xcode's iOS SDK | `DEVELOPER_DIR=<that Xcode>/Contents/Developer xcodebuild -downloadPlatform iOS` |
 | watchOS simulator runtime | The one that matches the pinned Xcode's watchOS SDK | `DEVELOPER_DIR=<that Xcode>/Contents/Developer xcodebuild -downloadPlatform watchOS` |
-| XcodeGen | 2.47.0 | `brew install xcodegen`, if Homebrew's version is 2.47.0. Otherwise download `xcodegen.zip` from the [2.47.0 release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.47.0), check its SHA-256 against `6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd`, and put `xcodegen/bin` on your `PATH`. |
+| XcodeGen | 2.47.0 | Download `xcodegen.zip` from the [2.47.0 release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.47.0), check its SHA-256 against `6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd`, and unpack it, as the zip unpacks, into `tools/xcodegen-2.47.0/` under the build folder. The scripts find it there: see [XcodeGen](#xcodegen) below. |
 | python3 and git | The ones that come with Xcode | `xcode-select --install` installs the command-line tools. Do not point `xcode-select` at an Xcode: the scripts choose the Xcode themselves. |
 
 GRDB, the one third-party library, comes through Swift Package Manager. Its version and its revision are pinned in `Packages/KnotKit/Package.swift`, and `scripts/verify.sh` checks both.
@@ -25,6 +25,20 @@ GRDB, the one third-party library, comes through Swift Package Manager. Its vers
 - `scripts/sdk-path.sh <platform> <framework>` prints where a framework's Swift interfaces are, for reading a declaration before using an OS 26 or OS 27 API (`docs/architecture.md` §21).
 
 Until the owner installs the release Xcode at gate G1, `.xcode-version` reads `pending` and every script asks for `KNOT_XCODE`.
+
+## XcodeGen
+
+The scripts choose their XcodeGen as they choose their Xcode, so a machine-wide upgrade cannot change it under a run. `knot_resolve_xcodegen` in `scripts/lib/common.sh` settles on one binary, in this order:
+
+1. `KNOT_XCODEGEN`, a path to the binary, for a copy kept elsewhere;
+2. the pinned release under the build folder, `tools/xcodegen-<version>/xcodegen/bin/xcodegen`;
+3. `xcodegen` on `PATH`.
+
+The way on any Mac is the second: the release, checked against the checksum in the table above, unpacked under the build folder's `tools/` with its `share/` beside `bin/`. Homebrew's copy serves only when there is no pinned copy and its version is the pinned one. Nobody relinks, pins or installs anything in Homebrew for the project: Homebrew on the build Mac is the owner's, and other projects keep their own tools.
+
+`scripts/doctor.sh` and `scripts/bootstrap.sh` say which of the three they chose. `knot_generate_project` checks the chosen binary's version again just before it generates. A tool that changed during a run fails the step with `infra-xcodegen-version` and generates nothing. A missing copy fails with `infra-xcodegen-missing`, and the scripts download nothing.
+
+The hosted workflows install XcodeGen the same way, from the release with its checksum, and put its `bin` on `PATH`. A runner has no build folder, so the third choice serves there.
 
 ## First build
 
@@ -90,7 +104,7 @@ One run takes one tier. Each run starts with `scripts/doctor.sh`, and ends with 
 |---|---|
 | `scripts/verify.sh --quick` | doctor, the plan check, the fixtures check, formatting, the pins, the package build and its tests, the contract-suite proof and the scripts' self-test. The check before a pull request. |
 | `scripts/verify.sh --full` | Everything: also the link check, the lint, ownership, KnotCore's API, the named tests, every app, the packaging proofs, the tests hosted in the iOS app, the launches and the Mac UI tests. `--skip mac-ui` leaves the Mac UI tests out, for an implementer whose Mac cannot run them. |
-| `scripts/verify.sh --gate` | The merge gate, on the orchestrator's Mac. Its depth comes from the diff against `--base` (`origin/main` by default), by the table of `docs/architecture.md` §18, and `scripts/gate-steps.txt` lists its steps and which are pending. It runs on a detached head, so the orchestrator names the package with `--package WP-10` or the branch with `--branch wp/10-store`. It builds with the pinned Xcode only, requires the on-device models and fails on a skipped test, and refuses `--only`, `--module`, `--skip` and a `KNOT_XCODE` that names another Xcode. |
+| `scripts/verify.sh --gate` | The merge gate, on the orchestrator's Mac. Its depth comes from the diff against `--base` (`origin/main` by default), by the table of `docs/architecture.md` §18, and `scripts/gate-steps.txt` lists its steps and which are pending. It runs on a detached head, so the orchestrator names the branch with `--branch wp/10-store`, which tells a note's pull request from a code one, and the package with `--package WP-10` when the branch does not name it. On a detached head the gate refuses to run without `--branch`. It builds with the pinned Xcode only, requires the on-device models and fails on a skipped test, and refuses `--only`, `--module`, `--skip` and a `KNOT_XCODE` that names another Xcode. |
 | `scripts/verify.sh --soak [--seed <n>]` | The capture ledger soak, whose step WP-06 builds. A failure prints its seed. |
 | `scripts/verify.sh --perf` | The timed targets of `docs/product-spec.md` §14, on an optimised build with the fakes (`-DKNOT_FAKES`), holding every build slot. WP-42 adds the measured tests. |
 | `scripts/verify.sh --only <step>` | Doctor, then one step. `scripts/verify.sh --help` lists the steps. |
@@ -125,6 +139,10 @@ The build products, the logs and the status line go to the tree's own `.build/`.
 - a file or folder whose name ends in " 2".
 
 It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. A comment `knot-lint: allow network` or `knot-lint: allow logged-text` on a line, followed by the reason, lets that line pass, as for a sink that logs a finished line as public by design. The review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule and three lines that must pass, and the self-test fails when the lint misses a case or flags one of those lines. It judges the fixture against a privacy manifest of its own, so the result does not change when a package adds a reason to a real manifest.
+
+**A tool that does not answer.** The packaging step starts the `knot-dev` that it built, with a limit of 30 seconds (`KNOT_TOOL_START_LIMIT`). A system dialog, such as a consent prompt, can hold every start of a new tool; then the step ends the tool, with KILL two seconds after TERM if it must, fails, and says in its log that a dialog may be waiting for the owner on this Mac. No agent answers such a dialog. The UI tests have limits of their own: xcodebuild's test limits are on, 3 minutes a case and 5 at most, and each xcodebuild run of UI tests ends after 20 minutes (`KNOT_UI_TEST_LIMIT`, in seconds), with the same message. The Mac UI step then ends the app and the test runner that the worktree built, if either is still open. A UI test step reads its cases first and then xcodebuild's status, so a run whose cases passed fails when xcodebuild exits with an error.
+
+**The team's ID in build logs.** On a Mac whose Xcode knows the owner's team, every app build writes the team's prefix into its log, whatever the signing: `TeamIdentifierPrefix`, `AppIdentifierPrefix` and the entitlements it prints, such as `application-identifier`. So `scripts/verify.sh` filters every log it keeps, and everything it prints from them, through `knot_filter_team` in `scripts/lib/common.sh`, and at the start of each run it rewrites the logs that earlier runs left in `.build/logs`. The filter masks, as `<TEAM>`, ten capitals and digits where those keys, `DEVELOPMENT_TEAM` or an identifier such as `<ID>.com.…` or `<ID>.*` put them, as a plist's whole `<string>`, as codesign's `[String]` value, and as the parenthesised end of a certificate's name. A run that has the owner's configuration also masks the ID itself wherever it stands. The filter reads it, as the `team-id` step does, from `KNOT_TEAM_CONFIG`, else `KNOT_LOCAL_CONFIG`, else the configuration that bootstrap linked into `.build/config/`, and never prints it. Other runs know no ID and go by the patterns alone. Xcode's own logs in DerivedData keep the prefix; the scripts never print them, and nothing from a build log goes into a note, a commit or a pull request unfiltered.
 
 ## The other scripts
 
