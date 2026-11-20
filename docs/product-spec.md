@@ -227,6 +227,7 @@ The panel floats above other windows, including full-screen apps, on the display
 
 - Share or copy a note as text or Markdown. Share a recording or a drawing as a file.
 - Export everything to a folder of Markdown files with their recordings and drawings. Export first downloads any that are still on another device, and lists those it could not get.
+- An export writes the notes the stream shows. A deleted note, a note with no live segment and a deleted segment stay behind.
 - On the Mac, drag a note out of the window. It drops as text into another app, or as a Markdown file into Finder. Recordings and drawings stay behind; Share sends those.
 - On the Mac, the command line and MCP server read and write notes.
 - There is no continuous mirror into a folder and no Obsidian integration.

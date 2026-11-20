@@ -215,7 +215,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
 | WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
 | WP-16 | 1 | The whole package | WP-10 PR 2 |
-| WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 2 |
+| WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 3 |
 | WP-17 | 2 | The transport | SP-2; WP-02 PR 3 |
 | WP-18 | Proof step | Recognition of the ink fixtures, and a short note saying whether the draft `InkRecogniser` port fits the real API's streaming, cancellation and errors. It runs early and is not held. | WP-01 PR 1; WP-04 |
 | WP-18 | 1 | Everything after the proof step. Held until the keep-gate ruling. | WP-18 proof step; the ruling; WP-05; WP-02 PR 3 |
