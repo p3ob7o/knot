@@ -11,8 +11,8 @@
 #
 # The gate builds with the pinned Xcode only: it refuses KNOT_XCODE when it names another
 # Xcode than .xcode-version pins. It refuses --only, --module and --skip. It refuses
-# KNOT_LOCAL_CONFIG, which would put the team into its builds, and it fails when a step it
-# should run is skipped.
+# KNOT_LOCAL_CONFIG, which would give its builds settings that no other run has, and it
+# fails when a step it should run is skipped.
 
 doctor	required	WP-01	The machine: no cloud-synced folder, the disk floor, the pinned Xcode and XcodeGen, the simulator runtimes, and the on-device models.
 plan	required	WP-01	scripts/check-plan.sh.

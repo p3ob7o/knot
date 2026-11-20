@@ -20,19 +20,19 @@
 #   … --tree <path>                            check another tree with these scripts, as the
 #                                              gate does: main's scripts on the candidate
 #
-# Steps: doctor, plan, links, fixtures, format, pins, lint, ownership, core-api, named-tests,
-# package-build, package-test, contract-two-targets, self-test, apps, packaging, launch,
-# mac-ui, soak, perf, tsan, model-report.
+# Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
+# named-tests, package-build, package-test, contract-two-targets, self-test, apps, packaging,
+# launch, mac-ui, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
 # and the command that reruns only that step. Heavy steps wait for a build slot
 # (scripts/build-slot.sh). Logs go to .build/logs/.
 #
-# The gate refuses --only, --module and --skip, and an Xcode named by KNOT_XCODE that is
-# not the pinned one. It runs on a detached head, so the orchestrator names the package
-# with --package or the branch with --branch; it compares with --base, origin/main by
-# default. scripts/gate-steps.txt lists its steps and which are still pending.
+# The gate refuses --only, --module, --skip, KNOT_LOCAL_CONFIG and an Xcode named by
+# KNOT_XCODE that is not the pinned one, and it fails on a skipped step. It runs on a
+# detached head: name the package with --package or the branch with --branch. It compares
+# with --base, origin/main by default. scripts/gate-steps.txt lists its steps.
 
 # --tree <path> checks another tree with these scripts, as KNOT_TREE does. It is read
 # before anything else, because every path of the run depends on it.
@@ -114,6 +114,9 @@ else
             *) usage_fail "Unknown argument: $1" ;;
         esac
     done
+    # A gate that is refused before it runs must not leave an earlier run's line behind:
+    # --status-line prints the file, and the line names no commit.
+    if [[ $TIER == gate ]]; then rm -f "$STATUS_FILE"; fi
     if [[ -n $ONLY || -n $MODULE ]]; then
         [[ -z $TIER ]] || usage_fail "--only and --module run one part. They take no tier."
         [[ -z $ONLY || -z $MODULE ]] || usage_fail "Use --only or --module, not both."
@@ -209,8 +212,8 @@ step_lint() { (cd "$KNOT_ROOT" && tool lint); }
 # passed, and the gate fails on a skipped step.
 #
 # KNOT_TEAM_CONFIG names the configuration for this check alone. Unlike KNOT_LOCAL_CONFIG it
-# links nothing into the tree, so the run builds as every other run does, with no team in
-# its build settings or its logs. The gate takes the configuration this way.
+# links nothing into the tree, so the run builds what every other run builds. The gate
+# takes the configuration this way.
 step_team_id() {
     local config="${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-}}"
     [[ -n $config ]] || config="$KNOT_CONFIG/Local.xcconfig"
@@ -683,19 +686,23 @@ else
         soak) STEPS="doctor package-build soak" ;;
         perf) STEPS="doctor perf" ;;
         gate)
+            # The gate builds what every thread builds, signed locally and with no local
+            # configuration linked into the tree: a linked one would give its app steps
+            # build settings that no other run has. So it refuses KNOT_LOCAL_CONFIG, and
+            # it removes a link that an earlier run left. The team-ID check then reads
+            # what KNOT_TEAM_CONFIG names and nothing else. The refusal comes before the
+            # Xcode is selected, because it needs none.
+            if [[ -n ${KNOT_LOCAL_CONFIG:-} ]]; then
+                knot_fail "verify-gate-local-config" "The gate builds with no local configuration, as every thread does, and KNOT_LOCAL_CONFIG is set." \
+                    "Unset KNOT_LOCAL_CONFIG. Name the owner's configuration for the team-ID check with KNOT_TEAM_CONFIG, which links nothing into the tree." \
+                    "safe" "nothing"
+            fi
+            rm -f "$KNOT_CONFIG/Local.xcconfig"
             # The gate builds with the pinned Xcode only.
             knot_select_xcode
             if [[ ${KNOT_XCODE_NOTE:-} == *"named by KNOT_XCODE"* ]]; then
                 knot_fail "verify-gate-xcode" "The gate builds with the pinned Xcode, and KNOT_XCODE names $(knot_xcode_label)." \
                     "Unset KNOT_XCODE, or name the Xcode that .xcode-version pins." "safe" "nothing"
-            fi
-            # The gate builds as every thread does, signed locally and with no team. A
-            # linked local configuration would put the team's ID into the build settings
-            # and the logs of its app steps.
-            if [[ -n ${KNOT_LOCAL_CONFIG:-} ]]; then
-                knot_fail "verify-gate-local-config" "The gate builds with no team, and KNOT_LOCAL_CONFIG is set." \
-                    "Unset KNOT_LOCAL_CONFIG. Name the owner's configuration for the team-ID check with KNOT_TEAM_CONFIG, which links nothing into the tree." \
-                    "safe" "nothing"
             fi
             [[ -n $PACKAGE ]] || usage_fail "The gate needs the package: --package <ID> or --branch <name>. A detached head has no branch to read."
             git -C "$KNOT_ROOT" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null ||

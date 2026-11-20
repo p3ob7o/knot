@@ -268,13 +268,18 @@ else
     fail "the team-ID check: clean $clean, a tracked ID $leaked, no configuration $absent"
 fi
 
-# The gate refuses a local configuration, which would put the team's ID into its builds.
+# The gate refuses a local configuration, which would give its builds settings that no
+# other run has, and a refused gate leaves no earlier run's status line behind. The gate
+# runs on a tree of its own here, so that it removes nothing in the worktree.
+gate_tree="$scratch/gate-tree"
+mkdir -p "$gate_tree/.build/logs"
+printf 'gate everything ok: an earlier run\n' >"$gate_tree/.build/logs/verify-status.txt"
 status=0
-output="$(KNOT_LOCAL_CONFIG="$scratch/Team.xcconfig" "$KNOT_SCRIPTS/verify.sh" --gate --package WP-00 2>&1)" || status=$?
-if [[ $status == 1 && $output == *"FAIL verify-gate-local-config"* ]]; then
-    pass "the gate refuses KNOT_LOCAL_CONFIG"
+output="$(KNOT_LOCAL_CONFIG="$scratch/Team.xcconfig" "$KNOT_SCRIPTS/verify.sh" --gate --package WP-00 --tree "$gate_tree" 2>&1)" || status=$?
+if [[ $status == 1 && $output == *"FAIL verify-gate-local-config"* && ! -e $gate_tree/.build/logs/verify-status.txt ]]; then
+    pass "the gate refuses KNOT_LOCAL_CONFIG, and leaves no earlier status line"
 else
-    fail "the gate with KNOT_LOCAL_CONFIG set: status $status and: $output"
+    fail "the gate with KNOT_LOCAL_CONFIG set: status $status, earlier line $(ls "$gate_tree/.build/logs"), and: $output"
 fi
 
 if ((FAILED)); then
