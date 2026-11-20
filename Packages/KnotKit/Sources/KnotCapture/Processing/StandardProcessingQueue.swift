@@ -277,8 +277,15 @@ public actor StandardProcessingQueue: ProcessingQueue {
     /// Marks a job running, and returns it as the store holds it now.
     private func start(_ job: Job) async throws(KnotError) -> Job {
         let running = try Self.reduce(job, .start)
-        try await notes.saveJob(running)
+        // This process's before the save, so that a `resume()` that runs as the save returns
+        // does not take it for a death.
         runningHere.insert(job.id)
+        do throws(KnotError) {
+            try await notes.saveJob(running)
+        } catch {
+            runningHere.remove(job.id)
+            throw error
+        }
         // Saved as running: from here every way out of the step leaves it not running. A read
         // that fails takes the revision the save gave it.
         var stored = running

@@ -3,6 +3,7 @@ import KnotCapture
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// The queue sequences the review of pull request 40 found, each first shown failing.
@@ -175,6 +176,41 @@ import Testing
         #expect(job.attempts == 0)
         #expect(job.deaths == 0)
         #expect(try await r.notes.segment(SegmentID(begun.captureID))?.state == .voice(.recorded))
+    }
+
+    /// A queue over a hooked copy of the rig's store.
+    static func hookedQueue(_ r: Rig, _ hooks: JobHooks, cancellable: Bool = false) -> StandardProcessingQueue {
+        StandardProcessingQueue(
+            notes: HookedStore(store: r.notes, hooks: hooks, cancellable: cancellable), assets: r.assets,
+            transcriber: r.transcriber, cleaner: r.cleaner, clock: r.clock, ids: r.ids)
+    }
+
+    /// Finding 28, the re-check's B1. A `resume()` that runs just after this process saved its
+    /// job as running counts no death: the job is this process's before the save.
+    @Test func resumeJustAfterTheRunningSaveCountsNoDeath() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks)
+        let first = Mutex(true)
+        hooks.afterSave.withLock { hook in
+            hook = { job in
+                guard job.state == .running,
+                    first.withLock({ f in
+                        defer { f = false }
+                        return f
+                    })
+                else { return }
+                try? await queue.resume()
+            }
+        }
+        #expect(
+            await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } } == .idle)
+        let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first { $0.kind == .transcribe })
+        #expect(job.deaths == 0)
+        #expect(job.state == .done)
     }
 }
 
