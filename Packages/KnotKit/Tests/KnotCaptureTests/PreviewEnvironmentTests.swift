@@ -12,13 +12,14 @@ import Testing
             path: "KnotPreviewTest-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
         let environment = AppEnvironment.makePreview(root: root)
         #expect(environment.engine is StandardCaptureEngine)
+        let engine = BoundedEngine(environment.engine)
         #expect(environment.queue is StandardProcessingQueue)
 
-        let recording = try await environment.engine.begin(CaptureRequest(kind: .voice, surface: .app))
-        let stopped = try await environment.engine.end(recording.captureID)
+        let recording = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let stopped = try await engine.end(recording.captureID)
         #expect(stopped.outcome == .stored)
-        let typed = try await environment.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "preview"))
-        _ = try await environment.engine.end(typed.captureID)
+        let typed = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "preview"))
+        _ = try await engine.end(typed.captureID)
 
         // The queue drains by itself, and the scripted transcriber reads the preview's
         // recording as its default script.

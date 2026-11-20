@@ -24,7 +24,9 @@ struct Rig {
     let queue: StandardProcessingQueue
     let ingest: InboxIngest
     let recovery: LaunchRecovery
-    let engine: StandardCaptureEngine
+    /// The engine, each of whose calls a test makes ends within `SuiteWait`'s limit, so that a
+    /// wrong engine fails the test instead of holding the suite.
+    let engine: BoundedEngine
     let logs: RecordingSink
 
     /// - Parameters:
@@ -78,10 +80,11 @@ struct Rig {
         recovery = LaunchRecovery(
             notes: notes, assets: assets, recorder: recorder, queue: queue, launchID: launchID, locations: locations,
             layer: layer, log: log)
-        engine = StandardCaptureEngine(
-            notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
-            deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
-            ingest: engineIngests ? ingest : nil, log: log)
+        engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
+                deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
+                ingest: engineIngests ? ingest : nil, log: log))
     }
 
     /// The next launch of the process: the same store, files, recorder and models, and a new
@@ -186,4 +189,72 @@ func expectError<T>(
         Issue.record("Expected \(expected.code), got \(error).", sourceLocation: sourceLocation)
         return nil
     }
+}
+
+/// A capture engine whose every call ends within `SuiteWait`'s limit: after it, the call
+/// records an issue that says what it waited for, and throws.
+struct BoundedEngine: Sendable {
+    let engine: any CaptureEngine
+
+    init(_ engine: any CaptureEngine) {
+        self.engine = engine
+    }
+
+    func begin(_ request: CaptureRequest, sourceLocation: SourceLocation = #_sourceLocation) async throws(KnotError)
+        -> CaptureState
+    {
+        try await bounded("a begin", sourceLocation: sourceLocation) { [engine] () async throws(KnotError) in
+            try await engine.begin(request)
+        }
+    }
+
+    func update(
+        _ capture: CaptureID, with content: CaptureUpdate, sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws(KnotError) -> CaptureState {
+        try await bounded("an update", sourceLocation: sourceLocation) { [engine] () async throws(KnotError) in
+            try await engine.update(capture, with: content)
+        }
+    }
+
+    func end(_ capture: CaptureID, sourceLocation: SourceLocation = #_sourceLocation) async throws(KnotError)
+        -> CaptureState
+    {
+        try await bounded("an end", sourceLocation: sourceLocation) { [engine] () async throws(KnotError) in
+            try await engine.end(capture)
+        }
+    }
+
+    func discard(_ capture: CaptureID, sourceLocation: SourceLocation = #_sourceLocation) async throws(KnotError)
+        -> CaptureState
+    {
+        try await bounded("a discard", sourceLocation: sourceLocation) { [engine] () async throws(KnotError) in
+            try await engine.discard(capture)
+        }
+    }
+
+    func retryConversions(sourceLocation: SourceLocation = #_sourceLocation) async {
+        guard let engine = engine as? StandardCaptureEngine else { return }
+        _ = await SuiteWait.value("the conversions' retry", sourceLocation: sourceLocation) {
+            await engine.retryConversions()
+        }
+    }
+
+    func states() -> AsyncStream<CaptureState> { engine.states() }
+}
+
+/// Runs one call of an engine within `SuiteWait`'s limit. After it, records that it waited
+/// for `what`, and throws `unexpected`.
+func bounded<T: Sendable>(
+    _ what: String, sourceLocation: SourceLocation = #_sourceLocation,
+    _ call: @escaping @Sendable () async throws(KnotError) -> T
+) async throws(KnotError) -> T {
+    let answer = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Result<T, KnotError> in
+        do throws(KnotError) {
+            return .success(try await call())
+        } catch {
+            return .failure(error)
+        }
+    }
+    guard let answer else { throw KnotError.unexpected }
+    return try answer.get()
 }
