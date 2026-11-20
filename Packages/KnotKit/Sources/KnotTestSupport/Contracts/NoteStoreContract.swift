@@ -113,6 +113,10 @@ public enum NoteStoreContract {
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
         Check(name: "unreadable-item", run: anUnreadableInboxItemIsAFailedSegment),
+        Check(name: "kept-item", run: aKeptInboxItemIsAFailedSegmentInANewNote),
+        Check(name: "kept-item-again", run: aKeptItemAgainChangesOnlyItsFiles),
+        Check(name: "kept-item-ingested", run: aKeptItemReadLaterIsStoredInItsNote),
+        Check(name: "kept-item-refused", run: aKeptItemThatIsNotOneIsRefused),
         Check(name: "small-ones", run: theSmallOnes),
         Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
@@ -2199,6 +2203,113 @@ public enum NoteStoreContract {
         }
     }
 
+    // MARK: Kept inbox items
+
+    /// An item of `Inbox/` that cannot be read, or that a newer Knot wrote, becomes a failed
+    /// segment that says why, in a new note dated when it was found, even inside the window of
+    /// a note it could have joined; the store records the files the caller names, and reads
+    /// them back for that capture only.
+    public static func aKeptInboxItemIsAFailedSegmentInANewNote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let earlier = try await h.store.record(h.typed("Earlier", from: 0, to: 0.5))
+        for (index, reason) in KeptInboxItem.reasons.sorted(by: { $0.rawValue < $1.rawValue }).enumerated() {
+            let item = h.keptItem(h.ids.make(), reason: reason, at: 1 + Double(index))
+            let receipt = try await h.store.recordKeptItem(item)
+            #expect(receipt.outcome == .failed(reason), "It failed, and says why.")
+            #expect(!receipt.joinedExistingNote && receipt.noteID != earlier.noteID, "A new note of its own.")
+            let row = try #require(try await h.row(item.captureID), "The item has a row.")
+            #expect(row.outcome == .failed(reason) && row.kind == .keptInboxItem)
+            let segment = try #require(try await h.store.segment(SegmentID(item.captureID))).segment
+            #expect(segment.kind == .keptInboxItem && segment.state == .keptInboxItem(reason))
+            #expect(segment.state.keptInboxItemReason == reason, "The segment carries the reason.")
+            #expect(segment.noteID == receipt.noteID && segment.text.isEmpty && segment.assetID == nil)
+            let note = try #require(try await h.store.note(receipt.noteID))
+            #expect(note.note.createdAt == item.foundAt, "The note is dated when the item was found.")
+            #expect(note.isShown, "Where a person sees it.")
+            let files = try await h.store.keptFiles(of: item.captureID)
+            #expect(files.map(\.url.lastPathComponent) == item.files.map(\.url.lastPathComponent))
+            #expect(files.map(\.role) == item.files.map(\.role))
+        }
+        #expect(try await h.store.keptFiles(of: earlier.captureID).isEmpty, "Another capture keeps no files.")
+        #expect(try await h.store.openCaptures().isEmpty, "A kept item is not open.")
+    }
+
+    /// The same kept item again changes nothing but the record of its files, which takes the
+    /// files the call names now, and returns the first receipt.
+    public static func aKeptItemAgainChangesOnlyItsFiles(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let item = h.keptItem(h.ids.make(), reason: KnotError.inboxItemUnreadable.code, at: 1)
+        let first = try await h.store.recordKeptItem(item)
+        let row = try await h.row(item.captureID)
+        let cursor = try await h.store.cursor()
+        var again = item
+        again.files = [item.files[0]]
+        again.foundAt = h.at(7)
+        again.reason = KnotError.inboxItemNewerVersion.code
+        let second = try await h.store.recordKeptItem(again)
+        #expect(second == first, "The first receipt.")
+        #expect(try await h.row(item.captureID) == row, "The row is as it was.")
+        #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Nothing else changes.")
+        let files = try await h.store.keptFiles(of: item.captureID)
+        #expect(files.map(\.url.lastPathComponent) == [item.files[0].url.lastPathComponent], "The files named now.")
+    }
+
+    /// A kept item that a later version can read is stored through the failed-row path, in the
+    /// note its failed segment is in, whatever its own time and placement say, and its files
+    /// are no longer read as kept. Ingested again, it changes nothing.
+    public static func aKeptItemReadLaterIsStoredInItsNote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let typed = h.inboxText("Read after the update", at: 0.6, revision: 2)
+        let recording = h.watchRecording(from: 0.7, to: 0.8)
+        // A note it could have joined by its own time.
+        let nearby = try await h.store.record(h.typed("Nearby", from: 0, to: 0.5))
+        for (item, ready) in [(typed, SegmentState.typed(.ready)), (recording, .voice(.recorded))] {
+            let kept = try await h.store.recordKeptItem(
+                h.keptItem(item.id, reason: KnotError.inboxItemNewerVersion.code, at: 9))
+            let result = try await h.store.ingest(item)
+            #expect(result.applied && result.receipt.outcome == .stored, "\(item.kind): stored.")
+            #expect(result.storedRevision >= item.revision)
+            let row = try #require(try await h.row(item.id))
+            #expect(row.outcome == .stored && row.kind == item.kind)
+            let segment = try #require(try await h.store.segment(SegmentID(item.id))).segment
+            #expect(segment.noteID == kept.noteID && segment.noteID != nearby.noteID, "Nothing moves to another note.")
+            #expect(segment.kind == item.kind && segment.state == ready)
+            if case .text(let text) = item.body { #expect(segment.text == text) }
+            #expect(try await h.store.keptFiles(of: item.id).isEmpty, "Its files are no longer kept.")
+            if item.kind == .voice {
+                #expect(try await h.store.jobs(for: SegmentID(item.id)).map(\.kind) == [.transcribe])
+            }
+            let cursor = try await h.store.cursor()
+            let repeated = try await h.store.ingest(item)
+            #expect(!repeated.applied, "Again, nothing is applied.")
+            #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Again, nothing changes.")
+        }
+    }
+
+    /// A kept item is refused, and nothing is written, for a reason that is not one of the two,
+    /// no file, a file named for another capture, or a capture the store holds that is not a
+    /// kept item.
+    public static func aKeptItemThatIsNotOneIsRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let id: CaptureID = h.ids.make()
+        var item = h.keptItem(id, reason: KnotError.writeFailed.code, at: 1)
+        await refuses(KnotError.captureInvalid, "another reason") { try await h.store.recordKeptItem(item) }
+        item.reason = KnotError.inboxItemUnreadable.code
+        item.files = []
+        await refuses(KnotError.captureInvalid, "no file") { try await h.store.recordKeptItem(item) }
+        item.files = h.keptItem(h.ids.make(), reason: item.reason, at: 1).files
+        await refuses(KnotError.captureInvalid, "another capture's file") { try await h.store.recordKeptItem(item) }
+        #expect(try await h.row(id) == nil, "Nothing is written.")
+        #expect(try await h.store.keptFiles(of: id).isEmpty)
+        let stored = try await h.store.record(h.typed("Stored", from: 2, to: 2.5))
+        let row = try await h.row(stored.captureID)
+        await refuses(KnotError.captureIDConflict, "a capture that is not kept") {
+            try await h.store.recordKeptItem(h.keptItem(stored.captureID, reason: item.reason, at: 3))
+        }
+        #expect(try await h.row(stored.captureID) == row, "It is as it was.")
+        #expect(try await h.store.keptFiles(of: stored.captureID).isEmpty)
+    }
+
     /// Witness 67: `changes` reports a "Remove recording".
     public static func removingARecordingIsAChange(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
@@ -2554,6 +2665,16 @@ struct Harness {
             id: id, kind: .voice, origin: CaptureOrigin(source: .device(device), surface: .watch), launchID: launch,
             placement: .window, arrival: arrival, startedAt: at(start), endedAt: at(end),
             body: .file(asset(.audio, for: id), duration: .seconds((end - start) * 60)))
+    }
+
+    /// An item of `Inbox/` kept for `capture`, found at `minute`: its manifest and a text payload,
+    /// named as `Inbox/` names them.
+    func keptItem(_ capture: CaptureID, reason: ErrorCode, at minute: Double) -> KeptInboxItem {
+        clock.set(at(minute))
+        let inbox = URL(fileURLWithPath: "/store/Inbox", isDirectory: true)
+        return KeptInboxItem(
+            captureID: capture, reason: reason, foundAt: at(minute),
+            files: ["json", "txt"].map { KeptFile(url: inbox.appending(path: "\(capture).\($0)")) })
     }
 
     func run(_ text: String, from start: Duration, resumeAt: Duration?) -> TranscriptionRun {
