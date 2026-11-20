@@ -12,7 +12,7 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 
 - `spike/sync-shape`, the branch that holds the spike's code. It is never merged.
 - `docs/spikes/SP-4.md`, the report.
-- `docs/notes/SP-4.md`, the short note of its code half
+- `docs/notes/SP-4.md`, the short note of the first stage of its code half
 
 ## Starts after
 
@@ -21,9 +21,9 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 | Notes | The code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
 | 1 | The report, `docs/spikes/SP-4.md`, which holds the final CloudKit schema and ends with a decision | SP-4 notes |
 
-The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It needs only WP-01 PR 1 and WP-04. It files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. The note is `docs/notes/SP-4.md`, merged by a pull request that holds nothing else.
+The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It runs in two stages. Stage 1 needs only WP-01 PR 1 and WP-04: it works from the pinned SDK alone, with no container, and files a short note saying whether the draft port fits the real API's streaming, cancellation and errors, what it read and what is not verified yet. The note is `docs/notes/SP-4.md`, merged by a pull request that holds nothing else. Stage 2 runs the same code against the development iCloud container once the owner's signing and two signed-in devices or simulators are there, and the report follows it.
 
-WP-02 PR 3 waits for SP-4's short note, and not for its report. No chain to M2 waits for the report of SP-4. The short note carries CloudKit's record limit as the code half measured it, and WP-02 PR 3 fixes its size numbers from that value. The report confirms the limit.
+WP-02 PR 3 waits for SP-4's short note, and not for its report. No chain to M2 waits for the report of SP-4. The short note carries CloudKit's record limit as stage 1 read it in the SDK, not measured, so WP-02 PR 3 keeps the first size values of `docs/architecture.md` §4. The report confirms the limit, or a contract PR changes the sizes.
 
 SP-4 is done when its report has merged and the owner has confirmed its decision. Gate G3 is the owner's sitting for those confirmations, and each spike is confirmed on its own, so a package waits only for the spikes its row names.
 
@@ -31,8 +31,10 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
 
 ## Build
 
-- SP-4 needs the development iCloud container and two signed-in devices or simulators.
-- The code on `spike/sync-shape` answers these questions:
+- SP-4 needs the development iCloud container and two signed-in devices or simulators, which need the owner's signing. So its code half runs in two stages, on the same code.
+  - Stage 1 works from the pinned SDK alone, with no container. It builds the spike, runs its harness on a fake zone, and files the short note, which says what was read and what is not verified yet.
+  - Stage 2 runs the same code against the development container once the owner's signing and two signed-in devices or simulators are there. It checks every statement that the note rests on reading alone, and the report follows it.
+- The code on `spike/sync-shape` answers these questions, across the two stages:
   - Does the design in `docs/architecture.md` §11 hold: an engine-managed zone for notes and segments, and an attachments zone kept out of automatic fetches and read on demand?
   - Do encrypted fields work for all text?
   - Can a trigger-fed change log drive the engine's pending changes, including writes from another process?
@@ -51,9 +53,9 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
   - What happens on a change of account with uploads pending?
   - What does a restored or replaced phone do to device identity?
   - Does an existing sync layer over GRDB and CKSyncEngine, such as SQLiteData, meet those rules, and at what dependency cost?
-- Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, from memory, that a record holds at most about 1 MB apart from its assets. The code half measures the limit and its short note carries the value, because WP-02 PR 3 fixes its size numbers from the note. The report confirms it. If the code half cannot reach CloudKit before its short note, the note says so, and WP-02 PR 3 keeps the first values of `docs/architecture.md` §4, which leave about half of the reported limit free. The report then confirms the limit, or a contract PR changes the sizes.
+- Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, read in the SDK and not measured, that a record stores at most 1 MB apart from its assets. The code half measures the limit in stage 2. Stage 1 could not reach CloudKit before its short note, so the note says so, and WP-02 PR 3 keeps the first values of `docs/architecture.md` §4, which leave about half of the read limit free. The report then confirms the limit, or a contract PR changes the sizes.
 - Fix the mechanism of account isolation, which WP-16 builds. A record counts as synced only for the account, the environment and the zone identity it was synced under, and the zone carries an identity written when it is made. So a record missing from the zone it was synced to is deleted locally, and a zone that is gone or new deletes nothing. A fetch that would delete more than a set share of the local notes pauses sync and asks.
-- `docs/architecture.md` §20 reports that CKSyncEngine downloads assets eagerly and offers no way to fetch selected fields. SP-4 checks it.
+- `docs/architecture.md` §20 holds, read in the SDK and not measured, that CKSyncEngine's fetch options have a zone scope and no `desiredKeys`, so the engine fetches whole records with their assets. Stage 2 checks it against the container.
 - The engine's events cannot be built in a test, so `docs/architecture.md` §11 has the thin adapter between CKSyncEngine and the merge core proven by SP-4's harness, and on hardware at M4.
 - Set the restore time. A fresh install in WP-16 restores within the time SP-4 set.
 - The report, `docs/spikes/SP-4.md`, holds the final CloudKit schema.
@@ -72,7 +74,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
 
 ## Milestone evidence
 
-- Gate G3, with SP-4. The owner signs two devices into iCloud for the sync spike, about 10 minutes.
+- Gate G3, with SP-4. The owner signs two devices into iCloud for the second stage of the sync spike, about 10 minutes, once his signing is set up.
 - A sitting with the spike's build starts when `scripts/install.sh` has reported success.
 - Gate G3. The owner reads the report and confirms its decision. Each spike is confirmed on its own.
 - Adding a dependency, such as an existing sync layer, stays the owner's decision under D30.
