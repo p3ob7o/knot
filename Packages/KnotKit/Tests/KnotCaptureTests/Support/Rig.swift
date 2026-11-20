@@ -103,10 +103,12 @@ struct Rig {
         }
     }
 
-    /// Begins a recording and returns once some of its audio is durable, as the engine says.
-    func beginRecording(_ request: CaptureRequest = CaptureRequest(kind: .voice, surface: .app)) async throws
-        -> CaptureState
-    {
+    /// Begins a recording, on the rig's engine or `other`, and returns once some of its audio is
+    /// durable, as the engine says.
+    func beginRecording(
+        _ request: CaptureRequest = CaptureRequest(kind: .voice, surface: .app), on other: BoundedEngine? = nil
+    ) async throws -> CaptureState {
+        let engine = other ?? self.engine
         let states = engine.states()
         let begun = try await engine.begin(request)
         let id = begun.captureID

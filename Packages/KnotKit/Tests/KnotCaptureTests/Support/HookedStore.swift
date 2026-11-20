@@ -1,4 +1,5 @@
 import Foundation
+import KnotCapture
 import KnotCore
 import KnotFakes
 import Synchronization
@@ -14,6 +15,16 @@ final class JobHooks: Sendable {
     let afterCleanup = Mutex<(@Sendable () async -> Void)?>(nil)
     /// How many of the next reads of jobs answer `store_not_open`; a negative number, all.
     let failingJobReads = Mutex(0)
+    /// When set, each save of a job is saved a second time, so that the revisions the store
+    /// gives a job go up by two: a queue that guesses a revision meets `revision_stale`.
+    let saveJobsTwice = Mutex(false)
+    /// The writes of captures asked of the store, in the order they were asked: `record`,
+    /// `checkpoint` and `end`, each with the capture's ID.
+    let captureWrites = Mutex<[String]>([])
+
+    fileprivate func asked(_ call: String, _ capture: CaptureID) {
+        captureWrites.withLock { $0.append("\(call) \(capture)") }
+    }
 
     func failJobReads(_ count: Int) { failingJobReads.withLock { $0 = count } }
 
@@ -51,6 +62,7 @@ struct HookedStore: NoteStore {
     }
     func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt {
         try check()
+        hooks.asked("record", capture.id)
         return try await store.record(capture)
     }
     func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult {
@@ -59,10 +71,12 @@ struct HookedStore: NoteStore {
     }
     func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
         try check()
+        hooks.asked("checkpoint", checkpoint.captureID)
         return try await store.checkpoint(checkpoint)
     }
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt {
         try check()
+        hooks.asked("end", end.captureID)
         return try await store.end(end)
     }
     func openCaptures() async throws(KnotError) -> [Capture] {
@@ -150,7 +164,8 @@ struct HookedStore: NoteStore {
     func saveJob(_ job: Job) async throws(KnotError) -> Job {
         try check()
         if let hook = hooks.beforeSave.withLock({ $0 }) { await hook(job) }
-        let stored = try await store.saveJob(job)
+        var stored = try await store.saveJob(job)
+        if hooks.saveJobsTwice.withLock({ $0 }) { stored = try await store.saveJob(stored) }
         if let hook = hooks.afterSave.withLock({ $0 }) { await hook(job) }
         return stored
     }
@@ -162,5 +177,16 @@ struct HookedStore: NoteStore {
     func purge(before date: Date) async throws(KnotError) -> PurgeResult {
         try check()
         return try await store.purge(before: date)
+    }
+}
+
+extension Rig {
+    /// An engine over this rig's parts with `notes` in place of the rig's store.
+    func engine(notes: any NoteStore, deadline: StoreDeadline = .patient) -> BoundedEngine {
+        BoundedEngine(
+            StandardCaptureEngine(
+                notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
+                deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
+                ingest: ingest, log: KnotLog(.capture, sink: logs)))
     }
 }

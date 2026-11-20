@@ -309,26 +309,35 @@ import Testing
         _ = try await engine.discard(second.captureID)
     }
 
-    /// Finding 34. A start does no old work ahead of its own write: while an old discard's end
-    /// and its retry after the call both wait in the store, a start still returns, and the old
-    /// row is ended once the store answers.
+    /// Finding 34, and finding 42. A start does no old work ahead of its own write: while an old
+    /// discard's end and its retry after the call both wait in the store, a start writes its
+    /// own row before the store is asked to end the old row again, and the old row is ended
+    /// once the store answers.
     @Test func startWaitsForNoOldDiscard() async throws {
         let impatient = Mutex(false)
-        let r = Rig(
+        let r = Rig()
+        let hooks = JobHooks()
+        let engine = r.engine(
+            notes: HookedStore(store: r.notes, hooks: hooks),
             deadline: StoreDeadline {
                 if impatient.withLock({ $0 }) { return }
                 try? await Task.sleep(for: SuiteWait.limit)
             })
-        let recording = try await r.beginRecording()
+        let recording = try await r.beginRecording(on: engine)
         #expect(recording.path == .store)
         impatient.withLock { $0 = true }
         let ownEnd = await r.notes.holdNextCaptureWrite()
         let retry = await r.notes.holdNextCaptureWrite()
-        _ = try await r.engine.discard(recording.captureID)
+        _ = try await engine.discard(recording.captureID)
         // The discard's end did not answer in time; its retry, after the call, waits too.
         await reached(retry)
-        let typed = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
+        let typed = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
         #expect(typed.durableRevision == 1)
+        let writes = hooks.captureWrites.withLock { $0 }
+        let ownWrite = try #require(writes.firstIndex(of: "record \(typed.captureID)"))
+        #expect(
+            writes[..<ownWrite].filter { $0 == "end \(recording.captureID)" }.count == 2,
+            "The start asked the store to end the old row again before its own write: \(writes)")
         ownEnd.release()
         retry.release()
         #expect(
