@@ -127,9 +127,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.portUnavailable
         }
         let startedAt = clock.now()
-        // Rule 15 first, so that a start it refuses writes nothing.
-        if case .retry(let pending) = try nextStep(for: request, besides: nil) {
-            return try await retryBegin(pending, text: request.text ?? "")
+        // Rule 15 first, so that a start it refuses writes nothing. A start that turns out not to
+        // be a retry once it holds the capture's line is decided again.
+        while case .retry(let pending) = try nextStep(for: request, besides: nil) {
+            if let state = try await retryBegin(pending, text: request.text ?? "") { return state }
         }
         let id: CaptureID = ids.make()
         var entry = Entry(
@@ -161,7 +162,11 @@ public actor StandardCaptureEngine: CaptureEngine {
                 case .retry(let pending):
                     // Another start of this kind on this surface ran while this one waited.
                     entries[id] = nil
-                    return try await retryBegin(pending, text: request.text ?? "")
+                    if let state = try await retryBegin(pending, text: request.text ?? "") { return state }
+                    // That capture was answered or ended while this start waited: this start is
+                    // a capture of its own after all.
+                    entries[id] = entry
+                    continue planning
                 case .end(let open):
                     if case .store = entries[open]?.path {
                         log.capture(id, "start_waits_for_open_capture", .segment(SegmentID(open)))
@@ -362,13 +367,15 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     /// The retry of a typed start that reached no disk, on its surface: the same capture, its
-    /// text saved at the next revision.
-    private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState {
+    /// text saved at the next revision. Whether the start is that retry is decided once it holds
+    /// the capture's line, not when it arrived (finding 41): a capture that a call answered as
+    /// saved, or that ended, while the start waited is no longer one to retry, and `nil` says
+    /// that the start is a capture of its own.
+    private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState? {
+        log.capture(id, "start_waits_to_retry")
         await take(id)
         defer { release(id) }
-        guard let entry = entries[id], entry.outcome == .open else {
-            throw KnotError.illegalTransition.about(capture: id)
-        }
+        guard let entry = entries[id], entry.outcome == .open, !entry.answered else { return nil }
         // The capture that rule 15 ends for it, named in the item before it ends.
         if case .end(let open)? = try? nextStep(
             for: CaptureRequest(kind: entry.kind, surface: entry.surface), besides: id)

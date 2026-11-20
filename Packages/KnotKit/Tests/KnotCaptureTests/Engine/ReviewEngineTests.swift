@@ -410,6 +410,37 @@ import Testing
         #expect(again.durableRevision == 1)
     }
 
+    /// Finding 41, the re-check's C1. Two starts on one surface overlap: the second comes
+    /// while the first one's begin is still in the store, and waits for its line as its retry.
+    /// The first is answered as saved meanwhile, so the second is a capture of its own, and the
+    /// acknowledged text stays.
+    @Test func overlappingSameSurfaceStartsKeepTheAcknowledgedText() async throws {
+        let r = Rig()
+        let engine = r.engine
+        let hold = await r.notes.holdNextCaptureWrite()
+        let first = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "buy milk")) }
+        await reached(hold)
+        let second = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "call mom")) }
+        #expect(
+            await eventually("the second start to wait for the first one's line") {
+                r.logs.logged("start_waits_to_retry")
+            })
+        hold.release()
+        let a = try #require(await SuiteWait.value("the first start") { try? await first.value } ?? nil)
+        #expect(a.durableRevision == 1, "The first start was answered as saved.")
+        let b = try #require(await SuiteWait.value("the second start") { try? await second.value } ?? nil)
+        try #require(b.captureID != a.captureID, "The second start is a capture of its own.")
+        _ = try await engine.end(a.captureID)
+        _ = try await engine.end(b.captureID)
+        #expect(
+            await eventually("both texts to be stored") {
+                let first = try? await r.notes.segment(SegmentID(a.captureID))
+                let second = try? await r.notes.segment(SegmentID(b.captureID))
+                return first?.text == "buy milk" && second?.text == "call mom"
+            })
+        #expect(try await r.notes.openCaptures().isEmpty)
+    }
+
     /// Finding 39, n05 and n06. A typed start that reaches no disk ends nothing: the open
     /// capture, on the store path or on the `Inbox/` path, goes on and takes saves.
     @Test(arguments: [false, true])
