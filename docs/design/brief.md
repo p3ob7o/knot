@@ -245,7 +245,6 @@ Design for the Ultra 2 first, then the smaller sizes.
 6. On the watch, what is the smallest screen that makes "it is recording" and "it is saved" certain at a glance and by feel?
 7. On iPad, how do typing and Pencil share one capture surface without a mode switch, and what ends a drawing?
 8. Where does a lasting problem show outside Settings: sync that has failed for hours, or notes that could not be opened?
-9. What does the empty stream say on first run when the person has switched sync off? With sync on, it says that sync is on and where its switch is.
 
 ## 8. Constraints
 
