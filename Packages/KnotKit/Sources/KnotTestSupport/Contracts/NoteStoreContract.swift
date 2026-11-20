@@ -108,6 +108,7 @@ public enum NoteStoreContract {
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
+        Check(name: "unreadable-item", run: anUnreadableInboxItemIsAFailedSegment),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2112,19 +2113,57 @@ public enum NoteStoreContract {
             asset.sha256 = String(repeating: "a", count: 63)
             recording.body = .file(asset, duration: duration)
         }
-        await refuses(KnotError.unexpected, "record") { try await h.store.record(recording) }
+        await refuses(KnotError.captureInvalid, "record") { try await h.store.record(recording) }
         #expect(try await h.row(recording.id) == nil, "Nothing is written.")
         let start = h.recordingStart(at: 2, surface: .app)
         _ = try await h.store.record(start)
         var asset = h.asset(.audio, for: start.id)
         asset.sha256 = String(repeating: "b", count: 63)
-        await refuses(KnotError.unexpected, "end") {
+        await refuses(KnotError.captureInvalid, "end") {
             try await h.store.end(
                 CaptureEnd(
                     captureID: start.id, endedAt: h.at(3), outcome: .stored(.file(asset, duration: .seconds(60))),
                     revision: 0))
         }
         #expect(try await h.row(start.id)?.outcome == .open, "Nothing is written.")
+
+        // A body of another kind is refused with the same code, and nothing is written (finding 71).
+        await refuses(KnotError.captureInvalid, "an end with text for a recording") {
+            try await h.store.end(h.endTyped(start.id, "words", at: 3, revision: 1))
+        }
+        #expect(try await h.row(start.id)?.outcome == .open, "Nothing is written.")
+        var typed = h.typed("text", from: 5, to: 5.1)
+        typed.body = .file(h.asset(.audio, for: typed.id), duration: .seconds(1))
+        await refuses(KnotError.captureInvalid, "a typed capture with a file") { try await h.store.record(typed) }
+        #expect(try await h.row(typed.id) == nil, "Nothing is written.")
+    }
+
+    /// An inbox item that does not fit its kind, a digest of 63 digits or a body of another
+    /// kind, is `inbox_item_unreadable`: the store writes it as a failed segment that says so,
+    /// and the call fails so that the file is kept. Ingested again, it changes nothing (finding 71).
+    public static func anUnreadableInboxItemIsAFailedSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        var recording = h.watchRecording(from: 0, to: 1)
+        if case .file(var asset, let duration) = recording.body {
+            asset.sha256 = String(repeating: "a", count: 63)
+            recording.body = .file(asset, duration: duration)
+        }
+        var typed = h.inboxText("text", at: 10, revision: 1)
+        typed.body = .file(h.asset(.ink, for: typed.id), duration: nil)
+        for (item, failed) in [
+            (recording, SegmentState.voice(.failed(.record, KnotError.inboxItemUnreadable.code))),
+            (typed, .typed(.failed)),
+        ] {
+            await refuses(KnotError.inboxItemUnreadable, "\(item.kind)") { try await h.store.ingest(item) }
+            let row = try #require(try await h.row(item.id), "The item has a row.")
+            #expect(row.outcome == .failed(KnotError.inboxItemUnreadable.code), "It failed, and says why.")
+            let segment = try #require(try await h.store.segment(SegmentID(item.id))).segment
+            #expect(segment.state == failed && segment.assetID == nil, "A failed segment, with no file.")
+            #expect(try await h.store.note(segment.noteID)?.isShown == true, "Where a person sees it.")
+            let cursor = try await h.store.cursor()
+            await refuses(KnotError.inboxItemUnreadable, "again") { try await h.store.ingest(item) }
+            #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Again, nothing changes.")
+        }
     }
 
     /// Witness 67: `changes` reports a "Remove recording".

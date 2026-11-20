@@ -202,8 +202,9 @@
 
         public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult {
             await waitIfHeld()
+            if !fits(capture) || capture.endedAt == nil { try writeUnreadable(capture) }
             try check(capture, ingesting: true)
-            guard let endedAt = capture.endedAt else { throw KnotError.unexpected.about(capture: capture.id) }
+            guard let endedAt = capture.endedAt else { throw KnotError.inboxItemUnreadable.about(capture: capture.id) }
             var next = state
             if next.captures[capture.id] == nil {
                 let receipt = try place(capture, ingesting: true, in: &next)
@@ -252,7 +253,7 @@
             case .failed(let code): incoming = .failed(code)
             }
             if case .stored(let body) = end.outcome, !body.isWellFormed {
-                throw KnotError.unexpected.about(capture: end.captureID)
+                throw KnotError.captureInvalid.about(capture: end.captureID)
             }
             var next = state
             _ = try save(
@@ -979,7 +980,7 @@
                 case .asItStands:
                     break
                 case .file:
-                    throw KnotError.unexpected.about(capture: id)
+                    throw KnotError.captureInvalid.about(capture: id)
                 }
                 // An ended capture that this save does not change is not touched at all.
                 if !wasOpen, !isFailed, winner == nil { return false }
@@ -1018,7 +1019,7 @@
                 case .file(let asset, let duration):
                     guard let content = CaptureBody.file(asset, duration: duration).content,
                         (row.kind == .voice) == (asset.kind == .audio)
-                    else { throw KnotError.unexpected.about(capture: id) }
+                    else { throw KnotError.captureInvalid.about(capture: id) }
                     let hash = contentHash(row.kind, content)
                     // A capture that a handoff ended before its file was known takes its file
                     // from a later save, as a later save of text applies (findings 21 and 40).
@@ -1075,7 +1076,7 @@
                         changed = true
                     }
                 case .text:
-                    throw KnotError.unexpected.about(capture: id)
+                    throw KnotError.captureInvalid.about(capture: id)
                 }
             default:
                 throw KnotError.unexpected.about(capture: id)
@@ -1254,6 +1255,16 @@
         // MARK: - Helpers
 
         private func check(_ capture: NewCapture, ingesting: Bool = false) throws(KnotError) {
+            // An inbox item's named note may be purged since: the item goes to a new note.
+            if !ingesting, case .named(let note) = capture.placement, state.notes[note] == nil {
+                throw KnotError.notFound.with(.init(captureID: capture.id, noteID: note))
+            }
+            guard fits(capture) else { throw KnotError.captureInvalid.about(capture: capture.id) }
+        }
+
+        /// Whether a capture fits its kind: a body of its kind, a well-formed file, a recording
+        /// or drawing that starts without its file and ends with it, and an end for a late one.
+        private func fits(_ capture: NewCapture) -> Bool {
             let valid: Bool
             switch (capture.kind, capture.body) {
             case (.typed, .text): valid = true
@@ -1262,13 +1273,32 @@
             case (.voice, .none), (.ink, .none): valid = capture.endedAt == nil
             default: valid = false
             }
-            // An inbox item's named note may be purged since: the item goes to a new note.
-            if !ingesting, case .named(let note) = capture.placement, state.notes[note] == nil {
-                throw KnotError.notFound.with(.init(captureID: capture.id, noteID: note))
+            return valid && capture.body.isWellFormed && (capture.arrival == .live || capture.endedAt != nil)
+        }
+
+        /// An inbox item that does not fit its kind (§6 rule 2, finding 71): it is written as a
+        /// failed segment that says so, where `record` would place it, and the call fails with
+        /// `inbox_item_unreadable` so that the file is kept. An open row it meets fails the same
+        /// way; any other row is left as it is.
+        private func writeUnreadable(_ item: NewCapture) throws(KnotError) -> Never {
+            let error = KnotError.inboxItemUnreadable.about(capture: item.id)
+            let code = KnotError.inboxItemUnreadable.code
+            var next = state
+            if let row = next.captures[item.id] {
+                guard row.outcome == .open else { throw error }
+            } else {
+                var open = item
+                open.endedAt = nil
+                open.arrival = item.endedAt == nil ? .live : item.arrival
+                open.body = item.kind == .typed ? .text("") : .none
+                _ = try place(open, ingesting: true, in: &next)
             }
-            guard valid, capture.body.isWellFormed, capture.arrival == .live || capture.endedAt != nil else {
-                throw KnotError.unexpected.about(capture: capture.id)
-            }
+            let revision = next.captures[item.id]?.revision ?? 0
+            _ = try save(
+                item.id, .failed(code), revision: revision, endingAt: item.endedAt ?? clock.now(), mode: .end,
+                in: &next)
+            commit(next)
+            throw error
         }
 
         private func segmentIDs(of capture: NewCapture) -> [SegmentID] {

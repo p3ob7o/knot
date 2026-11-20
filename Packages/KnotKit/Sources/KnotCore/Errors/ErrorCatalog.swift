@@ -197,6 +197,11 @@ extension KnotError {
     public static let captureIDConflict = KnotError(
         code: "capture_id_conflict", next: .useNewCaptureID, retry: .notSafe, written: .nothing,
         exitStatus: .conflict)
+    /// A capture, or its end, that does not fit its kind: a body of another kind, a file whose
+    /// digest is not 64 hexadecimal digits, or a recording or drawing that starts with its file.
+    /// Refused by `record` and `end`, with nothing written.
+    public static let captureInvalid = KnotError(
+        code: "capture_invalid", next: .reportProblem, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
     /// The segment or note changed since the revision the caller read.
     public static let revisionStale = KnotError(
         code: "revision_stale", next: .readAgain, retry: .notSafe, written: .nothing, exitStatus: .conflict)
@@ -262,7 +267,8 @@ extension KnotError {
     public static let jobDiedTwice = KnotError(
         code: "job_died_twice", next: .retry, retry: .safe(times: 1), written: .contentKept,
         exitStatus: .unexpected)
-    /// A state machine was asked for a transition it does not have.
+    /// A state machine was asked for a transition it does not have, or the store for a change
+    /// its rules do not allow.
     public static let illegalTransition = KnotError(
         code: "illegal_transition", next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)
@@ -303,7 +309,8 @@ extension KnotError {
         requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked, cancelled,
         inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch,
         syncSignedOut, syncAccountChanged, syncZoneRemoved, syncMassDeletePaused, syncUploadNeedsConsent,
-        textTooLong, captureIDConflict, revisionStale, revisionForeign, cursorForeign, cursorAheadOfStore,
+        textTooLong, captureIDConflict, captureInvalid, revisionStale, revisionForeign, cursorForeign,
+        cursorAheadOfStore,
         notFound, idAmbiguous, noteDeleted, segmentCaptureOpen, removeRecordingRefusedNoText,
         moveRefusedOpenCapture, moveRefusedDeletedSegment, moveRefusedConflictCopy, moveRefusedOnlySegment,
         returnRefusedNoteChanged, returnRefusedNoteGone, returnRefusedNoMove,

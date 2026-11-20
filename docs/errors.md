@@ -354,7 +354,7 @@ A step was cancelled: the task that awaited it was cancelled, because background
 
 ### `inbox_item_unreadable`
 
-An inbox item cannot be read. It becomes a failed segment that says so, and the file is kept.
+An inbox item cannot be read: its manifest, or a body that does not fit its kind, such as a file whose digest is not 64 hexadecimal digits. The store writes it as a failed segment that says so, and the file is kept.
 
 - Class: failure
 - Next: report_problem
@@ -465,6 +465,16 @@ The same capture ID with different content.
 - Retry: not safe
 - Written: nothing
 - Exit code: 5
+
+### `capture_invalid`
+
+A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, or a recording or drawing that starts with its file. `record` and `end` refuse it, and nothing was written. An inbox item that does not fit is `inbox_item_unreadable` instead.
+
+- Class: failure
+- Next: report_problem
+- Retry: not safe
+- Written: nothing
+- Exit code: 1
 
 ### `revision_stale`
 
@@ -642,7 +652,7 @@ A job was found running at launch twice. The process died inside it each time.
 
 ### `illegal_transition`
 
-A state machine was asked for a transition it does not have.
+A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, or a transcription run whose resume point is not after its start.
 
 - Class: failure
 - Next: report_problem

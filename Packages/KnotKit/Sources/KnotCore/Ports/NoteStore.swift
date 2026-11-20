@@ -80,7 +80,10 @@ public protocol NoteStore: Sendable {
     /// - an ended row at an equal or higher revision with other content: a conflict.
     ///
     /// The result says which content revision is durably stored. Only that lets the caller
-    /// remove the file; on a conflict the file is kept.
+    /// remove the file; on a conflict the file is kept. An item whose body does not fit its kind,
+    /// such as a file whose digest is not 64 hex digits, or that has no end, is written as a failed
+    /// segment that says so (an open row it meets fails the same way), and the call fails with
+    /// `inbox_item_unreadable`: the file is kept. Ingested again, it changes nothing.
     func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult
 
     /// Saves the text of a typed capture. Saves are ordered by revision: a checkpoint never
@@ -293,7 +296,9 @@ public enum CaptureBody: Hashable, Sendable {
 
     /// The content a repeated capture ID is judged by, or `nil` when there is none: a
     /// recording or drawing still being made. A file's digest must be 64 hex digits
-    /// (`isWellFormed`); a store refuses a capture whose digest is not.
+    /// (`isWellFormed`). `record` and `end` refuse a body that does not fit its kind, or a file
+    /// whose digest is not, with `capture_invalid` and nothing written; `ingest` writes such an
+    /// item as a failed segment and fails with `inbox_item_unreadable`, so the file is kept.
     ///
     /// "The same content" for a capture with none is defined case by case, never by a missing
     /// hash matching anything:
