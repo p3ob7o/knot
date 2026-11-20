@@ -145,9 +145,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         await take(id)
         defer { release(id) }
         // A recording starts first: one whose microphone cannot open never starts, and ends
-        // nothing. Its request names the capture that rule 15 ends for it, decided now, without
-        // waiting, so that the recorder's first manifest write carries the link and a death at
-        // any moment after the start leaves it there.
+        // nothing. Its request names the capture that rule 15 would end for it now, decided
+        // without waiting, so that the recorder's first manifest write carries the link. If that
+        // capture ends by itself before the planning below, the recording's later items name
+        // nothing, while that first manifest still names it: finding 54, WP-11's.
         if request.kind == .voice {
             if case .end(let open)? = try? nextStep(for: request, besides: id) { entries[id]?.follows = open }
             try await startRecorder(id)

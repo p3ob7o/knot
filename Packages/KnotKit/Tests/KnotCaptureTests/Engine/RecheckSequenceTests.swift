@@ -330,4 +330,57 @@ extension RecheckSequenceTests {
             Self.isStuck($0)
         }
     }
+
+    /// Finding 54 of the review of pull request 50, set aside for WP-11. Typed capture A is open
+    /// on the `Inbox/` path with the window off, and recording B starts; the recorder writes a
+    /// manifest that names A, the capture open at the start. While the recorder's start is
+    /// held, A ends by its own call, and the store refuses B's row. Alive, rule 15 ends
+    /// nothing, B's item names nothing, and B is a note of its own. After a death while B
+    /// records, recovery reads the first manifest and puts B in A's note, which it would not
+    /// join alive: the known issue. Nothing is lost or doubled either way.
+    @Test(arguments: [false, true]) func openCaptureEndsDuringTheStart(death: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        let recorder = WatchedRecorder(r.recorder)
+        // No ingest of the engine's own: the items stay in `Inbox/` until the next launch.
+        let engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: r.notes, assets: r.assets, recorder: recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+                deadline: .patient, ingest: nil, log: KnotLog(.capture, sink: r.logs)))
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        recorder.startGate.close()
+        // The store refuses the recording's row.
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let inner = engine.engine
+        let starting = Task { try await inner.begin(CaptureRequest(kind: .voice, surface: .app)) }
+        #expect(await eventually("the recording's start to be held") { recorder.startGate.isHolding })
+        _ = try await engine.end(a.captureID)
+        recorder.startGate.open()
+        let b = try #require(await SuiteWait.value("the recording's start") { try? await starting.value } ?? nil)
+        let firstManifest = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(b.captureID)))
+        #expect(
+            firstManifest.followsCaptureID == a.captureID, "The first manifest names the capture open at the start.")
+        #expect(try await r.notes.capture(b.captureID) == nil, "The store did not take the recording's row.")
+        if !death {
+            _ = try await engine.end(b.captureID)
+            let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(b.captureID)))
+            #expect(item.followsCaptureID == nil, "The item names what rule 15 ended: nothing.")
+        }
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        _ = try await next.recovery.run(ingest: next.ingest)
+        #expect(r.inboxFiles().isEmpty)
+        let noteA = try #require(try await r.notes.segment(SegmentID(a.captureID))).noteID
+        let noteB = try #require(try await r.notes.segment(SegmentID(b.captureID))).noteID
+        if death {
+            withKnownIssue("Finding 54, WP-11: after a death the recording joins a note it would not join alive") {
+                #expect(noteA != noteB, "The recording joined the typed capture's note.")
+            }
+        } else {
+            #expect(noteA != noteB, "Alive, with the window off, the recording is a note of its own.")
+        }
+    }
 }

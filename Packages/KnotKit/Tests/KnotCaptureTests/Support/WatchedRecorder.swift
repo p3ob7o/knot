@@ -17,6 +17,8 @@ final class WatchedRecorder: Recorder, Sendable {
     let failRemovals = Mutex(false)
     /// Runs as each start returns, with the recording's capture ID.
     let afterStart = Mutex<(@Sendable (CaptureID) -> Void)?>(nil)
+    /// While closed, every start waits at it once its manifest and working file are written.
+    let startGate = Gate()
     private let log = Mutex<[String]>([])
 
     init(_ base: ScriptedRecorder) { self.base = base }
@@ -30,6 +32,7 @@ final class WatchedRecorder: Recorder, Sendable {
     func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         log.withLock { $0.append("start") }
         let session = try await base.start(request)
+        await startGate.pass()
         afterStart.withLock { $0 }?(request.captureID)
         return session
     }
