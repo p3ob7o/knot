@@ -1180,6 +1180,16 @@ public enum NoteStoreContract {
         #expect(inside.noteID == a.noteID, "Capturing from inside A still appends to it (rule 5).")
         let byWindow = try await h.store.record(h.typed("By the window", from: 0.9, to: 1.0))
         #expect(byWindow.noteID != a.noteID, "A capture by the window never joins the closed note.")
+
+        // The same through ingest, closed at the manifest's capture time (finding 38).
+        let c = try await h.store.record(h.tool("C", at: 10))
+        var forced = h.inboxText("D, asked for a new note", at: 11, revision: 1)
+        forced.placement = .newNote
+        _ = try await h.store.ingest(forced)
+        #expect(try await h.store.note(c.noteID)?.note.closedAt == h.at(11), "Ingest closes it at the capture's start.")
+        _ = try await h.store.record(h.typed("Inside C", from: 12, to: 12, placement: .named(c.noteID)))
+        let following = try await h.store.record(h.tool("By the window", at: 13))
+        #expect(following.noteID != c.noteID)
     }
 
     /// A late capture never joins a deleted note, and never falls back to an older one (rules

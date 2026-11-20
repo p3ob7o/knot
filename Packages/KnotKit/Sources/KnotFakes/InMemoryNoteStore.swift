@@ -724,7 +724,7 @@
             next.counter += 1
             let counter = next.counter
             if !joined {
-                if capture.placement == .newNote, capture.arrival == .live, !ingesting,
+                if capture.placement == .newNote, capture.arrival == .live,
                     !faults.contains(.newNoteClosesNothing)
                 {
                     closeLatestNote(before: capture, in: &next, counter: counter)
