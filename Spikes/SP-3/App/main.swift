@@ -176,23 +176,35 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// The counter each form showed at the last refresh, so the window says which moved.
+    var last: [String: Int] = [:]
+
     func refresh(reason: String) {
-        let probe = Spike.probe(origin: "app", write: false)
-        let tool = Spike.tilde(Bundle.main.bundleURL.appending(path: "Contents/MacOS/knot-dev").path)
-        let helper = Spike.tilde(
-            Bundle.main.bundleURL.appending(path: "Contents/Helpers/knot-dev.app/Contents/MacOS/knot-dev").path)
+        var lines: [String] = []
+        for team in [false, true] {
+            let form = Spike.groupForm(team: team)
+            let probe = Spike.probe(origin: "app", write: false, team: team)
+            let counter = (probe["before"] as? [String: Any])?["counter"] as? Int
+            let moved = counter.map { c in last[form].map { c > $0 ? "moved" : "unchanged" } ?? "first read" } ?? "-"
+            if let counter { last[form] = counter }
+            lines.append(
+                "\(form) form: store \(probe["store"] ?? "?"), counter \(counter.map(String.init) ?? "-") (\(moved))"
+                    + ((probe["error"] as? String).map { "\n  error: \($0)" } ?? ""))
+        }
+        let tool = "\"" + Spike.tilde(Bundle.main.bundleURL.appending(path: "Contents/MacOS/knot-dev").path) + "\""
         text.string = """
             Refreshed: \(reason), \(Date().formatted(date: .omitted, time: .standard))
 
-            What the app sees:
-            \(Spike.json(probe))
+            What the app sees, in each form of the group:
+            \(lines.joined(separator: "\n"))
 
-            In Terminal, run each line, and watch this window refresh:
-              "\(tool)" probe
-              "\(tool)" add synthetic
-              "\(helper)" probe
-              "\(helper)" add synthetic
-              "\(tool)" cleanup
+            In Terminal, run each line. After an add, the form it names reads "moved":
+              \(tool) probe
+              \(tool) add synthetic
+              \(tool) probe --team-group
+              \(tool) add synthetic --team-group
+              \(tool) cleanup
+              \(tool) cleanup --team-group
             """
     }
 

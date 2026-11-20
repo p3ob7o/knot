@@ -28,11 +28,12 @@ enum Spike {
     /// `--team-group` on the command line picks the Team-ID form; otherwise the `group.` form.
     static let wantsTeamGroup = CommandLine.arguments.contains("--team-group")
 
-    static var groupForm: String { wantsTeamGroup ? "team" : "group." }
+    static func groupForm(team: Bool = wantsTeamGroup) -> String { team ? "team" : "group." }
 
-    static var appGroup: String {
+    /// The group of the form asked for: the Team-ID form when `team`, else the `group.` form.
+    static func appGroup(team: Bool = wantsTeamGroup) -> String {
         let groups = claimedGroups
-        let pick = groups.first { $0.hasPrefix("group.") == !wantsTeamGroup }
+        let pick = groups.first { $0.hasPrefix("group.") == !team }
         return pick ?? "none claimed"
     }
 
@@ -56,7 +57,7 @@ enum Spike {
 
     /// What the process is: its packaging, its identity as the bundle reports it, and its
     /// sandbox.
-    static func identity() -> [String: Any] {
+    static func identity(team: Bool = wantsTeamGroup) -> [String: Any] {
         [
             "variant": variant,
             "bundleID": Bundle.main.bundleIdentifier ?? "none",
@@ -64,18 +65,18 @@ enum Spike {
             "sandboxed": sandboxed,
             "sandboxContainerID": ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "none",
             "home": tilde(NSHomeDirectory()),
-            "appGroup": appGroup,
-            "groupForm": groupForm,
+            "appGroup": appGroup(team: team),
+            "groupForm": groupForm(team: team),
             "claimedGroups": claimedGroups,
         ]
     }
 
-    static func groupContainer() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    static func groupContainer(team: Bool = wantsTeamGroup) -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup(team: team))
     }
 
-    static func spikeFolder() throws -> URL {
-        guard let group = groupContainer() else { throw SpikeError.noGroupContainer }
+    static func spikeFolder(team: Bool = wantsTeamGroup) throws -> URL {
+        guard let group = groupContainer(team: team) else { throw SpikeError.noGroupContainer }
         let folder = group.appending(path: Spike.folder, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
@@ -83,8 +84,8 @@ enum Spike {
 
     /// Opens the store as Knot's real store is configured (docs/architecture.md §7): a pool
     /// in WAL mode, synchronous FULL, fullfsync on the writer, a 5-second busy timeout.
-    static func openStore() throws -> DatabasePool {
-        let url = try spikeFolder().appending(path: "spike.sqlite")
+    static func openStore(team: Bool = wantsTeamGroup) throws -> DatabasePool {
+        let url = try spikeFolder(team: team).appending(path: "spike.sqlite")
         var config = Configuration()
         config.busyMode = .timeout(5)
         config.prepareDatabase { db in
@@ -140,16 +141,16 @@ enum Spike {
 
     /// The probe each process runs: who it is, whether it reaches the group container, and
     /// whether it can open the store for reading and writing.
-    static func probe(origin: String, write: Bool) -> [String: Any] {
-        var result = identity()
-        guard let group = groupContainer() else {
+    static func probe(origin: String, write: Bool, team: Bool = wantsTeamGroup) -> [String: Any] {
+        var result = identity(team: team)
+        guard let group = groupContainer(team: team) else {
             result["groupContainer"] = "none"
             result["store"] = "no group container"
             return result
         }
         result["groupContainer"] = tilde(group.path)
         do {
-            let pool = try openStore()
+            let pool = try openStore(team: team)
             result["store"] = "opened"
             result["before"] = try read(pool).json
             if write {
@@ -167,8 +168,10 @@ enum Spike {
 
     /// Removes the spike's own files from the group container, by name, and its folder if
     /// that leaves it empty. Returns what it removed.
-    static func cleanup() -> [String: Any] {
-        guard let group = groupContainer() else { return ["removed": [String](), "error": "no group container"] }
+    static func cleanup(team: Bool = wantsTeamGroup) -> [String: Any] {
+        guard let group = groupContainer(team: team) else {
+            return ["removed": [String](), "error": "no group container"]
+        }
         let folder = group.appending(path: Spike.folder, directoryHint: .isDirectory)
         var removed: [String] = []
         for name in files {
