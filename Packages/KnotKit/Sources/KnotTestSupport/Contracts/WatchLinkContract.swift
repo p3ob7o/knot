@@ -42,6 +42,8 @@ public enum WatchLinkContract {
         let subject = try await make()
         let link = subject.link
         #expect(await counts(of: link) == WatchLinkCounts(waiting: 0, failed: 0))
+        // One subscription held across the changes, which must see them as they happen.
+        let watching = link.counts()
 
         // A send puts the capture in the outbox and queues it, and says nothing about delivery.
         let first: CaptureID = Identifier(uuid: UUID())
@@ -49,6 +51,11 @@ public enum WatchLinkContract {
         try await link.send(manifest(first), file: try await subject.makeFile(first))
         #expect(await counts(of: link) == WatchLinkCounts(waiting: 1, failed: 0), "A sent capture waits.")
         #expect(await subject.queueCount(first) == 1)
+        let seen = await SuiteWait.value("a held subscription to see the count change") {
+            for await counts in watching where counts.waiting == 1 { return true }
+            return false
+        }
+        #expect(seen == true, "A held subscription sees the count change.")
 
         // A finished transfer is not a delivery: the capture still waits.
         await subject.finishTransfer(first)
@@ -91,6 +98,9 @@ public enum WatchLinkContract {
         // The background task ends once nothing is pending, and says so.
         let fourth: CaptureID = Identifier(uuid: UUID())
         try await link.send(manifest(fourth), file: try await subject.makeFile(fourth))
+        // While a capture is pending, the task ends at its limit and says so. However long the
+        // machine takes, the capture is still pending, so the answer is the same.
+        #expect(await link.runBackgroundTask(limit: .milliseconds(50)) == false, "Pending at the limit.")
         let pending = Task { await link.runBackgroundTask(limit: SuiteWait.limit) }
         await subject.acknowledge(fourth)
         let emptied = await SuiteWait.value("the background task to end") { await pending.value }
