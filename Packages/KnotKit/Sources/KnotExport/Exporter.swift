@@ -216,7 +216,7 @@ public struct Exporter: Sendable {
     }
 
     /// What an export would write and what it could not, read from the store as `export(to:)`
-    /// reads it. It writes nothing, and asks for no image. A preview is true for the moment it
+    /// reads it, with each file found opened to see that it can be read. It writes nothing, and asks for no image. A preview is true for the moment it
     /// was read: the store may change before an export runs, and the report of `export(to:)`
     /// is what happened.
     public func preview() async throws(KnotError) -> ExportPreview {
@@ -226,7 +226,14 @@ public struct Exporter: Sendable {
             for segment in ExportedSegments.of(record) {
                 guard let assetID = segment.assetID else { continue }
                 switch try await locate(assetID, of: segment, in: record.note.id) {
-                case .here: preview.files += 1
+                case .here(let stored, let kind):
+                    if let reason = Self.readFailure(of: stored.url) {
+                        preview.missing.append(
+                            LeftOut(
+                                note: record.note.id, segment: segment.id, asset: assetID, kind: kind, reason: reason))
+                    } else {
+                        preview.files += 1
+                    }
                 case .leftOut(let leftOut): preview.missing.append(leftOut)
                 }
             }
@@ -358,13 +365,10 @@ public struct Exporter: Sendable {
             do {
                 data = try Data(contentsOf: stored.url, options: .mappedIfSafe)
             } catch {
-                // A file that went since it was found is not on this device; one that is still
-                // there and cannot be read is a failure of its own, and says so.
-                let gone = !FileManager.default.fileExists(atPath: stored.url.path(percentEncoded: false))
-                let reason: LeftOut.Reason = gone ? .notOnThisDevice : .unreadable
+                let reason = Self.reason(forUnreadable: stored.url)
                 report.leftOut.append(
                     LeftOut(note: note, segment: segment.id, asset: assetID, kind: kind, reason: reason))
-                return gone ? Self.notHereLine(kind, segment) : Self.unreadableLine(kind, segment)
+                return reason == .notOnThisDevice ? Self.notHereLine(kind, segment) : Self.unreadableLine(kind, segment)
             }
             let path = ExportNames.attachment(assetID, kind: kind)
             try await sink.write(data, at: path)
@@ -378,6 +382,27 @@ public struct Exporter: Sendable {
             }
             return .recording(path, duration: segment.duration)
         }
+    }
+
+    /// Why a file that was found cannot be read, or `nil` when it can. It opens the file and
+    /// reads one byte, the least that still proves it: a mode that refuses reading fails the
+    /// open, and a folder in place of the file fails the read. The preview asks this, so that
+    /// it lists what the export will leave out.
+    static func readFailure(of url: URL) -> LeftOut.Reason? {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            _ = try handle.read(upToCount: 1)
+            return nil
+        } catch {
+            return reason(forUnreadable: url)
+        }
+    }
+
+    /// The reason for a file that failed to be read: one that went since it was found is not on
+    /// this device, and one that is still there is unreadable.
+    static func reason(forUnreadable url: URL) -> LeftOut.Reason {
+        FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) ? .unreadable : .notOnThisDevice
     }
 
     /// The line of a file that is here and could not be read.
