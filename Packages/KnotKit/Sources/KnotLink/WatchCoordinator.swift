@@ -60,6 +60,8 @@ public actor WatchCoordinator {
         case kept(CaptureID, KnotError)
         /// Its manifest had no audio, so it was ended and nothing is kept.
         case endedWithoutAudio(CaptureID)
+        /// An iPhone had already acknowledged it: what was left on the Watch was removed.
+        case acknowledged(CaptureID)
     }
 
     private enum Activity {
@@ -263,6 +265,10 @@ public actor WatchCoordinator {
         let capture = recording.captureID
         guard finishing.insert(capture).inserted else { return nil }
         defer { finishing.remove(capture) }
+        if link.outbox.wasAcknowledged(capture) {
+            // An iPhone has it: what is left here goes, and nothing is converted or sent again.
+            return await removeAcknowledgedLeftovers(capture)
+        }
         if let entry = link.outbox.entry(capture), entry.hasRecording, entry.manifest != nil {
             // Already in the outbox, but perhaps by an admission whose folder sync failed: the
             // working pair goes only once the entry is known to be durable.
@@ -337,6 +343,20 @@ public actor WatchCoordinator {
             log.failure(error.about(capture: capture), "watch_recording_without_audio_not_removed")
         }
         return .endedWithoutAudio(capture)
+    }
+
+    /// Removes what is left in `Recording/` of a capture that an iPhone acknowledged, then the
+    /// marker that says so.
+    private func removeAcknowledgedLeftovers(_ capture: CaptureID) async -> StopOutcome {
+        unfinished[capture] = nil
+        await link.release(capture)
+        do {
+            try await recorder.removeWorkingFile(of: capture)
+            log.capture(capture, "watch_acknowledged_leftovers_removed")
+        } catch {
+            log.failure(error.about(capture: capture), "watch_acknowledged_leftovers_not_removed")
+        }
+        return .acknowledged(capture)
     }
 
     private func removeWorkingFile(_ capture: CaptureID) async -> StopOutcome {

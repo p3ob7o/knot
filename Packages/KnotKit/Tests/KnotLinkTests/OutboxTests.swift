@@ -120,4 +120,47 @@ import Testing
         #expect(throws: KnotError.self) { try harness.outbox.remove(manifest.captureID) }
         #expect(!FileManager.default.fileExists(atPath: harness.outbox.manifestURL(manifest.captureID).path))
     }
+    /// What a kill leaves at each point of an acknowledged capture's removal while its working
+    /// files are still in Recording/, and what the sweep then does.
+    @Test(arguments: ["after the marker", "after the manifest", "after the recording"])
+    func anAcknowledgedCapturesRemovalCutShortIsFinishedAndNeverShownAgain(_ point: String) throws {
+        let harness = LinkHarness()
+        let (manifest, url) = try harness.convertedRecording()
+        let capture = manifest.captureID
+        try harness.outbox.admit(manifest, recording: url)
+        let working = harness.locations.recordingManifest(capture)
+        try harness.files.place(try manifest.encoded(), at: working)
+
+        // The removal as remove(_:) makes it, stopped at `point`.
+        try harness.files.place(Data(), at: harness.outbox.acknowledgedURL(capture))
+        if point != "after the marker" { try FileManager.default.removeItem(at: harness.outbox.manifestURL(capture)) }
+        if point == "after the recording" {
+            try FileManager.default.removeItem(at: harness.outbox.recordingURL(capture))
+        }
+        #expect(harness.outbox.wasAcknowledged(capture))
+        #expect(harness.outbox.entry(capture) == nil, "The marker hides what is left of the entry.")
+        #expect(try harness.outbox.entries().isEmpty)
+
+        // While the working files remain, the sweep keeps the marker.
+        try harness.outbox.sweep()
+        #expect(harness.outbox.wasAcknowledged(capture))
+        #expect(!harness.outbox.holdsRecording(capture))
+        #expect(!FileManager.default.fileExists(atPath: harness.outbox.manifestURL(capture).path))
+
+        // Once recovery has removed them, the sweep forgets the capture.
+        try FileManager.default.removeItem(at: working)
+        try harness.outbox.sweep()
+        #expect(!harness.outbox.wasAcknowledged(capture))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: harness.locations.outbox.path).isEmpty)
+    }
+
+    /// The marker is written only while something of the capture is in Recording/.
+    @Test func anAcknowledgedCaptureWithNothingInRecordingLeavesNoMarker() throws {
+        let harness = LinkHarness()
+        let (manifest, url) = try harness.convertedRecording()
+        try harness.outbox.admit(manifest, recording: url)
+        try harness.outbox.remove(manifest.captureID)
+        #expect(!harness.outbox.wasAcknowledged(manifest.captureID))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: harness.locations.outbox.path).isEmpty)
+    }
 }

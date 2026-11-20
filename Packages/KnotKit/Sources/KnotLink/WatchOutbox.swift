@@ -105,10 +105,42 @@ public struct WatchOutbox: Sendable {
         }
     }
 
-    /// The capture's entry, or `nil` when its manifest is not in the outbox.
+    /// The marker that an iPhone acknowledged the capture, kept while anything of the capture
+    /// is left on the Watch (`remove(_:)`).
+    public func acknowledgedURL(_ capture: CaptureID) -> URL {
+        locations.outbox.appending(path: "\(capture).\(Self.acknowledgedExtension)", directoryHint: .notDirectory)
+    }
+
+    static let acknowledgedExtension = "acknowledged"
+
+    /// True when an iPhone acknowledged the capture and something of it was still on the Watch
+    /// when it did.
+    public func wasAcknowledged(_ capture: CaptureID) -> Bool {
+        layer.entryKind(acknowledgedURL(capture)) == .file
+    }
+
+    /// True when the capture's working files, or its converted file, are still in `Recording/`.
+    func hasWorkingFiles(_ capture: CaptureID) -> Bool {
+        [
+            locations.recordingManifest(capture), locations.recordingAudio(capture, format: .caf),
+            locations.convertedRecording(capture),
+        ].contains { layer.entryKind($0) != nil }
+    }
+
+    /// Forgets that the capture was acknowledged, once nothing of it is left on the Watch.
+    /// Forgetting what is not there is not an error.
+    public func forgetAcknowledged(_ capture: CaptureID) throws(KnotError) {
+        guard wasAcknowledged(capture), !hasWorkingFiles(capture), layer.entryKind(manifestURL(capture)) == nil,
+            layer.entryKind(recordingURL(capture)) == nil
+        else { return }
+        try files.remove(acknowledgedURL(capture))
+    }
+
+    /// The capture's entry, or `nil` when its manifest is not in the outbox, or when an iPhone
+    /// acknowledged it: such a capture's files are leftovers that `sweep()` removes.
     public func entry(_ capture: CaptureID) -> Entry? {
         let url = manifestURL(capture)
-        guard layer.entryKind(url) == .file else { return nil }
+        guard layer.entryKind(url) == .file, !wasAcknowledged(capture) else { return nil }
         let manifest = (try? layer.read(url)).flatMap { try? CaptureManifest.decode($0) }
         // A manifest whose own ID is another capture's is damaged: it is never sent under
         // either ID.
@@ -124,19 +156,39 @@ public struct WatchOutbox: Sendable {
 
     /// Removes an acknowledged capture: the manifest first, then the recording. Removing what
     /// is not there is not an error.
+    ///
+    /// When its working files are still in `Recording/`, because their removal failed after
+    /// the admission, it first places the marker that the capture was acknowledged, so that a
+    /// later launch removes them and never converts or sends the capture again. A kill at each
+    /// point leaves:
+    /// - before the marker: the entry, which is sent again and acknowledged again;
+    /// - after the marker: the marker hides the entry, recovery removes the working files and
+    ///   the sweep removes what is left of the entry, then the marker;
+    /// - with no working files, no marker: a recording left with no manifest is the sweep's.
     public func remove(_ capture: CaptureID) throws(KnotError) {
+        if hasWorkingFiles(capture), !wasAcknowledged(capture) {
+            try files.place(Data(), at: acknowledgedURL(capture))
+        }
         for url in [manifestURL(capture), recordingURL(capture)] where layer.entryKind(url) != nil {
             try files.remove(url)
         }
     }
 
-    /// Clears what a kill left: files being placed, and recordings with no manifest whose
+    /// Clears what a kill left: files being placed, what is left of acknowledged captures,
+    /// their markers once nothing else of them is left, and recordings with no manifest whose
     /// capture has nothing left in `Recording/`, which only an acknowledged capture's removal
     /// cut short leaves. Run it after the coordinator has finished the recordings of earlier
     /// launches.
     public func sweep() throws(KnotError) {
         guard layer.entryKind(locations.outbox) == .folder else { return }
         try files.removePartials(in: locations.outbox)
+        // What an acknowledged capture's removal left, then its marker once nothing of it is left.
+        for capture in try captureIDs(withExtension: Self.acknowledgedExtension) {
+            for url in [manifestURL(capture), recordingURL(capture)] where layer.entryKind(url) != nil {
+                try files.remove(url)
+            }
+            try forgetAcknowledged(capture)
+        }
         for capture in try captureIDs(withExtension: AssetKind.audio.fileExtension) {
             let orphan =
                 layer.entryKind(manifestURL(capture)) == nil

@@ -61,6 +61,8 @@ public actor OutboxLink {
     /// Recordings the coordinator keeps in `Recording/` because they have not reached the
     /// outbox: true for those that a final error kept, which count as failed.
     private var held: [CaptureID: Bool] = [:]
+    /// Every capture acknowledged in this launch.
+    private var everAcknowledged: Set<CaptureID> = []
     /// Acknowledged captures whose files are not yet all removed.
     private var acknowledged: Set<CaptureID> = []
     private var context: LinkContext?
@@ -204,6 +206,8 @@ public actor OutboxLink {
     /// after a step failed. It counts as failed when `failed`, and as waiting otherwise, until
     /// it is admitted or released.
     public func hold(_ capture: CaptureID, failed: Bool) {
+        // An acknowledged capture never becomes a waiting one.
+        guard !everAcknowledged.contains(capture), !outbox.wasAcknowledged(capture) else { return }
         held[capture] = failed
         changed()
     }
@@ -336,6 +340,8 @@ public actor OutboxLink {
         // Reported once: a repeat that comes while its files are still being removed is not
         // news to a subscriber.
         let isNew = inOutbox && acknowledged.insert(capture).inserted
+        everAcknowledged.insert(capture)
+        held[capture] = nil
         // A transfer of it still under way would only deliver it again.
         for file in transport.outstandingFiles() where file.captureID == capture {
             transport.cancelFile(captureID: capture, attempt: file.attempt)
