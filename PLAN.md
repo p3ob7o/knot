@@ -476,7 +476,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
 | G3 | After wave 1 | One spike sitting: SP-1 has 12 rows, and the SP-2 spike app runs its 30 transfers itself | 45 |
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
-| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check | 15 |
+| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its consent dialog would fail the check for a reason that has nothing to do with the app group | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
 | G3 | With SP-4 | Sign two devices into iCloud for the second stage of the sync spike, once his signing is set up | 10 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |

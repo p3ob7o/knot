@@ -263,7 +263,7 @@ The panel floats above other windows, including full-screen apps, on the display
 | `knot title <note> <text>` | Sets a title. `--clear` removes it. |
 | `knot move <segment> --from <note>` | Moves a segment out of that note into a new note of its own. `--back` returns it. |
 | `knot delete <id>`, `knot restore <id>` | Deletes a note or segment, and undoes that. `restore` also brings back text that `edit` replaced. |
-| `knot export <folder>` | Exports everything. |
+| `knot export` | Exports everything. |
 | `knot status` | Shows the store, how current it is, the open window and the versions in use. |
 | `knot mcp` | Runs the MCP server on standard input and output. |
 
@@ -278,7 +278,9 @@ Rules:
 - **Polling.** `--since` is a filter on time. An agent that polls uses `knot changes`, which also reports a late Watch recording and a deletion. A page is read in one go and ordered by the counter, so a note that changes again simply appears again, and nothing is skipped. A deletion stays reportable after the purge. A cursor taken before a restore of the store is refused as a conflict, with the instruction to read again from the start.
 - **Is a note finished.** Each note says whether it is settled: its window has closed, and nothing is still being transcribed, cleaned or downloaded. A segment whose step failed waits for a person and not for work, so it does not keep its note unsettled. Neither does a segment that shows "Kept, no text", which is a final state on this device (section 5). A settled note can still gain a late capture, or text that another device makes, and then it appears in `knot changes` again. Settling by time alone writes nothing, so an unsettled note carries the time at which it will settle if nothing else happens, or no time while work still runs, and an agent reads it again then. Each segment carries its state, in the six names of section 5 or as made by a newer Knot, where its text came from and its revision.
 - **Is the store current.** Every result says whether Knot is running, whether sync is on, and when it last synced. Text output adds one line on standard error when the store may be behind. That is information, never an error.
-- **Export.** The command does not download. If recordings or drawings are still on another device, it writes nothing and says so. `--skip-missing` exports the rest, with a list of what is missing.
+- **Export.** The command does not download. If recordings or drawings are still on another device, it writes nothing and says so. `--skip-missing` exports the rest, with a list of what is missing. The tool cannot write into a folder named on the command line, so `knot export` writes to standard output, as an archive or one stream, or into a folder in Knot's app group container that it names. SP-3's report chooses which.
+- **Installing.** Command-line access in Settings installs the `knot` command as a shell script that runs the tool inside the app, not as a symbolic link: in a folder you pick, or by one line you run. WP-34 chooses which of the two, with the owner.
+- **MCP clients.** An MCP client that is itself a sandboxed app cannot start the tool. The Settings row says so, and gives the tool's absolute path for MCP clients.
 - **Errors.** Every error says what failed, the fix, whether a retry is safe and what was written, under a stable code. With `--json` it is one object on standard error. Exit codes: 0 done, 1 unexpected, 2 usage, 3 ID not found or ambiguous, 4 access off, 5 conflict, 6 store busy, 7 the store needs the owner, 8 incomplete.
 - **Compatibility.** JSON output carries a schema number that changes only on a breaking change. A renamed flag or tool keeps working for one release, with a warning. A code never changes its meaning.
 - A segment written this way is marked as coming from the command line or from MCP.
@@ -294,7 +296,7 @@ This is the complete list.
 - Clean up transcripts, on or off. When cleanup is unavailable on the device, the row says why.
 - English variant used for transcription. It follows the device region by default and falls back to US English.
 - iCloud sync, on or off, with its status.
-- Mac only: the hotkey, launch at login, and command-line access, which installs the `knot` command.
+- Mac only: the hotkey, launch at login, and command-line access, which installs the `knot` command as a shell script that runs the tool inside the app, in a folder you pick or by one line you run (section 10).
 - Export all notes.
 - Recently deleted.
 - About: version, licence and source link. In test builds, a diagnostics export that holds no note text, an export of the store as it is, and a restore of a kept copy.
