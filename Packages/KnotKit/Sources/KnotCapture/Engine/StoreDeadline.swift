@@ -20,8 +20,11 @@ public struct StoreDeadline: Sendable {
         StoreDeadline { try? await Task.sleep(for: duration) }
     }
 
-    /// The app's: 100 ms.
-    public static let standard = StoreDeadline.after(.milliseconds(100))
+    /// How long the store has in the app (docs/architecture.md §6, rule 6).
+    public static let standardLimit: Duration = .milliseconds(100)
+
+    /// The app's: `standardLimit`.
+    public static let standard = StoreDeadline.after(standardLimit)
 }
 
 /// What one store call came to, as far as the engine waits for it.

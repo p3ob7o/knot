@@ -206,4 +206,14 @@ import Testing
         #expect(fell.noteID == nil)
         #expect(try await r.engine.end(begun.captureID).noteID == nil)
     }
+
+    /// Finding 16. The store has 100 ms to answer before a capture takes `Inbox/`
+    /// (docs/architecture.md §6, rule 6), and the standard deadline waits that long.
+    @Test func standardDeadlineIsAHundredMilliseconds() async {
+        #expect(StoreDeadline.standardLimit == .milliseconds(100))
+        let clock = ContinuousClock()
+        let started = clock.now
+        await StoreDeadline.standard.wait()
+        #expect(clock.now - started >= .milliseconds(100))
+    }
 }
