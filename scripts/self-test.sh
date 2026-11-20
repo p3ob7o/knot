@@ -384,6 +384,61 @@ else
     pkill -KILL -f "$scratch/tidy-tool" || true
 fi
 
+# Every start the scripts wait for has a limit, shaped like its call site: a run of hosted
+# tests (knot_run_limited), a simctl call (knot_sim_call) and the Mac app's start
+# (knot_start_app). For each, a stub that hangs ends at a short limit with its message, a
+# stub that passes is not slowed, and a status other than zero still fails.
+lim="$scratch/limits"
+mkdir -p "$lim"
+printf '#!/bin/sh\nsleep 30\n' >"$lim/hangs"
+printf '#!/bin/sh\nexit 0\n' >"$lim/passes"
+printf '#!/bin/sh\nexit 65\n' >"$lim/fails"
+printf '#!/bin/sh\nexit 1\n' >"$lim/quits"
+printf '#!/bin/sh\n' >"$lim/no-window"
+printf '#!/bin/sh\necho "$1 layer 0 320x240"\n' >"$lim/a-window"
+chmod +x "$lim"/*
+# timed <name> <command…>: runs the command, keeping its status, output and seconds.
+timed() {
+    local name=$1 start
+    shift
+    start=$(knot_now)
+    eval "${name}_status=0"
+    "$@" >"$lim/$name.out" 2>&1 || eval "${name}_status=\$?"
+    eval "${name}_seconds=$(($(knot_now) - start))"
+}
+timed hosted_hang knot_run_limited "The hosted iOS tests" 1 "$lim/hangs"
+timed hosted_pass knot_run_limited "The hosted iOS tests" 30 "$lim/passes"
+timed hosted_fail knot_run_limited "The hosted iOS tests" 30 "$lim/fails"
+if [[ $hosted_hang_status == 124 && "$(cat "$lim/hosted_hang.out")" == *"system dialog"* && $hosted_hang_seconds -lt 6 &&
+    $hosted_pass_status == 0 && $hosted_pass_seconds -lt 2 && $hosted_fail_status == 65 ]]; then
+    pass "a run of hosted tests ends at its limit naming a dialog, is not slowed when it passes, and keeps its status"
+else
+    fail "hosted tests: hang $hosted_hang_status in ${hosted_hang_seconds}s, pass $hosted_pass_status in ${hosted_pass_seconds}s, fail $hosted_fail_status: $(cat "$lim/hosted_hang.out")"
+fi
+timed sim_hang knot_sim_call 1 launch set-iphone "$lim/hangs"
+timed sim_pass knot_sim_call 30 launch set-iphone "$lim/passes"
+timed sim_fail knot_sim_call 30 launch set-iphone "$lim/fails"
+if [[ $sim_hang_status == 1 && "$(cat "$lim/sim_hang.out")" == *"set-iphone did not end within 1s"* && $sim_hang_seconds -lt 6 &&
+    $sim_pass_status == 0 && $sim_pass_seconds -lt 2 &&
+    $sim_fail_status == 1 && "$(cat "$lim/sim_fail.out")" == *"set-iphone failed with status 65"* ]]; then
+    pass "a simctl call ends at its limit naming the simulator, is not slowed when it passes, and fails on its status"
+else
+    fail "simctl calls: hang $sim_hang_status in ${sim_hang_seconds}s, pass $sim_pass_status in ${sim_pass_seconds}s, fail $sim_fail_status: $(cat "$lim/sim_hang.out" "$lim/sim_fail.out")"
+fi
+timed app_hang knot_start_app 2 "$lim/hangs" "$lim/no-window"
+hang_left="$(pgrep -f "$lim/hangs" || true)"
+timed app_pass knot_start_app 30 "$lim/hangs" "$lim/a-window"
+pass_left="$(pgrep -f "$lim/hangs" || true)"
+timed app_fail knot_start_app 30 "$lim/quits" "$lim/no-window"
+if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 8 &&
+    -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 4 && -z $pass_left &&
+    $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* ]]; then
+    pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, and leaves nothing running"
+else
+    fail "the app's start: hang $app_hang_status in ${app_hang_seconds}s (left: $hang_left), window $app_pass_status in ${app_pass_seconds}s (left: $pass_left), quit $app_fail_status: $(cat "$lim/app_hang.out" "$lim/app_fail.out")"
+fi
+pkill -KILL -f "$lim/hangs" 2>/dev/null || true
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
