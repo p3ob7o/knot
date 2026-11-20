@@ -55,6 +55,10 @@ step_one() {
     printf '%s\n' "$(swift test)"
     # expect: unbounded
     knot_fail "code" "$(xcodebuild -version)" "fix" "safe" "nothing"
+    # expect: unbounded
+    xcodebuild -scheme knot_limit_tests build
+    # expect: unbounded
+    swift test --filter knot_run_limited
 }
 mywrap() {
     # expect: nothing

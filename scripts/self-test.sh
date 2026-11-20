@@ -524,8 +524,9 @@ with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" || true)"
 release="$(knot_fakes_in "$fk/release.dylib" || true)"
 old_scan="$({ nm -a "$fk/with-fakes.dylib"; strings -a "$fk/with-fakes.dylib"; } 2>/dev/null | grep -c -e KnotFakes || true)"
 missing=""
-for fake in FakeLinkSystem FakeNested FakePrivate FakeFilePrivate FakeLocal FakeInExtension; do
-    [[ $with_fakes == *"$fake"* ]] || missing="$missing $fake"
+for fake in "KnotLink.FakeLinkSystem" "KnotLink.Outer.FakeNested" "KnotLink.(FakePrivate" "KnotLink.(FakeFilePrivate" \
+    "FakeLocal #1 in KnotLink" "(extension in KnotLink):Swift.Array.FakeInExtension"; do
+    [[ $with_fakes == *"$fake"* ]] || missing="$missing [$fake]"
 done
 if [[ $built == 2 && -z $missing && -z $release && $old_scan == 0 ]]; then
     pass "the release scan finds a fake in another module by its name, public, nested, private, local or in an extension"
@@ -540,9 +541,9 @@ fi
 # complete, stamped set is left as it is. The fixtures here are made up.
 fa="$scratch/fixtures-audio/Fixtures"
 mkdir -p "$fa/generated/audio"
-committed_manifest() { # committed_manifest <text checksum> <voice> <rate>
+committed_manifest() { # committed_manifest <text checksum> <voice> <rate> [<clip a's own voice>]
     printf '{"generatorVersion": 2, "speechRate": %s, "voices": [{"name": "%s"}], "generatedAudio": "generated/manifest.json", "audio": [{"file": "generated/audio/a.wav", "referenceSha256": "%s", "voice": "%s", "about": "one"}, {"file": "generated/audio/b.wav", "referenceSha256": "0", "voice": "%s"}]}\n' \
-        "$3" "$2" "$1" "$2" "$2" >"$fa/manifest.json"
+        "$3" "$2" "$1" "${4:-$2}" "$2" >"$fa/manifest.json"
 }
 audio_state() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" >/dev/null 2>&1 && echo present || echo missing; }
 stamp() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" --write-stamp >/dev/null 2>&1; }
@@ -565,27 +566,52 @@ committed_manifest aaa Reed 200
 states="$states $(audio_state)"
 committed_manifest aaa Reed 175
 states="$states $(audio_state)"
+committed_manifest aaa Reed 175 Flo
+states="$states $(audio_state)"
+committed_manifest aaa Reed 175
 write_local 1
 states="$states $(audio_state)"
 write_local 2
 printf 'changed\n' >"$fa/generated/audio/b.wav"
 states="$states $(audio_state)"
-if [[ $states == "missing missing present missing missing missing present missing missing" ]]; then
-    pass "the fixtures step finds this tree's audio missing, unstamped, stale by text, voice or rate, of another version or changed"
+if [[ $states == "missing missing present missing missing missing present missing missing missing" ]]; then
+    pass "the fixtures step finds this tree's audio missing, unstamped, stale by text, voice, a clip's voice or rate, of another version or changed"
 else
-    fail "the local audio's state, with none, unstamped, stamped, a new text, voice and rate, the same again, another version and a changed clip: $states"
+    fail "the local audio's state, with none, unstamped, stamped, a new text, voice and rate, the same again, a clip's own voice, another version and a changed clip: $states"
+fi
+
+# The stamp is written only after the audio is spoken: a generator that fails leaves none,
+# so the next run speaks again. A scratch tree holds the committed manifest and a generator
+# that fails; the fixtures step's own path runs on it.
+st="$scratch/stamp-tree"
+mkdir -p "$st/Fixtures/tools"
+cp "$KNOT_ROOT/Fixtures/manifest.json" "$st/Fixtures/"
+cp "$KNOT_ROOT/.xcode-version" "$st/"
+printf '#!/bin/sh\necho "the voices are missing" >&2\nexit 2\n' >"$st/Fixtures/tools/generate.sh"
+chmod +x "$st/Fixtures/tools/generate.sh"
+stamp_status=0
+env -u KNOT_TREE KNOT_TREE="$st" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio >"$scratch/stamp-tree.out" 2>&1 || stamp_status=$?
+if [[ $stamp_status != 0 && ! -e $st/Fixtures/generated/verify-stamp.txt ]]; then
+    pass "the audio's stamp is written only after the audio is spoken: a generator that fails leaves none"
+else
+    fail "the fixtures step with a generator that fails: status $stamp_status, stamp $(ls "$st/Fixtures/generated" 2>&1 | tr '\n' ' ')"
 fi
 
 # A limit is wall-clock time, not a count of polls: with each poll's sleep slowed to 0.3 s,
 # as a loaded Mac slows it, a 2-second limit still ends near 2 seconds. A limit under a
 # minute is stated in seconds.
+precise_now() { python3 -I -c 'import time; print("%.2f" % time.time())'; }
+slow_started="$(precise_now)"
 timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 2 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+slow_elapsed="$(python3 -I -c 'import sys; print("%.1f" % (float(sys.argv[2]) - float(sys.argv[1])))' "$slow_started" "$(precise_now)")"
 timed short_limit env KNOT_SWIFT_TEST_LIMIT=1 bash -c 'source "$1"; knot_swift_test_limited package-test "$2"' _ \
     "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
-if [[ $slow_polls_status == 124 && $slow_polls_seconds -le 4 && "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
-    pass "a limit is wall-clock time, however slow each poll, and a short one is stated in seconds"
+# It ends neither late nor early: at least the limit, as the timer measures it.
+if [[ $slow_polls_status == 124 && $slow_polls_seconds -le 4 && "${slow_elapsed%.*}${slow_elapsed#*.}" -ge 19 &&
+    "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
+    pass "a limit is wall-clock time, neither early nor late however slow each poll, and a short one is stated in seconds"
 else
-    fail "a 2 s limit with slow polls ended after ${slow_polls_seconds}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
+    fail "a 2 s limit with slow polls ended after ${slow_elapsed}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
