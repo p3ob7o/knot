@@ -172,7 +172,10 @@ public struct WatchOutbox: Sendable {
     /// - before the marker: the entry, which is sent again and acknowledged again;
     /// - after the marker: the marker hides the entry, recovery removes the working files and
     ///   the sweep removes what is left of the entry, then the marker;
-    /// - with no working files, no marker: a recording left with no manifest is the sweep's.
+    /// - with no working files, no marker: a recording left with no manifest is the sweep's;
+    /// - after recovery removed the leftovers, or in the sweep between the entry's removal and
+    ///   the marker's: the marker alone, which hides nothing, counts nothing, sends nothing, and
+    ///   the next sweep removes.
     public func remove(_ capture: CaptureID) throws(KnotError) {
         if hasWorkingFiles(capture), !wasAcknowledged(capture) {
             try files.place(Data(), at: acknowledgedURL(capture))

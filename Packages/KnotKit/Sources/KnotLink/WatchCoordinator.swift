@@ -370,8 +370,9 @@ public actor WatchCoordinator {
         return .endedWithoutAudio(capture)
     }
 
-    /// Removes what is left in `Recording/` of a capture that an iPhone acknowledged, then the
-    /// marker that says so.
+    /// Removes what is left in `Recording/` of a capture that an iPhone acknowledged. The marker
+    /// that says so stays: the outbox's sweep removes it once nothing else of the capture is left,
+    /// which at launch follows recovery.
     private func removeAcknowledgedLeftovers(_ capture: CaptureID) async -> StopOutcome {
         unfinished[capture] = nil
         written[capture] = nil

@@ -163,4 +163,20 @@ import Testing
         #expect(!harness.outbox.wasAcknowledged(manifest.captureID))
         #expect(try FileManager.default.contentsOfDirectory(atPath: harness.locations.outbox.path).isEmpty)
     }
+    /// The fourth state a kill can leave: the marker alone, after recovery removed the
+    /// leftovers or in the sweep between the entry and the marker. It hides nothing, counts
+    /// nothing and is removed by the next sweep.
+    @Test func aMarkerLeftAloneIsHarmlessAndTheNextSweepRemovesIt() async throws {
+        let harness = LinkHarness()
+        let capture: CaptureID = harness.ids.make()
+        try harness.files.place(Data(), at: harness.outbox.acknowledgedURL(capture))
+        #expect(try harness.outbox.entries().isEmpty)
+        let (link, _) = harness.launchWatch()
+        await link.resume()
+        await harness.settle(link)
+        #expect(await link.currentCounts() == (waiting: 0, failed: 0))
+        #expect(harness.system.timesQueued(capture) == 0)
+        try harness.outbox.sweep()
+        #expect(!harness.outbox.wasAcknowledged(capture))
+    }
 }
