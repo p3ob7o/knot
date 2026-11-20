@@ -100,6 +100,7 @@ public enum NoteStoreContract {
         Check(name: "late-start", run: aLateStartDoesNotEndTheCaptureBeingMadeNow),
         Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
         Check(name: "failed-recording-retry", run: aFailedRecordingsRetryIsStored),
+        Check(name: "blank-repeat", run: aRepeatOfABlankCaptureChangesNothing),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -2039,6 +2040,27 @@ public enum NoteStoreContract {
                 try await h.store.jobs(for: SegmentID(start.id)).map(\.id) == [.transcribe(of: SegmentID(start.id))],
                 "The recording stored \(how) has its transcribe job.")
         }
+    }
+
+    /// Content is judged after the emptiness rule: empty against empty is the same content. A
+    /// repeat of a blank capture returns the first result, and the same blank inbox item
+    /// ingested twice changes nothing, so its file can go (finding 66).
+    public static func aRepeatOfABlankCaptureChangesNothing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let tool = h.tool("  \n", at: 0)
+        let first = try await h.store.record(tool)
+        #expect(first.outcome == .discardedEmpty)
+        #expect(try await h.store.record(tool) == first, "A repeat of a blank capture returns the first result.")
+
+        var item = h.inboxText("   ", at: 1, revision: 2)
+        item.body = .text("   ")
+        let ingested = try await h.store.ingest(item)
+        #expect(ingested.receipt.outcome == .discardedEmpty)
+        let cursor = try await h.store.cursor()
+        let again = try await h.store.ingest(item)
+        #expect(!again.applied && again.storedRevision == 2, "The same blank item ingested again changes nothing.")
+        #expect(again.receipt == ingested.receipt)
+        #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty)
     }
 
     // MARK: Reading
