@@ -59,4 +59,30 @@ import Testing
         #expect(try await r.notes.capture(id)?.outcome == .open)
         #expect(try await r.notes.segment(SegmentID(id))?.text == "g")
     }
+
+    /// Finding 2. A checkpoint the store did not apply, because it holds a higher revision of
+    /// other content, is not durable: the engine saves the text again above the stored
+    /// revision, and acknowledges it only then.
+    @Test func checkpointBelowTheStoredRevisionIsSavedAgainAboveIt() async throws {
+        let r = Rig()
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first"))
+        _ = try await r.notes.checkpoint(CaptureCheckpoint(captureID: a.captureID, text: "other", revision: 8))
+        let acknowledged = try await r.engine.update(a.captureID, with: .text("mine"))
+        #expect(acknowledged.path == .store)
+        #expect(acknowledged.durableRevision == 9)
+        #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "mine")
+        #expect(try await r.notes.capture(a.captureID)?.revision == 9)
+        // The engine's revisions go on from there.
+        #expect(try await r.engine.update(a.captureID, with: .text("mine too")).durableRevision == 10)
+    }
+
+    /// An end with nothing new keeps the higher revision the store holds (the second opinion's
+    /// `lowerRevisionEndKeepsWinningText`, which held already).
+    @Test func endWithNothingNewKeepsTheStoredText() async throws {
+        let r = Rig()
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "old"))
+        _ = try await r.notes.checkpoint(CaptureCheckpoint(captureID: a.captureID, text: "winner", revision: 9))
+        _ = try await r.engine.end(a.captureID)
+        #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "winner")
+    }
 }

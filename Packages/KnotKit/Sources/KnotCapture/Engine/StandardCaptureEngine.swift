@@ -249,16 +249,21 @@ public actor StandardCaptureEngine: CaptureEngine {
                     saved = false
                 }
             } else {
-                let checkpoint = CaptureCheckpoint(captureID: id, text: entry.text, revision: entry.revision)
-                let answer = await deadline.race { [notes] () async throws(KnotError) in
-                    try await notes.checkpoint(checkpoint)
+                var answer = await checkpoint(id)
+                if case .answered(let result) = answer, !result.applied,
+                    result.storedRevision >= (entries[id]?.revision ?? 0)
+                {
+                    // The store holds a higher revision of other content, so this text is not
+                    // durable there: it is saved again above the stored revision.
+                    entries[id]?.revision = result.storedRevision + 1
+                    answer = await checkpoint(id)
                 }
-                if case .answered(let result) = answer, result.applied || result.storedRevision >= entry.revision {
+                if case .answered(let result) = answer, result.applied {
                     saved = true
                 } else if case .answered = answer {
-                    // The store kept something newer than this save, which it never was sent:
-                    // the store path no longer holds this capture's content.
-                    entries[id]?.path = .inbox(KnotError.illegalTransition.code)
+                    // The store did not take the text: it goes to `Inbox/`, and is acknowledged
+                    // only once it is there.
+                    entries[id]?.path = .inbox(KnotError.revisionStale.code)
                     saved = false
                 } else {
                     fallBack(id, answer)
@@ -266,7 +271,8 @@ public actor StandardCaptureEngine: CaptureEngine {
                 }
             }
             if saved {
-                entries[id]?.durableRevision = entry.revision
+                let revision = entries[id]?.revision ?? entry.revision
+                entries[id]?.durableRevision = revision
                 if ending != nil { log.capture(id, "capture_ended", .flag("store_path", true)) }
                 return
             }
@@ -278,6 +284,13 @@ public actor StandardCaptureEngine: CaptureEngine {
             log.capture(id, "capture_ended", .flag("store_path", false))
             runIngest(id)
         }
+    }
+
+    /// Sends a typed capture's latest text, at its latest revision, as a checkpoint.
+    private func checkpoint(_ id: CaptureID) async -> StoreAnswer<CheckpointResult> {
+        let checkpoint = CaptureCheckpoint(
+            captureID: id, text: entries[id]?.text ?? "", revision: entries[id]?.revision ?? 0)
+        return await deadline.race { [notes] () async throws(KnotError) in try await notes.checkpoint(checkpoint) }
     }
 
     /// Writes a typed capture's item in `Inbox/`. Throws when it did not reach the drive; the
