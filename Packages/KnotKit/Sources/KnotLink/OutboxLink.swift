@@ -53,9 +53,9 @@ public actor OutboxLink {
     private var session: LinkSessionState = .inactive
     private var hasReconciled = false
     private var queued: [CaptureID: (attempt: LinkAttempt, at: Date)] = [:]
-    /// For each capture, the last attempt that a resume found gone from the session before its
-    /// end arrived.
-    private var lostEnds: [CaptureID: LinkAttempt] = [:]
+    /// For each capture, every attempt that a resume found gone from the session before its end
+    /// arrived, kept until the capture is acknowledged, fails, or is sent again.
+    private var lostEnds: [CaptureID: Set<LinkAttempt>] = [:]
     /// This launch's own ID, which every attempt it queues carries, and how many it has queued.
     private let launch = UUID()
     private var queuedInLaunch = 0
@@ -348,10 +348,10 @@ public actor OutboxLink {
         // An end of an earlier attempt, or of a transfer this launch never knew, changes
         // nothing: the capture is queued again on the next trigger if it needs to be.
         guard queued[capture]?.attempt == attempt else {
-            if lostEnds[capture] == attempt, failure?.handling == .failure {
+            if lostEnds[capture]?.contains(attempt) == true, failure?.handling == .failure {
                 // The end of a transfer that a resume took for lost, after the capture was
-                // queued again: a file missing for good is no less missing for that. The
-                // transfer queued in its place is cancelled, and the capture fails.
+                // queued again, once or more: a file missing for good is no less missing for
+                // that. The transfer queued in its place is cancelled, and the capture fails.
                 lostEnds[capture] = nil
                 if let current = queued[capture] {
                     transport.cancelFile(captureID: capture, attempt: current.attempt)
@@ -404,6 +404,7 @@ public actor OutboxLink {
             transport.cancelFile(captureID: capture, attempt: file.attempt)
         }
         queued[capture] = nil
+        lostEnds[capture] = nil
         unreadable.remove(capture)
         removeAcknowledged()
         if isNew {
@@ -445,7 +446,7 @@ public actor OutboxLink {
             // Its end was lost, or has not arrived yet: it waits, and is queued again below.
             // Its attempt is kept, so that an end that was only late still counts if it
             // reports a file missing for good.
-            lostEnds[capture] = entry.attempt
+            lostEnds[capture, default: []].insert(entry.attempt)
             queued[capture] = nil
         }
         for (capture, attempt) in outstanding {

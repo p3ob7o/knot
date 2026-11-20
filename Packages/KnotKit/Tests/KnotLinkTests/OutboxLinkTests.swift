@@ -308,6 +308,30 @@ import Testing
         #expect(harness.outstanding(capture).isEmpty, "The transfer queued in its place is cancelled.")
     }
 
+    /// Two resumes in a row before the link hears either end: the first gives up A and queues
+    /// B, B ends with a deferral, and the second gives up B and queues C. A's end then reports a
+    /// file missing for good, and the capture fails: the link remembers every attempt it gave up.
+    @Test func aLateFailureForGoodStillFailsTheCaptureAfterTwoResumes() async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        harness.system.finish(capture, as: .fails(.outboxFileMissing))  // A
+        await link.resume()
+        await harness.settle(link)
+        try #require(harness.outstanding(capture).count == 1)
+        harness.system.finish(capture, as: .fails(.counterpartFull))  // B
+        await link.resume()
+        await harness.settle(link)
+        try #require(harness.outstanding(capture).count == 1)  // C
+
+        harness.system.releaseHeld()
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .failed, "A's end reported the file missing for good.")
+        #expect(harness.outstanding(capture).isEmpty, "The transfer queued in A's place is cancelled.")
+    }
+
     /// An end of a transfer that a resume took for lost, without a failure for good, changes
     /// nothing: the capture's new transfer stands.
     @Test(arguments: [LinkFailure?.none, .deliveryFailed, .counterpartFull])
