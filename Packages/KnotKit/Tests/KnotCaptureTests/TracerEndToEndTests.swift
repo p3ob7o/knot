@@ -8,12 +8,15 @@ import Testing
 /// The tracer's end-to-end test (docs/plan/WP-05.md). It stays WP-05's: a later package that
 /// must change it asks the orchestrator.
 @Suite struct TracerEndToEndTests {
-    /// A fixture recording and a typed capture go through the engine, the queue, the
+    /// A recording the test makes and a typed capture go through the engine, the queue, the
     /// in-memory `NoteStore` and the scripted `Recorder`, `Transcriber` and `Cleaner`, and every
-    /// assertion reads the stream page that `NoteStore` publishes.
+    /// assertion reads the stream page that `NoteStore` publishes. The scripted parts need the
+    /// recording as frames, not speech, so it takes nothing from `Fixtures/generated/`, which
+    /// a fresh checkout and the hosted runner lack; its transcript is the committed
+    /// `Fixtures/audio/canary.txt`, whose made-up word must reach no log line.
     @Test("tracer-end-to-end-typed-and-recording", .tags(.named))
     func typedAndRecording() async throws {
-        let audio = try Data(contentsOf: try FixtureFiles.url("generated/audio/canary.wav"))
+        let audio = Self.recording(seconds: 2)
         let spoken = try String(contentsOf: try FixtureFiles.url("audio/canary.txt"), encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let rig = Rig(audio: audio, runBudget: .seconds(2))
@@ -109,5 +112,37 @@ import Testing
             #expect(!line.contains("stamps"))
         }
         #expect(!rig.logs.lines.isEmpty)
+    }
+}
+
+extension TracerEndToEndTests {
+    /// A synthetic recording in the format of the fixtures' audio: a WAV file of mono 16-bit
+    /// PCM at 16 kHz, holding a quiet tone.
+    static func recording(seconds: Int) -> Data {
+        let sampleRate: UInt32 = 16_000
+        let frames = Int(sampleRate) * seconds
+        var samples = Data(capacity: frames * 2)
+        for frame in 0..<frames {
+            let value = Int16(3_000 * sin(2 * Double.pi * 440 * Double(frame) / Double(sampleRate)))
+            withUnsafeBytes(of: value.littleEndian) { samples.append(contentsOf: $0) }
+        }
+        var file = Data()
+        func append<T: FixedWidthInteger>(_ value: T) {
+            withUnsafeBytes(of: value.littleEndian) { file.append(contentsOf: $0) }
+        }
+        file.append(contentsOf: Array("RIFF".utf8))
+        append(UInt32(36 + samples.count))
+        file.append(contentsOf: Array("WAVEfmt ".utf8))
+        append(UInt32(16))
+        append(UInt16(1))  // PCM
+        append(UInt16(1))  // mono
+        append(sampleRate)
+        append(sampleRate * 2)  // bytes a second
+        append(UInt16(2))  // bytes a frame
+        append(UInt16(16))  // bits a sample
+        file.append(contentsOf: Array("data".utf8))
+        append(UInt32(samples.count))
+        file.append(samples)
+        return file
     }
 }
