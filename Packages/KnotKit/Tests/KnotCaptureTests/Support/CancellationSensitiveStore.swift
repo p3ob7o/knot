@@ -119,9 +119,9 @@ struct CancellationSensitiveStore: NoteStore {
         try check()
         return try await store.applyCleanup(result, to: segment)
     }
-    func saveJob(_ job: Job) async throws(KnotError) {
+    func saveJob(_ job: Job) async throws(KnotError) -> Job {
         try check()
-        try await store.saveJob(job)
+        return try await store.saveJob(job)
     }
     func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] {
         try check()

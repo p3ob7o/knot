@@ -95,8 +95,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
             job.state == .running, !runningHere.contains(job.id),
             let next = try? Self.reduce(job, .foundRunningAtLaunch)
         else { return }
-        try await notes.saveJob(next)
-        await publish(job.id, of: job.segmentID)
+        broadcast.send(try await notes.saveJob(next))
         if case .failed(let code) = next.state {
             await moveSegment(job.segmentID, .stepFailed(code))
         } else {
@@ -242,7 +241,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private func transcribe(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
         defer { runningHere.remove(queued.id) }
-        guard var job = try await start(queued, step: .transcribe) else { return }
+        var job = try await start(queued)
         await moveSegment(segment, .startTranscribing)
         do throws(KnotError) {
             guard let read = try await notes.segment(segment), let assetID = read.assetID,
@@ -276,7 +275,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private func clean(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
         defer { runningHere.remove(queued.id) }
-        guard var job = try await start(queued, step: .clean) else { return }
+        var job = try await start(queued)
         await moveSegment(segment, .startCleaning)
         let applied: CleanupApplied
         do throws(KnotError) {
@@ -295,40 +294,31 @@ public actor StandardProcessingQueue: ProcessingQueue {
         let done = job
         let notes = self.notes
         do throws(KnotError) {
-            try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(done) }
+            broadcast.send(
+                try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(done) })
         } catch {
             try await stepFailed(job, error, step: .clean)
             return
         }
-        await publish(job.id, of: segment)
         await moveSegment(segment, applied.textReplaced ? .cleaned : .keepRawTranscript)
         log.capture(Self.capture(of: segment), "cleaned", .job(job.id), .flag("replaced", applied.textReplaced))
     }
 
     // MARK: Jobs
 
-    /// Marks a job running, and returns it as the store holds it now.
-    /// Marks a job running, and returns it as the store holds it now. When the store saved it
-    /// and will not say what it holds, the job is never given a guessed revision: the step
-    /// takes its way out, which reads the job again, and `start` returns `nil`.
-    private func start(_ job: Job, step: JobKind) async throws(KnotError) -> Job? {
+    /// Marks a job running, and returns it as the store holds it now: the store's answer to
+    /// the save, whose revision is never worked out here.
+    private func start(_ job: Job) async throws(KnotError) -> Job {
         let running = try Self.reduce(job, .start)
         // This process's before the save, so that a `resume()` that runs as the save returns
         // does not take it for a death.
         runningHere.insert(job.id)
+        let stored: Job
         do throws(KnotError) {
-            try await notes.saveJob(running)
+            stored = try await notes.saveJob(running)
         } catch {
             runningHere.remove(job.id)
             throw error
-        }
-        // Saved as running: from here every way out of the step leaves it not running.
-        let stored: Job
-        do throws(KnotError) {
-            stored = try await reread(running)
-        } catch {
-            try await stepFailed(running, error, step: step, readRequired: true)
-            return nil
         }
         broadcast.send(stored)
         return stored
@@ -336,28 +326,22 @@ public actor StandardProcessingQueue: ProcessingQueue {
 
     /// A step that threw: a yield, a deferral, a final error or an attempt, each as
     /// `JobMachine` says, with the segment's state to match. A yield ends the drain.
-    /// - Parameter readRequired: `job` is not as the store last held it, so the job must be read
-    ///   again before anything is saved: a revision is never guessed.
-    private func stepFailed(_ job: Job, _ error: KnotError, step: JobKind, readRequired: Bool = false)
-        async throws(KnotError)
-    {
+    private func stepFailed(_ job: Job, _ error: KnotError, step: JobKind) async throws(KnotError) {
         // The step's way out is written outside the task around it, which a yield cancelled: a
         // job still marked running then means only that the process died (§4).
         let notes = self.notes
+        // Read first: a run saved by `appendTranscript` moved the job on since the queue last held
+        // it. Without an answer, the job as the store last returned it stands.
         let read = try? await outsideCancellation { () async throws(KnotError) in
             try await notes.jobs(for: job.segmentID).first { $0.id == job.id }
         }
-        if readRequired, read == nil {
-            log.failure(
-                error.with(.init(captureID: Self.capture(of: job.segmentID), segmentID: job.segmentID, jobID: job.id)),
-                "job_left_running")
-            throw error
-        }
         let current = read ?? job
+        // A job the store already holds as not running, such as one the last run finished, has
+        // nothing left to save.
+        guard current.state == .running else { return }
         let retryAt = error.isDeferral ? error.context.retryAt : clock.now().addingTimeInterval(backoff(current))
         let next = try Self.reduce(current, .stepFailed(error, retryAt: retryAt))
-        try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(next) }
-        await publish(job.id, of: job.segmentID)
+        broadcast.send(try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(next) })
         await moveSegment(job.segmentID, segmentEvent(after: error, job: next, step: step))
         log.failure(
             error.with(.init(captureID: Self.capture(of: job.segmentID), segmentID: job.segmentID, jobID: job.id)),
@@ -388,9 +372,8 @@ public actor StandardProcessingQueue: ProcessingQueue {
         guard !(try await notes.jobs(for: segment)).contains(where: { $0.kind == .clean }),
             let read = try await notes.segment(segment), read.state == .voice(.transcribed)
         else { return }
-        let job = Job(id: ids.make(), segmentID: segment, kind: .clean)
-        try await notes.saveJob(job)
-        broadcast.send(job)
+        let job = Job(id: .clean(of: segment), segmentID: segment, kind: .clean)
+        broadcast.send(try await notes.saveJob(job))
         log.capture(Self.capture(of: segment), "clean_job_written", .job(job.id))
     }
 
@@ -399,11 +382,6 @@ public actor StandardProcessingQueue: ProcessingQueue {
             throw KnotError.notFound.with(.init(segmentID: job.segmentID, jobID: job.id))
         }
         return stored
-    }
-
-    private func publish(_ job: JobID, of segment: SegmentID) async {
-        guard let stored = try? await notes.jobs(for: segment).first(where: { $0.id == job }) else { return }
-        broadcast.send(stored)
     }
 
     /// Moves a voice segment by `VoiceMachine`, and leaves it when the event does not apply.

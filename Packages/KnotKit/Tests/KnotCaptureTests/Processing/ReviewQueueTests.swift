@@ -296,11 +296,11 @@ import Testing
         #expect(try await r.notes.segment(segment)?.state == .voice(.ready))
     }
 
-    /// Finding 31 (the re-check's n25d). The store saves a job as running and then does not
-    /// answer the read that would say its revision: the step takes its way out, which reads the
-    /// job again, so the job is left queued with an attempt, never running, and its revision is
-    /// never guessed.
-    @Test func startWhoseReadFailsLeavesTheJobNotRunning() async throws {
+    /// Finding 31 (the re-check's n25d), after pull request 41. `start` takes the job's
+    /// revision from its save, and reads nothing of its own: a read of the jobs that fails right
+    /// after the running save is met by the step after the run, which finds the job the run
+    /// finished, and leaves nothing running.
+    @Test func startReadsNothingOfItsOwn() async throws {
         let r = Rig()
         r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
         let begun = try await r.beginRecording()
@@ -323,10 +323,9 @@ import Testing
         #expect(
             await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } } == .idle)
         let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first { $0.kind == .transcribe })
-        #expect(job.state == .queued)
-        #expect(job.attempts == 1)
+        #expect(job.state == .done)
         #expect(job.deaths == 0)
-        #expect(job.lastErrorCode == KnotError.storeNotOpen.code)
+        #expect(r.transcriber.runCount == 1)
     }
 
     enum NotRunnableNow: String, CaseIterable, CustomTestStringConvertible {
@@ -352,8 +351,8 @@ import Testing
         let hooks = JobHooks()
         let queue = Self.hookedQueue(r, hooks)
         let first = Mutex(true)
-        // Once the step's way out has saved the job queued, the queue's own read of that save
-        // goes through, and the drain's next read of the jobs meets a store that does not answer.
+        // Once the step's way out has saved the job queued, the drain's next read of the jobs
+        // meets a store that does not answer.
         hooks.afterSave.withLock { hook in
             hook = { job in
                 if job.state == .queued, job.lastErrorCode != nil,
@@ -362,7 +361,7 @@ import Testing
                         return f
                     })
                 {
-                    hooks.failJobReads(2)
+                    hooks.failJobReads(1)
                 }
             }
         }

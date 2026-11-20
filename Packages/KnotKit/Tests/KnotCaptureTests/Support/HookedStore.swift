@@ -147,11 +147,12 @@ struct HookedStore: NoteStore {
         if let hook = hooks.afterCleanup.withLock({ $0 }) { await hook() }
         return applied
     }
-    func saveJob(_ job: Job) async throws(KnotError) {
+    func saveJob(_ job: Job) async throws(KnotError) -> Job {
         try check()
         if let hook = hooks.beforeSave.withLock({ $0 }) { await hook(job) }
-        try await store.saveJob(job)
+        let stored = try await store.saveJob(job)
         if let hook = hooks.afterSave.withLock({ $0 }) { await hook(job) }
+        return stored
     }
     func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] {
         try check()
