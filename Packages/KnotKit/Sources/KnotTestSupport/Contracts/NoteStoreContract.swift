@@ -62,6 +62,7 @@ public enum NoteStoreContract {
         Check(name: "edit-protected", run: aLateSaveNeverTouchesAPersonsEdit),
         Check(name: "ingest", run: ingestReconcilesEachStateOfTheRow),
         Check(name: "shown-note", run: aCaptureGoesToTheNoteItsSurfaceShowed),
+        Check(name: "named-gone", run: anItemNamingANoteThatCannotTakeItStartsANewNote),
         Check(name: "end-outcomes", run: endWithEachOutcome),
         Check(name: "failed", run: aFailedCaptureNeedsYouAndARetryStoresIt),
         Check(name: "recovery", run: recoveryOfTheThreeKinds),
@@ -575,6 +576,20 @@ public enum NoteStoreContract {
         var afterClose = h.typedDraft("After the close", at: 2.2)
         afterClose.shownNote = shown.noteID
         #expect(try await h.store.record(afterClose).noteID != shown.noteID, "A closed note takes nothing new.")
+    }
+
+    /// An inbox item that names a note which can no longer take it, because its only segment
+    /// was deleted (rule 11), starts a new note with its content (finding 37).
+    public static func anItemNamingANoteThatCannotTakeItStartsANewNote(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let gone = try await h.store.record(h.tool("gone", at: 0))
+        _ = try await h.store.delete(.segment(gone.segmentIDs[0]))
+        var item = h.inboxText("fallback", at: 1, revision: 1)
+        item.placement = .named(gone.noteID)
+        let result = try await h.store.ingest(item)
+        #expect(result.receipt.noteID != gone.noteID && !result.receipt.joinedExistingNote, "It starts a new note.")
+        #expect(try await h.text(SegmentID(item.id)) == "fallback")
+        #expect(try await h.row(item.id)?.placement == .named(gone.noteID), "The row records what was asked.")
     }
 
     /// `end` with each outcome sets the segment's state: a voice file, a drawing, empty text,

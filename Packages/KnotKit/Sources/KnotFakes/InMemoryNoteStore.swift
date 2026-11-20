@@ -804,6 +804,9 @@
                 guard let named = next.notes[note], named.deletedAt == nil else {
                     return .refused(KnotError.noteDeleted.with(.init(noteID: note)))
                 }
+                // A named note with no live segment left counts as deleted (rule 11): the item's
+                // content starts a new note rather than join a hidden one.
+                guard hasLiveSegment(note, in: next) else { return .newNote(.latestNoteDeleted) }
                 return .join(note, .namedNote)
             case .newNote:
                 return .newNote(.newNoteAsked)
