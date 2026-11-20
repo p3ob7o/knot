@@ -480,25 +480,30 @@
             }
             if segment.deletedAt != nil { throw KnotError.moveRefusedDeletedSegment.with(context) }
             if segment.conflictOf != nil { throw KnotError.moveRefusedConflictCopy.with(context) }
+            // The pieces of one long capture move together: they are one capture (finding 60).
+            let lead = segment.pieceOf ?? segment.id
+            let pieces = piecesMoving(with: segment, in: state)
             let others = state.segments.values.filter {
-                $0.noteID == noteID && $0.deletedAt == nil && $0.id != segmentID && $0.conflictOf != segmentID
+                $0.noteID == noteID && $0.deletedAt == nil && !pieces.contains($0.id)
+                    && !($0.conflictOf.map(pieces.contains) ?? false)
             }
             if others.isEmpty { throw KnotError.moveRefusedOnlySegment.with(context) }
             guard var left = state.notes[noteID] else { throw KnotError.notFound.with(context) }
 
             var next = state
             let now = clock.now()
+            let latest = pieces.compactMap { state.segments[$0]?.latestTime }.max() ?? segment.latestTime
             let made = Note(
-                id: ids.make(), createdAt: segment.startedAt, updatedAt: segment.latestTime,
-                lastCaptureEndedAt: segment.latestTime)
+                id: ids.make(), createdAt: segment.startedAt, updatedAt: latest, lastCaptureEndedAt: latest)
             next.notes[made.id] = made
-            let moved = carry(segmentID, to: made.id, in: &next)
+            for piece in pieces { carry(piece, to: made.id, in: &next) }
+            let moved = next.segments[segmentID] ?? segment
             let title = TitleRule.afterSegmentLeaves(
                 title: left.title, origin: left.titleOrigin, remainingTexts: liveTexts(of: noteID, in: next))
             if title.dropped != nil { try left.setTitle(title.title, origin: title.titleOrigin, at: now) }
             next.notes[noteID] = left
             if !faults.contains(.losesMoveHistory) {
-                next.moves[segmentID, default: []].append(
+                next.moves[lead, default: []].append(
                     MoveRow(
                         left: noteID, made: made.id, generation: moved.noteGeneration, droppedTitle: title.dropped,
                         at: now))
@@ -517,7 +522,8 @@
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }
             let now = clock.now()
-            let rows = state.moves[segmentID] ?? []
+            let lead = segment.pieceOf ?? segment.id
+            let rows = state.moves[lead] ?? []
             let usable = { (row: MoveRow) in
                 row.made == noteID && (self.faults.contains(.returnIgnoresAge) || !Self.isPast30Days(row.at, now: now))
             }
@@ -534,7 +540,8 @@
                 throw KnotError.returnRefusedNoteGone.with(context)
             }
             var next = state
-            let returned = carry(segmentID, to: row.left, in: &next)
+            for piece in piecesMoving(with: segment, in: state) { carry(piece, to: row.left, in: &next) }
+            let returned = next.segments[segmentID] ?? segment
             let (title, origin) = TitleRule.afterReturn(
                 title: left.title, origin: left.titleOrigin, dropped: row.droppedTitle)
             if title != left.title || origin != left.titleOrigin { try left.setTitle(title, origin: origin, at: now) }
@@ -552,7 +559,7 @@
             if let earlier = remaining.lastIndex(where: { $0.made == row.left }) {
                 remaining[earlier].generation = returned.noteGeneration
             }
-            next.moves[segmentID] = remaining
+            next.moves[lead] = remaining
             next.counter += 1
             touch(row.left, counter: next.counter, at: now, in: &next)
             touch(noteID, counter: next.counter, at: now, in: &next)
@@ -1379,6 +1386,18 @@
                 next.segmentCapture[id] = nil
             }
             next.savedRevisions[capture] = nil
+        }
+
+        /// The segments that move with `segment`: every live piece of its capture in its note, the
+        /// first piece and its continuations, which are one capture split by the size limit.
+        private func piecesMoving(with segment: Segment, in state: State) -> [SegmentID] {
+            let lead = segment.pieceOf ?? segment.id
+            return SegmentOrder.sorted(
+                state.segments.values.filter {
+                    ($0.pieceOf ?? $0.id) == lead && $0.conflictOf == nil && $0.noteID == segment.noteID
+                        && $0.deletedAt == nil
+                }
+            ).map(\.id)
         }
 
         /// Moves a segment and its conflict copies to `note`, raising their note generation.

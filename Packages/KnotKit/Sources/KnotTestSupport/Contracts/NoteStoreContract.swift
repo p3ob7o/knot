@@ -1765,21 +1765,36 @@ public enum NoteStoreContract {
         }
     }
 
-    /// Witness 52: the continuation of an ended long capture can move while a sibling stays.
+    /// Witness 52, widened by finding 60: the pieces of one long capture move together. A move
+    /// of its continuation, with a sibling of another capture left behind, moves every piece,
+    /// and a return brings them all back.
     public static func aContinuationMoves(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let draft = h.typedDraft("short", at: 0)
         _ = try await h.store.record(draft)
         let ended = try await h.store.end(h.endTyped(draft.id, Harness.longText(pieces: 2), at: 1, revision: 2))
-        _ = try await h.store.record(h.typed("A sibling", from: 1.5, to: 1.6, placement: .named(ended.noteID)))
+        let sibling = try await h.store.record(
+            h.typed("A sibling", from: 1.5, to: 1.6, placement: .named(ended.noteID)))
+        let first = SegmentID(draft.id)
         let continuation = SegmentID.piece(1, of: draft.id)
         guard case .moved(let moved) = try await h.store.move(continuation, from: ended.noteID) else {
             Issue.record("The continuation moves.")
             return
         }
-        #expect(try await h.store.segment(continuation)?.segment.noteID == moved.to.id)
-        _ = try await h.store.returnToFormerNote(continuation, from: moved.to.id)
-        #expect(try await h.store.segment(continuation)?.segment.noteID == ended.noteID)
+        let away = try #require(try await h.store.note(moved.to.id))
+        #expect(away.segments.map(\.id) == [first, continuation], "Every piece moves, in place.")
+        let home = try #require(try await h.store.note(ended.noteID))
+        #expect(home.liveSegments.map(\.id) == sibling.segmentIDs, "The sibling stays.")
+        _ = try await h.store.returnToFormerNote(first, from: moved.to.id)
+        let back = try #require(try await h.store.note(ended.noteID))
+        #expect(Set(back.liveSegments.map(\.id)) == Set([first, continuation] + sibling.segmentIDs), "All come back.")
+        #expect(try await h.store.note(moved.to.id)?.isShown == false)
+
+        // A capture alone in its note, of two pieces, cannot be moved out of it.
+        let alone = try await h.store.record(h.tool(Harness.longText(pieces: 2), at: 10))
+        await refuses(.moveRefusedOnlySegment, "Its pieces are one capture.") {
+            try await h.store.move(alone.segmentIDs[1], from: alone.noteID)
+        }
     }
 
     /// Witness 53: a checkpoint before the first `record` commits is refused, writes nothing,
