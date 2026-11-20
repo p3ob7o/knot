@@ -645,12 +645,13 @@ step_launch() {
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds (30). The
-    # probe reads only what needs no Screen Recording permission; the Mac UI tests are the
-    # mac-ui step. Afterwards neither the app nor anything it started may be left running.
+    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds, 60: the first
+    # probe compiles its script, which a loaded Mac makes slow. The probe reads only what
+    # needs no Screen Recording permission; the Mac UI tests are the mac-ui step. Afterwards
+    # neither the app nor anything it started may be left running.
     local mac status=0
     mac="$(products Debug)/Knot.app"
-    knot_start_app "${KNOT_APP_START_LIMIT:-30}" "$mac/Contents/MacOS/Knot" \
+    knot_start_app "${KNOT_APP_START_LIMIT:-60}" "$mac/Contents/MacOS/Knot" \
         xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
     end_mac_test_hosts
     if [[ -n "$(mac_test_hosts)" ]]; then

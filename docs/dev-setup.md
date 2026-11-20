@@ -153,9 +153,11 @@ It cannot know what a value holds. A value named `noteID` that holds text passes
 | Every other simctl call of `scripts/sim.sh`, such as in `ensure` and in `shutdown`, which a step's exit runs, and the doctor's list of runtimes | 120 seconds | `KNOT_SIMCTL_LIMIT` |
 | `xcodebuild -version`, when a script chooses the pinned Xcode | 120 seconds | `KNOT_XCODE_ANSWER_LIMIT` |
 | `scripts/sim.sh boot`, which shuts the simulator down at its limit | 300 seconds | `KNOT_SIM_BOOT_LIMIT` |
-| The Mac app's first window, in `launch` | 30 seconds | `KNOT_APP_START_LIMIT` |
+| The Mac app's first window, in `launch`; each window probe has 15 seconds, and never more than the time left | 60 seconds | `KNOT_APP_START_LIMIT` |
 | `swift test`, in `package-test`, `contract-two-targets`, `perf` and `tsan` | 50 minutes | `KNOT_SWIFT_TEST_LIMIT` |
 | The model report, in the nightly run | 10 minutes | `KNOT_MODEL_REPORT_LIMIT` |
+| The scripts' self-test, in `self-test` | 10 minutes | `KNOT_SELF_TEST_LIMIT` |
+| A wait for the audio's lock, while another run in the same tree speaks it, in `fixtures` and `scripts/bootstrap.sh` | 30 minutes | `KNOT_FIXTURES_LOCK_WAIT` |
 
 The package tests' limit is not about a dialog. At 50 minutes it stays under the hour that another run waits for a build slot, and it catches a test that hangs, such as in a deadlock; a run whose waits keep running out may be ended by it first, with its log kept. The Thread Sanitizer run took 2m52s here. A test step reads its results first and then xcodebuild's status, so a run whose tests passed fails when xcodebuild exits with an error. A simctl failure names the simulator. The `launch` and `mac-ui` steps end the Mac app and the test runner that the worktree built, and `launch` fails if either is still running afterwards. The Mac app's start keeps the app's standard error in the step's log, and tells a window probe that failed from a window that has not come.
 

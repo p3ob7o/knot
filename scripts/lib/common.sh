@@ -450,7 +450,7 @@ knot_sim_call() {
 # this Mac most likely means a system dialog holds the start.
 #   knot_start_app <seconds> <app executable> <probe…>
 knot_start_app() {
-    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note=""
+    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note="" probe_limit
     shift 2
     out="$(mktemp)"
     errors="$(mktemp)"
@@ -464,12 +464,17 @@ knot_start_app() {
             exited=1
             break
         fi
+        # Each probe has 15 seconds at most, and never more than the time left, so that the
+        # start keeps to its own limit.
         probe_status=0
-        knot_limit 15 "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
+        probe_limit=$((deadline - $(knot_now)))
+        ((probe_limit > 15)) && probe_limit=15
+        ((probe_limit < 1)) && probe_limit=1
+        knot_limit "$probe_limit" "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
         found="$(cat "$out")"
         [[ -n $found ]] && break
         if ((KNOT_LIMIT_HIT)); then
-            probe_note="the window probe did not answer within 15s"
+            probe_note="the window probe did not answer within ${probe_limit}s"
         elif ((probe_status != 0)); then
             probe_note="the window probe failed with status $probe_status: $(tail -n 1 "$errors")"
         else

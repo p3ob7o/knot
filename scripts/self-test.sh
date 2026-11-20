@@ -458,6 +458,19 @@ fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 pkill -KILL -f "$lim/talks" 2>/dev/null || true
 
+# The app's start keeps to its own limit, whatever the probe does: a probe that never
+# answers is cut at the time left, not after its own 15 seconds.
+printf '#!/bin/sh\nsleep 30\n' >"$lim/silent-probe"
+chmod +x "$lim/silent-probe"
+timed app_silent knot_start_app 2 "$lim/hangs" "$lim/silent-probe"
+if [[ $app_silent_status == 1 && $app_silent_seconds -lt 6 && "$(cat "$lim/app_silent.out")" == *"did not answer"* ]]; then
+    pass "the app's start keeps to its limit when the probe does not answer"
+else
+    fail "the app's start with a probe that never answers: status $app_silent_status after ${app_silent_seconds}s (limit 2s): $(cat "$lim/app_silent.out")"
+fi
+pkill -KILL -f "$lim/hangs" 2>/dev/null || true
+pkill -KILL -f "$lim/silent-probe" 2>/dev/null || true
+
 # A step that runs the package's tests has an outer limit (knot_swift_test_limited): a test
 # that hangs ends at it, and the failure names the step and says nothing of a dialog; a run
 # that passes is not slowed; a failing run keeps its status.
