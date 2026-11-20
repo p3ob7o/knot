@@ -66,6 +66,7 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
 - `docs/spikes/SP-4.md` holds the final CloudKit schema.
 - It answers every question under "Build".
 - It confirms CloudKit's record limit.
+- It reports on each statement under "Not verified yet" in `docs/notes/SP-4.md`, and moves each row of `docs/architecture.md` §20 that rests on reading to measured, or corrects it.
 - It sets the restore time for a fresh install of 5,000 notes, 20,000 segments and their deletions.
 - It fixes the mechanism of account isolation and the mechanism for a replica that stayed away for more than 30 days.
 - It says whether an existing sync layer such as SQLiteData meets the rules of `docs/architecture.md` §11, and at what dependency cost.
