@@ -1,7 +1,10 @@
 import Foundation
 
 /// An image of a drawing: PNG bytes and the image's size in pixels.
-public struct DrawingImage: Hashable, Sendable {
+///
+/// Not named `DrawingImage`: KnotExport has a type of that name, the image its caller passes
+/// in, and a file that imports both modules would find the name ambiguous.
+public struct RenderedDrawing: Hashable, Sendable {
     /// The image, encoded as PNG.
     public var png: Data
     public var pixelWidth: Int
@@ -22,5 +25,5 @@ public protocol DrawingImages: Sendable {
     /// The image of `drawing` at `scale` pixels per point: a PNG that decodes at the size it
     /// states, which follows the scale asked. A drawing whose data cannot be decoded fails with
     /// `drawing_unreadable`.
-    func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> DrawingImage
+    func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> RenderedDrawing
 }

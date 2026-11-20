@@ -14,7 +14,7 @@
         public static let pointSize = (width: 64, height: 32)
 
         /// The synthetic image at `scale` pixels per point.
-        public static func synthetic(scale: Double) -> DrawingImage {
+        public static func synthetic(scale: Double) -> RenderedDrawing {
             let width = max(1, Int((Double(pointSize.width) * scale).rounded()))
             let height = max(1, Int((Double(pointSize.height) * scale).rounded()))
             guard
@@ -22,7 +22,7 @@
                     data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                     space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            else { return DrawingImage(png: Data(), pixelWidth: 0, pixelHeight: 0) }
+            else { return RenderedDrawing(png: Data(), pixelWidth: 0, pixelHeight: 0) }
             context.setStrokeColor(CGColor(gray: 0, alpha: 1))
             context.setLineWidth(2 * scale)
             context.move(to: CGPoint(x: 4 * scale, y: Double(height) / 2))
@@ -32,14 +32,14 @@
             guard let image = context.makeImage(),
                 let destination = CGImageDestinationCreateWithData(
                     png as CFMutableData, "public.png" as CFString, 1, nil)
-            else { return DrawingImage(png: Data(), pixelWidth: 0, pixelHeight: 0) }
+            else { return RenderedDrawing(png: Data(), pixelWidth: 0, pixelHeight: 0) }
             CGImageDestinationAddImage(destination, image, nil)
             CGImageDestinationFinalize(destination)
-            return DrawingImage(png: png as Data, pixelWidth: width, pixelHeight: height)
+            return RenderedDrawing(png: png as Data, pixelWidth: width, pixelHeight: height)
         }
 
         private struct State {
-            var images: [Data: DrawingImage] = [:]
+            var images: [Data: RenderedDrawing] = [:]
             var unreadable: Set<Data> = []
             var requests = 0
         }
@@ -49,7 +49,7 @@
         public init() {}
 
         /// The image `drawing` gives.
-        public func script(_ drawing: InkDrawingData, image: DrawingImage) {
+        public func script(_ drawing: InkDrawingData, image: RenderedDrawing) {
             state.withLock { $0.images[drawing.bytes] = image }
         }
 
@@ -60,7 +60,7 @@
 
         public var requestCount: Int { state.withLock { $0.requests } }
 
-        public func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> DrawingImage {
+        public func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> RenderedDrawing {
             let (image, unreadable) = state.withLock { state in
                 state.requests += 1
                 return (state.images[drawing.bytes], state.unreadable.contains(drawing.bytes))

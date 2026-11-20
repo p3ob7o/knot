@@ -23,7 +23,7 @@ public struct UnavailableInkRecogniser: InkRecogniser {
 public struct UnavailableDrawingImages: DrawingImages {
     public init() {}
 
-    public func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> DrawingImage {
+    public func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> RenderedDrawing {
         throw KnotError.portUnavailable
     }
 }
