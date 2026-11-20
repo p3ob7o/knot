@@ -524,13 +524,13 @@ A restored store waits for consent before it uploads.
 - Written: nothing
 - Exit code: 1
 
-The sync conditions follow: the errors of the engine that SP-4's code half sorted (`docs/notes/SP-4.md`). Only a manual sync throws them. Otherwise they surface as the engine's status.
+The sync conditions follow: the errors of the engine that SP-4's code half sorted (`docs/notes/SP-4.md`). Only a manual sync throws them. Otherwise they surface as the engine's status. `sync_transient` is a deferral, which carries the time to try again, and `sync_final` is final.
 
 ### `sync_transient`
 
 The network, the account or the service is not available for now, or the server limits requests. The engine retries by itself, and `context.retryAt` says when, when the server gave a time.
 
-- Class: failure
+- Class: deferral
 - Next: wait_and_retry
 - Retry: safe, as often as needed
 - Written: nothing
@@ -590,7 +590,7 @@ A record is gone from the server. The rule of a long absence decides what follow
 
 Any other error of the engine. No retry fixes it on this device.
 
-- Class: failure
+- Class: final
 - Next: report_problem
 - Retry: not safe
 - Written: nothing

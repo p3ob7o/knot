@@ -233,7 +233,7 @@ extension KnotError {
     /// requests. The engine retries by itself; `context.retryAt` says when, when the server gave
     /// a time.
     public static let syncTransient = KnotError(
-        code: "sync_transient", next: .waitAndRetry, retry: .safe, written: .nothing,
+        code: "sync_transient", errorClass: .deferral, next: .waitAndRetry, retry: .safe, written: .nothing,
         exitStatus: .unexpected)
     /// The server holds a newer version of a record. It is merged like a fetched record and sent
     /// again.
@@ -255,7 +255,7 @@ extension KnotError {
         code: "sync_unknown_item", next: .none, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
     /// Any other error of the engine. No retry fixes it on this device.
     public static let syncFinal = KnotError(
-        code: "sync_final", next: .reportProblem, retry: .notSafe, written: .nothing,
+        code: "sync_final", errorClass: .final, next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)
 
     // MARK: Text, revisions and cursors
