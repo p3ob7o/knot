@@ -47,6 +47,15 @@ struct InboxItems: Sendable {
         try files.place(try manifest.encoded(), at: locations.inboxManifest(manifest.captureID))
     }
 
+    /// Names, in the recorder's manifest of a started recording, the capture it follows. The
+    /// recorder's other fields, and fields this build does not know, stay as they are.
+    func markRecording(_ capture: CaptureID, follows: CaptureID) throws(KnotError) {
+        let url = locations.recordingManifest(capture)
+        var manifest = try CaptureManifest.decode(try layer.read(url))
+        manifest.followsCaptureID = follows
+        try files.place(try manifest.encoded(), at: url)
+    }
+
     /// The captures that have a manifest in `Inbox/`.
     func captureIDs() throws(KnotError) -> [CaptureID] {
         guard layer.entryKind(locations.inbox) == .folder else { return [] }
@@ -78,6 +87,20 @@ struct InboxItems: Sendable {
 
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension CaptureManifest {
+    /// Where ingest and recovery place the capture. One that rule 13 or 15 started as it ended
+    /// another names that capture, and is the next segment of its note as the store has it now,
+    /// whatever the window says and whichever launch stored the first. Text from the command
+    /// line or MCP never ends a capture, so it is placed as it asked. A followed capture that
+    /// left no segment leaves the capture placed as it asked (finding 36).
+    func placement(using notes: any NoteStore) async throws(KnotError) -> CapturePlacement {
+        guard let follows = followsCaptureID, !origin.source.isTool,
+            let note = try await notes.segment(SegmentID(follows))?.noteID
+        else { return placement }
+        return .named(note)
     }
 }
 

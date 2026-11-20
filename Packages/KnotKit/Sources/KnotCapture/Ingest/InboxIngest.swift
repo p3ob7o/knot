@@ -37,9 +37,6 @@ public actor InboxIngest {
     private let items: InboxItems
     private let log: KnotLog
     private var running: Set<CaptureID> = []
-    /// The note of each capture of a launch that ingest stored, by the time it ended: a
-    /// capture that rule 15 started as that one ended, on the `Inbox/` path too, joins it.
-    private var notesByEnd: [LaunchID: [Date: NoteID]] = [:]
 
     public init(
         notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
@@ -235,19 +232,12 @@ public actor InboxIngest {
             let row = try await notes.capture(manifest.captureID)
             endedAt = max(manifest.startedAt, row?.lastSavedAt ?? manifest.startedAt)
         }
-        // Rule 15: a capture that began the instant an earlier capture of its launch ended, both
-        // on the `Inbox/` path, is the next segment of that capture's note. The engine ends the
-        // earlier one at the later one's start, and ingest takes them in that order.
-        var shownNote = manifest.shownNoteID
-        if shownNote == nil, manifest.placement == .window, manifest.origin.surface != .watch {
-            shownNote = notesByEnd[manifest.launchID]?[manifest.startedAt]
-        }
         return NewCapture(
             id: manifest.captureID, kind: manifest.kind, origin: manifest.origin, launchID: manifest.launchID,
-            placement: manifest.placement,
+            placement: try await manifest.placement(using: notes),
             // Only a delivery from outside the app process is late (docs/architecture.md §6, rule 2).
             arrival: manifest.origin.surface == .watch ? .late : .live, startedAt: manifest.startedAt,
-            endedAt: endedAt, body: body, revision: manifest.revision, shownNote: shownNote)
+            endedAt: endedAt, body: body, revision: manifest.revision, shownNote: manifest.shownNoteID)
     }
 
     /// Removes the item once the store holds its revision.
@@ -258,9 +248,6 @@ public actor InboxIngest {
             return .kept(KnotError.captureIDConflict.code)
         }
         try items.remove(id, kind: manifest.kind)
-        if result.receipt.outcome == .stored, let endedAt = manifest.endedAt {
-            notesByEnd[manifest.launchID, default: [:]][endedAt] = result.receipt.noteID
-        }
         log.capture(id, "inbox_item_stored", .flag("applied", result.applied))
         return .stored(revision: result.storedRevision)
     }

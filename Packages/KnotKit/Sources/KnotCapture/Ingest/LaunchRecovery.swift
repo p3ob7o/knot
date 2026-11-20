@@ -143,7 +143,7 @@ public struct LaunchRecovery: Sendable {
                 let result = try await notes.ingest(
                     NewCapture(
                         id: id, kind: .voice, origin: manifest.origin, launchID: manifest.launchID,
-                        placement: manifest.placement, startedAt: manifest.startedAt,
+                        placement: try await manifest.placement(using: notes), startedAt: manifest.startedAt,
                         endedAt: manifest.startedAt.addingTimeInterval(seconds(converted.duration)), body: body,
                         revision: recording.frames, shownNote: manifest.shownNoteID))
                 outcome = result.receipt.outcome
@@ -183,7 +183,8 @@ public struct LaunchRecovery: Sendable {
             _ = try await notes.record(
                 NewCapture(
                     id: id, kind: .voice, origin: manifest.origin, launchID: manifest.launchID,
-                    placement: manifest.placement, startedAt: manifest.startedAt, body: .none, revision: 0,
+                    placement: try await manifest.placement(using: notes), startedAt: manifest.startedAt,
+                    body: .none, revision: 0,
                     shownNote: manifest.shownNoteID))
             guard let row = try await notes.capture(id) else { return .kept(KnotError.notFound.code) }
             return try await failConversion(row, recording, KnotError.conversionFailed.about(capture: id))

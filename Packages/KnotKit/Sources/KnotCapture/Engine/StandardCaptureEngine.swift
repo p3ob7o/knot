@@ -54,6 +54,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// typed start on its surface is its retry; after, the surface was told its text is
         /// saved, and a start never replaces it (findings 1 and 38).
         var answered = false
+        /// The capture that rule 13 or 15 ended for this one: this capture is the next segment
+        /// of its note. Every manifest of this capture names it, so that ingest and recovery
+        /// place the capture there, whichever launch stored the first (finding 36).
+        var follows: CaptureID?
     }
 
     private let notes: any NoteStore
@@ -181,6 +185,11 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw error
         }
         if let sameWay { entries[id]?.path = .inbox(sameWay) }
+        // The capture this one follows is named before the open one ends, on either path.
+        if let followed = handoff ?? endAfterStart {
+            entries[id]?.follows = followed
+            if request.kind == .voice { markFollows(id) }
+        }
         let state: CaptureState
         do throws(KnotError) {
             state =
@@ -357,7 +366,15 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState {
         await take(id)
         defer { release(id) }
-        guard entries[id]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: id) }
+        guard let entry = entries[id], entry.outcome == .open else {
+            throw KnotError.illegalTransition.about(capture: id)
+        }
+        // The capture that rule 15 ends for it, named in the item before it ends.
+        if case .end(let open)? = try? nextStep(
+            for: CaptureRequest(kind: entry.kind, surface: entry.surface), besides: id)
+        {
+            entries[id]?.follows = open
+        }
         entries[id]?.revision += 1
         entries[id]?.text = text
         try await saveTyped(id, ending: nil)
@@ -454,7 +471,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         let manifest = CaptureManifest(
             captureID: id, kind: .typed, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, placement: entry.placement, shownNoteID: entry.shownNote,
-            revision: entry.revision)
+            revision: entry.revision, followsCaptureID: entry.follows)
         do throws(KnotError) {
             try inbox.writeTyped(manifest, text: entry.text)
         } catch {
@@ -485,6 +502,19 @@ public actor StandardCaptureEngine: CaptureEngine {
         let events = session.events
         Task { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
+        }
+    }
+
+    /// Names, in a started recording's manifest, the capture it follows, so that recovery places
+    /// it in that capture's note after a death during the recording. The recorder writes the
+    /// manifest before the first sample and leaves it; a manifest that could not be changed
+    /// leaves the recording placed by the window.
+    private func markFollows(_ id: CaptureID) {
+        guard let follows = entries[id]?.follows else { return }
+        do throws(KnotError) {
+            try inbox.markRecording(id, follows: follows)
+        } catch {
+            log.failure(error.about(capture: id), "recording_manifest_not_marked")
         }
     }
 
@@ -578,7 +608,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             captureID: id, kind: .voice, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, duration: duration, placement: entry.placement,
             shownNoteID: entry.shownNote, revision: revision, payloadByteCount: stored.byteCount,
-            payloadSHA256: stored.sha256)
+            payloadSHA256: stored.sha256, followsCaptureID: entry.follows)
         do throws(KnotError) {
             try inbox.writeRecording(manifest)
         } catch {
@@ -698,7 +728,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
         release(open)
         do throws(KnotError) {
-            _ = try await end(open)
+            // Ended at the new capture's start, as rule 15 ends it.
+            _ = try await end(open, at: entries[newCapture]?.startedAt)
         } catch {
             log.failure(error.about(capture: open), "capture_not_ended")
         }

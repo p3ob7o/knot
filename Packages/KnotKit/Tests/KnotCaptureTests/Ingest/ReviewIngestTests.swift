@@ -4,6 +4,7 @@ import KnotCapture
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// The ingest sequences the review of pull request 40 found, each first shown failing.
@@ -277,4 +278,118 @@ import Testing
         let again = try await next.recovery.run(ingest: next.ingest)
         #expect(again[begun.captureID] == nil)
     }
+
+    // MARK: Finding 36: the capture a capture follows, by its ID
+
+    /// Finding 36, the re-check's N2. The app dies during the recording that followed a typed
+    /// capture on the `Inbox/` path, after the typed capture was stored. The recording's
+    /// manifest names the capture it follows, so the next launch's recovery places it in that
+    /// capture's note, read from the store, with appending off.
+    @Test func deathDuringTheFollowingRecordingKeepsTheHandoff() async throws {
+        let r = Rig()
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        let manifest = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(b.captureID)))
+        #expect(manifest.followsCaptureID == a.captureID, "The recording's manifest names the capture it follows.")
+        #expect(
+            await eventually("the typed capture to be stored") {
+                (try? await r.notes.capture(a.captureID))?.outcome == .stored
+            })
+        // The process dies here, mid-recording, and the next launch recovers the recording.
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[b.captureID] == .ended(.stored))
+        let sa = try #require(try await r.notes.segment(SegmentID(a.captureID)))
+        let sb = try #require(try await r.notes.segment(SegmentID(b.captureID)))
+        #expect(sa.noteID == sb.noteID)
+    }
+
+    /// Finding 36, the re-check's N3. Rule 15 on the store path, where the new capture's store
+    /// call is refused and it falls back: the open capture is ended by the engine, and every
+    /// store call takes time here. The new capture's item names the open one, so ingest places
+    /// it in that capture's note whatever the times say.
+    @Test func storePathHandoffWhoseNewCaptureFallsBackKeepsTheHandoff() async throws {
+        let box = ClockBox()
+        let r = Rig(
+            deadline: StoreDeadline {
+                box.advance(by: 0.2)
+                try? await Task.sleep(for: .seconds(900))
+            })
+        box.set(r.clock)
+        await r.notes.setWindow(.off)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        #expect(a.path == .store)
+        r.clock.advance(by: 1)
+        await r.notes.failNextCaptureWrites(with: .storeBusy, .storeBusy)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        _ = try await r.engine.end(b.captureID)
+        _ = await r.ingest.ingestAll()
+        #expect(
+            await eventually("both to be stored") {
+                let first = try? await r.notes.capture(a.captureID)
+                let second = try? await r.notes.capture(b.captureID)
+                return first?.outcome == .stored && second?.outcome == .stored
+            })
+        let sa = try #require(try await r.notes.segment(SegmentID(a.captureID)))
+        let sb = try #require(try await r.notes.segment(SegmentID(b.captureID)))
+        #expect(sa.noteID == sb.noteID)
+    }
+
+    /// Finding 36, the re-check's N4. Two captures from MCP in one launch of its process, the
+    /// second stamped in the same millisecond the first ended. Text from MCP never ends an open
+    /// capture and is placed by the window, so with appending off they are two notes.
+    @Test func toolCapturesInTheSameMillisecondStayApart() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        let launch: LaunchID = r.ids.make()
+        let files = r.locations.durableFiles(layer: r.layer)
+        let t0 = r.clock.now()
+        let t1 = t0.addingTimeInterval(0.004)
+        var ids: [CaptureID] = []
+        for (start, end, text) in [(t0, t1, "first"), (t1, t1, "second")] {
+            let id: CaptureID = r.ids.make()
+            ids.append(id)
+            let payload = Data(text.utf8)
+            let manifest = CaptureManifest(
+                captureID: id, kind: .typed, origin: CaptureOrigin(source: .mcp, surface: .app), launchID: launch,
+                startedAt: start, endedAt: end, placement: .window, revision: 1,
+                payloadByteCount: Int64(payload.count), payloadSHA256: Self.sha256(payload))
+            try files.place(try manifest.encoded(), at: r.locations.inboxManifest(id))
+            try files.place(payload, at: r.locations.inboxPayload(id, kind: .typed))
+        }
+        _ = await r.ingest.ingestAll()
+        let s0 = try #require(try await r.notes.segment(SegmentID(ids[0])))
+        let s1 = try #require(try await r.notes.segment(SegmentID(ids[1])))
+        #expect(s0.noteID != s1.noteID)
+    }
+
+    /// Finding 36. A recording that follows a typed capture on the `Inbox/` path names it in its
+    /// item, and the typed capture, which follows nothing, names nothing.
+    @Test func theItemNamesTheCaptureItFollows() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        #expect(a.path == .inbox(KnotError.storeBusy.code))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        _ = try await r.engine.end(b.captureID)
+        let typed = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(a.captureID)))
+        #expect(typed.followsCaptureID == nil)
+        let recording = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(b.captureID)))
+        #expect(recording.followsCaptureID == a.captureID)
+    }
+}
+
+/// The rig's clock, for a store deadline made before the rig.
+final class ClockBox: Sendable {
+    private let clock = Mutex<FakeClock?>(nil)
+
+    func set(_ clock: FakeClock) { self.clock.withLock { $0 = clock } }
+    func advance(by seconds: TimeInterval) { clock.withLock { $0 }?.advance(by: seconds) }
 }
