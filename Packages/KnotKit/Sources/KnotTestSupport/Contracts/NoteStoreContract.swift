@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "title-time", run: theTitlesTimeIsSetByEachChange),
         Check(name: "discard-not-final", run: aDiscardIsNotFinalForALaterSave),
         Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
@@ -1798,6 +1799,48 @@ public enum NoteStoreContract {
         let later = try await h.store.end(h.endTyped(draft.id, "only", at: 2, revision: 3))
         #expect(later.outcome == .stored)
         #expect(try await h.text(SegmentID(draft.id)) == "only")
+    }
+
+    /// A note's `titleEditedAt` is the writing device's time of any change to its title or its
+    /// origin: a person's edit, a proposed title, and the drop and return of a generated title
+    /// when a segment leaves and comes back. A note that never had a title has none, and a later
+    /// save of a segment does not move it (finding 58).
+    public static func theTitlesTimeIsSetByEachChange(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let first = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        #expect(try await h.store.note(first.noteID)?.note.titleEditedAt == nil, "No title, no time.")
+        _ = try await h.store.appendTranscript(
+            h.run("orange cat", from: .zero, resumeAt: nil), to: first.segmentIDs[0],
+            job: .transcribe(of: first.segmentIDs[0]))
+        h.clock.set(h.at(2))
+        let proposed = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .declined(.guardRejected), title: "orange cat", provenance: .init(osBuild: "b"), modelName: "m"
+            ),
+            to: first.segmentIDs[0])
+        #expect(proposed.titleSet && proposed.note.titleEditedAt == h.at(2), "A proposed title sets the time.")
+        let second = try await h.store.record(h.typed("milk and eggs", from: 2.5, to: 2.6))
+        #expect(second.noteID == first.noteID)
+        #expect(try await h.store.note(first.noteID)?.note.titleEditedAt == h.at(2), "A later save does not move it.")
+
+        h.clock.set(h.at(3))
+        guard case .moved(let moved) = try await h.store.move(first.segmentIDs[0], from: first.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        #expect(moved.from.title == nil && moved.from.titleEditedAt == h.at(3), "The drop sets the time.")
+        #expect(moved.to.titleEditedAt == nil, "The new note has no title and no time.")
+        h.clock.set(h.at(4))
+        let back = try await h.store.returnToFormerNote(first.segmentIDs[0], from: moved.to.id)
+        #expect(back.to.title == "orange cat" && back.to.titleEditedAt == h.at(4), "The return sets the time.")
+
+        h.clock.set(h.at(5))
+        let typed = try await h.store.setTitle("My cat", of: first.noteID, ifRevision: nil)
+        #expect(typed.titleEditedAt == h.at(5), "A person's edit sets the time.")
+        h.clock.set(h.at(6))
+        _ = try await h.store.record(h.typed("and the dog", from: 6, to: 6.1, placement: .named(first.noteID)))
+        #expect(
+            try await h.store.note(first.noteID)?.note.titleEditedAt == h.at(5), "A later capture does not move it.")
     }
 
     // MARK: Reading

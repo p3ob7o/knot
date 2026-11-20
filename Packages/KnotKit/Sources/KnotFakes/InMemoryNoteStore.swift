@@ -362,7 +362,7 @@
         {
             guard var stored = state.notes[note] else { throw KnotError.notFound.with(.init(noteID: note)) }
             try ifRevision?.check(storeID: storeID, generation: generation, current: stored.revision)
-            try stored.setTitle(title, origin: title == nil ? .none : .user)
+            try stored.setTitle(title, origin: title == nil ? .none : .user, at: clock.now())
             var next = state
             next.notes[note] = stored
             next.counter += 1
@@ -493,7 +493,7 @@
             let moved = carry(segmentID, to: made.id, in: &next)
             let title = TitleRule.afterSegmentLeaves(
                 title: left.title, origin: left.titleOrigin, remainingTexts: liveTexts(of: noteID, in: next))
-            try left.setTitle(title.title, origin: title.titleOrigin)
+            if title.dropped != nil { try left.setTitle(title.title, origin: title.titleOrigin, at: now) }
             next.notes[noteID] = left
             if !faults.contains(.losesMoveHistory) {
                 next.moves[segmentID, default: []].append(
@@ -535,13 +535,13 @@
             let returned = carry(segmentID, to: row.left, in: &next)
             let (title, origin) = TitleRule.afterReturn(
                 title: left.title, origin: left.titleOrigin, dropped: row.droppedTitle)
-            try left.setTitle(title, origin: origin)
+            if title != left.title || origin != left.titleOrigin { try left.setTitle(title, origin: origin, at: now) }
             next.notes[row.left] = left
             // The note the segment leaves by the return is held to the title rule too.
             if var from = next.notes[noteID] {
                 let after = TitleRule.afterSegmentLeaves(
                     title: from.title, origin: from.titleOrigin, remainingTexts: liveTexts(of: noteID, in: next))
-                try from.setTitle(after.title, origin: after.titleOrigin)
+                if after.dropped != nil { try from.setTitle(after.title, origin: after.titleOrigin, at: now) }
                 next.notes[noteID] = from
             }
             var remaining = rows
@@ -630,7 +630,7 @@
                     for: segmentID, segmentsInOrder: inOrder,
                     title: faults.contains(.cleanupOverwritesTitle) ? nil : note.title)
                 if mayPropose, TitleRule.fits(title, noteTexts: liveTexts(of: note.id, in: next)) {
-                    try note.setTitle(title, origin: .generated)
+                    try note.setTitle(title, origin: .generated, at: clock.now())
                     next.notes[note.id] = note
                     titleSet = true
                 }

@@ -251,12 +251,32 @@ func segment(
     }
 }
 
+@Suite struct NoteTitleTimeTests {
+    /// `titleEditedAt` is the time the caller gives for a change to the title or its origin; a
+    /// note that never had a title has none, and a note written without the field reads as nil.
+    @Test func theTitleTimeComesFromTheCaller() throws {
+        var note = Note(id: id(1), createdAt: at("09:00"))
+        #expect(note.titleEditedAt == nil)
+        try note.setTitle("Plans", origin: .user, at: at("09:05"))
+        #expect(note.titleEditedAt == at("09:05"))
+        try note.setTitle(nil, origin: .none, at: at("09:06"))
+        #expect(note.title == nil && note.titleEditedAt == at("09:06"), "Clearing a title is a change of it.")
+        let decoded = try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note))
+        #expect(decoded == note)
+        let old = String(decoding: try JSONEncoder().encode(Note(id: id(2), createdAt: at("09:00"))), as: UTF8.self)
+        #expect(!old.contains("titleEditedAt"))
+        #expect(try JSONDecoder().decode(Note.self, from: Data(old.utf8)).titleEditedAt == nil)
+    }
+}
+
 @Suite struct NoteTitleSetterTests {
     @Test func theTitleChangesOnlyWithinItsBound() throws {
         var note = Note(id: id(1), createdAt: at("09:00"))
-        #expect(throws: KnotError.textTooLong) { try note.setTitle(NoteTitleBoundTests.tooLong, origin: .user) }
+        #expect(throws: KnotError.textTooLong) {
+            try note.setTitle(NoteTitleBoundTests.tooLong, origin: .user, at: at("09:01"))
+        }
         #expect(note.title == nil)
-        try note.setTitle(String(repeating: "t", count: 200), origin: .user)
+        try note.setTitle(String(repeating: "t", count: 200), origin: .user, at: at("09:01"))
         #expect(note.titleOrigin == .user)
         #expect(throws: KnotError.textTooLong) {
             try Note(id: id(2), createdAt: at("09:00"), title: NoteTitleBoundTests.tooLong, titleOrigin: .user)
