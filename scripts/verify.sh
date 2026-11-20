@@ -461,7 +461,20 @@ step_contract_two_targets() {
 }
 
 # The named test scripts-self-test.
-step_self_test() { "$KNOT_SCRIPTS/self-test.sh"; }
+# The scripts' self-test. Its output goes to a file that the step then prints, so that a
+# process one of its checks leaves behind can hold no pipe of the run open, and it has a
+# limit (KNOT_SELF_TEST_LIMIT, 10 minutes; it takes under a minute), so that a check that
+# hangs fails the step with its log instead of holding the run.
+step_self_test() {
+    local output="$KNOT_LOGS/verify-self-test.out" limit=${KNOT_SELF_TEST_LIMIT:-600} status=0
+    knot_limit "$limit" "$KNOT_SCRIPTS/self-test.sh" >"$output" 2>&1 || status=$?
+    cat "$output"
+    if ((KNOT_LIMIT_HIT)); then
+        echo "self-test: did not end within $(knot_duration "$limit"); the check after the last line above hangs."
+        return 1
+    fi
+    return "$status"
+}
 
 # Every app, Debug: the iOS app with the Watch app and both widget extensions in it, and
 # the Mac app with the `knot` tool in it.
