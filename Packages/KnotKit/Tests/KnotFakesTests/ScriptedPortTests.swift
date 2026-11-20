@@ -80,9 +80,12 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
     func aRecordingEndsByItselfAndAStopAfterIsSafe(ending: RecordingEnding) async throws {
         let (recorder, layer) = try scriptedRecorder(script: .init(buffers: 3, endsBySelf: ending))
         let session = try await recorder.start(recordingRequest())
-        var last: RecordingEvent?
-        for await event in session.events { last = event }
-        guard case .ended(let audio) = last else {
+        let last = await SuiteWait.value("the events to end") {
+            var last: RecordingEvent?
+            for await event in session.events { last = event }
+            return last
+        }
+        guard case .ended(let audio)?? = last else {
             Issue.record("The events end with an ending.")
             return
         }
@@ -140,17 +143,24 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {
         let (recorder, _) = try scriptedRecorder(script: .init(buffers: 40, interval: .zero))
         let session = try await recorder.start(recordingRequest())
-        var durable: Int64 = 0
-        for await event in session.events {
-            if case .durable(let frames) = event { durable = frames }
-            if durable == 40 * 1_600 { break }
+        let durable = await SuiteWait.value("every buffer to be durable") {
+            var durable: Int64 = 0
+            for await event in session.events {
+                if case .durable(let frames) = event { durable = frames }
+                if durable == 40 * 1_600 { break }
+            }
+            return durable
         }
-        #expect(durable == 40 * 1_600, "Every buffer reached the file although nobody read the live audio.")
+        let every: Int64 = 40 * 1_600
+        #expect(durable == every, "Every buffer reached the file although nobody read the live audio.")
         let result = await session.stop()
         #expect(result.frames == 40 * 1_600)
-        var kept = 0
-        for await _ in session.liveAudio { kept += 1 }
-        #expect(kept <= 8, "The oldest live audio was dropped.")
+        let kept = await SuiteWait.value("the live audio to end") {
+            var kept = 0
+            for await _ in session.liveAudio { kept += 1 }
+            return kept
+        }
+        #expect((kept ?? .max) <= 8, "The oldest live audio was dropped.")
     }
 }
 
@@ -191,7 +201,8 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         let transcriber = Self.scripted()
         var offset: Duration = .zero
         var text: [String] = []
-        while true {
+        // A count, not a loop without end: runs that never end fail the check below.
+        for _ in 0..<1_000 {
             let run = try await transcriber.transcribe(file: Self.speech, from: offset, budget: .seconds(3))
             text += run.pieces.map(\.text)
             guard let next = run.resumeAt else { break }
@@ -240,11 +251,13 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         let wait: Duration = .seconds(600)
         transcriber.setRunDelay(wait)
         let task = Task { try await transcriber.transcribe(file: Self.speech, from: .zero, budget: nil) }
-        // Cancel once the run has begun, however long the scheduler takes to start it.
-        while transcriber.runCount == 0 { await Task.yield() }
+        // Cancel once the run has begun, however long the scheduler takes to start it, within
+        // the suites' ten minutes (finding 85).
+        await SuiteWait.until("the run to begin") { transcriber.runCount > 0 }
         let started = ContinuousClock.now
         task.cancel()
-        await #expect(throws: KnotError.cancelled) { try await task.value }
+        let outcome = await SuiteWait.value("the cancelled run to return") { await task.result }
+        #expect(throws: KnotError.cancelled) { try outcome?.get() }
         #expect(ContinuousClock.now - started < wait / 2, "It returned before the scripted wait could end.")
     }
 
@@ -253,8 +266,14 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         let (chunks, feed) = AsyncStream.makeStream(of: AudioChunk.self)
         for _ in 0..<3 { feed.yield(AudioChunk(samples: [0], sampleRate: 16_000)) }
         feed.finish()
-        var updates: [LiveTranscript] = []
-        for await event in transcriber.live(chunks) { if case .update(let text) = event { updates.append(text) } }
+        let updates: [LiveTranscript] =
+            await SuiteWait.value("the live text to end") {
+                var updates: [LiveTranscript] = []
+                for await event in transcriber.live(chunks) {
+                    if case .update(let text) = event { updates.append(text) }
+                }
+                return updates
+            } ?? []
         #expect(updates.first == LiveTranscript(final: "", volatile: "pick"))
         #expect(updates.last == LiveTranscript(final: "pick up the", volatile: ""))
     }
@@ -307,10 +326,14 @@ final class ProgressLog: Sendable {
 
     @Test func availabilityChangesFromNotReadyToAvailable() async {
         let cleaner = ScriptedCleaner(availability: .notReady)
-        var changes = cleaner.availabilityChanges().makeAsyncIterator()
-        #expect(await changes.next() == .notReady)
-        cleaner.setAvailability(.available)
-        #expect(await changes.next() == .available)
+        let changes = cleaner.availabilityChanges()
+        let seen = await SuiteWait.value("two changes of availability") {
+            var iterator = changes.makeAsyncIterator()
+            let first = await iterator.next()
+            cleaner.setAvailability(.available)
+            return [first, await iterator.next()]
+        }
+        #expect(seen == [.notReady, .available])
     }
 
     @Test func aRequestCancelledWhileItRunsIsAYield() async {
@@ -321,7 +344,8 @@ final class ProgressLog: Sendable {
         let task = Task { try await cleaner.clean("text", proposeTitle: true) }
         try? await Task.sleep(for: .milliseconds(20))
         task.cancel()
-        await #expect(throws: KnotError.cancelled) { try await task.value }
+        let outcome = await SuiteWait.value("the cancelled request to return") { await task.result }
+        #expect(throws: KnotError.cancelled) { try outcome?.get() }
     }
 
     @Test func aTitleThatDoesNotFitIsNeverProposed() async throws {

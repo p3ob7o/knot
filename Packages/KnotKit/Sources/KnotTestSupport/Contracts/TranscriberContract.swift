@@ -94,7 +94,7 @@ public enum TranscriberContract {
         let cancelled = ContinuousClock.now
         task.cancel()
         do {
-            _ = try await task.value
+            _ = try await SuiteWait.value("the cancelled run to return") { await task.result }?.get()
             Issue.record("A run cancelled while it runs must throw, not finish.")
         } catch {
             #expect((error as? KnotError)?.code == KnotError.cancelled.code, "A cancelled run throws the yield.")
@@ -107,20 +107,25 @@ public enum TranscriberContract {
         let (chunks, feed) = AsyncStream.makeStream(of: AudioChunk.self)
         for chunk in subject.liveChunks { feed.yield(chunk) }
         feed.finish()
-        var updates: [LiveTranscript] = []
-        for await event in transcriber.live(chunks) {
-            switch event {
-            case .update(let text): updates.append(text)
-            case .failed(let error): Issue.record("Live text failed with \(error.code).")
-            }
-        }
+        let updates: [LiveTranscript] =
+            await SuiteWait.value("the live text to end with its audio") {
+                var updates: [LiveTranscript] = []
+                for await event in transcriber.live(chunks) {
+                    switch event {
+                    case .update(let text): updates.append(text)
+                    case .failed(let error): Issue.record("Live text failed with \(error.code).")
+                    }
+                }
+                return updates
+            } ?? []
         #expect(!updates.isEmpty, "Live text arrives.")
         #expect(updates.last?.volatile == "", "When the audio ends, everything is final.")
         #expect(!(updates.last?.final.isEmpty ?? true))
 
         // A consumer that goes away ends the live stream. Its audio never ends by itself: a
-        // watchdog ends it after ten minutes, and the check sees which of the two ended the
-        // stream, by what happens rather than by a bound on the wall clock (finding 84).
+        // watchdog ends it after the suites' ten minutes, and the check sees which of the two
+        // ended the stream, by what happens rather than by a bound on the wall clock (finding
+        // 84). A stream that neither ends fails after twice that (finding 85).
         let (endless, keep) = AsyncStream.makeStream(of: AudioChunk.self)
         keep.yield(subject.liveChunks[0])
         let consumer = Task {
@@ -129,13 +134,13 @@ public enum TranscriberContract {
         try await Task.sleep(for: .milliseconds(50))
         let forced = SuiteFlag()
         let watchdog = Task {
-            try? await Task.sleep(for: .seconds(600))
+            try? await Task.sleep(for: SuiteWait.limit)
             guard !Task.isCancelled else { return }
             forced.set()
             keep.finish()
         }
         consumer.cancel()
-        await consumer.value
+        _ = await SuiteWait.value("the live stream to end", limit: SuiteWait.limit * 2) { await consumer.value }
         watchdog.cancel()
         #expect(!forced.isSet, "The stream ends when its consumer goes away, not when its audio does.")
         keep.finish()

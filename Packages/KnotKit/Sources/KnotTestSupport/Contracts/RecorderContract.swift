@@ -60,38 +60,51 @@ public enum RecorderContract {
         #expect(subject.exists(manifest), "The manifest is written before the first sample.")
         #expect(subject.exists(working), "The working file exists once the recording is live.")
 
-        var durable: [Int64] = []
-        var levels = 0
-        for await event in session.events {
-            switch event {
-            case .level(let peak, let average):
-                levels += 1
-                #expect((0...1).contains(peak) && (0...1).contains(average), "Levels run from 0 to 1.")
-            case .durable(let frames):
-                durable.append(frames)
-                // What is reported durable is in the working file (finding 72).
-                #expect(frames == 0 || (subject.size(working) ?? 0) > 0, "The working file holds what is durable.")
-            case .ended:
-                Issue.record("The recording ended before it was stopped.")
-            }
-            if durable.count >= 2 { break }
-        }
+        let size = subject.size
+        let (durable, levels): ([Int64], Int) =
+            await SuiteWait.value("two durable counts") {
+                var durable: [Int64] = []
+                var levels = 0
+                for await event in session.events {
+                    switch event {
+                    case .level(let peak, let average):
+                        levels += 1
+                        #expect((0...1).contains(peak) && (0...1).contains(average), "Levels run from 0 to 1.")
+                    case .durable(let frames):
+                        durable.append(frames)
+                        // What is reported durable is in the working file (finding 72).
+                        #expect(frames == 0 || (size(working) ?? 0) > 0, "The working file holds what is durable.")
+                    case .ended:
+                        Issue.record("The recording ended before it was stopped.")
+                    }
+                    if durable.count >= 2 { break }
+                }
+                return (durable, levels)
+            } ?? ([], 0)
         #expect(levels > 0, "Levels arrive.")
         #expect(durable == durable.sorted(), "The durable count never goes down.")
-        var chunks = 0
-        for await chunk in session.liveAudio {
-            #expect(chunk.sampleRate > 0 && !chunk.samples.isEmpty)
-            chunks += 1
-            break
-        }
+        let chunks: Int =
+            await SuiteWait.value("live audio") {
+                var chunks = 0
+                for await chunk in session.liveAudio {
+                    #expect(chunk.sampleRate > 0 && !chunk.samples.isEmpty)
+                    chunks += 1
+                    break
+                }
+                return chunks
+            } ?? 0
         #expect(chunks == 1, "Live audio arrives.")
 
-        let result = await session.stop()
+        let result = try #require(await SuiteWait.value("the stop") { await session.stop() })
         #expect(result.captureID == request.captureID && result.ending == .stopped)
         #expect(result.frames >= (durable.last ?? 0), "What was durable is in the file.")
         #expect(result.workingFile == working && subject.exists(working), "The working file stays after the stop.")
-        var endings: [RecordedAudio] = []
-        for await event in session.events { if case .ended(let audio) = event { endings.append(audio) } }
+        let endings: [RecordedAudio] =
+            await SuiteWait.value("the events to end after the stop") {
+                var endings: [RecordedAudio] = []
+                for await event in session.events { if case .ended(let audio) = event { endings.append(audio) } }
+                return endings
+            } ?? []
         #expect(endings == [result], "The events end with exactly one ending, the stop's result.")
 
         let converted = try await recorder.convert(result)
@@ -114,9 +127,11 @@ public enum RecorderContract {
         let session = try await subject.recorder.start(request())
         let stopping = Task { await session.stop() }
         stopping.cancel()
-        let first = await stopping.value
+        let first = try #require(await SuiteWait.value("a cancelled caller's stop") { await stopping.value })
         #expect(first.ending == .stopped, "A cancelled caller does not cancel the stop.")
-        #expect(await session.stop() == first, "A second stop returns the same result.")
+        #expect(
+            await SuiteWait.value("a second stop") { await session.stop() } == first,
+            "A second stop returns the same result.")
     }
 
     /// Two stops at once return the same result, and neither returns before the file is on the
@@ -127,21 +142,28 @@ public enum RecorderContract {
         let subject = try await make()
         let request = request()
         let session = try await subject.recorder.start(request)
-        for await event in session.events {
-            if case .durable(let frames) = event, frames > 0 { break }
+        _ = await SuiteWait.value("a durable count above zero") {
+            for await event in session.events {
+                if case .durable(let frames) = event, frames > 0 { break }
+            }
         }
         let working = subject.locations.recordingAudio(request.captureID, format: .caf)
         let size = subject.size
-        let seen = await withTaskGroup(of: (RecordedAudio, Int?).self) { group in
-            for _ in 0..<2 { group.addTask { (await session.stop(), size(working)) } }
-            var seen: [(RecordedAudio, Int?)] = []
-            for await each in group { seen.append(each) }
-            return seen
-        }
+        let seen: [StopSeen] =
+            await SuiteWait.value("two stops at once") {
+                await withTaskGroup(of: StopSeen.self) { group in
+                    for _ in 0..<2 { group.addTask { StopSeen(audio: await session.stop(), size: size(working)) } }
+                    var seen: [StopSeen] = []
+                    for await each in group { seen.append(each) }
+                    return seen
+                }
+            } ?? []
         let final = subject.size(working)
-        #expect(seen.count == 2 && seen.allSatisfy { $0.0 == seen[0].0 }, "Both stops return the same result.")
+        #expect(seen.count == 2 && seen.allSatisfy { $0.audio == seen[0].audio }, "Both stops return the same result.")
         #expect((final ?? 0) > 0, "The stopped recording is on the drive.")
-        #expect(seen.allSatisfy { $0.1 == final }, "Neither stop returns before the file is written: \(seen.map(\.1)).")
+        #expect(
+            seen.allSatisfy { $0.size == final },
+            "Neither stop returns before the file is written: \(seen.map(\.size)).")
     }
 
     /// A discard ends the recording and keeps nothing.
@@ -149,8 +171,8 @@ public enum RecorderContract {
         let subject = try await make()
         let request = request()
         let session = try await subject.recorder.start(request)
-        await session.discard()
-        let after = await session.stop()
+        _ = await SuiteWait.value("the discard") { await session.discard() }
+        let after = try #require(await SuiteWait.value("a stop after the discard") { await session.stop() })
         #expect(after.ending == .discarded && after.frames == 0 && after.workingFile == nil, "Nothing is kept.")
         #expect(!subject.exists(subject.locations.recordingAudio(request.captureID, format: .caf)))
         #expect(!subject.exists(subject.locations.recordingManifest(request.captureID)))
@@ -167,6 +189,12 @@ public enum RecorderContract {
         #expect(
             !recovered.contains { $0.captureID == session.captureID }, "The current launch's recording is left alone.")
         #expect(recovered.allSatisfy { $0.ending == .recovered })
-        #expect(await session.stop().ending == .stopped, "It records on.")
+        #expect(await SuiteWait.value("the stop") { await session.stop() }?.ending == .stopped, "It records on.")
     }
+}
+
+/// What one of two stops at once saw: its result, and the working file's size as it returned.
+struct StopSeen: Sendable {
+    let audio: RecordedAudio
+    let size: Int?
 }

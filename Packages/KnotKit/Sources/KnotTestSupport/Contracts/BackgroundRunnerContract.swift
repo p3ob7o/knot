@@ -26,26 +26,31 @@ public enum BackgroundRunnerContract {
         let runner = subject.runner
         #expect(!runner.name.isEmpty)
 
-        let finished = Mutex(false)
-        try await runner.run(
-            BackgroundWork { report in
-                for step in 1...4 { report(BackgroundProgress(fraction: Double(step) / 4, step: .transcribe)) }
-                finished.withLock { $0 = true }
-            })
-        #expect(finished.withLock { $0 }, "The work runs to its end.")
-
-        await refuses(.transcriptionFailed) {
-            try await runner.run(BackgroundWork { _ throws(KnotError) in throw KnotError.transcriptionFailed })
+        let finished = SuiteFlag()
+        let ran = await SuiteWait.value("a run of short work to return") {
+            await outcome(
+                of: runner,
+                BackgroundWork { report in
+                    for step in 1...4 { report(BackgroundProgress(fraction: Double(step) / 4, step: .transcribe)) }
+                    finished.set()
+                })
         }
+        #expect(ran == .some(nil), "The run returns without an error.")
+        #expect(finished.isSet, "The work runs to its end.")
+
+        let failed = await SuiteWait.value("a run of failing work to return") {
+            await outcome(of: runner, BackgroundWork { _ throws(KnotError) in throw KnotError.transcriptionFailed })
+        }
+        #expect(failed??.code == KnotError.transcriptionFailed.code, "A failure of the work comes back as it is.")
 
         // A cancelled caller cancels the work, which yields, and the caller sees the yield
         // (finding 73).
         let sawCancellation = SuiteFlag()
         let started = SuiteFlag()
         let caller = Task { await outcome(of: runner, longWork(started: started, sawCancellation: sawCancellation)) }
-        await waitUntil(started)
+        await SuiteWait.until("the runner to begin the work", { started.isSet })
         caller.cancel()
-        let yielded = await caller.value
+        let yielded = await SuiteWait.value("a cancelled caller's run to return") { await caller.value } ?? nil
         #expect(
             yielded?.code == KnotError.cancelled.code,
             "A cancelled caller sees the step yield: \(String(describing: yielded?.code)).")
@@ -57,9 +62,9 @@ public enum BackgroundRunnerContract {
         let startedAgain = SuiteFlag()
         let endRunner = endSubject.runner
         let running = Task { await outcome(of: endRunner, longWork(started: startedAgain, sawCancellation: sawEnd)) }
-        await waitUntil(startedAgain)
+        await SuiteWait.until("the runner to begin the work", { startedAgain.isSet })
         await endSubject.endTimeNow()
-        let ended = await running.value
+        let ended = await SuiteWait.value("the run to return once its time ended") { await running.value } ?? nil
         #expect(
             ended?.code == KnotError.noBackgroundTime.code, "The end of the time: \(String(describing: ended?.code)).")
         #expect(sawEnd.isSet, "The work sees its cancellation when the time ends.")
@@ -89,11 +94,6 @@ public enum BackgroundRunnerContract {
         }
     }
 
-    /// Waits until the work has begun, with no bound on the wall clock: a loaded machine may
-    /// take its time to start it (finding 84).
-    static func waitUntil(_ flag: SuiteFlag) async {
-        while !flag.isSet { try? await Task.sleep(for: .milliseconds(1)) }
-    }
 }
 
 /// A flag the suites set from one task and read from another.

@@ -20,8 +20,12 @@ public enum CleanerContract {
         let cleaner = await make()
         let availability = await cleaner.availability()
         #expect(availability == .available, "The suite runs on an available cleaner.")
-        var changes = cleaner.availabilityChanges().makeAsyncIterator()
-        #expect(await changes.next() == availability, "The changes start with the current availability.")
+        let changes = cleaner.availabilityChanges()
+        let first = await SuiteWait.value("the first availability") {
+            var iterator = changes.makeAsyncIterator()
+            return await iterator.next()
+        }
+        #expect(first == availability, "The changes start with the current availability.")
 
         let result = try await cleaner.clean(transcript, proposeTitle: true)
         switch result.outcome {
@@ -44,7 +48,7 @@ public enum CleanerContract {
         let cancelled = ContinuousClock.now
         task.cancel()
         do {
-            _ = try await task.value
+            _ = try await SuiteWait.value("the cancelled request to return") { await task.result }?.get()
             Issue.record("A request cancelled while it runs must throw, not finish.")
         } catch {
             let code = (error as? KnotError)?.code

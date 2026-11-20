@@ -133,13 +133,13 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         let request = draft
         let hold = await store.holdNextCaptureWrite()
         let late = Task { try await store.record(request) }
-        await hold.untilReached()
+        _ = await SuiteWait.value("the held write to reach its hold") { await hold.untilReached() }
         _ = try await store.record(
             NewCapture(
                 id: ids.make(), kind: .typed, origin: origin, launchID: launch, placement: .newNote,
                 startedAt: clock.now(), endedAt: clock.now(), body: .text("B")))
         hold.release()
-        _ = try await late.value
+        _ = try await SuiteWait.value("the held write to return") { await late.result }?.get()
         draft.endedAt = clock.now().addingTimeInterval(60)
         draft.body = .text("all")
         draft.revision = 3
@@ -202,26 +202,16 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         #expect(await reached(second), "The second write meets the second hold.")
         second.release()
         first.release()
-        _ = try await (writeA.value, writeB.value)
+        _ = try await SuiteWait.value("the first held write to return") { await writeA.result }?.get()
+        _ = try await SuiteWait.value("the second held write to return") { await writeB.result }?.get()
         #expect(try await store.capture(a.id) != nil)
         #expect(try await store.capture(b.id) != nil)
     }
 
-    /// Whether a hold is reached within a minute, without hanging when it never is. A minute is
-    /// a bound that scheduling on a loaded machine cannot reach (finding 84).
+    /// Whether a hold is reached within the suites' ten minutes, without hanging when it never
+    /// is (findings 84 and 85).
     private func reached(_ hold: StoreCallHold) async -> Bool {
-        final class Seen: Sendable { let value = Mutex(false) }
-        let seen = Seen()
-        // Unstructured, so that a hold never reached leaves the test to fail instead of waiting.
-        Task {
-            await hold.untilReached()
-            seen.value.withLock { $0 = true }
-        }
-        for _ in 0..<6_000 {
-            if seen.value.withLock({ $0 }) { return true }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return false
+        await SuiteWait.value("the write to reach its hold") { await hold.untilReached() } != nil
     }
 
     /// The reviewer's sequence for finding 62: hold the record of a typed capture begun in the
@@ -238,7 +228,7 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
             revision: 1)
         let hold = await store.holdNextCaptureWrite()
         let late = Task { try await store.record(older) }
-        await hold.untilReached()
+        _ = await SuiteWait.value("the held write to reach its hold") { await hold.untilReached() }
         clock.advance(by: 12)
         let panel = NewCapture(
             id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .macPanel),
@@ -246,7 +236,7 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
             revision: 1)
         _ = try await store.record(panel)
         hold.release()
-        _ = try await late.value
+        _ = try await SuiteWait.value("the held write to return") { await late.result }?.get()
         #expect(try await store.capture(panel.id)?.outcome == .open)
         #expect(try await store.segment(SegmentID(panel.id))?.segment.state == .typed(.draft))
         #expect(try await store.capture(older.id)?.endedAt == panel.startedAt)
@@ -273,11 +263,11 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
 
         let hold = await store.holdNextCaptureWrite()
         let late = Task { try await store.record(open) }
-        await hold.untilReached()
+        _ = await SuiteWait.value("the held write to reach its hold") { await hold.untilReached() }
         let ingested = try await store.ingest(item)
         #expect(ingested.applied && ingested.storedRevision == 4)
         hold.release()
-        let receipt = try await late.value
+        let receipt = try #require(await SuiteWait.value("the held write to return") { await late.result }).get()
         #expect(receipt.outcome == .stored, "The late call returns the stored capture.")
         #expect(try await store.segment(SegmentID(id))?.segment.text == "First words and the rest")
         #expect(try await store.capture(id)?.revision == 4, "The older call never lowers what ingest stored.")

@@ -848,10 +848,14 @@ public enum NoteStoreContract {
     /// A signal follows each committed write, and the open captures name their launch.
     public static func changeSignalsAndOpenCapturesByLaunch(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
-        var signals = h.store.changeSignals().makeAsyncIterator()
+        // Subscribed before the write; the stream keeps the signal until it is read.
+        let signals = h.store.changeSignals()
         let receipt = try await h.store.record(h.tool("Signal me", at: 0))
-        let signal = await signals.next()
-        #expect(signal.map { $0.counter >= receipt.cursor.counter } == true, "A write sends a signal.")
+        let signal = await SuiteWait.value("a signal after a write") {
+            var iterator = signals.makeAsyncIterator()
+            return await iterator.next()
+        }
+        #expect(signal??.counter ?? 0 >= receipt.cursor.counter, "A write sends a signal.")
         let draft = h.typedDraft("Open", at: 1)
         _ = try await h.store.record(draft)
         let open = try await h.store.openCaptures()
