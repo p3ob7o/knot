@@ -506,6 +506,32 @@ else
     fail "the scan for fakes outside KnotFakes: built $built, list $(tr '\n' ';' <"$fk/list.txt"), with fakes '$with_fakes', release '$release', old scan $old_scan"
 fi
 
+# The fixtures step speaks this tree's audio when it lacks it (knot_tool.py fixtures-audio
+# decides): with no local manifest, with one from another generator version, or with a clip
+# missing or changed. A complete set is left as it is. The fixtures here are made up.
+fa="$scratch/fixtures-audio/Fixtures"
+mkdir -p "$fa/generated/audio"
+printf '{"generatorVersion": 2, "generatedAudio": "generated/manifest.json", "audio": [{"file": "generated/audio/a.wav"}, {"file": "generated/audio/b.wav"}]}\n' >"$fa/manifest.json"
+audio_state() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" >/dev/null 2>&1 && echo present || echo missing; }
+states="$(audio_state)"
+printf 'one\n' >"$fa/generated/audio/a.wav"
+printf 'two\n' >"$fa/generated/audio/b.wav"
+sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+write_local() { printf '{"generatorVersion": %s, "audio": [{"file": "generated/audio/a.wav", "sha256": "%s"}, {"file": "generated/audio/b.wav", "sha256": "%s"}]}\n' \
+    "$1" "$(sum "$fa/generated/audio/a.wav")" "$(sum "$fa/generated/audio/b.wav")" >"$fa/generated/manifest.json"; }
+write_local 2
+states="$states $(audio_state)"
+write_local 1
+states="$states $(audio_state)"
+write_local 2
+printf 'changed\n' >"$fa/generated/audio/b.wav"
+states="$states $(audio_state)"
+if [[ $states == "missing present missing missing" ]]; then
+    pass "the fixtures step finds this tree's audio missing, stale or changed, and complete when it is"
+else
+    fail "the local audio's state, with none, complete, another version and a changed clip: $states"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

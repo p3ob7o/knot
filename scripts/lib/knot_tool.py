@@ -873,6 +873,49 @@ def option(args, name, default=None):
     return default
 
 
+# ---------------------------------------------------------------- this tree's audio fixtures
+
+
+def cmd_fixtures_audio(fixtures):
+    """Whether this tree holds its generated audio, as Fixtures/tools/generate.sh --audio
+    makes it: Fixtures/generated/manifest.json made by the generator's version that the
+    committed manifest names, and every clip that the committed manifest lists, present and
+    matching the checksum the local manifest records. Prints what is missing and exits 1 when
+    the audio is not all there, so the fixtures step speaks it first."""
+    import hashlib
+    fixtures = fixtures or "Fixtures"
+    try:
+        with open(os.path.join(fixtures, "manifest.json")) as f:
+            committed = json.load(f)
+    except (OSError, ValueError):
+        print("Fixtures/manifest.json is missing or unreadable")
+        return 1
+    local_path = os.path.join(fixtures, committed.get("generatedAudio", "generated/manifest.json"))
+    try:
+        with open(local_path) as f:
+            local = json.load(f)
+    except (OSError, ValueError):
+        print("no local audio")
+        return 1
+    if local.get("generatorVersion") != committed.get("generatorVersion"):
+        print("the local audio was made by generator version %s, not %s"
+              % (local.get("generatorVersion"), committed.get("generatorVersion")))
+        return 1
+    sums = {entry.get("file"): entry.get("sha256") for entry in local.get("audio", [])}
+    for entry in committed.get("audio", []):
+        name = entry.get("file")
+        path = os.path.join(fixtures, name)
+        if name not in sums or not os.path.isfile(path):
+            print("the local audio lacks %s" % name)
+            return 1
+        with open(path, "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != sums[name]:
+                print("the local %s does not match its manifest" % name)
+                return 1
+    print("local audio present: %d clips" % len(committed.get("audio", [])))
+    return 0
+
+
 # ---------------------------------------------------------------- the fakes in a release build
 
 FAKE_GUARD = re.compile(r"^\s*#if\b(.*)$")
@@ -978,6 +1021,8 @@ def main(argv):
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
         return cmd_links()
+    if command == "fixtures-audio":
+        return cmd_fixtures_audio(option(args, "--fixtures"))
     if command == "fake-types":
         return cmd_fake_types(option(args, "--sources"))
     if command == "status":

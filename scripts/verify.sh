@@ -231,7 +231,17 @@ step_links() { tool links; }
 
 # The synthetic fixtures match a fresh run, and the generated audio has its format and
 # length (Fixtures/README.md).
-step_fixtures() { "$KNOT_ROOT/Fixtures/tools/generate.sh" --check; }
+# The fixtures. When this tree lacks its generated audio, as a fresh checkout and the hosted
+# runner do, the step speaks it first with the generator as it is, so that the package tests
+# that read Fixtures/generated/audio/ find it here as they would on a Mac that made it.
+step_fixtures() {
+    local why
+    if ! why="$(cd "$KNOT_ROOT" && tool fixtures-audio)"; then
+        echo "fixtures: $why. Speaking this tree's audio first: Fixtures/tools/generate.sh --audio"
+        "$KNOT_ROOT/Fixtures/tools/generate.sh" --audio
+    fi
+    "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
+}
 
 step_format() {
     (cd "$KNOT_ROOT" && xcrun swift-format lint --strict --recursive --parallel \
