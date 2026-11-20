@@ -51,13 +51,9 @@ command -v git >/dev/null ||
     knot_fail "infra-git-missing" "git is missing." "xcode-select --install" "safe" "nothing"
 knot_select_xcode
 step "$(knot_xcode_label)"
-command -v xcodegen >/dev/null ||
-    knot_fail "infra-xcodegen-missing" "XcodeGen is not installed." \
-        "brew install xcodegen, at version $KNOT_XCODEGEN_VERSION (docs/dev-setup.md)." "safe" "nothing"
-[[ "$(xcodegen --version | awk '{ print $2 }')" == "$KNOT_XCODEGEN_VERSION" ]] ||
-    knot_fail "infra-xcodegen-version" "XcodeGen is $(xcodegen --version), not $KNOT_XCODEGEN_VERSION." \
-        "Install XcodeGen $KNOT_XCODEGEN_VERSION (docs/dev-setup.md)." "safe" "nothing"
-step "XcodeGen $KNOT_XCODEGEN_VERSION"
+knot_check_xcodegen ||
+    knot_fail "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
+step "XcodeGen $KNOT_XCODEGEN_VERSION, from $KNOT_XCODEGEN_FROM, at $KNOT_XCODEGEN_PATH"
 for platform in iOS:iphonesimulator watchOS:watchsimulator; do
     name=${platform%%:*}
     sdk=${platform#*:}

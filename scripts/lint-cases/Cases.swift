@@ -43,6 +43,12 @@ let space = fstatfs(descriptor, &volume)
 dump(note)
 // expect: logged-text
 Swift.print(note.text)
+// A parenthesis inside a string literal does not join the lines after it into one statement,
+// so a finding names its own line.
+// expect: nothing
+let opening = "("
+// expect: logged-text
+logger.info("saved \(note.text)")
 
 // The lines below must pass: an ID and a formatted duration shown as public, and a line that
 // the escape marker lets through.

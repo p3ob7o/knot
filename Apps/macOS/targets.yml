@@ -35,5 +35,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).uitests
         TEST_TARGET_NAME: Knot-macOS
+        # Signed ad hoc, the UI test runner cannot load its test bundle under the hardened
+        # runtime: library validation refuses a bundle whose ad hoc signature differs, and
+        # ad hoc signing has no team to share. A test target never ships.
+        ENABLE_HARDENED_RUNTIME: NO
     dependencies:
       - target: Knot-macOS
