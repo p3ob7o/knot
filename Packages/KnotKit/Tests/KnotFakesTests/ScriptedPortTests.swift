@@ -158,6 +158,7 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
     static let speech = URL(fileURLWithPath: "/fixtures/speech.wav")
     static let silence = URL(fileURLWithPath: "/fixtures/silence.wav")
     static let long = URL(fileURLWithPath: "/fixtures/long.m4a")
+    static let missing = URL(fileURLWithPath: "/fixtures/missing.wav")
 
     static func scripted() -> ScriptedTranscriber {
         let transcriber = ScriptedTranscriber()
@@ -168,6 +169,7 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
                 TranscriptPiece(text: word, range: .seconds(index * 2) ..< .seconds(index * 2 + 1))
             })
         transcriber.script(silence, pieces: [])
+        transcriber.scriptMissing(missing)
         transcriber.scriptLive(words: ["pick", "up", "the"])
         return transcriber
     }
@@ -179,7 +181,7 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
             transcriber.setRunDelay(.seconds(30), for: Self.long)
             return TranscriberSubject(
                 transcriber: transcriber, speech: Self.speech, long: Self.long, silence: Self.silence,
-                missing: URL(fileURLWithPath: "/fixtures/missing.wav"), budget: .milliseconds(500),
+                missing: Self.missing, budget: .milliseconds(500),
                 liveChunks: Array(repeating: AudioChunk(samples: [0, 0.1], sampleRate: 16_000), count: 4))
         }
     }
@@ -369,6 +371,26 @@ final class ProgressLog: Sendable {
             offset = next
         }
         #expect(runs == 2 && text == ["a long first phrase", "then a short one"])
+    }
+
+    /// A file nobody scripted reads as the default script, so that a recording made in a
+    /// preview has a transcript; one marked missing is unreadable; and with the default
+    /// turned off, an unscripted file is unreadable too (finding 74).
+    @Test func anUnscriptedFileReadsAsTheDefaultScript() async throws {
+        let transcriber = ScriptedTranscriber()
+        let made = URL(fileURLWithPath: "/recordings/made-in-a-preview.caf")
+        let run = try await transcriber.transcribe(file: made, from: .zero, budget: nil)
+        #expect(!run.pieces.isEmpty && run.resumeAt == nil, "The default script answers.")
+        #expect(run.pieces.map(\.text) == ScriptedTranscriber.defaultScript.map(\.text))
+        let missing = URL(fileURLWithPath: "/recordings/missing.caf")
+        transcriber.scriptMissing(missing)
+        await #expect(throws: KnotError.audioUnreadable) {
+            try await transcriber.transcribe(file: missing, from: .zero, budget: nil)
+        }
+        transcriber.scriptUnscriptedFiles(pieces: nil)
+        await #expect(throws: KnotError.audioUnreadable) {
+            try await transcriber.transcribe(file: made, from: .zero, budget: nil)
+        }
     }
 
     @Test func theProvenanceNamesTheLocaleItWasGiven() async throws {

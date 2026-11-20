@@ -108,6 +108,7 @@
         private var state = State()
         private let signals = Signals()
         private var pendingHold: StoreCallHold?
+        private var captureWriteFailures: [KnotError] = []
 
         /// - Parameters:
         ///   - seed: notes with their segments that the store holds from the start, such as
@@ -151,6 +152,14 @@
             return hold
         }
 
+        /// The next writes that record, save, end or ingest a capture fail with these errors, in
+        /// order, and write nothing, as a store that is not open yet, or that another process
+        /// holds, answers (`store_not_open`, `store_busy`). For the tracer's named test of a
+        /// capture made before the store opens or while it is locked.
+        public func failNextCaptureWrites(with errors: KnotError...) {
+            captureWriteFailures += errors
+        }
+
         /// Applies a change of a segment's note that arrived by sync, as the merge core applies
         /// a remote move or the deleted-note rule (docs/architecture.md §11): the segment and its
         /// conflict copies go to `note`, which is made if it is missing, with a higher generation.
@@ -190,6 +199,7 @@
 
         public func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt {
             await waitIfHeld()
+            try failIfScripted(capture.id)
             try check(capture)
             if !faults.contains(.ignoresRepeatedCaptureID), let row = state.captures[capture.id] {
                 return try repeatOf(capture, row: row)
@@ -202,6 +212,7 @@
 
         public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult {
             await waitIfHeld()
+            try failIfScripted(capture.id)
             if !fits(capture) || capture.endedAt == nil { try writeUnreadable(capture) }
             try check(capture, ingesting: true)
             guard let endedAt = capture.endedAt else { throw KnotError.inboxItemUnreadable.about(capture: capture.id) }
@@ -228,6 +239,7 @@
 
         public func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
             await waitIfHeld()
+            try failIfScripted(checkpoint.captureID)
             guard let row = state.captures[checkpoint.captureID] else {
                 throw KnotError.notFound.about(capture: checkpoint.captureID)
             }
@@ -243,6 +255,7 @@
 
         public func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt {
             await waitIfHeld()
+            try failIfScripted(end.captureID)
             guard state.captures[end.captureID] != nil else { throw KnotError.notFound.about(capture: end.captureID) }
             let incoming: Incoming
             switch end.outcome {
@@ -1536,6 +1549,11 @@
             else { throw KnotError.notFound }
             return MoveOutcome(
                 segment: read(moved), from: read(fromNote), to: read(toNote), cursor: cursor(state.counter))
+        }
+
+        private func failIfScripted(_ capture: CaptureID) throws(KnotError) {
+            guard !captureWriteFailures.isEmpty else { return }
+            throw captureWriteFailures.removeFirst().about(capture: capture)
         }
 
         private func waitIfHeld() async {

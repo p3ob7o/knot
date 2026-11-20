@@ -5,7 +5,8 @@
 
     /// A `Transcriber` that says what a test scripts (docs/architecture.md §5): each readiness
     /// state and its changes, the pieces of each file over several runs, each failure, an
-    /// empty file, a cancellation during a run, and live text that is volatile and then final.
+    /// empty file, a missing one, a cancellation during a run, and live text that is volatile
+    /// and then final. A file nobody scripted reads as `defaultScript`.
     public final class ScriptedTranscriber: Transcriber {
         /// The provenance of every run, as a real transcript would carry it, with the locale
         /// the transcriber was given.
@@ -16,6 +17,8 @@
         private struct State {
             var readiness: TranscriberReadiness
             var files: [URL: [TranscriptPiece]] = [:]
+            var missing: Set<URL> = []
+            var unscripted: [TranscriptPiece]? = ScriptedTranscriber.defaultScript
             var failures: [KnotError] = []
             var installFailure: KnotError?
             var runDelay: Duration = .zero
@@ -38,6 +41,22 @@
 
         /// The phrases `file` holds, in its own time. A file with none is empty or silent.
         public func script(_ file: URL, pieces: [TranscriptPiece]) { state.withLock { $0.files[file] = pieces } }
+
+        /// What a file nobody scripted reads as, so that a recording made in a preview or by the
+        /// tracer has a transcript: three short synthetic phrases.
+        public static let defaultScript: [TranscriptPiece] = [
+            TranscriptPiece(text: "a scripted", range: .zero ..< .seconds(1)),
+            TranscriptPiece(text: " transcript", range: .seconds(1) ..< .seconds(2)),
+            TranscriptPiece(text: " of a recording", range: .seconds(2) ..< .seconds(3)),
+        ]
+
+        /// What every file nobody scripted reads as; `nil` makes such a file unreadable.
+        public func scriptUnscriptedFiles(pieces: [TranscriptPiece]?) {
+            state.withLock { $0.unscripted = pieces }
+        }
+
+        /// A file that is not there, or cannot be read: `audio_unreadable`.
+        public func scriptMissing(_ file: URL) { state.withLock { _ = $0.missing.insert(file) } }
 
         /// The next calls to `transcribe` fail with these errors, in order.
         public func failNextRuns(with errors: KnotError...) { state.withLock { $0.failures += errors } }
@@ -80,7 +99,8 @@
             let (readiness, failure, pieces, delay) = state.withLock { state in
                 state.calls += 1
                 let failure = state.failures.isEmpty ? nil : state.failures.removeFirst()
-                return (state.readiness, failure, state.files[file], state.fileDelays[file] ?? state.runDelay)
+                let pieces = state.missing.contains(file) ? nil : state.files[file] ?? state.unscripted
+                return (state.readiness, failure, pieces, state.fileDelays[file] ?? state.runDelay)
             }
             switch readiness {
             case .ready: break

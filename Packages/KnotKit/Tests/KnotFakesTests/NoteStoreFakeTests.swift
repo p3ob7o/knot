@@ -146,6 +146,39 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         #expect(result.receipt.noteID == a.noteID)
     }
 
+    /// For the tracer (finding 74): the next capture writes fail with the codes given, in order,
+    /// and write nothing; the one after succeeds. `record`, `checkpoint`, `end` and `ingest` alike.
+    @Test func theNextCaptureWritesFailWithTheCodesGiven() async throws {
+        let clock = FakeClock()
+        let ids = SeededIDGenerator(seed: 13, clock: clock)
+        let device: DeviceID = ids.make()
+        let store = InMemoryNoteStore(clock: clock, ids: ids, deviceID: device)
+        let launch: LaunchID = ids.make()
+        let draft = NewCapture(
+            id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .app),
+            launchID: launch, placement: .window, startedAt: clock.now(), body: .text("first"), revision: 1)
+        await store.failNextCaptureWrites(with: .storeNotOpen, .storeBusy)
+        await #expect(throws: KnotError.storeNotOpen.about(capture: draft.id)) { try await store.record(draft) }
+        await #expect(throws: KnotError.storeBusy.about(capture: draft.id)) { try await store.record(draft) }
+        #expect(try await store.capture(draft.id) == nil, "Nothing is written.")
+        _ = try await store.record(draft)
+
+        await store.failNextCaptureWrites(with: .storeBusy, .storeBusy, .storeNotOpen)
+        await #expect(throws: KnotError.storeBusy.about(capture: draft.id)) {
+            try await store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "second", revision: 2))
+        }
+        let end = CaptureEnd(
+            captureID: draft.id, endedAt: clock.now(), outcome: .stored(.text("second")), revision: 2)
+        await #expect(throws: KnotError.storeBusy.about(capture: draft.id)) { try await store.end(end) }
+        var item = draft
+        item.endedAt = clock.now()
+        item.body = .text("second")
+        item.revision = 2
+        await #expect(throws: KnotError.storeNotOpen.about(capture: draft.id)) { try await store.ingest(item) }
+        #expect(try await store.capture(draft.id)?.outcome == .open, "Nothing is written.")
+        #expect(try await store.ingest(item).applied)
+    }
+
     /// The reviewer's sequence for finding 62: hold the record of a typed capture begun in the
     /// app, begin one in the Mac panel 12 seconds later, release: the panel's capture stays open.
     @Test func aHeldStartReleasedAfterANewerOneBeganDoesNotEndIt() async throws {
