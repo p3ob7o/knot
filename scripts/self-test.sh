@@ -712,6 +712,56 @@ else
 fi
 pkill -KILL -f "$lockdir/silent/ioreg" 2>/dev/null || true
 
+# The lock check's wiring, through verify.sh's own step loop. A copy of scripts/ in which
+# only the doctor and the Mac UI step are stand-ins runs `--only mac-ui` on a scratch tree,
+# with its build slots in a scratch folder, and a stub ioreg that counts its reads. A locked
+# screen fails the step at once, takes no slot and runs no test; an unlocked one runs it; a
+# read that does not answer runs it too, and never passes it unrun; a screen that reads
+# locked and then unlocked still fails; a run without the Mac UI step reads nothing.
+wl="$scratch/lock-loop"
+mkdir -p "$wl/tree" "$wl/slots" "$wl/stubs"
+cp -R "$KNOT_SCRIPTS" "$wl/scripts"
+cp "$KNOT_ROOT/.xcode-version" "$wl/tree/"
+python3 -I - "$wl/scripts/verify.sh" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("step_mac_ui", 'echo "mac-ui stand-in ran" >>"$KNOT_LOCK_LOOP/ran"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body.replace("$KNOT_LOCK_LOOP/", "$KNOT_LOCK_LOOP_RUN/") + "\n}\n" + text[end:]
+open(path, "w").write(text)
+PY
+lock_stub() { # lock_stub <name> <first answer> [<later answer>]: an ioreg that counts its reads
+    mkdir -p "$wl/stubs/$1"
+    printf '#!/bin/sh\necho x >>"$KNOT_LOCK_LOOP_RUN/reads"\nn=$(wc -l <"$KNOT_LOCK_LOOP_RUN/reads" | tr -d " ")\nanswer=%s\n[ "$n" -gt 1 ] && answer=%s\n[ "$answer" = silent ] && exec sleep 30\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><%%s/></dict></plist>\\n" "$answer"\n' \
+        "$2" "${3:-$2}" >"$wl/stubs/$1/ioreg"
+    chmod +x "$wl/stubs/$1/ioreg"
+}
+lock_stub locked true
+lock_stub unlocked false
+lock_stub silent silent
+lock_stub flips true false
+lock_loop() { # lock_loop <stub> <step>: status, reads, whether the stand-in ran, whether a slot was taken
+    local status=0 run="$wl/run-$1-$2"
+    mkdir -p "$run/slots"
+    env PATH="$wl/stubs/$1:$PATH" KNOT_LOCK_LOOP_RUN="$run" KNOT_TREE="$wl/tree" KNOT_SLOT_DIR="$run/slots" \
+        KNOT_CONSOLE_READ_LIMIT=2 "$wl/scripts/verify.sh" --only "$2" >"$wl/out-$1-$2" 2>&1 || status=$?
+    echo "$status $( [[ -f $run/reads ]] && wc -l <"$run/reads" | tr -d ' ' || echo 0) $( [[ -f $run/ran ]] && echo ran || echo not-run) $(ls "$run/slots" | grep -c holder || true)"
+}
+locked_run="$(lock_loop locked mac-ui)"
+unlocked_run="$(lock_loop unlocked mac-ui)"
+silent_run="$(lock_loop silent mac-ui)"
+flips_run="$(lock_loop flips mac-ui)"
+plan_run="$(lock_loop locked doctor)"
+if [[ ${locked_run%% *} != 0 && $locked_run == *" 1 not-run 0" && "$(cat "$wl/out-locked-mac-ui")" == *"locked"*"owner"* &&
+    $unlocked_run == "0 1 ran "* && $silent_run == "0 1 ran "* && ${flips_run%% *} != 0 && $flips_run == *"not-run"* &&
+    $plan_run == "0 0 not-run 0" ]]; then
+    pass "through verify's loop, a locked screen fails the Mac UI step unrun and slotless, and no step passes unrun"
+else
+    fail "the lock check through verify's loop (status, reads, stand-in, slots): locked '$locked_run', unlocked '$unlocked_run', silent '$silent_run', locked then unlocked '$flips_run', a run without the step '$plan_run'"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
