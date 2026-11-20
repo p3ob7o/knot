@@ -190,3 +190,176 @@ knot_generate_project() {
     knot_write_worktree_config
     (cd "$KNOT_ROOT" && xcodegen generate --spec project.yml --quiet)
 }
+
+# Whether this Mac can run Mac UI tests, from the output of `automationmodetool` (no
+# arguments) and of `DevToolsSecurity -status`. Prints what is missing, one item a line, and
+# returns 1 when anything is.
+#
+# `automationmodetool` prints two lines (man automationmodetool): whether Automation Mode is
+# on now, and whether turning it on needs authentication. The first says "disabled" whenever
+# no UI test runs, because a test run turns it on and off. What matters is the second:
+# "This device DOES NOT REQUIRE user authentication to enable Automation Mode". Developer
+# mode must read "currently enabled"; "disabled" holds the word "enabled", so the whole
+# phrase is matched.
+knot_mac_ui_ready() {
+    local automation=$1 developer=$2 missing=0
+    if ! printf '%s\n' "$automation" | grep -i -e 'does not require user authentication to enable automation mode' >/dev/null; then
+        echo "enabling Automation Mode needs authentication: sudo automationmodetool enable-automationmode-without-authentication"
+        missing=1
+    fi
+    if ! printf '%s\n' "$developer" | grep -i -e 'developer mode is currently enabled' >/dev/null; then
+        echo "developer mode is off: sudo DevToolsSecurity -enable"
+        missing=1
+    fi
+    return "$missing"
+}
+
+# Runs a command with a time limit, and returns its status. At the limit the command and its
+# descendants, found before any of them ends, get TERM, then KILL two seconds later for those
+# that ignore it; the function then sets KNOT_LIMIT_HIT=1 and returns 124. The command's
+# output goes where the caller sends it: send it to a file, not a pipe that the caller reads,
+# since a process that outlives the kill would hold the pipe open.
+#   knot_limit <seconds> <command…>
+KNOT_LIMIT_HIT=0
+knot_limit() {
+    local seconds=$1 status=0 pid ticks=0 family
+    shift
+    KNOT_LIMIT_HIT=0
+    "$@" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        family="$pid $(knot_descendants "$pid")"
+        # shellcheck disable=SC2086
+        kill -TERM $family 2>/dev/null || true
+        # The two seconds are for the whole family: when the command is a shell function,
+        # $pid is a subshell that dies at TERM at once, while what it started, such as
+        # xcodebuild ending its test session, still needs the time.
+        ticks=0
+        while knot_any_alive $family && ((ticks < 20)); do
+            sleep 0.1
+            ticks=$((ticks + 1))
+        done
+        # shellcheck disable=SC2086
+        kill -KILL $family 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        KNOT_LIMIT_HIT=1
+        return 124
+    fi
+    wait "$pid" || status=$?
+    return "$status"
+}
+
+# Whether any of the processes named is still alive.
+knot_any_alive() {
+    local p
+    for p in "$@"; do
+        kill -0 "$p" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+# Prints the process IDs of every descendant of a process, one per line.
+knot_descendants() {
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do
+        echo "$child"
+        knot_descendants "$child"
+    done
+}
+
+# What a step says when a run outlives its limit: on this Mac, a system dialog that only the
+# owner can answer is the likely cause, and no agent answers it.
+knot_dialog_message() {
+    echo "$1 did not end within ${2}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+}
+
+# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its standard
+# output; its standard error goes to standard error. A start that a system dialog holds, such
+# as a consent prompt, never returns, and nothing but the owner can answer the dialog, so the
+# limit turns that hang into a failure that says so, on standard error. Returns the tool's
+# status, or 1 when the limit ran out.
+#   knot_start_tool <seconds> <tool> [arguments…]
+knot_start_tool() {
+    local seconds=$1 status=0 output errors
+    shift
+    # The tool's standard output is what the caller compares; its standard error, and the
+    # message at the limit, go to standard error, which a step sends to its log.
+    output="$(mktemp)"
+    errors="$(mktemp)"
+    knot_limit "$seconds" "$@" >"$output" 2>"$errors" || status=$?
+    cat "$output"
+    cat "$errors" >&2
+    rm -f "$output" "$errors"
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "$(basename "$1")" "$seconds" >&2
+        return 1
+    fi
+    return "$status"
+}
+
+# Takes the signing team's ID out of a build log, by pattern: Xcode writes the team's prefix
+# into the log of every app build on a Mac that knows the team, whatever the signing, as
+# TeamIdentifierPrefix, AppIdentifierPrefix and the entitlements it prints, such as
+# application-identifier. No run needs the ID, and most do not know it, so a team ID is
+# matched by its shape, ten capitals and digits, where those keys or an identifier put it:
+# before `.com.` or `.*`, as a plist's whole string, as codesign's `[String]` value, and as
+# the parenthesised end of a certificate's name. A run that has the owner's configuration
+# knows the ID: the filter reads it, as the team-ID step does, from KNOT_TEAM_CONFIG, else
+# KNOT_LOCAL_CONFIG, else the configuration that bootstrap linked into the tree, never prints
+# it, and masks it wherever it stands.
+#   … | knot_filter_team
+KNOT_TEAM_FILTER='
+    BEGIN {
+        my $config = $ENV{KNOT_FILTER_CONFIG} || "";
+        if ($config ne "" && open(my $file, "<", $config)) {
+            local $/;
+            my $text = <$file>;
+            ($main::team) = $text =~ /^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]{10})\s*$/m;
+        }
+    }
+    s/((?:TeamIdentifierPrefix|AppIdentifierPrefix)\\?[=:]\s*"?)[A-Z0-9]{10}(?=[."\s]|$)/$1<TEAM>/g;
+    s/(DEVELOPMENT_TEAM\w*\s*\\?[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/((?:team-identifier|TeamIdentifier|com\.apple\.developer\.team-identifier)"?\s*[=:]\s*"?)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/\b[A-Z0-9]{10}(?=\.(?:(?:com|group|iCloud|org|net)\b|\*))/<TEAM>/g;
+    s/(<string>\s*)[A-Z0-9]{10}(?=\s*<\/string>)/$1<TEAM>/g;
+    s/(\[String\]\s+)[A-Z0-9]{10}\b/$1<TEAM>/g;
+    s/\([A-Z0-9]{10}\)/(<TEAM>)/g;
+    s/\Q$main::team\E/<TEAM>/g if defined $main::team;
+'
+# The configuration the filter reads the ID from, chosen as step_team_id chooses it.
+knot_filter_config() { echo "${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-$KNOT_CONFIG/Local.xcconfig}}"; }
+knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_TEAM_FILTER"; }
+
+# Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
+# the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
+# of a command still writing to it, and a rewrite would give the file a new inode under the
+# writer, whose lines would then be lost.
+knot_scrub_logs() {
+    local folder=$1 log
+    [[ -d $folder ]] || return 0
+    for log in "$folder"/verify-* "$folder"/bootstrap-*; do
+        [[ -f $log ]] || continue
+        KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
+    done
+}
+
+# Judges the log of an xcodebuild test run of XCTest cases, such as UI tests. Prints one line,
+# "xctest: N passed, M failed", and returns 1 when no case passed, when a case failed, or
+# when a destination named after the log has no passed case: a run that executed 0 tests is
+# a failure, not a pass. A run on several destinations writes "passed on '<name> - …'".
+#   knot_xctest_result <log> [destination name…]
+knot_xctest_result() {
+    local log=$1 passed failed destination missing=""
+    shift
+    passed=$(grep -a -c -E "Test [Cc]ase '[^']+' passed" "$log" || true)
+    failed=$(grep -a -c -E "Test [Cc]ase '[^']+' failed" "$log" || true)
+    for destination in "$@"; do
+        grep -a -F -e "passed on '$destination" "$log" >/dev/null || missing="$missing $destination"
+    done
+    echo "xctest: $passed passed, $failed failed${missing:+, none passed on:$missing}"
+    ((passed > 0 && failed == 0)) && [[ -z $missing ]]
+}

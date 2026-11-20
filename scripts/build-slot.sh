@@ -52,7 +52,9 @@ status() {
 # SLOT_BUSY to 1 when a lock was taken by someone else and the command did not run, else to
 # 0, and returns the command's status. Which of the two happened is told by a marker that
 # the command's wrapper writes once it holds every lock, never by the status, because a
-# command may itself exit with lockf's 75.
+# command may itself exit with lockf's 75. When WAITED_SINCE is set, the run has waited
+# since then, and the wrapper says how long once it holds every lock, before the command
+# starts, so that the time counts the wait alone.
 try_run() {
     local locks=() marker
     while [[ $1 != -- ]]; do locks+=("$1"); shift; done
@@ -63,13 +65,18 @@ try_run() {
     for lock in "${locks[@]}"; do chain+=(/usr/bin/lockf -s -t 0 -k "$lock"); done
     local status=0
     "${chain[@]}" /bin/bash -c '
-        marker=$1 label=$2 count=$3
-        shift 3
+        marker=$1 label=$2 since=$3 count=$4
+        shift 4
         holder="pid $$, $label, since $(date "+%H:%M:%S")"
         i=0
         while ((i < count)); do printf "%s\n" "$holder" >"${1%.lock}.holder"; shift; i=$((i + 1)); done
         : >"$marker"
-        exec "$@"' _ "$marker" "$LABEL" "${#locks[@]}" "${locks[@]}" "$@" || status=$?
+        if [[ -n $since ]]; then
+            s=$(($(date +%s) - since))
+            if ((s >= 60)); then w=$(printf "%dm%02ds" $((s / 60)) $((s % 60))); else w="${s}s"; fi
+            echo "build-slot: got a slot after $w, at $(date "+%H:%M:%S")" >&2
+        fi
+        exec "$@"' _ "$marker" "$LABEL" "${WAITED_SINCE:-}" "${#locks[@]}" "${locks[@]}" "$@" || status=$?
     if [[ -e $marker ]]; then
         rm -f "$marker"
         SLOT_BUSY=0
@@ -132,11 +139,10 @@ run() {
                 [[ -n $sim ]] && locks+=("$sim")
                 locks+=(${extras[@]+"${extras[@]}"})
                 status=0
+                WAITED_SINCE=""
+                ((waited)) && WAITED_SINCE=$start
                 try_run "${locks[@]}" -- "$@" || status=$?
-                if ((SLOT_BUSY == 0)); then
-                    ((waited)) && echo "build-slot: got a slot after $(knot_duration $(($(knot_now) - start)))" >&2
-                    return "$status"
-                fi
+                ((SLOT_BUSY == 0)) && return "$status"
             done
         done
         waited=1

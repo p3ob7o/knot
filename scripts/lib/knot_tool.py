@@ -372,10 +372,12 @@ HOSTED = [
     "Packages/KnotKit/Tests/KnotAudioTests/", "Packages/KnotKit/Tests/KnotInkTests/",
     "Apps/iOS/", "Packages/KnotKit/Package.swift", "project.yml",
 ]
-# Mac UI tests run where the diff reaches the Mac app or KnotUI.
+# Mac UI tests run where the diff reaches the Mac app or KnotUI, the scripts that run them,
+# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38).
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
     "Packages/KnotKit/Sources/KnotUI/", "Packages/KnotKit/Sources/KnotApp/",
+    "scripts/", ".xcode-version",
 ]
 
 
@@ -504,6 +506,8 @@ def cmd_named_tests(source, package=None, branch=None):
     counts as merged, so a package's last pull request is held to its tests at its own gate."""
     merged = merged_prs(source)
     if package and package != "contract":
+        if not branch:
+            print(f"named-tests: no branch was named, so this pull request counts as {package}'s code, not as a note")
         merged.append((package, is_note_branch(branch)))
     code = code_text()
     missing, required = [], 0
@@ -577,7 +581,11 @@ def code_lines(path):
             start = number
         parts.append(line.strip())
         raws.append(raw.strip())
-        depth += line.count("(") - line.count(")")
+        # Parentheses inside a string literal, interpolations included, open no call: they
+        # are counted only outside the literals, so that a "(" in a string does not join the
+        # lines after it into one statement.
+        bare = re.sub(r'"(?:\\.|[^"\\])*"', '""', line)
+        depth += bare.count("(") - bare.count(")")
         if depth <= 0:
             yield start, " ".join(parts), " ".join(raws)
             start, parts, raws, depth = None, [], [], 0
