@@ -90,6 +90,7 @@ public enum NoteStoreContract {
         Check(name: "deletes", run: deletesRestoresAndThePurge),
         Check(name: "emptied", run: anEmptyCaptureLeavesAnEmptiedNote),
         Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
+        Check(name: "recording-job", run: aStoredRecordingAlwaysHasItsJob),
         Check(name: "stream-search", run: streamAndSearch),
     ]
 
@@ -791,8 +792,7 @@ public enum NoteStoreContract {
         _ = try await voiced.store.end(
             CaptureEnd(
                 captureID: recording.id, endedAt: voiced.at(2.5),
-                outcome: .stored(.file(voiced.asset(.audio, for: recording.id), duration: .seconds(30))), revision: 0,
-                transcribeJob: voiced.ids.make()))
+                outcome: .stored(.file(voiced.asset(.audio, for: recording.id), duration: .seconds(30))), revision: 0))
         let recovered = try #require(try await voiced.store.segment(SegmentID(recording.id))).segment
         #expect(recovered.state == .voice(.recorded) && recovered.endedAt == voiced.at(2.5))
         #expect(try await voiced.store.jobs(for: recovered.id).count == 1, "A recovered recording has its job.")
@@ -1489,12 +1489,11 @@ public enum NoteStoreContract {
         let h = await Harness(make)
         let start = h.recordingStart(at: 0, surface: .control)
         _ = try await h.store.record(start)
-        let jobID: JobID = h.ids.make()
+        let jobID = JobID.transcribe(of: SegmentID(start.id))
         _ = try await h.store.end(
             CaptureEnd(
                 captureID: start.id, endedAt: h.at(1),
-                outcome: .stored(.file(h.asset(.audio, for: start.id), duration: .seconds(60))), revision: 0,
-                transcribeJob: jobID))
+                outcome: .stored(.file(h.asset(.audio, for: start.id), duration: .seconds(60))), revision: 0))
         let segment = SegmentID(start.id)
         let job = try #require(try await h.store.jobs(for: segment).first, "The first job is written with the end.")
         #expect(job.id == jobID && job.kind == .transcribe && job.state == .queued && job.resumeAt == nil)
@@ -1523,12 +1522,11 @@ public enum NoteStoreContract {
         // A job of another segment cannot write this one's transcript.
         let otherStart = h.recordingStart(at: 10, surface: .control)
         _ = try await h.store.record(otherStart)
-        let otherJob: JobID = h.ids.make()
+        let otherJob = JobID.transcribe(of: SegmentID(otherStart.id))
         _ = try await h.store.end(
             CaptureEnd(
                 captureID: otherStart.id, endedAt: h.at(11),
-                outcome: .stored(.file(h.asset(.audio, for: otherStart.id), duration: .seconds(9))), revision: 0,
-                transcribeJob: otherJob))
+                outcome: .stored(.file(h.asset(.audio, for: otherStart.id), duration: .seconds(9))), revision: 0))
         await refuses(.notFound) {
             try await h.store.appendTranscript(h.run("wrong", from: .zero, resumeAt: nil), to: segment, job: otherJob)
         }
@@ -1557,6 +1555,42 @@ public enum NoteStoreContract {
                 outcome: .declined(.guardRejected), title: "bikes", provenance: cleaned.provenance, modelName: "model"),
             to: second.segmentIDs[0])
         #expect(!none.titleSet && none.note.title == nil)
+    }
+
+    /// A stored recording never lacks its transcribe job, whatever the path that stored it:
+    /// the store writes it, with an ID derived from the segment's, so a repeat makes the same
+    /// one (finding 44).
+    public static func aStoredRecordingAlwaysHasItsJob(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make, window: .off)
+        func expectOneJob(_ segment: SegmentID, _ path: String) async throws {
+            let jobs = try await h.store.jobs(for: segment)
+            #expect(jobs.map(\.id) == [.transcribe(of: segment)], "\(path): one job, with the derived ID.")
+            #expect(jobs.first?.kind == .transcribe)
+        }
+        // end of an open recording, and its repeat.
+        let started = h.recordingStart(at: 0, surface: .control)
+        _ = try await h.store.record(started)
+        let end = CaptureEnd(
+            captureID: started.id, endedAt: h.at(1),
+            outcome: .stored(.file(h.asset(.audio, for: started.id), duration: .seconds(60))), revision: 0)
+        _ = try await h.store.end(end)
+        _ = try await h.store.end(end)
+        try await expectOneJob(SegmentID(started.id), "end")
+        // record of a finished recording.
+        let finished = h.watchRecording(from: 2, to: 3, arrival: .live)
+        _ = try await h.store.record(finished)
+        _ = try await h.store.record(finished)
+        try await expectOneJob(SegmentID(finished.id), "record")
+        // ingest, with an open row and with none, and its repeat.
+        for open in [true, false] {
+            var item = h.recordingStart(at: open ? 10 : 20, surface: .control)
+            if open { _ = try await h.store.record(item) }
+            item.endedAt = h.at(open ? 11 : 21)
+            item.body = .file(h.asset(.audio, for: item.id), duration: .seconds(10))
+            _ = try await h.store.ingest(item)
+            _ = try await h.store.ingest(item)
+            try await expectOneJob(SegmentID(item.id), open ? "ingest onto an open row" : "ingest with no row")
+        }
     }
 
     // MARK: Reading
@@ -1746,7 +1780,7 @@ struct Harness {
         return NewCapture(
             id: id, kind: .voice, origin: CaptureOrigin(source: .device(device), surface: .watch), launchID: launch,
             placement: .window, arrival: arrival, startedAt: at(start), endedAt: at(end),
-            body: .file(asset(.audio, for: id), duration: .seconds((end - start) * 60)), transcribeJob: ids.make())
+            body: .file(asset(.audio, for: id), duration: .seconds((end - start) * 60)))
     }
 
     func run(_ text: String, from start: Duration, resumeAt: Duration?) -> TranscriptionRun {

@@ -215,8 +215,7 @@
             case .none: incoming = .asItStands
             }
             let applied = try save(
-                capture.id, incoming, revision: capture.revision, endingAt: endedAt, mode: .ingest,
-                job: capture.transcribeJob, in: &next)
+                capture.id, incoming, revision: capture.revision, endingAt: endedAt, mode: .ingest, in: &next)
             commit(next)
             guard let receipt = next.receipts[capture.id], let row = next.captures[capture.id] else {
                 throw KnotError.notFound
@@ -233,7 +232,7 @@
             var next = state
             let applied = try save(
                 checkpoint.captureID, .text(checkpoint.text), revision: checkpoint.revision, endingAt: nil,
-                mode: .checkpoint, job: nil, in: &next)
+                mode: .checkpoint, in: &next)
             if applied { commit(next) }
             let stored = state.captures[row.id]?.revision ?? row.revision
             return CheckpointResult(applied: applied, storedRevision: stored)
@@ -255,8 +254,7 @@
             }
             var next = state
             _ = try save(
-                end.captureID, incoming, revision: end.revision, endingAt: end.endedAt, mode: .end,
-                job: end.transcribeJob, in: &next)
+                end.captureID, incoming, revision: end.revision, endingAt: end.endedAt, mode: .end, in: &next)
             commit(next)
             guard let receipt = next.receipts[end.captureID] else { throw KnotError.notFound }
             return receipt
@@ -741,9 +739,7 @@
             } else {
                 segmentIDs = try writeSegments(for: capture, in: noteID, joined: joined, at: now, into: &next)
             }
-            if outcome == .stored, let job = capture.transcribeJob, capture.kind == .voice {
-                next.jobs[job] = Job(id: job, segmentID: SegmentID(capture.id), kind: .transcribe)
-            }
+            if outcome == .stored, capture.kind == .voice { writeTranscribeJob(for: SegmentID(capture.id), in: &next) }
             touch(noteID, counter: counter, at: now, in: &next)
             let hash = outcome == .stored ? capture.body.content.map { contentHash(capture.kind, $0) } : nil
             next.captures[capture.id] = Capture(
@@ -844,7 +840,7 @@
         /// first; then emptiness is judged, the segments finished and what is stored hashed.
         /// Returns whether anything changed.
         private func save(
-            _ id: CaptureID, _ incoming: Incoming, revision: Int64, endingAt: Date?, mode: SaveMode, job: JobID?,
+            _ id: CaptureID, _ incoming: Incoming, revision: Int64, endingAt: Date?, mode: SaveMode,
             in next: inout State
         ) throws(KnotError) -> Bool {
             guard var row = next.captures[id], var receipt = next.receipts[id] else {
@@ -961,9 +957,7 @@
                         next.segments[first]?.endedAt = endingAt ?? now
                         next.segments[first]?.state = row.kind == .voice ? .voice(.recorded) : .ink(.recognising)
                         attach(asset, duration: duration, to: first, in: &next)
-                        if row.kind == .voice, let job {
-                            next.jobs[job] = Job(id: job, segmentID: first, kind: .transcribe)
-                        }
+                        if row.kind == .voice { writeTranscribeJob(for: first, in: &next) }
                         row.outcome = .stored
                         row.contentHash = hash
                         row.revision = max(row.revision, revision)
@@ -1064,7 +1058,7 @@
                     break
                 case .endOpenAndAppend(let ended, let note):
                     if !predicting {
-                        _ = try save(ended, .asItStands, revision: 0, endingAt: nil, mode: .end, job: nil, in: &next)
+                        _ = try save(ended, .asItStands, revision: 0, endingAt: nil, mode: .end, in: &next)
                     }
                     return .join(note, .openCaptureOnDevice)
                 case .continueOpen(let id), .recordingPress(let id):
@@ -1291,6 +1285,13 @@
                     next.segments[id].map { (id, $0.revision) }
                 })
             return ids
+        }
+
+        /// Writes a stored recording's transcribe job, unless it has one: the store writes it with
+        /// every recording it stores, with an ID derived from the segment's (finding 44).
+        private func writeTranscribeJob(for segment: SegmentID, in next: inout State) {
+            let id = JobID.transcribe(of: segment)
+            if next.jobs[id] == nil { next.jobs[id] = Job(id: id, segmentID: segment, kind: .transcribe) }
         }
 
         private func attach(_ asset: Asset, duration: Duration?, to segment: SegmentID, in next: inout State) {

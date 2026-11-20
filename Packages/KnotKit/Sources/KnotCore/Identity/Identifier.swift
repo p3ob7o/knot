@@ -126,6 +126,14 @@ extension Identifier where Tag == SegmentTag {
     }
 }
 
+extension Identifier where Tag == JobTag {
+    /// The transcribe job of a stored recording, which the store writes with every recording
+    /// it stores. Derived from the segment's ID, so a repeat makes the same one.
+    public static func transcribe(of segment: SegmentID) -> JobID {
+        JobID(uuid: UUIDv5.make(namespace: .transcribeJob, name: segment.description))
+    }
+}
+
 extension Identifier where Tag == NoteTag {
     /// The note that takes a segment added to a note that was already deleted
     /// (docs/architecture.md §11). Every device computes the same one.

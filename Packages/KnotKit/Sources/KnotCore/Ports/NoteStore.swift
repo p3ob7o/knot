@@ -84,8 +84,9 @@ public protocol NoteStore: Sendable {
     /// with its content kept. The end is a save, ordered by revision like a checkpoint: the
     /// winning content is chosen first, then judged empty or not, and that is what is stored
     /// and hashed. A stale end ends the capture with the stored content; an end at the stored
-    /// revision with other content is a conflict. A recording's or a drawing's end may write
-    /// its first job in the same transaction. An end of a capture that has ended returns its
+    /// revision with other content is a conflict. A stored recording never lacks its transcribe
+    /// job: the store writes it, `JobID.transcribe(of:)`, in the transaction that stores the
+    /// recording, by `end`, `record` or `ingest`. An end of a capture that has ended returns its
     /// receipt when the content is the same; at a higher revision it is a later save of the
     /// capture, which applies unless a person replaced the text since (then nothing changes);
     /// at the same revision with other content it fails with `capture_id_conflict`.
@@ -233,13 +234,11 @@ public struct NewCapture: Hashable, Sendable {
     /// manifest records with the placement asked for. The store places the capture there when
     /// that note can still take it.
     public var shownNote: NoteID?
-    /// For a finished recording, the ID of its first job, which the store writes with it.
-    public var transcribeJob: JobID?
 
     public init(
         id: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, placement: CapturePlacement,
         arrival: Arrival = .live, startedAt: Date, endedAt: Date? = nil, body: CaptureBody, revision: Int64 = 0,
-        shownNote: NoteID? = nil, transcribeJob: JobID? = nil
+        shownNote: NoteID? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -252,7 +251,6 @@ public struct NewCapture: Hashable, Sendable {
         self.body = body
         self.revision = revision
         self.shownNote = shownNote
-        self.transcribeJob = transcribeJob
     }
 
     /// The question the append rule answers for this capture.
@@ -368,18 +366,12 @@ public struct CaptureEnd: Hashable, Sendable {
     public var outcome: Outcome
     /// The engine's final revision of the content.
     public var revision: Int64
-    /// For a recording stored by this end, the ID of its first job, which the store writes in
-    /// the same transaction, so that no recording ends without its job.
-    public var transcribeJob: JobID?
 
-    public init(
-        captureID: CaptureID, endedAt: Date, outcome: Outcome, revision: Int64, transcribeJob: JobID? = nil
-    ) {
+    public init(captureID: CaptureID, endedAt: Date, outcome: Outcome, revision: Int64) {
         self.captureID = captureID
         self.endedAt = endedAt
         self.outcome = outcome
         self.revision = revision
-        self.transcribeJob = transcribeJob
     }
 }
 
