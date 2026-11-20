@@ -193,4 +193,17 @@ import Testing
         #expect(try await r.notes.jobs(for: SegmentID(a.captureID)).map(\.kind) == [.transcribe])
         #expect(r.layer.entryKind(r.locations.recordingAudio(a.captureID, format: .caf)) == nil)
     }
+
+    /// Finding 15. A capture on the `Inbox/` path names no note: the file path has not
+    /// confirmed where it lands, even when the store placed its start.
+    @Test func captureOffTheStorePathNamesNoNote() async throws {
+        let r = Rig(engineIngests: false)
+        let begun = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "n"))
+        #expect(begun.noteID != nil)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let fell = try await r.engine.update(begun.captureID, with: .text("no"))
+        #expect(fell.path == .inbox(KnotError.storeBusy.code))
+        #expect(fell.noteID == nil)
+        #expect(try await r.engine.end(begun.captureID).noteID == nil)
+    }
 }
