@@ -239,7 +239,15 @@ public protocol NoteStore: Sendable {
     /// done job stays done, and its attempts and deaths never fall except through the retry of
     /// a failed job (`JobMachine`), all refused with `illegal_transition`. Each save raises
     /// the job's revision.
-    func saveJob(_ job: Job) async throws(KnotError)
+    ///
+    /// Returns the job as the store now holds it, revision included, as a read straight after
+    /// would give it. A caller takes the next revision from this result and never works one
+    /// out: the port does not promise by how much a save raises it.
+    ///
+    /// Before the third pull request it returned nothing. A store written against that still
+    /// conforms through the default implementation below, which answers `port_unavailable`.
+    @discardableResult
+    func saveJob(_ job: Job) async throws(KnotError) -> Job
 
     /// The jobs of one segment, or every job.
     func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job]
@@ -258,6 +266,12 @@ extension NoteStore {
     public func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
         -> SegmentRead
     { throw KnotError.portUnavailable.with(.init(segmentID: segment)) }
+
+    /// The default for a store written before `saveJob` returned the job: not there yet.
+    @discardableResult
+    public func saveJob(_ job: Job) async throws(KnotError) -> Job {
+        throw KnotError.portUnavailable.with(.init(segmentID: job.segmentID, jobID: job.id))
+    }
 }
 
 // MARK: - Capturing

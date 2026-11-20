@@ -713,7 +713,8 @@
             return read(segment)
         }
 
-        public func saveJob(_ job: Job) throws(KnotError) {
+        @discardableResult
+        public func saveJob(_ job: Job) throws(KnotError) -> Job {
             guard state.segments[job.segmentID] != nil else {
                 throw KnotError.notFound.with(.init(segmentID: job.segmentID, jobID: job.id))
             }
@@ -730,6 +731,7 @@
                 saved.revision = stored.revision + 1
             }
             state.jobs[job.id] = saved
+            return saved
         }
 
         public func jobs(for segment: SegmentID?) throws(KnotError) -> [Job] {

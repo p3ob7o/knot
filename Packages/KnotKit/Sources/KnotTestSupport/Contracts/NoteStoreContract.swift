@@ -95,6 +95,7 @@ public enum NoteStoreContract {
         Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
         Check(name: "recording-job", run: aStoredRecordingAlwaysHasItsJob),
         Check(name: "job-forward", run: aJobOnlyMovesForward),
+        Check(name: "job-save-returns", run: aSavedJobIsWhatTheStoreHolds),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
         Check(name: "title-time", run: theTitlesTimeIsSetByEachChange),
@@ -1699,6 +1700,29 @@ public enum NoteStoreContract {
         #expect(lowered.attempts == 1)
         lowered.attempts = 0
         await refuses(.illegalTransition, "Counters never fall.") { try await h.store.saveJob(lowered) }
+    }
+
+    /// `saveJob` returns the job as the store now holds it, revision included: a job added and
+    /// each save after it return what a read then gives, and the revision returned is the one
+    /// the next save names (finding 26 on pull request 41).
+    public static func aSavedJobIsWhatTheStoreHolds(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let recording = try await h.store.record(h.watchRecording(from: 0, to: 1))
+        let segment = recording.segmentIDs[0]
+        func stored(_ id: JobID) async throws -> Job? {
+            try await h.store.jobs(for: segment).first { $0.id == id }
+        }
+
+        let added = try await h.store.saveJob(Job(id: .clean(of: segment), segmentID: segment, kind: .clean))
+        #expect(added == (try await stored(added.id)), "A job added is returned as the store holds it.")
+
+        var job = try #require(try await stored(.transcribe(of: segment)))
+        for event in [JobEvent.start, .stepFailed(.transcriptionFailed, retryAt: nil), .start] {
+            let before = job.revision
+            job = try await h.store.saveJob(try JobMachine.reduce(job, event))
+            #expect(job == (try await stored(job.id)), "A save returns the job as a read then gives it.")
+            #expect(job.revision > before, "Each save raises the revision it returns.")
+        }
     }
 
     /// Every write returns its revisions stamped with the store and its generation, as the
