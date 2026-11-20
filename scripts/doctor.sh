@@ -130,6 +130,10 @@ runtime_for watchOS watchsimulator
 #    password: Automation Mode that turns on without authentication, and developer mode.
 #    Automation Mode itself reads "disabled" between test runs; a run turns it on.
 missing="$(knot_mac_ui_ready "$(automationmodetool 2>&1 || true)" "$(DevToolsSecurity -status 2>&1 || true)" || true)"
+# The Mac UI tests also need the screen unlocked. That is no failure here, since most runs
+# have no Mac UI step; the step itself fails at once on a locked screen.
+[[ "$(knot_console_state)" != locked ]] ||
+    warn screen "locked: the Mac UI tests need it unlocked, and the owner has to unlock it"
 if [[ -z $missing ]]; then
     ok automation "Mac UI tests can run: Automation Mode needs no authentication, and developer mode is on"
 else

@@ -423,6 +423,35 @@ knot_fakes_in() {
 # hold one for ever. It stays under the hour another run waits for a build slot.
 KNOT_BUILD_LIMIT=${KNOT_BUILD_LIMIT:-2400}
 
+# Whether this Mac's screen is locked, from the console's IOConsoleLocked, which ioreg gives
+# without a prompt: prints locked, unlocked, or unknown when the read says nothing or does not
+# answer within KNOT_CONSOLE_READ_LIMIT seconds (10).
+knot_console_state() {
+    local listing status=0 value
+    listing="$(knot_limit "${KNOT_CONSOLE_READ_LIMIT:-10}" ioreg -n Root -d1 -a 2>/dev/null)" || status=$?
+    value="$( ((status == 0)) && plutil -p - <<<"$listing" 2>/dev/null |
+        sed -n -E 's/^ *"IOConsoleLocked" => (true|false)$/\1/p' | head -n 1 || true)"
+    case $value in
+        true) echo locked ;;
+        false) echo unlocked ;;
+        *) echo unknown ;;
+    esac
+}
+
+# The Mac UI tests need the screen unlocked: on a locked screen their app cannot come to the
+# front, and the test waits a minute and fails with a message that names neither the lock nor
+# what to do. Fails at once when the screen is locked, saying that the owner has to unlock
+# the Mac; goes on with a note when the state cannot be read.
+knot_check_unlocked() {
+    case "$(knot_console_state)" in
+        locked)
+            echo "mac-ui: the screen of this Mac is locked, so the Mac UI tests cannot bring their app to the front. The owner has to unlock the Mac; no agent does. Then run the step again."
+            return 1 ;;
+        unknown)
+            echo "mac-ui: could not read whether the screen is locked (ioreg); going on." ;;
+    esac
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

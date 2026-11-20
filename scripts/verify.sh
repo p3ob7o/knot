@@ -947,13 +947,20 @@ for step in $STEPS; do
     log="$KNOT_LOGS/verify-$step.log"
     step_start=$(knot_now)
     options="$(slot_options "$step")"
+    runner="step_${step//-/_}"
+    # The Mac UI tests need the screen unlocked. A locked screen fails the step at once,
+    # before it takes its slot: its runner is then the check, which says so.
+    if [[ $step == mac-ui && "$(knot_console_state)" == locked ]]; then
+        options=none
+        runner=knot_check_unlocked
+    fi
     if [[ $options == none ]]; then
         # A light step runs in a background subshell, so that `set -e` holds inside it:
         # bash ignores -e in a function that runs as the condition of an `if`.
         # Its output is filtered for the team's ID, as every log of the run is.
         (
             set -o pipefail
-            ("step_${step//-/_}") 2>&1 | knot_filter_team
+            ("$runner") 2>&1 | knot_filter_team
         ) >"$log" &
     else
         # A heavy step runs in its own process, holding a build slot.

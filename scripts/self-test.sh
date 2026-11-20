@@ -684,6 +684,39 @@ else
     fail "the wiring of the limits: real $real, hosted mutant $hosted, wrapper mutant $wrapper: $real_out / $hosted_out / $wrapper_out"
 fi
 
+# The Mac UI step needs the screen unlocked, and a run reads whether it is before the step
+# (knot_console_state, knot_check_unlocked): a locked screen fails at once, saying that the
+# owner has to unlock the Mac; an unlocked one passes; a read that says nothing, or does
+# not answer within its limit, goes on with a note. A stub on PATH stands for ioreg.
+lockdir="$scratch/console"
+mkdir -p "$lockdir/locked" "$lockdir/unlocked" "$lockdir/none" "$lockdir/silent"
+for state in locked unlocked; do
+    value=$([[ $state == locked ]] && echo true || echo false)
+    printf '#!/bin/sh\ncat <<PLIST\n<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>IOConsoleLocked</key><%s/><key>IOConsoleUsers</key><array/></dict></plist>\nPLIST\n' \
+        "$value" >"$lockdir/$state/ioreg"
+done
+printf '#!/bin/sh\necho "<plist version=\\"1.0\\"><dict></dict></plist>"\n' >"$lockdir/none/ioreg"
+printf '#!/bin/sh\nsleep 30\n' >"$lockdir/silent/ioreg"
+chmod +x "$lockdir"/*/ioreg
+console() { # console <stub>: the state read, the check's status and its message
+    local status=0 message
+    message="$(env PATH="$lockdir/$1:$PATH" KNOT_CONSOLE_READ_LIMIT=2 bash -c 'source "$1"; knot_check_unlocked' _ "$KNOT_SCRIPTS/lib/common.sh" 2>&1)" ||
+        status=$?
+    echo "$(env PATH="$lockdir/$1:$PATH" KNOT_CONSOLE_READ_LIMIT=2 bash -c 'source "$1"; knot_console_state' _ "$KNOT_SCRIPTS/lib/common.sh" 2>/dev/null) $status $message"
+}
+started=$(knot_now)
+locked="$(console locked)"
+unlocked="$(console unlocked)"
+none="$(console none)"
+silent="$(console silent)"
+if [[ $locked == "locked 1 "*"locked"*"owner"*"unlock"* && $unlocked == "unlocked 0"* && $none == "unknown 0 "*"could not"* &&
+    $silent == "unknown 0 "*"could not"* && $(($(knot_now) - started)) -lt 12 ]]; then
+    pass "a locked screen fails the Mac UI step at once and names the owner; an unreadable state goes on with a note"
+else
+    fail "the screen's lock state: locked '$locked', unlocked '$unlocked', no key '$none', silent '$silent'"
+fi
+pkill -KILL -f "$lockdir/silent/ioreg" 2>/dev/null || true
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

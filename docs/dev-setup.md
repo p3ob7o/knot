@@ -157,6 +157,7 @@ It cannot know what a value holds. A value named `noteID` that holds text passes
 | `swift test`, in `package-test`, `contract-two-targets`, `perf` and `tsan` | 50 minutes | `KNOT_SWIFT_TEST_LIMIT` |
 | The model report, in the nightly run | 10 minutes | `KNOT_MODEL_REPORT_LIMIT` |
 | The scripts' self-test, in `self-test` | 10 minutes | `KNOT_SELF_TEST_LIMIT` |
+| Reading whether the screen is locked, before `mac-ui` and in the doctor | 10 seconds | `KNOT_CONSOLE_READ_LIMIT` |
 | A wait for the audio's lock, while another run in the same tree speaks it, in `fixtures` and `scripts/bootstrap.sh` | 30 minutes | `KNOT_FIXTURES_LOCK_WAIT` |
 
 The package tests' limit is not about a dialog. At 50 minutes it stays under the hour that another run waits for a build slot, and it catches a test that hangs, such as in a deadlock; a run whose waits keep running out may be ended by it first, with its log kept. The Thread Sanitizer run took 2m52s here. A test step reads its results first and then xcodebuild's status, so a run whose tests passed fails when xcodebuild exits with an error. A simctl failure names the simulator. The `launch` and `mac-ui` steps end the Mac app and the test runner that the worktree built, and `launch` fails if either is still running afterwards. The Mac app's start keeps the app's standard error in the step's log, and tells a window probe that failed from a window that has not come.
@@ -186,6 +187,8 @@ For later: xcodebuild allows a case three minutes, five at most, while a contrac
   sudo automationmodetool enable-automationmode-without-authentication
   sudo DevToolsSecurity -enable
   ```
+
+  The Mac UI tests also need the screen unlocked, at every run that holds them: on a locked screen their app cannot come to the front. A run reads the lock state before the Mac UI step, under a limit, and fails that step at once when the screen is locked, saying that the owner has to unlock the Mac; no agent does. `scripts/doctor.sh` notes a locked screen.
 
 - Set up signing so that `scripts/doctor.sh --require-signing` passes: the gate's development-signed step must sign without a prompt.
 - Confirm the identifiers in the table above, pair the devices for development builds, and register the other Mac.
