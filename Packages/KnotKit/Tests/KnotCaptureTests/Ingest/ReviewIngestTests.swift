@@ -97,4 +97,27 @@ import Testing
         #expect(await r.ingest.ingestAll() == [id: .kept(KnotError.inboxItemUnreadable.code)])
         #expect(r.inboxFiles() == ["\(id).json"])
     }
+
+    /// Finding 10. A watch delivery is late (product spec §3, rule 7): it joins the note of the
+    /// capture that ended just before it started, not the newest note, and is marked arrived.
+    @Test func watchDeliveryIsPlacedAsALateArrival() async throws {
+        let r = Rig()
+        let start = r.clock.now()
+        let x = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "earlier"))
+        r.clock.advance(by: 5)
+        let xEnded = try await r.engine.end(x.captureID)
+        r.clock.advance(by: 595)
+        let y = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "newer"))
+        r.clock.advance(by: 5)
+        let yEnded = try await r.engine.end(y.captureID)
+        #expect(xEnded.noteID != yEnded.noteID)
+        r.clock.advance(by: 100)
+        let id: CaptureID = r.ids.make()
+        let audio = Data([9, 8, 7])
+        try Self.deliver(r, id, file: audio, digestOf: audio, startedAt: start.addingTimeInterval(65))
+        #expect(await r.ingest.ingest(id) == .stored(revision: 1))
+        let segment = try #require(try await r.notes.segment(SegmentID(id)))
+        #expect(segment.noteID == xEnded.noteID)
+        #expect(segment.arrivedAt != nil)
+    }
 }
