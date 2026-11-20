@@ -134,7 +134,10 @@ public actor StandardProcessingQueue: ProcessingQueue {
         } catch {
             if error.isYield || error.code == KnotError.noBackgroundTime.code { return .yielded }
             log.failure(error, "drain_stopped")
-            return .idle
+            // `idle` promises that nothing is left that a later drain could run. A drain that
+            // stopped on an error, such as a store that does not answer, says `yielded` while
+            // queued work is left, or while the store cannot say.
+            return await hasQueuedWork() == false ? .idle : .yielded
         }
     }
 
@@ -174,6 +177,13 @@ public actor StandardProcessingQueue: ProcessingQueue {
         } catch {
             throw error.knotError.with(.init(segmentID: job.segmentID, jobID: job.id))
         }
+    }
+
+    /// Whether a job of a kind the queue runs is still queued, or `nil` when the store does
+    /// not answer.
+    private func hasQueuedWork() async -> Bool? {
+        guard let all = try? await notes.jobs(for: nil) else { return nil }
+        return all.contains { $0.state == .queued && ($0.kind == .transcribe || $0.kind == .clean) }
     }
 
     private static func order(_ job: Job) -> (Int, JobID) {

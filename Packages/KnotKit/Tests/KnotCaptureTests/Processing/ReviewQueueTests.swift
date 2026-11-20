@@ -115,4 +115,27 @@ import Testing
         #expect(job.deaths == 0)
         #expect(try await r.notes.jobs(for: segment).contains { $0.kind == .clean })
     }
+
+    /// Finding 22, the second review's R5. A drain that stops on an error, here a store that
+    /// does not answer, with a job still queued says `yielded`, so that its caller comes back.
+    @Test func drainThatStopsOnAnErrorWithWorkLeftHasYielded() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        _ = try await r.engine.end(begun.captureID)
+        let result = await r.queue.drain(using: StoreNotAnsweringRunner()) { _ in }
+        #expect(try await r.notes.jobs(for: SegmentID(begun.captureID)).first?.state == .queued)
+        #expect(result == .yielded)
+        // With nothing queued, the same stop is idle.
+        #expect(await r.drain() == .idle)
+        #expect(await r.queue.drain(using: StoreNotAnsweringRunner()) { _ in } == .idle)
+    }
+}
+
+/// A runner whose work meets a store that does not answer.
+final class StoreNotAnsweringRunner: BackgroundRunner {
+    let name = "store-not-answering"
+    func run(_ work: BackgroundWork) async throws(KnotError) {
+        throw KnotError.storeNotOpen
+    }
 }
