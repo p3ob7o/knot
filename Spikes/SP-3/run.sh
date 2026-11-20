@@ -6,6 +6,7 @@
 #   Spikes/SP-3/run.sh signing   print what each piece carries, masked
 #   Spikes/SP-3/run.sh checks tool|app   run the checks of one phase, each with a time limit
 #   Spikes/SP-3/run.sh cleanup   remove the spike's files from the group container, by name
+#   Spikes/SP-3/run.sh quote <file>   print a log through the mask, the only way to quote one
 #
 # Needs KNOT_LOCAL_CONFIG linked by scripts/bootstrap.sh. Every line this script prints
 # goes through mask(), which writes the team ID as <team> and the home folder as ~, because
@@ -128,6 +129,7 @@ case "${1:-}" in
     build) shift; build "$@" ;;
     signing) signing ;;
     cleanup) cleanup ;;
+    quote) mask <"${2:?a log file}" ;;
     checks)
         exec python3 -I "$here/checks.py" "$app" "$team" \
             "$root/.build/DerivedData/Build/Products/Debug/Knot.app/Contents/MacOS/knot-dev" \
