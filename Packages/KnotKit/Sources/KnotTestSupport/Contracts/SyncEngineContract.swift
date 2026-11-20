@@ -143,6 +143,28 @@ public enum SyncEngineContract {
             return
         }
 
+        // A question outlives a stop: the next start asks it again, and a manual sync does
+        // nothing, and uses up nothing, until the question is answered (finding 29).
+        await subject.pause(.accountChanged)
+        #expect(await first(of: engine) == .paused(.accountChanged))
+        await engine.stop()
+        #expect(await first(of: engine) == .off, "A stopped engine is off, a question or not.")
+        await subject.failNextSync(.syncQuotaExceeded)
+        await engine.start()
+        #expect(
+            await first(of: engine) == .paused(.accountChanged),
+            "A start after a stop asks the unanswered question again.")
+        try await engine.syncNow()
+        #expect(
+            await first(of: engine) == .paused(.accountChanged),
+            "A manual sync does nothing until the question is answered.")
+        await engine.answer(.accountChanged, .upload)
+        guard case .idle = await first(of: engine) else {
+            Issue.record("The answer, and nothing else, ends the pause.")
+            return
+        }
+        await refuses(.syncQuotaExceeded, "Nothing was used up while paused.") { try await engine.syncNow() }
+
         // A stop is published to those already listening, and drops every later event of its run.
         let listening = engine.statusUpdates()
         await engine.stop()

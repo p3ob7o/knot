@@ -12,7 +12,9 @@ public enum ZoneLoss: String, Hashable, Sendable, Codable, CaseIterable {
 }
 
 /// A pause of sync that asks the user (docs/architecture.md §11). Each has the two answers of
-/// `SyncAnswer`, and sync stays paused until the app answers.
+/// `SyncAnswer`, and sync stays paused until the app answers, through a stop and a relaunch.
+/// Every pause of the port is one of these: there is no pause that asks nothing, so no pause
+/// ends at a stop.
 public enum SyncQuestion: Hashable, Sendable {
     /// The device signed out of iCloud. The notes stay.
     case signedOut
@@ -68,12 +70,19 @@ public protocol SyncEngine: Sendable {
     func statusUpdates() -> AsyncStream<SyncStatus>
 
     /// Starts the engine: it is then idle, with the time of its last success, which a stop does
-    /// not forget. Starting a started engine changes nothing.
+    /// not forget. A question left unanswered at a stop is asked again instead: the engine
+    /// starts paused on it, and `syncNow` does nothing until it is answered. Starting a started
+    /// engine changes nothing.
     func start() async
 
     /// Stops the engine: it cancels what runs and drops every later event of this run, so an
     /// event that arrives after the stop never reaches the notes. The status is then `off`, and
     /// those already listening hear it.
+    ///
+    /// A stop does not end a pause. The question outlives a stop and a relaunch: while stopped
+    /// it is not asked, and an answer to it changes nothing, and the next start asks it again.
+    /// Keeping it across a relaunch is the adapter's work, because CKSyncEngine reports an
+    /// account change once (docs/notes/SP-4.md), and a question lost there is lost for good.
     func stop() async
 
     /// Fetches, then sends. It throws a sync condition, `sync_transient` to
@@ -91,7 +100,7 @@ public protocol SyncEngine: Sendable {
 
     /// Answers the question of a pause. An answer to a question that is not asked changes
     /// nothing. `upload` leaves the pause for `idle`, and `keepPaused` keeps it. A pause wins
-    /// over a sync that is finishing: nothing but this answer, or a stop, ends it, so sync never
-    /// goes on under an account the person has not agreed to.
+    /// over a sync that is finishing, and outlives a stop: nothing but this answer ends it, so
+    /// sync never goes on under an account the person has not agreed to.
     func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async
 }

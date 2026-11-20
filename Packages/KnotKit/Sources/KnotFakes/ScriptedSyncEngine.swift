@@ -18,6 +18,8 @@
             var watchers: [UUID: AsyncStream<SyncStatus>.Continuation] = [:]
             var syncs = 0
             var pauseDuringSync: SyncQuestion?
+            /// The question asked and not yet answered, which a stop keeps (finding 29).
+            var question: SyncQuestion?
         }
 
         private let clock: any WallClock
@@ -84,7 +86,8 @@
             state.withLock { state in
                 guard state.status == .off else { return }
                 state.generation += 1
-                state.status = .idle(lastSuccess: state.lastSuccess)
+                // A question nobody answered is asked again (finding 29).
+                state.status = state.question.map { .paused($0) } ?? .idle(lastSuccess: state.lastSuccess)
                 for watcher in state.watchers.values { watcher.yield(state.status) }
             }
         }
@@ -142,6 +145,7 @@
             state.withLock { state in
                 // Only the answer `upload` to the question asked ends a pause.
                 guard state.status == .paused(question), answer == .upload else { return }
+                state.question = nil
                 state.status = .idle(lastSuccess: state.lastSuccess)
                 for watcher in state.watchers.values { watcher.yield(state.status) }
             }
@@ -150,13 +154,15 @@
         /// Sets the status from an event of the run `generation`, and tells every watcher, in the
         /// order of the changes. An event of an older run, or one that arrives while sync is off,
         /// is dropped. A pause wins over the run: no event of it but another pause replaces one,
-        /// so nothing but an answer, or a stop, ends a pause (finding 14).
+        /// so nothing but an answer ends a pause (findings 14 and 29). Its question is kept
+        /// through a stop.
         private func deliver(_ status: SyncStatus, from generation: Int) {
             state.withLock { state in
                 guard generation == state.generation, state.status != .off else { return }
                 if case .paused = state.status {
                     guard case .paused = status else { return }
                 }
+                if case .paused(let question) = status { state.question = question }
                 state.status = status
                 for watcher in state.watchers.values { watcher.yield(status) }
             }
