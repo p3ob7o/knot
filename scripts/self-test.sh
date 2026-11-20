@@ -565,6 +565,30 @@ else
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
+# The wiring check reads the shell: it finds every unbounded call of its fixture,
+# scripts/lint-cases/Unbounded.sh, in its many spellings, and passes every bounded one.
+unbounded_fixture="$KNOT_SCRIPTS/lint-cases/Unbounded.sh"
+if unbounded_verdict="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$unbounded_fixture" <<'PY'
+import re, subprocess, sys
+fixture = sys.argv[2]
+lines = open(fixture).read().splitlines()
+want = {n + 2: m.group(1) for n, line in enumerate(lines) if (m := re.search(r"#\s*expect:\s*(\w+)", line))}
+out = subprocess.run([sys.executable, "-I", "-B", sys.argv[1] + "/knot_tool.py", "unbounded-calls", fixture],
+                     capture_output=True, text=True).stdout
+found = {int(m.group(1)) for m in re.finditer(r"^[^:]+:(\d+):", out, re.M)}
+missed = sorted(n for n, w in want.items() if w == "unbounded" and n not in found)
+wrong = sorted(n for n, w in want.items() if w == "nothing" and n in found)
+unbounded = sum(1 for w in want.values() if w == "unbounded")
+print(f"found {unbounded - len(missed)} of {unbounded} unbounded calls, flagged {len(wrong)} bounded ones;"
+      f" missed lines {missed}, wrongly flagged {wrong}")
+sys.exit(1 if missed or wrong else 0)
+PY
+)"; then
+    pass "the wiring check reads the shell: $unbounded_verdict"
+else
+    fail "the wiring check on its fixture: $unbounded_verdict"
+fi
+
 # Every start in the scripts is wired through a limit (knot_tool.py unbounded-calls): no call
 # of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh or nightly.sh is
 # made without a limit helper. A copy of verify.sh with the hosted run's limit taken off,
@@ -582,7 +606,7 @@ hosted_out="$(cat "$wiring/out")"
 wrapper=0
 wiring_check "$wiring/wrapper.sh" || wrapper=$?
 wrapper_out="$(cat "$wiring/out")"
-if [[ $real == 0 && $hosted == 1 && $hosted_out == *"no limit"*"Knot-iOS-Tests"* && $wrapper == 1 && $wrapper_out == *"package_tests"*"no limit"* ]] &&
+if [[ $real == 0 && $hosted == 1 && $hosted_out == *"no limit: xcb"*"Knot-iOS"* && $wrapper == 1 && $wrapper_out == *"package_tests"*"no limit"* ]] &&
     ! cmp -s "$wiring/hosted.sh" "$KNOT_SCRIPTS/verify.sh" && ! cmp -s "$wiring/wrapper.sh" "$KNOT_SCRIPTS/verify.sh"; then
     pass "every swift test, simctl, xcodebuild and xcb call in the scripts goes through a limit, and a bare one is found"
 else

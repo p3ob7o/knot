@@ -895,78 +895,325 @@ def option(args, name, default=None):
 
 # ---------------------------------------------------------------- starts that have a limit
 
-LIMITED_CALL = re.compile(r"\bswift test\b|\bxcrun simctl\b|\bxcodebuild\b|(?:^|[\s;(|&])xcb\s")
+# The helpers that bound a command: each is the command word of a simple command, and the
+# command it bounds is among its arguments.
 LIMIT_HELPERS = ("knot_limit", "knot_run_limited", "knot_sim_call", "knot_swift_test_limited",
                  "knot_start_tool", "knot_start_app")
-LIMIT_MARKER = re.compile(r"#\s*limit:\s*([A-Za-z_]\w*)\s*$")
+LIMIT_MARKER = re.compile(r"#\s*limit:\s*([A-Za-z_][\w-]*)\s*$")
 OTHER_PARTS = ("soak",)
+# Words that may stand before the command word of a simple command.
+RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
+                  "time", "case", "esac", "in", "function", "select", "for"}
+PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate"}
+FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{(.*)$")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
 
 
-def logical_lines(text):
-    """A shell file's logical lines, with a backslash continuation joined, each with the
-    number of its first line."""
-    lines, current, first = [], "", None
-    for number, line in enumerate(text.splitlines(), 1):
-        if first is None:
-            first = number
-        if line.rstrip().endswith("\\"):
-            current += line.rstrip()[:-1] + " "
+def shell_segments(text, first_line=1):
+    """The simple commands of a piece of shell, as (first line, last line, text), split outside
+    quotes at newlines, ;, &&, ||, | and &, with a backslash-newline read as a space. What a
+    command substitution, $(…) or backticks, holds is read as commands of its own, at the line
+    where it starts; arithmetic, $((…)) and ((…)), holds none."""
+    segments = []
+    current, start, line = [], first_line, first_line
+    i, n = 0, len(text)
+    quote = None
+
+    def close(end_line):
+        nonlocal current, start
+        body = "".join(current).strip()
+        if body:
+            segments.append((start, end_line, body))
+        current = []
+        start = end_line
+
+    def matching(at, opener, closer):
+        """The index just past the closer that matches an opener at text[at]."""
+        depth, k, q = 0, at, None
+        while k < n:
+            c = text[k]
+            if q:
+                if c == "\\" and q == '"':
+                    k += 2
+                    continue
+                if c == q:
+                    q = None
+            elif c in "'\"":
+                q = c
+            elif text.startswith(opener, k):
+                depth += 1
+                k += len(opener)
+                continue
+            elif text.startswith(closer, k):
+                depth -= 1
+                if depth == 0:
+                    return k + len(closer)
+            k += 1
+        return n
+
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n and text[i + 1] == "\n" and quote != "'":
+            current.append(" ")
+            line += 1
+            i += 2
             continue
-        lines.append((first, current + line))
-        current, first = "", None
-    if current:
-        lines.append((first, current))
-    return lines
+        if c == "\n":
+            line += 1
+            if quote:
+                current.append(c)
+            else:
+                close(line - 1)
+                start = line
+            i += 1
+            continue
+        if quote == "'":
+            current.append(c)
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            current.append(text[i:i + 2])
+            i += 2
+            continue
+        if text.startswith("$((", i):
+            end = matching(i + 1, "((", "))")
+            line += text.count("\n", i, end)
+            current.append("0")
+            i = end
+            continue
+        if text.startswith("$(", i) or c == "`":
+            if c == "`":
+                end = text.find("`", i + 1)
+                end = n if end < 0 else end + 1
+                inner = text[i + 1:end - 1]
+            else:
+                end = matching(i + 1, "(", ")")
+                inner = text[i + 2:end - 1]
+            segments.extend(shell_segments(inner, line))
+            line += text.count("\n", i, end)
+            current.append("SUBSTITUTION")
+            i = end
+            continue
+        if quote == '"':
+            current.append(c)
+            if c == '"':
+                quote = None
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            current.append(c)
+            i += 1
+            continue
+        if c == "#" and (not current or "".join(current)[-1:].isspace()):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if text.startswith("((", i):
+            end = matching(i, "((", "))")
+            line += text.count("\n", i, end)
+            i = end
+            continue
+        if text.startswith("&&", i) or text.startswith("||", i):
+            close(line)
+            i += 2
+            continue
+        if c == "(" and text[i - 1:i] == "=":
+            # An array's literal, as in `cmd=(xcrun simctl list)`, is a word, not a subshell.
+            end = matching(i, "(", ")")
+            current.append(text[i:end])
+            line += text.count("\n", i, end)
+            i = end
+            continue
+        if c == "&" and (text[i - 1:i] == ">" or text[i + 1:i + 2] == ">"):
+            current.append(c)
+            i += 1
+            continue
+        if c in ";|&()":
+            close(line)
+            i += 1
+            continue
+        current.append(c)
+        i += 1
+    close(line)
+    return segments
 
 
-def code_of(line):
-    """A shell line without its comment and without the text of its plain quoted strings, so
-    that a message that names xcodebuild is not a call of it. A double-quoted string that
-    holds a command substitution is kept whole, since what it runs is a call; and a line
-    whose command is a message, such as echo or knot_fail, is no call at all."""
-    if re.match(r"^\s*(?:\|\||&&)?\s*(?:echo|printf|knot_fail|knot_report|bad|warn|ok)\b", line):
-        return ""
-    line = re.sub(r"'[^']*'", "''", line)
-    line = re.sub(r'"((?:\\.|[^"\\])*)"', lambda m: m.group(0) if "$(" in m.group(1) else '""', line)
-    return re.sub(r"(^|\s)#.*$", "", line)
+def shell_words(segment):
+    """The words of a simple command, with quotes removed and redirections dropped."""
+    import shlex
+    try:
+        words = shlex.split(segment, posix=True)
+    except ValueError:
+        words = segment.split()
+    kept, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        if re.match(r"^\d*(>>?|<|&>)$", word):
+            skip = True
+            continue
+        if re.match(r"^\d*(>>?|<|&>)", word):
+            continue
+        kept.append(word)
+    return kept
+
+
+def command_words(words, scalars, arrays):
+    """The command word of a simple command and the words after it: past assignments,
+    reserved words and prefixes such as env or exec, and with a command word held in a
+    variable or an array of the same file put in its place."""
+    k = 0
+    while k < len(words):
+        word = words[k]
+        if re.match(r"^[A-Za-z_]\w*(\[[^]]*\])?\+?=", word) or word in RESERVED_WORDS:
+            k += 1
+            continue
+        if word in PREFIX_WORDS:
+            k += 1
+            while k < len(words) and (words[k].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[k])):
+                k += 1 + (words[k] in ("-u", "-n", "-g", "-C"))
+            continue
+        break
+    rest = words[k:]
+    if rest:
+        variable = re.match(r"^\$\{?([A-Za-z_]\w*)(\[[@*]\])?\}?$", rest[0])
+        if variable and variable.group(1) in arrays:
+            rest = arrays[variable.group(1)] + rest[1:]
+        elif variable and variable.group(1) in scalars:
+            rest = scalars[variable.group(1)].split() + rest[1:]
+    return rest
+
+
+def limited_call(words):
+    """What a command calls among the starts that need a limit: xcodebuild, xcb, swift test,
+    and xcrun simctl, xcrun xcodebuild or xcrun swift test, past xcrun's options. None
+    otherwise."""
+    if not words:
+        return None
+    name = os.path.basename(words[0])
+    args = [w for w in words[1:]]
+    if name in ("xcodebuild", "xcb"):
+        return name
+    if name == "swift" and [w for w in args if not w.startswith("-")][:1] == ["test"]:
+        return "swift test"
+    if name == "xcrun":
+        k = 0
+        while k < len(args) and args[k].startswith("-"):
+            k += 1 + (args[k] in ("--sdk", "-sdk", "--toolchain", "-toolchain"))
+        rest = args[k:]
+        if rest[:1] == ["simctl"]:
+            return "xcrun simctl"
+        return limited_call(rest)
+    return None
 
 
 def cmd_unbounded_calls(files):
-    """Fails on a call of `swift test`, `xcrun simctl`, `xcodebuild` or `xcb` in the scripts
-    that is not made through a limit helper (LIMIT_HELPERS). A call inside a wrapper, such as
-    xcb's own xcodebuild, carries `# limit: <wrapper>` at the end of its line, and then every
-    call of that wrapper must go through a helper. The steps other packages own (OTHER_PARTS)
-    are listed and left to them."""
+    """Fails on a call of swift test, xcrun simctl, xcodebuild or xcb in the scripts that is
+    not bounded. A call is bounded when a limit helper (LIMIT_HELPERS) is the command word of
+    its own simple command, as in `knot_limit 10 xcodebuild -version`. A call inside a wrapper,
+    such as xcb's own xcodebuild, carries `# limit: <wrapper>`, where <wrapper> is the function
+    that holds the line; then every call of the wrapper must be bounded in its turn. The file
+    is read as shell: its simple commands, split outside quotes; what command substitutions,
+    eval and bash -c hold; and a command word held in a variable or array of the same file.
+    What it cannot see: a command word built at run time, such as one read from a file or put
+    together from pieces; an alias; a script that a call runs; and a function named in a
+    variable that is assigned in another file. The steps other packages own (OTHER_PARTS) are
+    listed and left to them."""
     found = 0
     for path in files:
         with open(path) as f:
             text = f.read()
+        raw = text.splitlines()
+        # Heredoc bodies hold no commands of this file.
+        lines, terminator = [], None
+        for line in raw:
+            if terminator:
+                lines.append("")
+                if line.strip() == terminator:
+                    terminator = None
+                continue
+            heredoc = HEREDOC.search(line.split("#", 1)[0] if "<<" in line else "")
+            lines.append(line)
+            if heredoc:
+                terminator = heredoc.group(2)
+        # The function that holds each line, by the definitions' indentation.
+        holder, stack = {}, []
+        for number, line in enumerate(lines, 1):
+            definition = FUNCTION_DEF.match(line)
+            if definition:
+                name, rest = definition.group(2), definition.group(3)
+                holder[number] = name
+                if not re.search(r"\}\s*(#.*)?$", rest):
+                    stack.append((len(definition.group(1)), name))
+                lines[number - 1] = definition.group(1) + "{" + rest
+                continue
+            holder[number] = stack[-1][1] if stack else None
+            if stack and re.match(r"^\s*\}", line) and len(line) - len(line.lstrip()) == stack[-1][0]:
+                stack.pop()
+        defined = set(holder.values()) - {None}
+        markers = {n: m.group(1) for n, line in enumerate(raw, 1) if (m := LIMIT_MARKER.search(line))}
         others = [part_markers(text, name) for name in OTHER_PARTS]
-        lines = logical_lines(text)
-        wrappers = {}
-        for number, line in lines:
-            code = code_of(line)
-            if not LIMITED_CALL.search(code) or any(h in code for h in LIMIT_HELPERS):
+        segments = shell_segments("\n".join(lines))
+        # Simple assignments of a word or an array, for a command word held in a variable.
+        scalars, arrays = {}, {}
+        for _, _, segment in segments:
+            assign = re.match(r"^(?:local\s+|readonly\s+)?([A-Za-z_]\w*)=\((.*)\)$", segment)
+            if assign:
+                arrays[assign.group(1)] = shell_words(assign.group(2))
                 continue
-            part = next((name for name, span in zip(OTHER_PARTS, others)
-                         if span and span[0] <= number <= span[1]), None)
-            if part:
-                print(f"{path}:{number}: in the {part} step, which its package bounds: {line.strip()[:100]}")
-                continue
-            marker = LIMIT_MARKER.search(line)
-            if marker:
-                wrappers.setdefault(marker.group(1), []).append(number)
-                continue
-            print(f"{path}:{number}: no limit: {line.strip()[:120]}")
-            found += 1
-        for wrapper, where in wrappers.items():
-            call = re.compile(r"(?:^|[\s;(|&])" + re.escape(wrapper) + r"(?:\s|$)")
-            for number, line in lines:
-                code = code_of(line)
-                if call.search(code) and not re.search(re.escape(wrapper) + r"\s*\(\)", code) \
-                        and not any(h in code for h in LIMIT_HELPERS):
-                    print(f"{path}:{number}: {wrapper}, which wraps the call at line {where[0]}, is called with no limit: {line.strip()[:100]}")
-                    found += 1
+            for word in shell_words(segment):
+                assign = re.match(r"^([A-Za-z_]\w*)=([\w./-]+)$", word)
+                if assign:
+                    scalars[assign.group(1)] = assign.group(2)
+
+        def commands(segment):
+            """The commands a simple command runs: itself, and what eval or bash -c holds."""
+            words = command_words(shell_words(segment), scalars, arrays)
+            yield words
+            if words[:1] == ["eval"]:
+                for inner in shell_segments(" ".join(words[1:])):
+                    yield from commands(inner[2])
+            if words and os.path.basename(words[0]) in ("bash", "sh", "zsh") and "-c" in words:
+                at = words.index("-c")
+                if at + 1 < len(words):
+                    for inner in shell_segments(words[at + 1]):
+                        yield from commands(inner[2])
+
+        wrappers, findings = {}, []
+        for first, last, segment in segments:
+            part = next((name for name, span in zip(OTHER_PARTS, others) if span and span[0] <= first <= span[1]), None)
+            marker = next((markers[n] for n in range(first, last + 1) if n in markers), None)
+            for words in commands(segment):
+                if not words or words[0] in LIMIT_HELPERS:
+                    continue
+                call = limited_call(words)
+                if not call:
+                    continue
+                if part:
+                    print(f"{path}:{first}: in the {part} step, which its package bounds: {segment[:100]}")
+                    continue
+                if marker and marker == holder.get(first):
+                    wrappers.setdefault(marker, first)
+                    continue
+                if marker:
+                    whose = holder.get(first) or "no function"
+                    why = "names no function" if marker not in defined else "names another function"
+                    findings.append((first, f"the marker `# limit: {marker}` {why}; the line is in {whose}: {segment[:100]}"))
+                else:
+                    findings.append((first, f"no limit: {call}: {segment[:100]}"))
+        # Every call of a wrapper must be bounded in its turn.
+        for first, _, segment in segments:
+            for words in commands(segment):
+                if words and words[0] in wrappers and holder.get(first) != words[0]:
+                    findings.append((first, f"{words[0]}, which wraps the call at line {wrappers[words[0]]}, "
+                                            f"is called with no limit: {segment[:100]}"))
+        for first, message in sorted(set(findings)):
+            print(f"{path}:{first}: {message}")
+        found += len(set(findings))
     if found:
         print(f"unbounded-calls: {found} calls with no limit")
         return 1
