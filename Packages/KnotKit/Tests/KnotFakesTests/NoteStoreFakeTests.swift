@@ -105,6 +105,11 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         try await check("prediction", on: inMemoryStore())
     }
 
+    /// Every order of eight saves and an edit keeps the edit (finding 34).
+    @Test(.tags(.contract)) func everyOrderKeepsTheEdit() async throws {
+        try await NoteStoreContract.everyOrderKeepsTheEdit(inMemoryStore())
+    }
+
     /// A store call that commits after its capture fell back to `Inbox/`: the hold lets the
     /// ingest of the inbox item commit first, and the late call then finds the row ended and
     /// changes nothing it should not.

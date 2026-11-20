@@ -59,6 +59,7 @@ public enum NoteStoreContract {
         Check(name: "checkpoint", run: checkpointOlderThanStoredTextChangesNothing),
         Check(name: "end-is-a-save", run: endIsASaveOrderedByRevision),
         Check(name: "later-save", run: aLaterSaveAppliesToAnEndedCapture),
+        Check(name: "edit-protected", run: aLateSaveNeverTouchesAPersonsEdit),
         Check(name: "ingest", run: ingestReconcilesEachStateOfTheRow),
         Check(name: "inbox-placement", run: anInboxItemGoesWhereItsManifestSays),
         Check(name: "end-outcomes", run: endWithEachOutcome),
@@ -366,6 +367,91 @@ public enum NoteStoreContract {
             CaptureCheckpoint(captureID: draft.id, text: "Half a thought, finished.", revision: 3))
         #expect(!check.applied, "Precedence keeps the person's text.")
         #expect(try await h.text(SegmentID(draft.id)) == "My words")
+    }
+
+    /// A late save onto text a person replaced changes nothing, the first time and every time:
+    /// not the text, not its origin, not its revision (finding 34).
+    public static func aLateSaveNeverTouchesAPersonsEdit(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let capture = h.typed("original", from: 0, to: 1)
+        let receipt = try await h.store.record(capture)
+        let segment = receipt.segmentIDs[0]
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "human", origin: .edited, writer: .app))
+        let edited = try #require(try await h.store.segment(segment))
+        let late = h.endTyped(capture.id, "late", at: 2, revision: 8)
+        for delivery in 1...2 {
+            _ = try await h.store.end(late)
+            _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: capture.id, text: "late", revision: 9))
+            let now = try #require(try await h.store.segment(segment))
+            #expect(now == edited, "Delivery \(delivery): the person's edit is untouched, revision and origin too.")
+        }
+        await refuses(.captureIDConflict, "An inbox item over a person's edit is refused, and its file kept.") {
+            var item = capture
+            item.body = .text("late")
+            item.revision = 8
+            return try await h.store.ingest(item)
+        }
+        #expect(try await h.text(segment) == "human")
+    }
+
+    /// Every order of a late record, a checkpoint, an ingest, a handoff, two ends, a person's edit
+    /// and recovery keeps the edit, and never lowers a segment's revision (finding 34). It runs
+    /// 20,160 orders, so it is not in `checks`: a store's own tests call it.
+    public static func everyOrderKeepsTheEdit(_ make: NoteStoreFactory) async throws {
+        var orders = Set<String>()
+        func enumerate(_ prefix: String, _ left: [Character]) {
+            if left.isEmpty { orders.insert(prefix) }
+            for next in Set(left) {
+                var rest = left
+                rest.remove(at: rest.firstIndex(of: next)!)
+                enumerate(prefix + String(next), rest)
+            }
+        }
+        enumerate("", Array("RKIHEEUX"))
+        var lowered = 0
+        var lost = 0
+        for order in orders.sorted() {
+            let h = await Harness(make)
+            let draft = h.typedDraft("one", at: 0)
+            var item = draft
+            item.endedAt = h.at(2)
+            item.body = .text("four")
+            item.revision = 4
+            var edited = false
+            var highest: Int64 = 0
+            for step in order {
+                switch step {
+                case "X":
+                    // Recovery ends an open row as it stands, at its last durable write.
+                    if let row = try await h.row(draft.id), row.outcome == .open {
+                        _ = try? await h.store.end(
+                            CaptureEnd(
+                                captureID: draft.id, endedAt: row.lastSavedAt ?? draft.startedAt,
+                                outcome: .stored(.none), revision: row.revision))
+                    }
+                case "R": _ = try? await h.store.record(draft)
+                case "K":
+                    _ = try? await h.store.checkpoint(
+                        CaptureCheckpoint(captureID: draft.id, text: "three", revision: 3))
+                case "I": _ = try? await h.store.ingest(item)
+                case "H": _ = try? await h.store.record(h.recordingStart(at: 1, surface: .control))
+                case "E": _ = try? await h.store.end(h.endTyped(draft.id, "two", at: 2, revision: 2))
+                default:
+                    let replaced = try? await h.store.replaceText(
+                        TextReplacement(segment: SegmentID(draft.id), text: "human", origin: .edited, writer: .app))
+                    if replaced != nil { edited = true }
+                }
+                if let read = try await h.store.segment(SegmentID(draft.id)) {
+                    if read.revision.value < highest { lowered += 1 }
+                    highest = read.revision.value
+                }
+            }
+            if edited, try await h.text(SegmentID(draft.id)) != "human" { lost += 1 }
+        }
+        #expect(orders.count == 20_160)
+        #expect(lowered == 0, "A segment's revision never goes down.")
+        #expect(lost == 0, "No order loses the person's edit.")
     }
 
     /// Ingest reconciles an inbox item with each state of the row, and says what is stored.

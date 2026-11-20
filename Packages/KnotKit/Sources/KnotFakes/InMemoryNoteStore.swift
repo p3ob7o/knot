@@ -72,6 +72,11 @@
             var moves: [SegmentID: [MoveRow]] = [:]
             var replaced: [SegmentID: [ReplacedText]] = [:]
             var tombstones: [NoteID: Int64] = [:]
+            /// The highest revision each segment ever had, so that one made again goes on from it.
+            var highestRevision: [SegmentID: Int64] = [:]
+            /// Each typed capture's segment revisions as its last save left them: a person's
+            /// edit since then shows as a difference.
+            var savedRevisions: [CaptureID: [SegmentID: Int64]] = [:]
         }
 
         /// What a save brings: new content, an end with nothing to keep, a failed save, or
@@ -828,18 +833,27 @@
             var changed = false
             // Whether the content itself changed: only that is a durable save of the capture.
             var contentChanged = false
+            // The notes whose segments this save changes besides the capture's own.
+            var touched: Set<NoteID> = []
             switch row.kind {
             case .typed:
                 let stored = storedText(of: id, in: next)
-                var winner = stored
+                var isFailed = false
+                if case .failed = row.outcome { isFailed = true }
+                // Whether `text` is the content the ledger accepted: the stored text of an open
+                // or failed capture, whatever a person did since to an ended one's text.
+                let accepted = { (text: String) -> Bool in
+                    if wasOpen || isFailed { return text == stored }
+                    guard let hash = row.contentHash else { return CaptureText.isEmpty(text) }
+                    return hash == self.contentHash(.typed, .text(text))
+                }
+                var winner: String?
                 var winnerRevision = row.revision
                 var failure: ErrorCode?
                 switch incoming {
                 case .text, .discard:
                     var text = ""
                     if case .text(let incomingText) = incoming { text = incomingText }
-                    var isFailed = false
-                    if case .failed = row.outcome { isFailed = true }
                     if isFailed {
                         // A failed capture becomes stored when a retry succeeds.
                         if revision >= row.revision {
@@ -848,18 +862,17 @@
                         }
                     } else if revision > row.revision || faults.contains(.lowersRevisions) {
                         if !wasOpen, textReplacedSinceEnd(id, in: next) {
-                            // A person's text since the end wins by precedence. An inbox
-                            // item that would replace it is a conflict, and its file stays.
+                            // A person's text since the end wins by precedence, and the save
+                            // touches nothing. An inbox item says so, and its file stays.
                             if mode == .ingest { throw conflict }
-                        } else {
-                            winner = text
-                            winnerRevision = revision
+                            return false
                         }
-                    } else if revision == row.revision, text != stored, mode != .checkpoint {
-                        throw conflict
-                    } else if revision < row.revision, text != stored, mode == .ingest, !wasOpen {
+                        winner = text
+                        winnerRevision = revision
+                    } else if !accepted(text) {
+                        if revision == row.revision, mode != .checkpoint { throw conflict }
                         // An inbox item older than what an ended capture holds is other content.
-                        throw conflict
+                        if revision < row.revision, mode == .ingest, !wasOpen { throw conflict }
                     }
                 case .failed(let code):
                     if !wasOpen {
@@ -872,13 +885,15 @@
                 case .file:
                     throw KnotError.unexpected.about(capture: id)
                 }
-                changed = winner != stored || winnerRevision != row.revision
-                contentChanged = changed
+                // An ended capture that this save does not change is not touched at all.
+                if !wasOpen, !isFailed, winner == nil { return false }
+                let text = winner ?? stored
+                contentChanged = winner != nil && (text != stored || winnerRevision != row.revision)
                 if !ending {
-                    guard changed else { return false }
+                    guard contentChanged else { return false }
                     receipt.segmentIDs = try setText(
-                        winner, of: id, revision: winnerRevision, row: row, note: receipt.noteID,
-                        state: .typed(.draft), endedAt: nil, into: &next)
+                        text, of: id, row: row, note: &receipt.noteID, state: .typed(.draft), endedAt: nil,
+                        touched: &touched, into: &next)
                 } else if let failure {
                     for segmentID in receipt.segmentIDs {
                         next.segments[segmentID]?.endedAt = endingAt ?? now
@@ -886,23 +901,20 @@
                     }
                     row.outcome = .failed(failure)
                     row.contentHash = nil
-                    changed = true
-                } else if CaptureText.isEmpty(winner) {
-                    changed = changed || row.outcome != .discardedEmpty
-                    discard(id, from: &next)
+                } else if CaptureText.isEmpty(text) {
+                    discard(id, touched: &touched, from: &next)
                     receipt.segmentIDs = []
                     row.outcome = .discardedEmpty
                     row.contentHash = nil
                 } else {
                     let endedAt = (wasOpen || row.endedAt == nil) ? (endingAt ?? now) : row.endedAt
-                    let before = (row.outcome, receipt.segmentIDs)
                     receipt.segmentIDs = try setText(
-                        winner, of: id, revision: winnerRevision, row: row, note: receipt.noteID,
-                        state: .typed(.ready), endedAt: endedAt, into: &next)
+                        text, of: id, row: row, note: &receipt.noteID, state: .typed(.ready), endedAt: endedAt,
+                        touched: &touched, into: &next)
                     row.outcome = .stored
-                    row.contentHash = contentHash(.typed, .text(winner))
-                    changed = changed || before.0 != .stored || before.1 != receipt.segmentIDs
+                    row.contentHash = contentHash(.typed, .text(text))
                 }
+                changed = true
                 row.revision = winnerRevision
             case .voice, .ink:
                 let first = SegmentID(id)
@@ -936,7 +948,7 @@
                 case .discard:
                     switch row.outcome {
                     case .open:
-                        discard(id, from: &next)
+                        discard(id, touched: &touched, from: &next)
                         receipt.segmentIDs = []
                         row.outcome = .discardedEmpty
                         changed = true
@@ -976,7 +988,7 @@
             next.captures[id] = row
             if changed {
                 next.counter += 1
-                touch(receipt.noteID, counter: next.counter, at: now, in: &next)
+                for note in touched.union([receipt.noteID]) { touch(note, counter: next.counter, at: now, in: &next) }
             }
             receipt.outcome = row.outcome
             receipt.revision = stamp(receipt.segmentIDs.first.flatMap { next.segments[$0]?.revision } ?? row.revision)
@@ -994,9 +1006,9 @@
         /// True when a person, the command line or MCP replaced the text of an ended typed
         /// capture: precedence then protects it from a later save of the capture.
         private func textReplacedSinceEnd(_ capture: CaptureID, in state: State) -> Bool {
-            guard let row = state.captures[capture] else { return false }
+            let saved = state.savedRevisions[capture] ?? [:]
             return state.segments.values.contains {
-                state.segmentCapture[$0.id] == capture && ($0.textOrigin != .typed || $0.revision != row.revision)
+                state.segmentCapture[$0.id] == capture && ($0.textOrigin != .typed || $0.revision != saved[$0.id])
             }
         }
 
@@ -1132,11 +1144,16 @@
                         id: piece.segmentID, noteID: noteID, kind: .typed, origin: source,
                         startedAt: capture.startedAt, endedAt: capture.endedAt, text: piece.text, textOrigin: .typed,
                         arrivedAt: arrivedAt, state: .typed(capture.endedAt == nil ? .draft : .ready),
-                        revision: capture.revision, piece: piece.position, pieceOf: piece.position == 0 ? nil : first)
+                        revision: (next.highestRevision[piece.segmentID] ?? 0) + 1, piece: piece.position,
+                        pieceOf: piece.position == 0 ? nil : first)
                     next.segments[segment.id] = segment
                     next.segmentCapture[segment.id] = capture.id
                     ids.append(segment.id)
                 }
+                next.savedRevisions[capture.id] = Dictionary(
+                    uniqueKeysWithValues: ids.compactMap { id in
+                        next.segments[id].map { (id, $0.revision) }
+                    })
                 return ids
             case .file, .none:
                 let voice = capture.kind == .voice
@@ -1152,7 +1169,7 @@
                     startedAt: capture.startedAt, endedAt: capture.endedAt,
                     textOrigin: voice ? .rawTranscript : .recognised,
                     processingOwner: voice && !source.isTool ? deviceID : nil, arrivedAt: arrivedAt, state: state,
-                    revision: capture.revision)
+                    revision: (next.highestRevision[SegmentID(capture.id)] ?? 0) + 1)
                 next.segments[segment.id] = segment
                 next.segmentCapture[segment.id] = capture.id
                 if case .file(let asset, let duration) = capture.body {
@@ -1175,42 +1192,57 @@
             return segment.id
         }
 
-        /// Sets the text of a typed capture, split into pieces past the size limit. Pieces the
-        /// text no longer reaches are removed: they belong to the same capture, whose text no
-        /// longer reaches them.
+        /// Sets the text of a typed capture, split into pieces past the size limit. A piece whose
+        /// text changes takes the next revision of that segment, which only ever rises. Pieces the
+        /// text no longer reaches are removed, and their notes are touched. A note that is gone
+        /// gives the capture a new one, so stored content is never left in no note.
         private func setText(
-            _ text: String, of capture: CaptureID, revision: Int64, row: Capture, note: NoteID,
-            state newState: SegmentState, endedAt: Date?, into next: inout State
+            _ text: String, of capture: CaptureID, row: Capture, note: inout NoteID, state newState: SegmentState,
+            endedAt: Date?, touched: inout Set<NoteID>, into next: inout State
         ) throws(KnotError) -> [SegmentID] {
             let pieces = TextPieces.pieces(of: text, capture: capture)
             let first = SegmentID(capture)
+            if next.segments[first] == nil, next.notes[note] == nil {
+                note = ids.make()
+                next.notes[note] = Note(
+                    id: note, createdAt: row.startedAt, updatedAt: clock.now(), lastCaptureEndedAt: row.startedAt)
+            }
             var ids: [SegmentID] = []
             for piece in pieces {
                 var segment: Segment
                 if let existing = next.segments[piece.segmentID] {
                     segment = existing
+                    if segment.text != piece.text {
+                        try segment.replaceText(piece.text, origin: .typed)
+                        segment.revision += 1
+                    }
                 } else {
                     let template = next.segments[first]
                     segment = try Segment(
                         id: piece.segmentID, noteID: template?.noteID ?? note, kind: .typed,
-                        origin: row.origin.source, startedAt: row.startedAt, textOrigin: .typed,
-                        arrivedAt: template?.arrivedAt, state: newState, revision: revision, piece: piece.position,
+                        origin: row.origin.source, startedAt: row.startedAt, text: piece.text, textOrigin: .typed,
+                        arrivedAt: template?.arrivedAt, state: newState,
+                        revision: (next.highestRevision[piece.segmentID] ?? 0) + 1, piece: piece.position,
                         pieceOf: piece.position == 0 ? nil : first)
                 }
-                try segment.replaceText(piece.text, origin: .typed)
-                segment.revision = revision
                 segment.state = newState
                 if let endedAt { segment.endedAt = endedAt }
                 next.segments[segment.id] = segment
                 next.segmentCapture[segment.id] = capture
+                next.highestRevision[segment.id] = max(next.highestRevision[segment.id] ?? 0, segment.revision)
                 ids.append(segment.id)
             }
             var position = pieces.count
             while let extra = next.segments[.piece(position, of: capture)], next.segmentCapture[extra.id] == capture {
+                if extra.noteID != note { touched.insert(extra.noteID) }
                 next.segments[extra.id] = nil
                 next.segmentCapture[extra.id] = nil
                 position += 1
             }
+            next.savedRevisions[capture] = Dictionary(
+                uniqueKeysWithValues: ids.compactMap { id in
+                    next.segments[id].map { (id, $0.revision) }
+                })
             return ids
         }
 
@@ -1224,11 +1256,13 @@
 
         /// Removes the segments of a capture that ended with nothing to keep. Its note stays,
         /// emptied and hidden when nothing else is in it, and `changes` reports it as removed.
-        private func discard(_ capture: CaptureID, from next: inout State) {
+        private func discard(_ capture: CaptureID, touched: inout Set<NoteID>, from next: inout State) {
             for (id, owner) in next.segmentCapture where owner == capture {
+                if let note = next.segments[id]?.noteID { touched.insert(note) }
                 next.segments[id] = nil
                 next.segmentCapture[id] = nil
             }
+            next.savedRevisions[capture] = nil
         }
 
         /// Moves a segment and its conflict copies to `note`, raising their note generation.
@@ -1266,6 +1300,10 @@
         }
 
         private func commit(_ next: State) {
+            var next = next
+            for segment in next.segments.values where segment.revision > (next.highestRevision[segment.id] ?? 0) {
+                next.highestRevision[segment.id] = segment.revision
+            }
             state = next
             signals.send(cursor(next.counter))
         }
