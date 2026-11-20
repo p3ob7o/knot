@@ -145,8 +145,14 @@ public actor StandardCaptureEngine: CaptureEngine {
         await take(id)
         defer { release(id) }
         // A recording starts first: one whose microphone cannot open never starts, and ends
-        // nothing.
-        if request.kind == .voice { try await startRecorder(id) }
+        // nothing. Its request names the capture that rule 15 would end for it now, decided
+        // without waiting, so that the recorder's first manifest write carries the link. If that
+        // capture ends by itself before the planning below, the recording's later items name
+        // nothing, while that first manifest still names it: finding 54, WP-11's.
+        if request.kind == .voice {
+            if case .end(let open)? = try? nextStep(for: request, besides: id) { entries[id]?.follows = open }
+            try await startRecorder(id)
+        }
 
         // Rule 15 ends the open capture once this one has started: on the store path in this
         // capture's record-a-capture transaction, which places it in that capture's note;
@@ -190,11 +196,9 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw error
         }
         if let sameWay { entries[id]?.path = .inbox(sameWay) }
-        // The capture this one follows is named before the open one ends, on either path.
-        if let followed = handoff ?? endAfterStart {
-            entries[id]?.follows = followed
-            if request.kind == .voice { markFollows(id) }
-        }
+        // The capture this one follows, as rule 15 ended it, names it in every item written from
+        // now on.
+        entries[id]?.follows = handoff ?? endAfterStart
         let state: CaptureState
         do throws(KnotError) {
             state =
@@ -500,7 +504,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             session = try await recorder.start(
                 RecordingRequest(
                     captureID: id, launchID: launchID, origin: origin(entry.surface), placement: entry.placement,
-                    shownNote: entry.shownNote))
+                    shownNote: entry.shownNote, followsCaptureID: entry.follows))
         } catch {
             entries[id] = nil
             log.failure(error.about(capture: id), "recording_not_started")
@@ -510,19 +514,6 @@ public actor StandardCaptureEngine: CaptureEngine {
         let events = session.events
         Task { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
-        }
-    }
-
-    /// Names, in a started recording's manifest, the capture it follows, so that recovery places
-    /// it in that capture's note after a death during the recording. The recorder writes the
-    /// manifest before the first sample and leaves it; a manifest that could not be changed
-    /// leaves the recording placed by the window.
-    private func markFollows(_ id: CaptureID) {
-        guard let follows = entries[id]?.follows else { return }
-        do throws(KnotError) {
-            try inbox.markRecording(id, follows: follows)
-        } catch {
-            log.failure(error.about(capture: id), "recording_manifest_not_marked")
         }
     }
 
@@ -839,6 +830,9 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     private func take(_ id: CaptureID) async {
         guard !line.take(id) else { return }
+        // IDs only. The call is in the line once this is logged: nothing suspends between the
+        // two, so a test can order a later call after it.
+        log.capture(id, "call_waits_for_line")
         await withCheckedContinuation { line.enqueue(id, $0) }
     }
 
