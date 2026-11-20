@@ -190,6 +190,27 @@ public enum NoteStoreContract {
         #expect(try await h.store.cursor() == cursor, "Nothing is written.")
         #expect(try await h.text(derived) == before)
         #expect(try await h.store.segment(derived)?.segment.noteID == first.noteID)
+
+        // The same on every path that grows a capture: a checkpoint, an end and an ingest that
+        // would write a piece another capture owns are refused and change nothing (finding 42).
+        let draft = h.typedDraft("start", at: 2)
+        var independent = h.tool("independent", at: 2)
+        independent.id = CaptureID(SegmentID.piece(1, of: draft.id))
+        _ = try await h.store.record(independent)
+        _ = try await h.store.record(draft)
+        let grown = Harness.longText(pieces: 2)
+        await refuses(.captureIDConflict) {
+            try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: grown, revision: 2))
+        }
+        await refuses(.captureIDConflict) { try await h.store.end(h.endTyped(draft.id, grown, at: 3, revision: 3)) }
+        var item = draft
+        item.endedAt = h.at(3)
+        item.body = .text(grown)
+        item.revision = 4
+        await refuses(.captureIDConflict) { try await h.store.ingest(item) }
+        #expect(
+            try await h.text(SegmentID(independent.id)) == "independent", "The other capture's segment is untouched.")
+        #expect(try await h.text(SegmentID(draft.id)) == "start")
     }
 
     // MARK: Revisions and cursors

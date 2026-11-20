@@ -1243,6 +1243,12 @@
         ) throws(KnotError) -> [SegmentID] {
             let pieces = TextPieces.pieces(of: text, capture: capture)
             let first = SegmentID(capture)
+            // Every piece the save would write must be this capture's, or nothing is written.
+            for piece in pieces where next.segments[piece.segmentID] != nil {
+                guard next.segmentCapture[piece.segmentID] == capture else {
+                    throw KnotError.captureIDConflict.about(capture: capture)
+                }
+            }
             if next.segments[first] == nil, next.notes[note] == nil {
                 note = ids.make()
                 next.notes[note] = Note(
