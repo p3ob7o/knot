@@ -72,6 +72,8 @@ public enum SegmentFileLine: Hashable, Sendable {
     case recordingNotHere(duration: Duration?)
     /// A drawing that is not on this device, so it was not exported.
     case drawingNotHere
+    /// A file of a kind this build does not know, made by a newer Knot, so it was not exported.
+    case newerFile
 }
 
 /// A note as Markdown and as plain text (docs/product-spec.md §8).
@@ -159,6 +161,8 @@ public enum NoteMarkdown {
             "*\(recordingName(duration)): not on this device, not exported.*"
         case .drawingNotHere:
             "*\(ExportNames.drawingLabel): not on this device, not exported.*"
+        case .newerFile:
+            "*File: made by a newer Knot, not exported.*"
         }
     }
 

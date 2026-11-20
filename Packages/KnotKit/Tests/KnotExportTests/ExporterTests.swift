@@ -119,7 +119,8 @@ import Testing
         #expect(notHere.filter { $0.contains("[Recording, 0:30](attachments/") }.count == 1)
     }
 
-    @Test func aFileOfAKindThisBuildDoesNotKnowStaysBehindWithNoLine() async throws {
+    /// Finding 6: such a file stays behind, counts as missing, and its note says so.
+    @Test func aFileOfAKindThisBuildDoesNotKnowStaysBehindAndItsNoteSaysSo() async throws {
         let note = Build.note(fixedID(0x60), at: t0)
         let photo = try Segment(
             id: fixedID(0x61), noteID: note.id, kind: .unknown("photo"), origin: .device(otherDevice), startedAt: t0,
@@ -134,7 +135,8 @@ import Testing
         #expect(report.leftOut.map(\.isMissing) == [true])
         #expect(sink.files.count == 1)
         #expect(
-            sink.files.values.first.map { String(decoding: $0, as: UTF8.self) }?.hasSuffix("---\n\nCaption.\n") == true)
+            sink.files.values.first.map { String(decoding: $0, as: UTF8.self) }?
+                .hasSuffix("---\n\n*File: made by a newer Knot, not exported.*\n\nCaption.\n") == true)
     }
 
     @Test func everyShownNoteLeavesAcrossPagesWithANameOfItsOwn() async throws {

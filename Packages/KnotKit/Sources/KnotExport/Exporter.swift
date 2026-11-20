@@ -45,7 +45,8 @@ public struct LeftOut: Hashable, Sendable {
         /// A drawing that the caller gave no image for. Its stored data was written instead, at
         /// this path, and its note's Markdown links to it.
         case drawingWithoutImage(ExportPath)
-        /// A file of a kind this build does not know. It stays behind.
+        /// A file of a kind this build does not know, which a newer Knot made. It stays behind,
+        /// and its note's Markdown says so in a line.
         case unknownKind
     }
 
@@ -66,6 +67,11 @@ public struct LeftOut: Hashable, Sendable {
     /// True for a file that the export could not write at all: what `knot export` refuses for
     /// unless it is told to skip it (docs/product-spec.md §10). A drawing written as its data
     /// is not missing.
+    ///
+    /// A file of a kind this build does not know counts as missing too. That is a reading, not
+    /// the spec's words, which name only a file on another device: the orchestrator ruled on
+    /// 2026-11-20 that an export which looks complete and is not is the worse outcome. `reason`
+    /// tells the caller which of the two it was.
     public var isMissing: Bool {
         switch reason {
         case .notOnThisDevice, .unknownKind: true
@@ -308,12 +314,12 @@ public struct Exporter: Sendable {
         }
     }
 
-    /// The line of a file that stayed behind. One of a kind this build does not know gets none.
-    private static func notHereLine(_ kind: AssetKind, _ segment: Segment) -> SegmentFileLine? {
+    /// The line of a file that stayed behind.
+    private static func notHereLine(_ kind: AssetKind, _ segment: Segment) -> SegmentFileLine {
         switch kind {
         case .audio: .recordingNotHere(duration: segment.duration)
         case .ink: .drawingNotHere
-        case .unknown: nil
+        case .unknown: .newerFile
         }
     }
 }
