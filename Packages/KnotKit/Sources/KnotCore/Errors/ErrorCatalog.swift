@@ -121,6 +121,16 @@ extension KnotError {
     public static let recognitionFailed = KnotError(
         code: "recognition_failed", next: .retry, retry: .safe(times: 5), written: .contentKept,
         exitStatus: .unexpected)
+    /// The drawing's data cannot be decoded. No retry fixes it: the drawing is kept, shown as
+    /// "Kept, no text".
+    public static let drawingUnreadable = KnotError(
+        code: "drawing_unreadable", errorClass: .final, next: .none, retry: .notSafe, written: .contentKept,
+        exitStatus: .unexpected)
+    /// The recogniser does not read handwriting in the language set. The drawing is kept, shown
+    /// as "Kept, no text".
+    public static let handwritingLanguageUnsupported = KnotError(
+        code: "handwriting_language_unsupported", errorClass: .final, next: .none, retry: .notSafe,
+        written: .contentKept, exitStatus: .unexpected)
 
     // MARK: Deferrals: a step that cannot run now
 
@@ -140,6 +150,11 @@ extension KnotError {
     /// The device is locked and the step needs it unlocked.
     public static let deviceLocked = KnotError(
         code: "device_locked", errorClass: .deferral, next: .unlockDevice, retry: .safe, written: .nothing,
+        exitStatus: .unexpected)
+    /// The step runs only while the app is in the foreground, as recognition does
+    /// (docs/architecture.md §10). It runs when the app comes forward.
+    public static let appNotInForeground = KnotError(
+        code: "app_not_in_foreground", errorClass: .deferral, next: .openKnot, retry: .safe, written: .nothing,
         exitStatus: .unexpected)
 
     /// A step was cancelled: the task that awaited it was cancelled, because background time
@@ -165,6 +180,29 @@ extension KnotError {
     /// A file from the watch does not match its manifest's checksum. The watch sends it again.
     public static let checksumMismatch = KnotError(
         code: "checksum_mismatch", next: .waitAndRetry, retry: .safe, written: .contentKept, exitStatus: .unexpected)
+    /// The watch link's session is not activated yet, or the iPhone is switching watches. The
+    /// capture waits in the outbox.
+    public static let linkNotReady = KnotError(
+        code: "link_not_ready", errorClass: .deferral, next: .waitAndRetry, retry: .safe, written: .contentKept,
+        exitStatus: .unexpected)
+    /// The other side of the watch link is missing: the devices are not paired, or the other
+    /// app is not installed. The capture waits in the outbox.
+    public static let counterpartMissing = KnotError(
+        code: "counterpart_missing", errorClass: .deferral, next: .waitAndRetry, retry: .safe,
+        written: .contentKept, exitStatus: .unexpected)
+    /// The receiving side of the watch link has no room. The capture waits in the outbox.
+    public static let counterpartFull = KnotError(
+        code: "counterpart_full", errorClass: .deferral, next: .freeSpace, retry: .safe, written: .contentKept,
+        exitStatus: .unexpected)
+    /// A transfer over the watch link did not complete. It is an attempt, and the capture is
+    /// queued again.
+    public static let deliveryFailed = KnotError(
+        code: "delivery_failed", next: .waitAndRetry, retry: .safe, written: .contentKept, exitStatus: .unexpected)
+    /// The outbox file of a capture is missing or cannot be read. The capture fails at once and
+    /// its manifest is kept.
+    public static let outboxFileMissing = KnotError(
+        code: "outbox_file_missing", next: .reportProblem, retry: .notSafe, written: .contentKept,
+        exitStatus: .unexpected)
 
     // MARK: Sync (docs/architecture.md §11)
 
@@ -186,6 +224,38 @@ extension KnotError {
     /// A restored store waits for consent before it uploads.
     public static let syncUploadNeedsConsent = KnotError(
         code: "sync_upload_needs_consent", next: .answerUploadQuestion, retry: .notSafe, written: .nothing,
+        exitStatus: .unexpected)
+
+    // The sync conditions: the errors of the engine that SP-4's code half sorted
+    // (docs/notes/SP-4.md). Only a manual sync throws them; otherwise they surface as a status.
+
+    /// The network, the account or the service is not available for now, or the server limits
+    /// requests. The engine retries by itself; `context.retryAt` says when, when the server gave
+    /// a time.
+    public static let syncTransient = KnotError(
+        code: "sync_transient", next: .waitAndRetry, retry: .safe, written: .nothing,
+        exitStatus: .unexpected)
+    /// The server holds a newer version of a record. It is merged like a fetched record and sent
+    /// again.
+    public static let syncServerRecordChanged = KnotError(
+        code: "sync_server_record_changed", next: .retry, retry: .safe, written: .nothing, exitStatus: .unexpected)
+    /// A send found the zone missing: the user deleted it, or it went with a reset of the
+    /// encrypted data. It leads to the zone-removed pause.
+    public static let syncZoneMissing = KnotError(
+        code: "sync_zone_missing", next: .answerUploadQuestion, retry: .notSafe, written: .nothing,
+        exitStatus: .unexpected)
+    /// A batch was over the server's limits. The adapter splits it and sends again.
+    public static let syncLimitExceeded = KnotError(
+        code: "sync_limit_exceeded", next: .retry, retry: .safe, written: .nothing, exitStatus: .unexpected)
+    /// The user's iCloud storage is full. Sending stops until there is room.
+    public static let syncQuotaExceeded = KnotError(
+        code: "sync_quota_exceeded", next: .none, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
+    /// A record is gone from the server. The rule of a long absence decides what follows.
+    public static let syncUnknownItem = KnotError(
+        code: "sync_unknown_item", next: .none, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
+    /// Any other error of the engine. No retry fixes it on this device.
+    public static let syncFinal = KnotError(
+        code: "sync_final", next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)
 
     // MARK: Text, revisions and cursors
@@ -306,10 +376,14 @@ extension KnotError {
         microphonePermissionRefused, noInputDevice, audioSessionBusy, tooLittleSpace, captureStoppedDiskFull,
         conversionFailed, captureBlockedByRecording,
         speechModelNotInstalled, audioUnreadable, speechUnavailable, transcriptionFailed, cleanupModelNotReady,
-        cleanupModelUnavailable, cleanupDeclined, cleanupTimedOut, recognitionFailed,
-        requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked, cancelled,
-        inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch,
+        cleanupModelUnavailable, cleanupDeclined, cleanupTimedOut, recognitionFailed, drawingUnreadable,
+        handwritingLanguageUnsupported,
+        requestsLimited, systemResourcesLimited, noBackgroundTime, deviceLocked, appNotInForeground, cancelled,
+        inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch, linkNotReady,
+        counterpartMissing, counterpartFull, deliveryFailed, outboxFileMissing,
         syncSignedOut, syncAccountChanged, syncZoneRemoved, syncMassDeletePaused, syncUploadNeedsConsent,
+        syncTransient, syncServerRecordChanged, syncZoneMissing, syncLimitExceeded, syncQuotaExceeded,
+        syncUnknownItem, syncFinal,
         textTooLong, captureIDConflict, captureInvalid, revisionStale, revisionForeign, cursorForeign,
         cursorAheadOfStore,
         notFound, idAmbiguous, noteDeleted, segmentCaptureOpen, removeRecordingRefusedNoText,

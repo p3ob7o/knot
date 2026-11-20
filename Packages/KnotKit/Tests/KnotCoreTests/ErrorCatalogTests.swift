@@ -104,16 +104,21 @@ import Testing
                 == Set(
                     [
                         KnotError.cleanupModelNotReady, .speechModelNotInstalled, .requestsLimited, .noBackgroundTime,
-                        .deviceLocked, .systemResourcesLimited,
+                        .deviceLocked, .systemResourcesLimited, .appNotInForeground, .linkNotReady, .counterpartMissing,
+                        .counterpartFull,
                     ].map(\.code)))
     }
 
-    @Test func threeErrorsAreFinal() {
+    @Test func fiveErrorsAreFinal() {
         // docs/architecture.md §4 and §5: no retry on this device can fix them, so the job
         // ends at once and is not tried again.
         #expect(
             Set(KnotError.catalog.filter(\.isFinal).map(\.code))
-                == Set([KnotError.speechUnavailable, .audioUnreadable, .cleanupModelUnavailable].map(\.code)))
+                == Set(
+                    [
+                        KnotError.speechUnavailable, .audioUnreadable, .cleanupModelUnavailable, .drawingUnreadable,
+                        .handwritingLanguageUnsupported,
+                    ].map(\.code)))
         for error in KnotError.catalog where error.isFinal {
             #expect(!error.retry.isSafe, "\(error.code) is final, so no retry is offered.")
         }
