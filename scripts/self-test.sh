@@ -453,16 +453,6 @@ if [[ $swift_hang_status == 124 && $swift_message == *"The step package-test did
 else
     fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
 fi
-# The limit outlasts a run in which every wait of a suite runs out: no test can run more
-# SuiteWait waits in turn, each ten minutes, a contract's run counted as all of its waits and
-# a wait of SuiteWait.limit * n as n, than fit in KNOT_SWIFT_TEST_LIMIT.
-longest="$(python3 -I "$KNOT_SCRIPTS/lib/suite_waits.py" "$KNOT_ROOT/Packages/KnotKit" || true)"
-if [[ $longest =~ ^[0-9]+\  ]] && ((${longest%% *} * 600 < KNOT_SWIFT_TEST_LIMIT)); then
-    pass "the package tests' limit outlasts the longest run of waits in one test: ${longest%% *} of ten minutes, in ${longest#* }"
-else
-    fail "the package tests' limit, ${KNOT_SWIFT_TEST_LIMIT}s, does not outlast the longest run of waits in one test: ${longest:-not counted}"
-fi
-
 # The release scan finds a fake that lives outside KnotFakes: knot_tool.py fake-types lists
 # every top-level type declared under an `#if` naming KNOT_FAKES, in any module, and
 # knot_fakes_in finds it in a binary. A made-up KnotLink holds a guarded FakeLinkSystem and a

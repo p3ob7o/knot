@@ -359,13 +359,13 @@ knot_run_limited() {
     return "$status"
 }
 
-# The limit on a step that runs the package's tests, in seconds: two hours. The suites end
-# every wait after SuiteWait.limit, ten minutes, and the most waits one test can run in turn
-# is 11, in RecorderContract.run, so a run in which every wait runs out ends after 110
-# minutes, while the other tests run beside it. A test that hangs outside a wait, such as a
-# deadlock, would otherwise hold the step for ever. The self-test checks that no test can
-# run more waits in turn than fit in this limit.
-KNOT_SWIFT_TEST_LIMIT=${KNOT_SWIFT_TEST_LIMIT:-7200}
+# The limit on a step that runs the package's tests, in seconds: 50 minutes, under the hour
+# that another run waits for a build slot. It is not long enough for every wait of a suite
+# to run out, and need not be: a suite's wait that runs out has failed the run already, and
+# the log keeps each failure as it happens. A run whose waits keep running out may be ended
+# by this limit first. What the limit catches is a test that hangs outside its waits, such
+# as in a deadlock, which would otherwise hold the step for ever.
+KNOT_SWIFT_TEST_LIMIT=${KNOT_SWIFT_TEST_LIMIT:-3000}
 
 # Runs a command that runs the package's tests, with KNOT_SWIFT_TEST_LIMIT. At the limit it
 # fails and names the step: a hung test, not a dialog. Otherwise it returns the command's
@@ -376,7 +376,7 @@ knot_swift_test_limited() {
     shift
     knot_limit "$KNOT_SWIFT_TEST_LIMIT" "$@" || status=$?
     if ((KNOT_LIMIT_HIT)); then
-        echo "The step $step did not end within $(knot_duration "$KNOT_SWIFT_TEST_LIMIT") (KNOT_SWIFT_TEST_LIMIT), longer than a run in which every wait of a suite runs out. A test hangs outside its waits, such as in a deadlock: the last test that started, above, is the one to read."
+        echo "The step $step did not end within $(knot_duration "$KNOT_SWIFT_TEST_LIMIT") (KNOT_SWIFT_TEST_LIMIT). A test hangs, such as in a deadlock, or the suite's waits keep running out: the failures and the last test that started, above, say which."
         return 124
     fi
     return "$status"
