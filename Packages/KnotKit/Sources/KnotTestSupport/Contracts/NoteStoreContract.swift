@@ -908,13 +908,24 @@ public enum NoteStoreContract {
         let voice = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
         let segment = voice.segmentIDs[0]
         let job = try #require(try await h.store.jobs(for: segment).first)
+        // Until the segment has text, the recording is all there is, and its job needs it
+        // (finding 69): refused, part way through the transcript too.
+        await refuses(.removeRecordingRefusedNoText, "before the transcript") {
+            try await h.store.removeRecording(of: segment)
+        }
         _ = try await h.store.appendTranscript(
-            h.run("keep these words", from: .zero, resumeAt: nil), to: segment, job: job.id)
+            h.run("   ", from: .zero, resumeAt: .seconds(30)), to: segment, job: job.id)
+        await refuses(.removeRecordingRefusedNoText, "with only blank words") {
+            try await h.store.removeRecording(of: segment)
+        }
+        #expect(try await h.store.segment(segment)?.segment.assetID != nil, "The recording stays.")
+        _ = try await h.store.appendTranscript(
+            h.run("keep these words", from: .seconds(30), resumeAt: nil), to: segment, job: job.id)
         let assetID = try #require(try await h.store.segment(segment)?.segment.assetID)
         let removed = try await h.store.removeRecording(of: segment)
         #expect(removed.id == assetID, "The caller learns which file to remove.")
         let after = try #require(try await h.store.segment(segment)).segment
-        #expect(after.text == "keep these words" && after.assetID == nil, "The text stays, without a player.")
+        #expect(after.text.contains("keep these words") && after.assetID == nil, "The text stays, without a player.")
         #expect(try await h.store.asset(assetID) == nil)
         await refuses(.notFound) { try await h.store.removeRecording(of: segment) }
     }

@@ -167,7 +167,9 @@ public protocol NoteStore: Sendable {
 
     /// "Remove recording" (docs/product-spec.md §7): keeps a voice segment's text and removes
     /// its recording's row. Returns the asset whose file the caller then removes through the
-    /// `AssetStore`. Refused while the capture is open; `not_found` when it has no recording.
+    /// `AssetStore`. Refused while the capture is open; `not_found` when it has no recording;
+    /// `remove_recording_refused_no_text` until the segment has text, since the recording is
+    /// then all there is and its transcribe job still needs it.
     func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset
 
     /// Clears the marks of late arrivals in one note, which the note view does when it opens.

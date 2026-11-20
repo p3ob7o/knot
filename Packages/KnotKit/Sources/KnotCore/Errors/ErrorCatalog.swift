@@ -223,6 +223,11 @@ extension KnotError {
     public static let segmentCaptureOpen = KnotError(
         code: "segment_capture_open", next: .waitForCaptureToEnd, retry: .safe, written: .nothing,
         exitStatus: .conflict)
+    /// "Remove recording" of a segment that has no text yet: the recording is all there is,
+    /// and its transcribe job still needs it.
+    public static let removeRecordingRefusedNoText = KnotError(
+        code: "remove_recording_refused_no_text", next: .waitAndRetry, retry: .safe, written: .nothing,
+        exitStatus: .conflict)
 
     // MARK: Moves and returns (docs/architecture.md §5)
 
@@ -299,7 +304,7 @@ extension KnotError {
         inboxItemUnreadable, inboxItemNewerVersion, manifestTooLarge, checksumMismatch,
         syncSignedOut, syncAccountChanged, syncZoneRemoved, syncMassDeletePaused, syncUploadNeedsConsent,
         textTooLong, captureIDConflict, revisionStale, revisionForeign, cursorForeign, cursorAheadOfStore,
-        notFound, idAmbiguous, noteDeleted, segmentCaptureOpen,
+        notFound, idAmbiguous, noteDeleted, segmentCaptureOpen, removeRecordingRefusedNoText,
         moveRefusedOpenCapture, moveRefusedDeletedSegment, moveRefusedConflictCopy, moveRefusedOnlySegment,
         returnRefusedNoteChanged, returnRefusedNoteGone, returnRefusedNoMove,
         jobDiedTwice, illegalTransition,

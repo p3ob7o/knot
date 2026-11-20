@@ -455,6 +455,10 @@
             guard segment.kind == .voice, let assetID = segment.assetID, let asset = state.assets[assetID] else {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }
+            // The text stays when the recording goes: with no text yet, nothing would (finding 69).
+            guard !CaptureText.isEmpty(segment.text) else {
+                throw KnotError.removeRecordingRefusedNoText.with(.init(segmentID: segmentID))
+            }
             var next = state
             segment.assetID = nil
             next.segments[segmentID] = segment

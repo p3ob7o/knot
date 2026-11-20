@@ -546,6 +546,16 @@ The segment's capture is still open in the app, so it cannot be edited, deleted 
 - Written: nothing
 - Exit code: 5
 
+### `remove_recording_refused_no_text`
+
+"Remove recording" of a segment that has no text yet. The recording is all there is, and its transcribe job still needs it; once the segment has text, the recording can go and the text stays (`docs/product-spec.md` §7).
+
+- Class: failure
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 5
+
 ## Moves and returns (docs/architecture.md §5)
 
 ### `move_refused_open_capture`
