@@ -94,4 +94,30 @@ import Testing
         try harness.outbox.sweep()
         #expect(FileManager.default.fileExists(atPath: stranger.path))
     }
+    /// The checksum covers the whole recording, read in pieces: a payload one mebibyte and
+    /// two bytes long.
+    @Test func theChecksumCoversTheWholeRecording() throws {
+        let harness = LinkHarness()
+        var bytes = Data(repeating: 1, count: 1 << 20)
+        bytes.append(contentsOf: [0x15, 0x27])
+        let (manifest, url) = try harness.convertedRecording(bytes: bytes)
+        let admitted = try harness.outbox.admit(manifest, recording: url)
+        #expect(admitted.payloadSHA256 == sha256(bytes))
+        #expect(admitted.payloadByteCount == Int64(bytes.count))
+    }
+
+    /// Removal takes the manifest first: when the recording cannot be removed, the manifest
+    /// is already gone, as the code does it, not as a test builds it.
+    @Test func removalTakesTheManifestBeforeTheRecording() throws {
+        let harness = LinkHarness()
+        let (manifest, url) = try harness.convertedRecording()
+        try harness.outbox.admit(manifest, recording: url)
+        let recording = harness.outbox.recordingURL(manifest.captureID)
+        // A folder that is not empty in the recording's place makes its removal fail.
+        try FileManager.default.removeItem(at: recording)
+        try FileManager.default.createDirectory(at: recording, withIntermediateDirectories: false)
+        try Data([1]).write(to: recording.appending(path: "synthetic"))
+        #expect(throws: KnotError.self) { try harness.outbox.remove(manifest.captureID) }
+        #expect(!FileManager.default.fileExists(atPath: harness.outbox.manifestURL(manifest.captureID).path))
+    }
 }

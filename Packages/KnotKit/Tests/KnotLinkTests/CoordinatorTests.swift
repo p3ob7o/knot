@@ -105,6 +105,21 @@ import Testing
         #expect(second != capture)
     }
 
+    /// The recording keeps the start written when it began, however long after that it is
+    /// stopped and converted.
+    @Test func aRecordingKeepsItsStartAcrossConversion() async throws {
+        let subject = makeSubject()
+        let harness = subject.harness
+        await subject.coordinator.launch()
+        let capture = try await subject.coordinator.start()
+        let written = try CaptureManifest.decode(Data(contentsOf: harness.locations.recordingManifest(capture)))
+        await waitForAudio(capture, harness)
+        harness.clock.advance(by: 120)
+        _ = await subject.coordinator.stop()
+        let manifest = try #require(harness.outbox.entry(capture)?.manifest)
+        #expect(manifest.startedAt == written.startedAt)
+    }
+
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {
         let subject = makeSubject()
         let harness = subject.harness

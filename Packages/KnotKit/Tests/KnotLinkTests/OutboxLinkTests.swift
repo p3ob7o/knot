@@ -224,6 +224,21 @@ import Testing
         #expect(await link.states()[capture] == .queued(attempt: current.first?.attempt ?? -1))
     }
 
+    /// A manifest whose own capture ID is not its file's is damaged: it counts as failed under
+    /// the file's ID, and nothing is queued.
+    @Test func aManifestNamingAnotherCaptureCountsAsFailedAndIsNotQueued() async throws {
+        let harness = LinkHarness()
+        let (first, url) = try harness.convertedRecording()
+        try harness.outbox.admit(first, recording: url)
+        let (other, _) = try harness.convertedRecording()
+        try harness.files.place(try other.encoded(), at: harness.outbox.manifestURL(first.captureID))
+        let (link, _) = harness.launchWatch()
+        await link.resume()
+        await harness.settle(link)
+        #expect(await link.states() == [first.captureID: .failed])
+        #expect(harness.system.outstanding().isEmpty)
+    }
+
     @Test func aMissingFileFailsTheCaptureAndKeepsItsManifest() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
