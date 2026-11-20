@@ -258,6 +258,31 @@ import Testing
         #expect(r.inboxFiles().isEmpty)
     }
 
+    /// Finding 48, the re-check's D9. A call that comes during a run returns at once, and the
+    /// run scans again: an item written after the run listed `Inbox/` is stored before the run
+    /// ends.
+    @Test func itemWrittenDuringARunIsStoredByThatRun() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "one"))
+        _ = try await r.engine.end(a.captureID)
+        let hold = await r.notes.holdNextCaptureWrite()
+        let ingest = r.ingest
+        let first = Task { await ingest.ingestAll() }
+        await reached(hold)
+        r.clock.advance(by: 1)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let b = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "two"))
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        _ = try await r.engine.end(b.captureID)
+        let during = await SuiteWait.value("a call during the run") { await ingest.ingestAll() }
+        #expect(during?.isEmpty == true)
+        hold.release()
+        _ = await SuiteWait.value("the first run") { await first.value }
+        #expect(try await r.notes.capture(b.captureID)?.outcome == .stored)
+        #expect(r.inboxFiles().isEmpty)
+    }
+
     /// Finding 20, the review's R3. A recording whose conversion failed keeps its working file
     /// as the recording; the next launch's recovery finds it among the orphans, converts it
     /// again and stores it, and it goes on to transcription.
