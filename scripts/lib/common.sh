@@ -440,16 +440,12 @@ knot_console_state() {
 
 # The Mac UI tests need the screen unlocked: on a locked screen their app cannot come to the
 # front, and the test waits a minute and fails with a message that names neither the lock nor
-# what to do. Fails at once when the screen is locked, saying that the owner has to unlock
-# the Mac; goes on with a note when the state cannot be read.
-knot_check_unlocked() {
-    case "$(knot_console_state)" in
-        locked)
-            echo "mac-ui: the screen of this Mac is locked, so the Mac UI tests cannot bring their app to the front. The owner has to unlock the Mac; no agent does. Then run the step again."
-            return 1 ;;
-        unknown)
-            echo "mac-ui: could not read whether the screen is locked (ioreg); going on." ;;
-    esac
+# what to do. verify.sh reads the state once, before the step, and on a locked screen runs
+# this in the step's place: it says so and fails, and reads nothing again, so that no second
+# read can let a step that did not run pass.
+knot_mac_ui_locked() {
+    echo "mac-ui: the screen of this Mac is locked, so the Mac UI tests cannot bring their app to the front. The owner has to unlock the Mac; no agent does. Then run the step again."
+    return 1
 }
 
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,

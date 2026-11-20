@@ -948,11 +948,18 @@ for step in $STEPS; do
     step_start=$(knot_now)
     options="$(slot_options "$step")"
     runner="step_${step//-/_}"
-    # The Mac UI tests need the screen unlocked. A locked screen fails the step at once,
-    # before it takes its slot: its runner is then the check, which says so.
-    if [[ $step == mac-ui && "$(knot_console_state)" == locked ]]; then
-        options=none
-        runner=knot_check_unlocked
+    # The Mac UI tests need the screen unlocked. The state is read once, before the step. A
+    # locked screen fails the step at once, before it takes its slot, and runs no test. A
+    # read that says nothing never passes the step: the step runs, and fails by itself if the
+    # screen is locked.
+    if [[ $step == mac-ui ]]; then
+        case "$(knot_console_state)" in
+            locked)
+                options=none
+                runner=knot_mac_ui_locked ;;
+            unknown)
+                echo "verify: could not read whether the screen is locked; the Mac UI step runs, and fails by itself if it is." ;;
+        esac
     fi
     if [[ $options == none ]]; then
         # A light step runs in a background subshell, so that `set -e` holds inside it:

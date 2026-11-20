@@ -188,7 +188,7 @@ For later: xcodebuild allows a case three minutes, five at most, while a contrac
   sudo DevToolsSecurity -enable
   ```
 
-  The Mac UI tests also need the screen unlocked, at every run that holds them: on a locked screen their app cannot come to the front. A run reads the lock state before the Mac UI step, under a limit, and fails that step at once when the screen is locked, saying that the owner has to unlock the Mac; no agent does. `scripts/doctor.sh` notes a locked screen.
+  The Mac UI tests also need the screen unlocked, at every run that holds them: on a locked screen their app cannot come to the front. A run reads the lock state once, before the Mac UI step, under a limit, and fails that step at once when the screen is locked, before it takes its slot, saying that the owner has to unlock the Mac; no agent does. A read that says nothing never passes the step: the step runs, and fails by itself if the screen is locked. `scripts/doctor.sh` notes a locked screen.
 
 - Set up signing so that `scripts/doctor.sh --require-signing` passes: the gate's development-signed step must sign without a prompt.
 - Confirm the identifiers in the table above, pair the devices for development builds, and register the other Mac.
