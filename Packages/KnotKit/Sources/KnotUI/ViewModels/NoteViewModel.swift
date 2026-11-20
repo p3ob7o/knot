@@ -597,11 +597,15 @@ public final class NoteViewModel {
     }
 
     /// Runs `work` after everything sent before it, so that saves reach the engine in order.
+    ///
+    /// Each queued action holds the view model until it has run. A surface that goes away right
+    /// after `endCapture()`, as a panel does when it closes, still has its last keystrokes
+    /// saved and its capture ended: a capture reaches disk before anything else happens to it.
+    /// Once the queue has run, nothing holds the model any longer.
     private func enqueue(_ work: @escaping @MainActor @Sendable (NoteViewModel) async -> Void) {
         let previous = chain
-        chain = Task { [weak self] in
+        chain = Task {
             await previous?.value
-            guard let self else { return }
             await work(self)
         }
     }

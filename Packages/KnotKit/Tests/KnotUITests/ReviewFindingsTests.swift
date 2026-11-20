@@ -52,6 +52,32 @@ import Testing
         let stored = try #require(try await rig.environment.notes.note(note))
         #expect(stored.liveSegments.map(\.text) == ["first words and the rest"])
     }
+
+    /// Finding 2. Product spec §4.1: text is saved again whenever the surface hides, and the
+    /// capture ends when it is dismissed. The shell calls `endCapture()` as the surface goes,
+    /// then lets the view model go: what was queued still runs.
+    @Test func theSurfaceGoingAwayStillSavesAndEnds() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        weak var released: NoteViewModel?
+        do {
+            let model = rig.capture()
+            released = model
+            model.fieldChanged("typed just before the panel closed")
+            model.endCapture()
+        }
+        let notes = rig.environment.notes
+        let saved = await eventually("the typed text to reach the store and the capture to end") {
+            guard let page = try? await notes.stream(after: nil, limit: 10), let record = page.notes.first,
+                let segment = record.liveSegments.first
+            else { return false }
+            let capture = try? await notes.capture(CaptureID(segment.id))
+            return segment.text == "typed just before the panel closed" && capture?.outcome == .stored
+        }
+        #expect(saved)
+        // Once its queue has run, nothing holds the view model.
+        #expect(await eventually("the view model to be released") { released == nil })
+    }
 }
 
 /// The real engine, whose text saves and ends can be made to fail.
