@@ -212,6 +212,65 @@ import Testing
         #expect(job.deaths == 0)
         #expect(job.state == .done)
     }
+
+    /// Finding 29, the re-check's B3. `resume()` reaches a job this process ran after it has
+    /// finished: it reads the job again before saving a death, leaves it alone, and does not
+    /// throw, while it still counts the death of an earlier launch's job.
+    @Test func resumeThatReachesAFinishedJobLeavesItAlone() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let a = try await r.beginRecording()
+        _ = try await r.engine.end(a.captureID)
+        let b = try await r.beginRecording()
+        _ = try await r.engine.end(b.captureID)
+        let jobA = try #require(try await r.notes.jobs(for: SegmentID(a.captureID)).first)
+        let jobB = try #require(try await r.notes.jobs(for: SegmentID(b.captureID)).first)
+        try #require(jobA.id < jobB.id, "resume() reaches A before B")
+        // A was left running by an earlier launch.
+        try await r.notes.saveJob(try JobMachine.reduce(jobA, .start))
+        r.transcriber.setRunDelay(.milliseconds(300))
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks)
+        let notes = r.notes
+        let first = Mutex(true)
+        // The save of A's death waits until B, which this process runs, is done.
+        hooks.beforeSave.withLock { hook in
+            hook = { job in
+                guard job.deaths > 0,
+                    first.withLock({ f in
+                        defer { f = false }
+                        return f
+                    })
+                else { return }
+                _ = await SuiteWait.value("job B to finish") {
+                    while (try? await notes.jobs(for: jobB.segmentID))?.first?.state != .done {
+                        try? await Task.sleep(for: .milliseconds(2))
+                    }
+                    return true
+                }
+            }
+        }
+        let drain = Task { await queue.drain(using: StraightThroughRunner()) { _ in } }
+        #expect(
+            await eventually("job B to run") {
+                (try? await r.notes.jobs(for: jobB.segmentID))?.first?.state == .running
+            })
+        let resumed = await SuiteWait.value("resume()") { () async -> KnotError? in
+            do throws(KnotError) {
+                try await queue.resume()
+                return nil
+            } catch {
+                return error
+            }
+        }
+        #expect(resumed == .some(nil), "resume() threw")
+        _ = await SuiteWait.value("the drain") { await drain.value }
+        let endA = try #require(try await r.notes.jobs(for: jobA.segmentID).first { $0.kind == .transcribe })
+        let endB = try #require(try await r.notes.jobs(for: jobB.segmentID).first { $0.kind == .transcribe })
+        #expect(endA.deaths == 1)
+        #expect(endB.deaths == 0)
+        #expect(endB.state == .done)
+    }
 }
 
 /// A runner whose work meets a store that does not answer.

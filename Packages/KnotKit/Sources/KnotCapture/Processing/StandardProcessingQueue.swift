@@ -62,37 +62,66 @@ public actor StandardProcessingQueue: ProcessingQueue {
     public nonisolated func jobs() -> AsyncStream<Job> { broadcast.subscribe() }
 
     public func resume() async throws(KnotError) {
-        for job in try await notes.jobs(for: nil) where job.state == .running && !runningHere.contains(job.id) {
-            guard let next = try? Self.reduce(job, .foundRunningAtLaunch) else { continue }
-            try await notes.saveJob(next)
-            await publish(job.id, of: job.segmentID)
-            if case .failed(let code) = next.state {
-                await moveSegment(job.segmentID, .stepFailed(code))
-            } else {
-                await moveSegment(job.segmentID, .deferred)
+        // An error on one job does not stop the others: the first is thrown once every job has
+        // been seen and the queue watches the cleaner.
+        var firstError: KnotError?
+        defer { watchAvailability() }
+        for listed in try await notes.jobs(for: nil) where listed.state == .running && !runningHere.contains(listed.id)
+        {
+            do throws(KnotError) {
+                try await countDeath(of: listed)
+            } catch {
+                log.failure(
+                    Self.aboutCapture(error.with(.init(segmentID: listed.segmentID, jobID: listed.id))),
+                    "death_not_counted")
+                if firstError == nil { firstError = error }
             }
-            log.capture(
-                Self.capture(of: job.segmentID), "job_found_running", .job(job.id), .number("deaths", next.deaths),
-                level: .notice)
         }
         for job in try await notes.jobs(for: nil) where job.state == .done {
-            // A death between a job's last save and its segment's state leaves the segment in
-            // a step that nothing runs any more: it moves on as the step's end would have.
-            guard let read = try await notes.segment(job.segmentID), case .voice(let state) = read.state else {
-                continue
+            do throws(KnotError) {
+                try await settleDone(job)
+            } catch {
+                if firstError == nil { firstError = error }
             }
-            switch (job.kind, state) {
-            case (.transcribe, .transcribing):
-                let hasWords = !CaptureText.isEmpty(read.rawTranscript ?? "")
-                await moveSegment(job.segmentID, .transcribed(hasWords: hasWords))
-            case (.clean, .cleaning):
-                await moveSegment(job.segmentID, read.textOrigin == .cleaned ? .cleaned : .keepRawTranscript)
-            default:
-                break
-            }
-            if job.kind == .transcribe { try await writeCleanJobIfMissing(for: job.segmentID) }
         }
-        watchAvailability()
+        if let firstError { throw firstError }
+    }
+
+    /// Counts a death for a job found running, read again just before the save: one this
+    /// process runs, or one that is no longer running, is left alone.
+    private func countDeath(of listed: Job) async throws(KnotError) {
+        guard !runningHere.contains(listed.id),
+            let job = try await notes.jobs(for: listed.segmentID).first(where: { $0.id == listed.id }),
+            job.state == .running, !runningHere.contains(job.id),
+            let next = try? Self.reduce(job, .foundRunningAtLaunch)
+        else { return }
+        try await notes.saveJob(next)
+        await publish(job.id, of: job.segmentID)
+        if case .failed(let code) = next.state {
+            await moveSegment(job.segmentID, .stepFailed(code))
+        } else {
+            await moveSegment(job.segmentID, .deferred)
+        }
+        log.capture(
+            Self.capture(of: job.segmentID), "job_found_running", .job(job.id), .number("deaths", next.deaths),
+            level: .notice)
+    }
+
+    /// A death between a done job's last save and its segment's state leaves the segment in a
+    /// step that nothing runs any more: it moves on as the step's end would have. A transcribed
+    /// recording gets its clean job.
+    private func settleDone(_ job: Job) async throws(KnotError) {
+        guard let read = try await notes.segment(job.segmentID), case .voice(let state) = read.state else { return }
+        switch (job.kind, state) {
+        case (.transcribe, .transcribing):
+            let hasWords = !CaptureText.isEmpty(read.rawTranscript ?? "")
+            await moveSegment(job.segmentID, .transcribed(hasWords: hasWords))
+        case (.clean, .cleaning):
+            await moveSegment(job.segmentID, read.textOrigin == .cleaned ? .cleaned : .keepRawTranscript)
+        default:
+            break
+        }
+        if job.kind == .transcribe { try await writeCleanJobIfMissing(for: job.segmentID) }
     }
 
     public func enqueue(_ segment: SegmentID) async throws(KnotError) {
