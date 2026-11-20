@@ -351,6 +351,22 @@ else
     pkill -KILL -f "$scratch/stubborn-tool" || true
 fi
 
+# A limit on a shell function, as ui_tests puts on xcb, gives the processes inside it the
+# same two seconds after TERM: the function's own subshell dies at once, so the wait must
+# watch the whole family. The child here cleans up for half a second on TERM, inside a
+# pipeline, as xcodebuild ends its test session.
+printf '#!/bin/bash\ntrap "sleep 0.5; echo cleaned >\"\$1\"; exit 0" TERM\nwhile :; do sleep 0.1; done\n' >"$scratch/tidy-tool"
+chmod +x "$scratch/tidy-tool"
+piped() { "$scratch/tidy-tool" "$scratch/tidy.done" | cat; }
+status=0
+knot_limit 1 piped >/dev/null 2>&1 || status=$?
+if [[ $status == 124 && "$(cat "$scratch/tidy.done" 2>/dev/null)" == cleaned ]]; then
+    pass "a limit on a shell function gives its processes their time after TERM"
+else
+    fail "a limit on a shell function: status $status, and the child's clean-up did not finish"
+    pkill -KILL -f "$scratch/tidy-tool" || true
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

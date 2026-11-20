@@ -235,8 +235,11 @@ knot_limit() {
         family="$pid $(knot_descendants "$pid")"
         # shellcheck disable=SC2086
         kill -TERM $family 2>/dev/null || true
+        # The two seconds are for the whole family: when the command is a shell function,
+        # $pid is a subshell that dies at TERM at once, while what it started, such as
+        # xcodebuild ending its test session, still needs the time.
         ticks=0
-        while kill -0 "$pid" 2>/dev/null && ((ticks < 20)); do
+        while knot_any_alive $family && ((ticks < 20)); do
             sleep 0.1
             ticks=$((ticks + 1))
         done
@@ -248,6 +251,15 @@ knot_limit() {
     fi
     wait "$pid" || status=$?
     return "$status"
+}
+
+# Whether any of the processes named is still alive.
+knot_any_alive() {
+    local p
+    for p in "$@"; do
+        kill -0 "$p" 2>/dev/null && return 0
+    done
+    return 1
 }
 
 # Prints the process IDs of every descendant of a process, one per line.
