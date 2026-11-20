@@ -25,3 +25,19 @@ public struct UnavailableDrawingImages: DrawingImages {
         throw KnotError.portUnavailable
     }
 }
+
+/// A `SyncEngine` that is not there: sync is off, and a manual sync fails.
+public struct UnavailableSyncEngine: SyncEngine {
+    public init() {}
+
+    public func statusUpdates() -> AsyncStream<SyncStatus> {
+        AsyncStream { continuation in
+            continuation.yield(.off)
+            continuation.finish()
+        }
+    }
+    public func start() async {}
+    public func stop() async {}
+    public func syncNow() async throws(KnotError) { throw KnotError.portUnavailable }
+    public func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async {}
+}

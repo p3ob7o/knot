@@ -1,0 +1,85 @@
+import Foundation
+
+/// Why the notes' zone is gone from iCloud, as CKSyncEngine reports a deleted zone
+/// (docs/architecture.md §11).
+public enum ZoneLoss: String, Hashable, Sendable, Codable, CaseIterable {
+    /// The app deleted the zone.
+    case deleted
+    /// The owner removed the app's data in the Settings app.
+    case purged
+    /// The owner reset their encrypted data.
+    case encryptedDataReset = "encrypted_data_reset"
+}
+
+/// A pause of sync that asks the user (docs/architecture.md §11). Each has the two answers of
+/// `SyncAnswer`, and sync stays paused until the app answers.
+public enum SyncQuestion: Hashable, Sendable {
+    /// The device signed out of iCloud. The notes stay.
+    case signedOut
+    /// The device signed in to another account. Nothing uploads before the answer.
+    case accountChanged
+    /// The notes were removed from iCloud. After `purged` or `encryptedDataReset` the user asked
+    /// iCloud to forget, so the prompt's default keeps sync paused.
+    case zoneRemoved(ZoneLoss)
+    /// A fetch would delete more than the set share of the local notes.
+    case largeDelete(notes: Int, ofTotal: Int)
+    /// A restored store waits for consent before it uploads.
+    case restoredStore
+    /// The build moved to another CloudKit environment, which uploads the local notes again.
+    case environmentChanged
+    /// Records over the record limit, which the store keeps apart.
+    case recordTooLarge(count: Int)
+}
+
+/// The two answers a pause of sync takes (docs/architecture.md §11).
+public enum SyncAnswer: String, Hashable, Sendable, Codable, CaseIterable {
+    /// Upload the local notes, and sync on.
+    case upload
+    /// Keep sync paused.
+    case keepPaused = "keep_paused"
+}
+
+/// What the sync engine is doing (docs/architecture.md §5 and §11; docs/notes/SP-4.md).
+///
+/// The engine streams no progress, only its events: `fetching` and `sending` come from its will
+/// and did events, and `remaining` from the store's count of pending records. The engine
+/// retries transient errors by itself and silently, so `waiting(until:)` has a time only after
+/// a manual sync that threw one.
+public enum SyncStatus: Hashable, Sendable {
+    /// Sync is off: the switch is off, the gate is closed, or the engine was stopped.
+    case off
+    case idle(lastSuccess: Date?)
+    case fetching
+    case sending(remaining: Int)
+    case waiting(until: Date?)
+    case paused(SyncQuestion)
+    /// A sync condition stopped the run: one of the sync codes of the taxonomy.
+    case failed(ErrorCode)
+}
+
+/// The iCloud sync engine (docs/architecture.md §5 and §11; docs/notes/SP-4.md). It exists
+/// only when the switch is on and the `sync` gate is open.
+///
+/// No method throws an engine error except `syncNow`. Everything else surfaces as a status,
+/// as the engine surfaces it as an event.
+public protocol SyncEngine: Sendable {
+    /// The current status, then every change. When the consumer goes away, its subscription
+    /// ends; sync is not affected.
+    func statusUpdates() -> AsyncStream<SyncStatus>
+
+    /// Starts the engine. Starting a started engine changes nothing.
+    func start() async
+
+    /// Stops the engine: it cancels what runs and drops every later event of this run, so an
+    /// event that arrives after the stop never reaches the notes. The status is then `off`.
+    func stop() async
+
+    /// Fetches, then sends. It throws a sync condition, `sync_transient` to
+    /// `sync_final`, with the time to retry in `context.retryAt` when the server gave one. While
+    /// sync is off or paused it does nothing.
+    func syncNow() async throws(KnotError)
+
+    /// Answers the question of a pause. An answer to a question that is not asked changes
+    /// nothing. `upload` leaves the pause, and `keepPaused` keeps it.
+    func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async
+}

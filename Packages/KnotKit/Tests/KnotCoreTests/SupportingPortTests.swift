@@ -29,3 +29,18 @@ import Testing
         }
     }
 }
+
+@Suite struct SyncPortTests {
+    @Test func theUnavailableSyncEngineIsOff() async {
+        let engine = UnavailableSyncEngine()
+        var statuses: [SyncStatus] = []
+        for await status in engine.statusUpdates() { statuses.append(status) }
+        #expect(statuses == [.off])
+        await #expect(throws: KnotError.portUnavailable) { try await engine.syncNow() }
+    }
+
+    @Test func aQuestionTakesTwoAnswers() {
+        #expect(SyncAnswer.allCases == [.upload, .keepPaused])
+        #expect(ZoneLoss.allCases.map(\.rawValue) == ["deleted", "purged", "encrypted_data_reset"])
+    }
+}
