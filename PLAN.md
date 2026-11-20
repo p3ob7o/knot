@@ -344,13 +344,13 @@ A package's "Done when" list is the merge criteria of its brief, and it holds on
 
 A spike answers questions. Its code stays on its `spike/…` branch and is never merged. Its report merges to `docs/spikes/` and ends with a decision. Where the answer changes docs/architecture.md, the report lists the changes it asks for, and the orchestrator, who owns that file, makes them in a pull request of its own before it launches a package that waits for the spike.
 
-A spike counts as finished when its report has merged and the owner has confirmed its decision. The code half of each spike starts with the proof steps, and files the same short note. A spike uses the development identifiers, like every build that is not a milestone build.
+A spike counts as finished when its report has merged and the owner has confirmed its decision. The code half of each spike starts with the proof steps, and files the same short note. SP-4's code half runs in two stages on the same code. The first works from the pinned SDK alone, with no container, and files the short note, which says what it read and what is not verified yet. The second runs against the development iCloud container once the owner's signing and two signed-in devices or simulators are there, and SP-4's report follows it. A spike uses the development identifiers, like every build that is not a milestone build.
 
 ### Proof steps
 
 WP-12, WP-13, WP-14 and WP-18 each begin with a proof step. It is the first thing the package does, and its brief says what it must show.
 
-Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The code of a proof step stays on a branch of its own, `wp/<number>-proof`, with no pull request, and the package's first PR starts from it. The note merges from a second branch that holds only that file. A spike's code half does the same from the spike's branch. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
+Proof comes before contracts. The proof steps, and the code half of each spike, start beside the first PR of WP-02. They need only the first PR of WP-01 and WP-04, and SP-5 needs only the first PR of WP-01. SP-4's second stage also needs the owner's signing and two signed-in devices, and its short note comes from the first. Each files a short note saying whether the draft port fits the real API's streaming, cancellation and errors. A note is the file `docs/notes/<ID>.md`, merged by a pull request that holds nothing else, and a row that waits for notes starts when that pull request has merged. The code of a proof step stays on a branch of its own, `wp/<number>-proof`, with no pull request, and the package's first PR starts from it. The note merges from a second branch that holds only that file. A spike's code half does the same from the spike's branch. The second PR of WP-02 waits for the notes of WP-12, WP-13 and WP-14, and its third for the note of WP-18 and for those of SP-1, SP-2 and SP-4.
 
 ### Prior art
 
@@ -478,7 +478,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
 | G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
-| G3 | With SP-4 | Sign two devices into iCloud for the sync spike | 10 |
+| G3 | With SP-4 | Sign two devices into iCloud for the second stage of the sync spike, once his signing is set up | 10 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
