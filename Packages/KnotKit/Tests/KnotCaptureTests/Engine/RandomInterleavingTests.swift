@@ -80,7 +80,9 @@ import Testing
             }
             Issue.record("Seed \(seed): open rows \(open), Inbox/ \(r.inboxFiles()). \(about) \(replay)")
         }
-        if r.logs.logged("line_nested") { Issue.record("Seed \(seed): a call took a line while it held another. \(replay)") }
+        if r.logs.logged("line_nested") {
+            Issue.record("Seed \(seed): a call took a line while it held another. \(replay)")
+        }
 
         // Every acknowledged text is found.
         for (capture, expected) in ledger.acknowledged() {

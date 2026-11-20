@@ -84,7 +84,9 @@ import Testing
         await expectError(.captureBlockedByRecording) {
             try await r.engine.begin(CaptureRequest(kind: .typed, surface: surface, text: "x"))
         }
-        await expectError(.segmentCaptureOpen) { try await r.engine.begin(CaptureRequest(kind: .voice, surface: surface)) }
+        await expectError(.segmentCaptureOpen) {
+            try await r.engine.begin(CaptureRequest(kind: .voice, surface: surface))
+        }
         r.clock.advance(by: 3)
         let ended = try await r.engine.end(recording.captureID)
         #expect(ended.outcome == .stored)

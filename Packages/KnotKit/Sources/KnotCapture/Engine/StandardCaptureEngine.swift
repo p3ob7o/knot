@@ -736,7 +736,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // fell back since keeps its saves in `Inbox/`, and its item must end there too,
                 // or ingest leaves it as an open item.
                 if onStorePath, entries[open]?.path == .store {
-                    let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(open) }
+                    let answer = await deadline.race { [notes] () async throws(KnotError) in
+                        try await notes.capture(open)
+                    }
                     if case .answered(let row?) = answer, row.outcome != .open {
                         entries[open]?.outcome = row.outcome
                         publish(open)

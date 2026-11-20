@@ -129,7 +129,11 @@ final class DiskFillsAfterConversion: Recorder, Sendable {
     }
     func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
         let converted = try await base.convert(recording)
-        if armed.withLock({ armed in defer { armed = false }; return armed }) { layer.failNextWrite(with: .diskFull) }
+        let fill = armed.withLock { armed in
+            defer { armed = false }
+            return armed
+        }
+        if fill { layer.failNextWrite(with: .diskFull) }
         return converted
     }
     func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
