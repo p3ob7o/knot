@@ -282,6 +282,21 @@ else
     fail "the gate with KNOT_LOCAL_CONFIG set: status $status, earlier line $(ls "$gate_tree/.build/logs"), and: $output"
 fi
 
+# On a detached head the gate needs the branch, which tells a note's pull request from a code
+# one: it refuses --package alone, and with neither it asks for --branch, not for either.
+# The scratch tree has no branch to read, as a detached head has none, and the tree's pin.
+cp "$KNOT_ROOT/.xcode-version" "$gate_tree/"
+status_package=0
+output_package="$("$KNOT_SCRIPTS/verify.sh" --gate --package WP-01 --tree "$gate_tree" 2>&1)" || status_package=$?
+status_none=0
+output_none="$("$KNOT_SCRIPTS/verify.sh" --gate --tree "$gate_tree" 2>&1)" || status_none=$?
+if [[ $status_package == 1 && $output_package == *"needs the branch, --branch <name>"* &&
+    $status_none == 1 && $output_none == *"needs the branch, --branch <name>"* && $output_none != *" or --branch"* ]]; then
+    pass "on a detached head the gate refuses --package alone, and asks for --branch"
+else
+    fail "the gate without --branch: status $status_package and $status_none, and: $output_package / $output_none"
+fi
+
 # The Mac UI readiness check reads the second line of automationmodetool, which says whether
 # turning Automation Mode on needs authentication, and the whole phrase "currently enabled"
 # of DevToolsSecurity, since "disabled" holds "enabled". The samples are the two tools'

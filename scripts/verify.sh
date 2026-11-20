@@ -7,8 +7,9 @@
 #   scripts/verify.sh --full [--skip mac-ui]   all of it: the lint, ownership, KnotCore's API,
 #                                              the named tests, every app, the packaging
 #                                              proofs, the launches and the Mac UI tests
-#   scripts/verify.sh --gate [--package <ID> | --branch <name>] [--base <ref>]
-#                                              the merge gate: its depth comes from the diff
+#   scripts/verify.sh --gate --branch <name> [--package <ID>] [--base <ref>]
+#                                              the merge gate: its depth comes from the diff;
+#                                              --branch is required on a detached head
 #   scripts/verify.sh --soak [--seed <n>]      the capture ledger soak (its step is WP-06's)
 #   scripts/verify.sh --perf                   the timed targets, on an optimised build with
 #                                              the fakes, holding every build slot
@@ -31,8 +32,9 @@
 #
 # The gate refuses --only, --module, --skip, KNOT_LOCAL_CONFIG and an Xcode named by
 # KNOT_XCODE that is not the pinned one, and it fails on a skipped step. It runs on a
-# detached head: name the package with --package or the branch with --branch. It compares
-# with --base, origin/main by default. scripts/gate-steps.txt lists its steps.
+# detached head, so it needs the branch, --branch, which tells a note's pull request from a
+# code one; --package names the package when the branch does not. It compares with --base,
+# origin/main by default. scripts/gate-steps.txt lists its steps.
 
 # --tree <path> checks another tree with these scripts, as KNOT_TREE does. It is read
 # before anything else, because every path of the run depends on it.
@@ -763,7 +765,7 @@ else
                 knot_fail "verify-gate-xcode" "The gate builds with the pinned Xcode, and KNOT_XCODE names $(knot_xcode_label)." \
                     "Unset KNOT_XCODE, or name the Xcode that .xcode-version pins." "safe" "nothing"
             fi
-            [[ -n $PACKAGE ]] || usage_fail "The gate needs the package: --package <ID> or --branch <name>. A detached head has no branch to read."
+            [[ -n $PACKAGE ]] || usage_fail "The gate needs the branch, --branch <name>: a detached head has no branch to read, and the branch tells a note's pull request from a code one. --package <ID> beside it names the package when the branch does not."
             # The branch tells a proof step's note from the package's code: without it, a
             # note's pull request would count as a code one, and the named tests of a package
             # that has not merged would be asked for.
