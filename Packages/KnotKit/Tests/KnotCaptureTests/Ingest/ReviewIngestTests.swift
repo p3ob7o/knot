@@ -209,4 +209,25 @@ import Testing
         #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == .file)
         #expect(r.layer.entryKind(r.locations.recordingAudio(id, format: .caf)) == .file)
     }
+
+    /// Finding 21. An item stays in `Inbox/` until the store holds its revision: here the store
+    /// holds the recording at an older revision than the item's manifest names, so the item
+    /// is kept.
+    @Test func itemTheStoreHoldsAtAnOlderRevisionStays() async throws {
+        let r = Rig(engineIngests: false)
+        let begun = try await r.beginRecording()
+        let ended = try await r.engine.end(begun.captureID)
+        let stored = try #require(try await r.notes.capture(begun.captureID))
+        #expect(ended.outcome == .stored)
+        let file = try #require(try await r.assets.find(AssetID(begun.captureID), kind: .audio))
+        let manifest = CaptureManifest(
+            captureID: begun.captureID, kind: .voice, origin: stored.origin, launchID: stored.launchID,
+            startedAt: stored.startedAt, endedAt: stored.endedAt, duration: .seconds(1), placement: .window,
+            revision: stored.revision + 10, payloadByteCount: file.byteCount, payloadSHA256: file.sha256)
+        try r.locations.durableFiles(layer: r.layer).place(
+            try manifest.encoded(), at: r.locations.inboxManifest(begun.captureID))
+        let outcomes = await r.ingest.ingestAll()
+        #expect(outcomes[begun.captureID] == .kept(KnotError.captureIDConflict.code))
+        #expect(r.layer.entryKind(r.locations.inboxManifest(begun.captureID)) == .file)
+    }
 }
