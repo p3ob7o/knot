@@ -77,6 +77,8 @@
             /// Each typed capture's segment revisions as its last save left them: a person's
             /// edit since then shows as a difference.
             var savedRevisions: [CaptureID: [SegmentID: Int64]] = [:]
+            /// The revision of the late save each capture keeps as a conflict copy.
+            var keptRevision: [CaptureID: Int64] = [:]
         }
 
         /// What a save brings: new content, an end with nothing to keep, a failed save, or
@@ -895,12 +897,16 @@
                             winner = text
                             winnerRevision = revision
                         }
+                    } else if !wasOpen, let kept = next.keptRevision[id], revision <= kept,
+                        textReplacedSinceEnd(id, in: next)
+                    {
+                        // A repeat, or an older save, of what the conflict copy already keeps.
+                        return false
                     } else if revision > row.revision || faults.contains(.lowersRevisions) {
                         if !wasOpen, textReplacedSinceEnd(id, in: next) {
-                            // A person's text since the end wins by precedence, and the save
-                            // touches nothing. An inbox item says so, and its file stays.
-                            if mode == .ingest { throw conflict }
-                            return false
+                            // A person's text since the end wins by precedence and is not
+                            // touched; the save's content is kept as a conflict copy of it.
+                            return try keepAsCopy(text, of: id, revision: revision, endingAt: endingAt, in: &next)
                         }
                         winner = text
                         winnerRevision = revision
@@ -1033,6 +1039,53 @@
             receipt.cursor = cursor(next.counter)
             next.receipts[id] = receipt
             return changed
+        }
+
+        /// Keeps a late save that precedence keeps out of a person's text as a conflict copy of
+        /// that text's first segment, piece by piece, with IDs derived from the capture's: a
+        /// repeat makes the same copy, and a higher revision updates it (finding 59). The
+        /// person's segments are not touched.
+        private func keepAsCopy(
+            _ text: String, of capture: CaptureID, revision: Int64, endingAt: Date?, in next: inout State
+        ) throws(KnotError) -> Bool {
+            guard var row = next.captures[capture], var receipt = next.receipts[capture],
+                let original = next.segments[SegmentID(capture)]
+            else { throw KnotError.notFound.about(capture: capture) }
+            guard revision > (next.keptRevision[capture] ?? 0) else { return false }
+            let pieces = TextPieces.split(text)
+            for (position, piece) in pieces.enumerated() {
+                let id = SegmentID.keptSave(of: capture, position: position)
+                if var copy = next.segments[id] {
+                    if copy.text != piece {
+                        try copy.replaceText(piece, origin: .typed)
+                        copy.revision += 1
+                    }
+                    copy.deletedAt = nil
+                    next.segments[id] = copy
+                } else {
+                    let copy = try Segment(
+                        id: id, noteID: original.noteID, kind: .typed, noteGeneration: original.noteGeneration,
+                        origin: row.origin.source, startedAt: row.startedAt, endedAt: endingAt ?? row.endedAt,
+                        text: piece, textOrigin: .typed, state: .typed(.ready), conflictOf: original.id,
+                        revision: (next.highestRevision[id] ?? 0) + 1, piece: position,
+                        pieceOf: position == 0 ? nil : SegmentID.keptSave(of: capture))
+                    next.segments[id] = copy
+                }
+            }
+            var position = pieces.count
+            while next.segments[.keptSave(of: capture, position: position)] != nil {
+                next.segments[.keptSave(of: capture, position: position)] = nil
+                position += 1
+            }
+            next.keptRevision[capture] = revision
+            row.revision = max(row.revision, revision)
+            row.lastSavedAt = clock.now()
+            next.captures[capture] = row
+            next.counter += 1
+            touch(original.noteID, counter: next.counter, at: clock.now(), in: &next)
+            receipt.cursor = cursor(next.counter)
+            next.receipts[capture] = receipt
+            return true
         }
 
         /// The text a typed capture's segments hold now, its pieces joined in position.

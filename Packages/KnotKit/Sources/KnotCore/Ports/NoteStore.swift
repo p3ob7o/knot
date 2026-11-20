@@ -65,8 +65,8 @@ public protocol NoteStore: Sendable {
     /// - a failed row: it becomes stored.
     /// - an ended row with the same content: nothing changes.
     /// - an ended row at a lower revision: the item's content replaces it, as a later save of
-    ///   the same capture, unless the text was replaced since the capture ended, which is a
-    ///   conflict.
+    ///   the same capture; if a person replaced the text since the capture ended, their text
+    ///   stays and the item's content is kept as a conflict copy of it, `SegmentID.keptSave`.
     /// - an ended row at an equal or higher revision with other content: a conflict.
     ///
     /// The result says which content revision is durably stored. Only that lets the caller
@@ -76,8 +76,10 @@ public protocol NoteStore: Sendable {
     /// Saves the text of a typed capture. Saves are ordered by revision: a checkpoint never
     /// lowers the stored revision, so one that arrives late, from a slow save or from
     /// `Inbox/`, replaces older text and never newer. An ended capture takes a save at a higher
-    /// revision too, as a later save of the same capture, unless a person replaced its text
-    /// since, which precedence keeps. The row keeps the time of each save that was applied.
+    /// revision too, as a later save of the same capture. When a person replaced its text since,
+    /// their segment is not touched and the save's content is kept as a conflict copy of it,
+    /// with an ID derived from the capture's (`SegmentID.keptSave`): a repeat makes the same
+    /// copy and a higher revision updates it. The row keeps the time of each save applied.
     func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult
 
     /// Ends an open capture: stored with its final content, discarded as empty, or failed
@@ -88,8 +90,8 @@ public protocol NoteStore: Sendable {
     /// job: the store writes it, `JobID.transcribe(of:)`, in the transaction that stores the
     /// recording, by `end`, `record` or `ingest`. An end of a capture that has ended returns its
     /// receipt when the content is the same; at a higher revision it is a later save of the
-    /// capture, which applies unless a person replaced the text since (then nothing changes);
-    /// at the same revision with other content it fails with `capture_id_conflict`.
+    /// capture, kept as a conflict copy when a person replaced the text since; at the same
+    /// revision with other content it fails with `capture_id_conflict`.
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt
 
     /// The captures whose rows are open, of every launch. Recovery finishes those of other
@@ -339,8 +341,8 @@ public struct CaptureCheckpoint: Hashable, Sendable {
 
 /// What a checkpoint did.
 public struct CheckpointResult: Hashable, Sendable {
-    /// False when the stored text was as new or newer, or a person replaced the text of the
-    /// ended capture since, which precedence keeps.
+    /// False when the stored text, or the conflict copy that keeps a late save, was as new or
+    /// newer.
     public var applied: Bool
     /// The content revision the store holds after the call: the producer's own sequence,
     /// not stamped, since it orders the saves of one capture and nothing else.

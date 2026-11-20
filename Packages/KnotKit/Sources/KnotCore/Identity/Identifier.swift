@@ -116,6 +116,14 @@ extension Identifier where Tag == SegmentTag {
         return SegmentID(uuid: UUIDv5.make(namespace: .textPiece, name: "\(capture)/\(position)"))
     }
 
+    /// The conflict copy that keeps a late save of a capture whose text a person replaced since
+    /// it ended, piece by piece. Derived from the capture's ID, so a repeat makes the same copy
+    /// and a higher revision updates it.
+    public static func keptSave(of capture: CaptureID, position: Int = 0) -> SegmentID {
+        precondition(position >= 0, "A piece's position is never negative.")
+        return SegmentID(uuid: UUIDv5.make(namespace: .keptSave, name: "\(capture)/\(position)"))
+    }
+
     /// The ID of the conflict copy made when a text field changed on both sides
     /// (docs/architecture.md §11). Handling the same conflict twice makes one copy.
     public static func conflictCopy(of segment: SegmentID, losingDevice: DeviceID, losingRevision: Int64)

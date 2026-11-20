@@ -432,8 +432,9 @@ public enum NoteStoreContract {
             TextReplacement(segment: SegmentID(draft.id), text: "My words", origin: .edited, writer: .app))
         let check = try await h.store.checkpoint(
             CaptureCheckpoint(captureID: draft.id, text: "Half a thought, finished.", revision: 3))
-        #expect(!check.applied, "Precedence keeps the person's text.")
-        #expect(try await h.text(SegmentID(draft.id)) == "My words")
+        #expect(check.applied, "The save is kept, as a conflict copy (finding 59).")
+        #expect(try await h.text(SegmentID(draft.id)) == "My words", "Precedence keeps the person's text.")
+        #expect(try await h.text(.keptSave(of: draft.id)) == "Half a thought, finished.")
 
         // A finished capture takes a checkpoint at a higher revision, and its text changes; one
         // at its own revision changes nothing (finding 41).
@@ -447,8 +448,11 @@ public enum NoteStoreContract {
         #expect(try await h.text(SegmentID(finished.id)) == "late")
     }
 
-    /// A late save onto text a person replaced changes nothing, the first time and every time:
-    /// not the text, not its origin, not its revision (finding 34).
+    /// A late save onto text a person replaced leaves the person's segment exactly as it is, the
+    /// first time and every time (finding 34), and keeps the save's content as a conflict copy of
+    /// that segment, with an ID derived from the capture's: a repeat makes the same copy and a
+    /// higher revision updates it. That holds for checkpoint, end and ingest, and ingest answers
+    /// that the content is stored, so its file can go (finding 59).
     public static func aLateSaveNeverTouchesAPersonsEdit(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let capture = h.typed("original", from: 0, to: 1)
@@ -457,20 +461,31 @@ public enum NoteStoreContract {
         _ = try await h.store.replaceText(
             TextReplacement(segment: segment, text: "human", origin: .edited, writer: .app))
         let edited = try #require(try await h.store.segment(segment))
+        let copyID = SegmentID.keptSave(of: capture.id)
         let late = h.endTyped(capture.id, "late", at: 2, revision: 8)
         for delivery in 1...2 {
             _ = try await h.store.end(late)
-            _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: capture.id, text: "late", revision: 9))
             let now = try #require(try await h.store.segment(segment))
             #expect(now == edited, "Delivery \(delivery): the person's edit is untouched, revision and origin too.")
+            let copy = try #require(try await h.store.segment(copyID), "The late save is kept as a conflict copy.")
+            #expect(copy.text == "late" && copy.conflictOf == segment && copy.noteID == receipt.noteID)
         }
-        await refuses(.captureIDConflict, "An inbox item over a person's edit is refused, and its file kept.") {
-            var item = capture
-            item.body = .text("late")
-            item.revision = 8
-            return try await h.store.ingest(item)
-        }
-        #expect(try await h.text(segment) == "human")
+        let copied = try #require(try await h.store.segment(copyID))
+        let checkpoint = try await h.store.checkpoint(
+            CaptureCheckpoint(captureID: capture.id, text: "later", revision: 9))
+        #expect(checkpoint.applied && checkpoint.storedRevision == 9, "A higher revision updates the copy.")
+        #expect(try await h.text(copyID) == "later")
+        #expect(try await h.store.segment(copyID)?.revision.value ?? 0 > copied.revision.value)
+        var item = capture
+        item.body = .text("latest")
+        item.revision = 10
+        let ingested = try await h.store.ingest(item)
+        #expect(ingested.applied && ingested.storedRevision == 10, "Ingest says the content is stored.")
+        #expect(try await h.text(copyID) == "latest")
+        let again = try await h.store.ingest(item)
+        #expect(!again.applied && again.storedRevision == 10, "A repeat makes the same copy.")
+        #expect(try await h.store.segment(segment) == edited, "The person's segment never changes.")
+        #expect(try await h.store.note(receipt.noteID)?.liveSegments.count == 2, "One segment and one copy.")
     }
 
     /// Every order of a late record, a checkpoint, an ingest, a handoff, two ends, a person's edit
@@ -569,14 +584,17 @@ public enum NoteStoreContract {
         await refuses(.captureIDConflict) { try await h.store.ingest(clash) }
         clash.revision = 4
         await refuses(.captureIDConflict) { try await h.store.ingest(clash) }
-        // A later save onto text a person replaced since the end is a conflict, and the file stays.
+        // A later save onto text a person replaced since the end is kept as a conflict copy, and
+        // the person's text stays (finding 59).
         _ = try await h.store.replaceText(
             TextReplacement(segment: SegmentID(draft.id), text: "Edited by hand", origin: .edited, writer: .app))
         var after = newer
         after.revision = 9
         after.body = .text("The inbox's later save")
-        await refuses(.captureIDConflict) { try await h.store.ingest(after) }
+        let kept = try await h.store.ingest(after)
+        #expect(kept.applied && kept.storedRevision == 9)
         #expect(try await h.text(SegmentID(draft.id)) == "Edited by hand")
+        #expect(try await h.text(.keptSave(of: draft.id)) == "The inbox's later save")
 
         // A failed row becomes stored.
         let failing = h.typedDraft("Could not save", at: 20, revision: 1)
