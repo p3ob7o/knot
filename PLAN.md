@@ -215,7 +215,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
 | WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
 | WP-16 | 1 | The whole package | WP-10 PR 2 |
-| WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 2 |
+| WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 3 |
 | WP-17 | 2 | The transport | SP-2; WP-02 PR 3 |
 | WP-18 | Proof step | Recognition of the ink fixtures, and a short note saying whether the draft `InkRecogniser` port fits the real API's streaming, cancellation and errors. It runs early and is not held. | WP-01 PR 1; WP-04 |
 | WP-18 | 1 | Everything after the proof step. Held until the keep-gate ruling. | WP-18 proof step; the ruling; WP-05; WP-02 PR 3 |
@@ -439,7 +439,7 @@ A PR is done when all of these hold:
 - No note text, transcript or audio appears in logs, test output or fixtures.
 - Any OS 26 or OS 27 API used is named in the PR with the declaration that was read (architecture §21).
 - Anything that could not be verified without hardware is listed, and has a row in a checklist.
-- Where it changes the cleanup instructions, the guard or the speech settings, it reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
+- Where it changes the cleanup instructions, the guard or the speech settings, it reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers. Until the owner's recordings exist, such a pull request merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them.
 
 **The merge gate.** The merge gate is `scripts/verify.sh --gate` on the orchestrator's Mac. It builds with the release Xcode that the owner installs at G1. It picks its depth from the diff by a fixed table and refuses a partial run: `--skip mac-ui` exists for implementers, and the gate refuses it. The table, and the checks that every depth starts with, are in docs/architecture.md §18. The gate requires both on-device models on the Mac and fails on a skipped model test. In the iOS Simulator it uses the scripted transcriber, because the real one is not available there.
 
@@ -453,7 +453,7 @@ After G1 and SP-3, the gate has one development-signed step for a PR that touche
 
 **Availability.** The deployment target is 27.0. An API that first shipped in 27.1 or later is guarded or raises the stated minimum, and code must compile with the release Xcode installed at G1.
 
-**Evaluation.** The synthetic cleanup and speech results are committed with the fixtures. A contributor's PR reruns the synthetic evaluation, and a meaning-critical case that passed and now fails blocks the PR. The orchestrator runs the local evaluation, on the owner's recordings, at the gate for a PR that touches speech or cleanup, and records the numbers.
+**Evaluation.** The synthetic cleanup and speech results are committed with the fixtures. A contributor's PR reruns the synthetic evaluation, and a meaning-critical case that passed and now fails blocks the PR. The orchestrator runs the local evaluation, on the owner's recordings, at the gate for a PR that touches speech or cleanup, and records the numbers. Until the owner's recordings exist, such a pull request merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them.
 
 **The nightly run.** The nightly run on `main` executes the package tests under Thread Sanitizer, and reports a model that changed with an update of the operating system. docs/architecture.md §18 says what else it runs.
 
@@ -471,14 +471,15 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G0 | Wave 0 | Approve the restart PR and the licence wording. Done: the restart merged on 2026-11-19 as pull request 10. | 15 |
 | G2 | Wave 0 | Review the brief, run the Claude Design direction step, choose a direction | 60 |
 | G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode, which he did on 2026-11-19; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
-| G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build | 10 |
+| G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build. Done on 2026-11-20: at his request the orchestrator set the rules. A pull request is required, squash is the only merge method, the checks `knot/gate` and `quick` are both required, the branch must be up to date, and nobody bypasses. Interactions are limited to collaborators until 2027-05-20 | 10 |
 | G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt. Signing on the build Mac was set up on 2026-11-20 | 5 |
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
 | G3 | After wave 1 | One spike sitting: SP-1 has 12 rows, and the SP-2 spike app runs its 30 transfers itself | 45 |
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
-| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check | 15 |
+| G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its first start would raise a consent dialog that has nothing to do with the app group. On a Mac where no Knot Dev build has run, no signer's dialog is expected, and any dialog is the group's | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
-| G3 | With SP-4 | Sign two devices into iCloud for the second stage of the sync spike, once his signing is set up | 10 |
+| G3 | With SP-4 | Sign two simulators into iCloud with his additional Apple ID, one that is not tied to his developer account, for the second stage of the sync spike, once his signing is set up | 10 |
+| G3 | With SP-4, after its first runs | Deploy the spike's schema to the production side of its throwaway container in the CloudKit Console, run the purge the spike asks for, and change the account once | 15 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
@@ -507,7 +508,7 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
 - The owner makes the wave 0 recordings with Apple's Voice Memos, on the iPhone and on the Watch, and puts them in the one folder outside every worktree that `KNOT_LOCAL_FIXTURES` names.
-- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. Whether a pull request that touches speech or cleanup then waits at the gate is open, and it is his to say: it is a point under "For the owner" in `docs/plan/open-points.md`. The orchestrator asks him before the first such pull request reaches the gate, and does not raise the recordings themselves before then.
+- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. He decided on 2026-11-20 that a pull request that touches speech or cleanup does not wait for them at the gate: it merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them. The orchestrator does not raise the recordings themselves before M2's close, or before the cleanup sitting of G4 needs them.
 - The owner's signing configuration is on the build Mac since 2026-11-20, in a file outside the repository that `KNOT_LOCAL_CONFIG` names. The team's ID never enters a tracked file, and the gate checks that.
 
 ## 11. Risks
