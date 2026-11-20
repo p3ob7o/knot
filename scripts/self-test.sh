@@ -302,16 +302,35 @@ else
 fi
 
 # Starting a tool that a system dialog holds ends at its time limit, with a message for the
-# owner, instead of hanging the run. The tool here only sleeps.
+# owner on standard error, instead of hanging the run. Each case is shaped like the packaging
+# step's call, which compares the standard output with the version line: a tool that only
+# sleeps, one that answers with a harmless line on standard error, and one that ignores TERM.
 printf '#!/bin/sh\nsleep 30\n' >"$scratch/hanging-tool"
-chmod +x "$scratch/hanging-tool"
+printf '#!/bin/sh\necho "a harmless note" >&2\necho "knot-dev 1.0 (dev)"\n' >"$scratch/noisy-tool"
+printf '#!/bin/bash\ntrap "" TERM\nwhile :; do sleep 0.2; done\n' >"$scratch/stubborn-tool"
+chmod +x "$scratch/hanging-tool" "$scratch/noisy-tool" "$scratch/stubborn-tool"
+answers() { [[ "$(knot_start_tool "$1" "$2" --version)" == "knot-dev 1.0 (dev)" ]]; }
 started=$(knot_now)
 status=0
-output="$(knot_start_tool 1 "$scratch/hanging-tool" --version)" || status=$?
-if [[ $status == 1 && $output == *"system dialog"* && $(($(knot_now) - started)) -lt 10 ]]; then
-    pass "a tool that does not answer ends at its time limit, naming a system dialog"
+answers 1 "$scratch/hanging-tool" 2>"$scratch/hanging.err" || status=$?
+if [[ $status == 1 && "$(cat "$scratch/hanging.err")" == *"system dialog"* && $(($(knot_now) - started)) -lt 10 ]]; then
+    pass "a tool that does not answer ends at its time limit, naming a system dialog where the log gets it"
 else
-    fail "a tool that does not answer: status $status after $(($(knot_now) - started))s: $output"
+    fail "a tool that does not answer: status $status after $(($(knot_now) - started))s, standard error: $(cat "$scratch/hanging.err")"
+fi
+if answers 5 "$scratch/noisy-tool" 2>"$scratch/noisy.err" && [[ "$(cat "$scratch/noisy.err")" == "a harmless note" ]]; then
+    pass "a tool's line on standard error neither fails the version check nor is lost"
+else
+    fail "a tool with a line on standard error failed the check, or the line was lost: $(cat "$scratch/noisy.err")"
+fi
+started=$(knot_now)
+status=0
+answers 1 "$scratch/stubborn-tool" 2>/dev/null || status=$?
+if [[ $status == 1 && $(($(knot_now) - started)) -lt 10 ]] && ! pgrep -f "$scratch/stubborn-tool" >/dev/null; then
+    pass "a tool that ignores TERM is killed"
+else
+    fail "a tool that ignores TERM: status $status after $(($(knot_now) - started))s"
+    pkill -KILL -f "$scratch/stubborn-tool" || true
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a

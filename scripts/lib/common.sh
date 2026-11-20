@@ -214,36 +214,61 @@ knot_mac_ui_ready() {
     return "$missing"
 }
 
-# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its output.
-# A start that a system dialog holds, such as a consent prompt, never returns, and nothing
-# but the owner can answer the dialog, so the limit turns that hang into a failure that says
-# so. Returns the tool's status, or 1 when the limit ran out.
+# Starts a tool that Knot built, such as knot-dev, with a time limit, and prints its standard
+# output; its standard error goes to standard error. A start that a system dialog holds, such
+# as a consent prompt, never returns, and nothing but the owner can answer the dialog, so the
+# limit turns that hang into a failure that says so, on standard error. Returns the tool's
+# status, or 1 when the limit ran out.
 #   knot_start_tool <seconds> <tool> [arguments…]
 knot_start_tool() {
-    local seconds=$1 status=0 output pid ticks=0
+    local seconds=$1 status=0 output errors pid ticks=0 family
     shift
-    # The output goes to a file, not a pipe: a child that outlives a killed tool would hold a
-    # pipe open, and the caller would wait for it after all.
+    # The output goes to files, not pipes: a child that outlives a killed tool would hold a
+    # pipe open, and the caller would wait for it after all. The tool's standard output is
+    # what the caller compares; its standard error, and the message at the limit, go to
+    # standard error, which a step sends to its log.
     output="$(mktemp)"
-    "$@" >"$output" 2>&1 &
+    errors="$(mktemp)"
+    "$@" >"$output" 2>"$errors" &
     pid=$!
     while kill -0 "$pid" 2>/dev/null && ((ticks < seconds * 10)); do
         sleep 0.1
         ticks=$((ticks + 1))
     done
     if kill -0 "$pid" 2>/dev/null; then
-        pkill -TERM -P "$pid" 2>/dev/null || true
-        kill -TERM "$pid" 2>/dev/null || true
+        # The tool and its descendants, found before any of them ends, get TERM, then KILL
+        # after two seconds for those that ignore it.
+        family="$pid $(knot_descendants "$pid")"
+        # shellcheck disable=SC2086
+        kill -TERM $family 2>/dev/null || true
+        ticks=0
+        while kill -0 "$pid" 2>/dev/null && ((ticks < 20)); do
+            sleep 0.1
+            ticks=$((ticks + 1))
+        done
+        # shellcheck disable=SC2086
+        kill -KILL $family 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
         cat "$output"
-        rm -f "$output"
-        echo "$(basename "$1") did not answer within ${seconds}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen."
+        cat "$errors" >&2
+        rm -f "$output" "$errors"
+        echo "$(basename "$1") did not answer within ${seconds}s. A system dialog, such as a consent prompt, may be waiting for the owner on this Mac; no agent answers it. Ask him to look at the screen." >&2
         return 1
     fi
     wait "$pid" || status=$?
     cat "$output"
-    rm -f "$output"
+    cat "$errors" >&2
+    rm -f "$output" "$errors"
     return "$status"
+}
+
+# Prints the process IDs of every descendant of a process, one per line.
+knot_descendants() {
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do
+        echo "$child"
+        knot_descendants "$child"
+    done
 }
 
 # Takes the signing team's ID out of a build log, by pattern: Xcode writes the team's prefix
