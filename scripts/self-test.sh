@@ -802,6 +802,48 @@ else
 fi
 pkill -KILL -f "$xs/xcodebuild" 2>/dev/null || true
 
+# This tree's audio is made in one place, knot_make_audio, under its lock, for the fixtures
+# step and for bootstrap alike: on a scratch tree with a stub generator that writes the
+# committed manifest's clips, the first call speaks and stamps, and a second speaks nothing.
+# And bootstrap.sh makes the audio only through it, never by calling the generator itself,
+# which writes no stamp.
+ma="$scratch/make-audio"
+mkdir -p "$ma/Fixtures/tools"
+cp "$KNOT_ROOT/Fixtures/manifest.json" "$ma/Fixtures/"
+cp "$KNOT_ROOT/.xcode-version" "$ma/"
+cat >"$ma/Fixtures/tools/generate.sh" <<'STUB'
+#!/bin/sh
+echo spoke >>"$(dirname "$0")/../../spoken"
+exec python3 -I - "$(dirname "$0")/.." <<'PY'
+import hashlib, json, os, sys
+fixtures = sys.argv[1]
+committed = json.load(open(os.path.join(fixtures, "manifest.json")))
+entries = []
+for clip in committed["audio"]:
+    path = os.path.join(fixtures, clip["file"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(clip["file"].encode())
+    entries.append({"file": clip["file"], "sha256": hashlib.sha256(clip["file"].encode()).hexdigest()})
+json.dump({"generatorVersion": committed["generatorVersion"], "audio": entries},
+          open(os.path.join(fixtures, "generated", "manifest.json"), "w"))
+PY
+STUB
+chmod +x "$ma/Fixtures/tools/generate.sh"
+make_audio() { env -u KNOT_TREE KNOT_TREE="$ma" bash -c 'source "$1"; knot_make_audio' _ "$KNOT_SCRIPTS/lib/common.sh" >/dev/null 2>&1; }
+spoken() { if [[ -f $ma/spoken ]]; then wc -l <"$ma/spoken" | tr -d ' '; else echo 0; fi; }
+make_audio || true
+first="$( [[ -f $ma/Fixtures/generated/verify-stamp.txt ]] && echo stamped || echo unstamped) $(spoken)"
+make_audio || true
+second="$(spoken)"
+bootstrap_ok=0
+grep -e 'knot_make_audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null &&
+    ! grep -e 'generate\.sh --audio' -e 'generate.sh" --audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null && bootstrap_ok=1
+if [[ $first == "stamped 1" && $second == 1 && $bootstrap_ok == 1 ]]; then
+    pass "the audio is made in one place, stamped and spoken once, and bootstrap.sh makes it there"
+else
+    fail "making the audio: first call '$first', spoken after the second '$second', bootstrap through knot_make_audio: $bootstrap_ok"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

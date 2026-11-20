@@ -238,14 +238,7 @@ step_links() { tool links; }
 # once, since the generator writes the clips in place: the decision and the speaking hold a
 # lock in the tree's .build/, and a second run waits for it and then finds the audio made.
 step_fixtures() {
-    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
-    mkdir -p "$KNOT_BUILD"
-    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
-    if ((status == 75)); then
-        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
-        return 1
-    fi
-    ((status == 0)) || return "$status"
+    knot_make_audio
     "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
 }
 

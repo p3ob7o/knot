@@ -448,6 +448,21 @@ knot_mac_ui_locked() {
     return 1
 }
 
+# Makes this tree's audio when it lacks it or it is stale, and stamps it: verify.sh's
+# fixtures-audio, under the audio's lock in the tree's .build/, so that two runs never speak
+# at once (KNOT_FIXTURES_LOCK_WAIT, 30 minutes, for the lock). The fixtures step and
+# bootstrap.sh both make the audio here, and nowhere else.
+knot_make_audio() {
+    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
+    mkdir -p "$KNOT_BUILD"
+    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
+    if ((status == 75)); then
+        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
+        return 1
+    fi
+    return "$status"
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.
