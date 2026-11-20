@@ -17,6 +17,9 @@ import Testing
 
     @Test(.tags(.contract)) func theFreeSpaceProbeContract() async throws {
         try await FreeSpaceProbeContract.run(FakeFreeSpaceProbe(), folder: URL(fileURLWithPath: "/work"))
+        try await FreeSpaceProbeContract.run(
+            FakeFreeSpaceProbe(bytes: nil), folder: URL(fileURLWithPath: "/work"),
+            cannotTell: URL(fileURLWithPath: "/work"))
         let full = FakeFreeSpaceProbe(bytes: 0)
         #expect(full.availableBytes(forVolumeAt: URL(fileURLWithPath: "/work")) == 0)
         full.setAvailable(nil)
@@ -24,7 +27,8 @@ import Testing
     }
 
     @Test(.tags(.contract)) func theInstallIdentityContract() async throws {
-        try await InstallIdentityContract.run { FakeInstallIdentity() }
+        try await InstallIdentityContract.run(
+            thisInstall: { FakeInstallIdentity() }, anotherInstall: { FakeInstallIdentity() })
     }
 
     /// A store that arrives on another device meets another install ID.
