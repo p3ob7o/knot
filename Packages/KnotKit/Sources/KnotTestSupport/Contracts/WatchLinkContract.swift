@@ -107,6 +107,80 @@ public enum WatchLinkContract {
         #expect(emptied == true, "The task ends once the session has nothing pending.")
 
         try await nothingStrands(subject)
+        try await publishesInOrder(subject)
+    }
+
+    /// Counts and acknowledgements are published in the order of the changes, each once
+    /// (finding 17). An acknowledgement for a capture the outbox does not hold changes nothing
+    /// and publishes nothing.
+    static func publishesInOrder(_ subject: WatchLinkSubject) async throws {
+        let link = subject.link
+        guard let start = await counts(of: link) else { return }
+        let held = link.counts()
+        let acknowledgements = link.acknowledgements()
+        let (x, y, z): (CaptureID, CaptureID, CaptureID) = (
+            Identifier(uuid: UUID()), Identifier(uuid: UUID()), Identifier(uuid: UUID())
+        )
+        try await link.send(manifest(x), file: try await subject.makeFile(x))
+        try await link.send(manifest(y), file: try await subject.makeFile(y))
+        await subject.acknowledge(x)
+        await subject.acknowledge(Identifier(uuid: UUID()))
+        await subject.acknowledge(x)
+        await subject.acknowledge(y)
+        try await link.send(manifest(z), file: try await subject.makeFile(z))
+        // The last change fails a capture, a count no earlier change reaches: the end of the run.
+        await subject.failTransfer(z, .outboxFileMissing)
+
+        let w = start.waiting
+        let f = start.failed
+        let expected = [
+            start, WatchLinkCounts(waiting: w + 1, failed: f), WatchLinkCounts(waiting: w + 2, failed: f),
+            WatchLinkCounts(waiting: w + 1, failed: f), WatchLinkCounts(waiting: w, failed: f),
+            WatchLinkCounts(waiting: w + 1, failed: f), WatchLinkCounts(waiting: w, failed: f + 1),
+        ]
+        let seen = await SuiteWait.value("the counts up to the last change") {
+            var seen: [WatchLinkCounts] = []
+            for await counts in held {
+                seen.append(counts)
+                if counts.failed == f + 1 || seen.count > expected.count { break }
+            }
+            return seen
+        }
+        #expect(seen == expected, "Each change is published once, in order: \(String(describing: seen)).")
+        let acknowledged = await SuiteWait.value("the two acknowledgements") {
+            var iterator = acknowledgements.makeAsyncIterator()
+            var seen: [CaptureID] = []
+            while seen.count < 2, let capture = await iterator.next() { seen.append(capture) }
+            return seen
+        }
+        #expect(acknowledged == [x, y], "Each acknowledgement once, and none for what the outbox does not hold.")
+
+        // Many sends at once: every subscriber sees every count, in order.
+        guard let before = await counts(of: link) else { return }
+        let subscribers = (0..<32).map { _ in link.counts() }
+        let total = 64
+        let captures: [CaptureID] = (0..<total).map { _ in Identifier(uuid: UUID()) }
+        var files: [CaptureID: URL] = [:]
+        for capture in captures { files[capture] = try await subject.makeFile(capture) }
+        let made = files
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for capture in captures {
+                group.addTask { try await link.send(manifest(capture), file: made[capture]!) }
+            }
+            try await group.waitForAll()
+        }
+        let ordered = await SuiteWait.value("every subscriber's counts") {
+            for counts in subscribers {
+                var next = before.waiting
+                for await count in counts {
+                    if count.waiting != next { return "expected \(next), got \(count.waiting)" }
+                    if next == before.waiting + total { break }
+                    next += 1
+                }
+            }
+            return "ordered"
+        }
+        #expect(ordered == "ordered", "Many sends at once are published in order.")
     }
 
     /// No recording strands on the Watch (finding 16): every trigger queues again every capture

@@ -45,31 +45,37 @@
         public func finishTransfer(_ capture: CaptureID) { state.withLock { _ = $0.outstanding.remove(capture) } }
 
         /// The iPhone acknowledged `capture`: it leaves the outbox.
+        /// An acknowledgement for a capture the outbox does not hold changes nothing and
+        /// publishes nothing.
         public func acknowledge(_ capture: CaptureID) {
-            let (acknowledged, counts, ackWatchers, countWatchers) = state.withLock { state in
+            change { state in
+                guard state.outbox.removeValue(forKey: capture) != nil else { return }
                 state.outstanding.remove(capture)
-                let acknowledged = state.outbox.removeValue(forKey: capture) != nil
-                return (
-                    acknowledged, state.counts, Array(state.acknowledgementWatchers.values),
-                    Array(state.countWatchers.values)
-                )
+                for watcher in state.acknowledgementWatchers.values { watcher.yield(capture) }
             }
-            guard acknowledged else { return }
-            for watcher in ackWatchers { watcher.yield(capture) }
-            for watcher in countWatchers { watcher.yield(counts) }
         }
 
         /// The transfer of `capture` failed with `error`. `outbox_file_missing` fails the capture;
         /// every other case leaves it waiting, to be queued again.
         public func failTransfer(_ capture: CaptureID, with error: KnotError) {
-            let (counts, watchers) = state.withLock { state in
+            change { state in
                 state.outstanding.remove(capture)
                 if error.code == KnotError.outboxFileMissing.code, state.outbox[capture] != nil {
                     state.outbox[capture] = .failed
                 }
-                return (state.counts, Array(state.countWatchers.values))
             }
-            for watcher in watchers { watcher.yield(counts) }
+        }
+
+        /// Makes a change under the lock, and publishes the counts there when they changed, so
+        /// every subscriber gets each change once and in order (finding 17).
+        private func change<T>(_ body: (inout State) -> T) -> T {
+            state.withLock { state in
+                let before = state.counts
+                let result = body(&state)
+                let after = state.counts
+                if after != before { for watcher in state.countWatchers.values { watcher.yield(after) } }
+                return result
+            }
         }
 
         /// How many times `capture` was queued with the transport.
@@ -82,15 +88,14 @@
 
         public func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError) {
             let capture = manifest.captureID
-            let result = state.withLock { state -> (WatchLinkCounts, [AsyncStream<WatchLinkCounts>.Continuation])? in
-                guard !state.missing.contains(file) else { return nil }
+            let sent = change { state -> Bool in
+                guard !state.missing.contains(file) else { return false }
                 // A new send replaces the entry of a capture whose transfer failed: it waits again.
                 state.outbox[capture] = .waiting
                 if !state.outstanding.contains(capture) { state.queue(capture) }
-                return (state.counts, Array(state.countWatchers.values))
+                return true
             }
-            guard let (counts, watchers) = result else { throw KnotError.outboxFileMissing.about(capture: capture) }
-            for watcher in watchers { watcher.yield(counts) }
+            guard sent else { throw KnotError.outboxFileMissing.about(capture: capture) }
         }
 
         public func acknowledgements() -> AsyncStream<CaptureID> {

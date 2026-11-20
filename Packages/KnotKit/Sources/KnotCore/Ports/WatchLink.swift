@@ -40,11 +40,12 @@ public protocol WatchLink: Sendable {
     /// queues no second one.
     func send(_ manifest: CaptureManifest, file: URL) async throws(KnotError)
 
-    /// The captures the iPhone acknowledged, each as it arrives. When the consumer goes away,
-    /// its subscription ends.
+    /// The captures the iPhone acknowledged, each once, as it arrives. An acknowledgement for a
+    /// capture the outbox does not hold changes nothing and publishes nothing. When the consumer
+    /// goes away, its subscription ends.
     func acknowledgements() -> AsyncStream<CaptureID>
 
-    /// The current counts, then every change.
+    /// The current counts, then every change, each once and in the order of the changes.
     func counts() -> AsyncStream<WatchLinkCounts>
 
     /// Resumes on `trigger`, every trigger alike: waits for the session's activation, adopts the
