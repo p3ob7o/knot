@@ -10,7 +10,9 @@
 # diff by scripts/lib/knot_tool.py.
 #
 # The gate builds with the pinned Xcode only: it refuses KNOT_XCODE when it names another
-# Xcode than .xcode-version pins. It refuses --only, --module and --skip.
+# Xcode than .xcode-version pins. It refuses --only, --module and --skip. It refuses
+# KNOT_LOCAL_CONFIG, which would give its builds settings that no other run has, and it
+# fails when a step it should run is skipped.
 
 doctor	required	WP-01	The machine: no cloud-synced folder, the disk floor, the pinned Xcode and XcodeGen, the simulator runtimes, and the on-device models.
 plan	required	WP-01	scripts/check-plan.sh.
@@ -18,7 +20,7 @@ links	required	WP-01	Every relative link in a Markdown file resolves.
 fixtures	required	WP-04	Fixtures/tools/generate.sh --check: the committed fixtures match a fresh run, and the generated audio has its format and length.
 format	required	WP-01	swift format lint --strict with .swift-format.
 pins	required	WP-01	GRDB's version and revision for SwiftPM and for Xcode, and no other dependency.
-team-id	pending	the owner's local configuration on the Mac (KNOT_LOCAL_CONFIG)	The signing team's ID from the owner's local configuration is in no tracked file. Without the configuration the check cannot run.
+team-id	required	the owner's local configuration, on the build Mac since 2026-11-20 (KNOT_TEAM_CONFIG)	The signing team's ID from the owner's local configuration is in no tracked file. At every depth. Without the configuration the step is skipped, and the gate fails on a skipped step.
 lint	required	WP-01	No network call, logged text, standard defaults domain, eraseDatabaseOnSchemaChange, unlisted concurrency escape, undeclared required-reason API, or file named "… 2".
 ownership	required	WP-01	The diff stays inside the paths the package owns, from its brief and scripts/ownership-extra.txt.
 core-api	required	WP-01	KnotCore's public API matches the base, except on a contract branch.

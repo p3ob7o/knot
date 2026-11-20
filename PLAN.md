@@ -198,7 +198,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | SP-2 | 1 | The report, `docs/spikes/SP-2.md`, which ends with a decision | SP-2 notes |
 | SP-3 | Notes | The code half on `spike/agent-access`, and its short note | WP-01 PR 1; WP-04 |
 | SP-3 | 1 | The report, `docs/spikes/SP-3.md`, which ends with a decision | SP-3 notes |
-| SP-4 | Notes | The code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
+| SP-4 | Notes | The first stage of the code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
 | SP-4 | 1 | The report, `docs/spikes/SP-4.md`, which holds the final CloudKit schema and ends with a decision | SP-4 notes |
 | SP-5 | Notes | The code half on `spike/mac-hotkey`, and its short note | WP-01 PR 1 |
 | SP-5 | 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
@@ -472,14 +472,14 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G2 | Wave 0 | Review the brief, run the Claude Design direction step, choose a direction | 60 |
 | G1 | With WP-01 | Confirm the identifiers, both the milestone set and the development set; install a release Xcode, which he did on 2026-11-19; pair the five devices for development builds; enable Automation Mode and developer mode once, with the two commands `scripts/doctor.sh` prints | 65 |
 | G1 | With WP-01 | Extend the ruleset on `main` to require a pull request, squash merges, the status `knot/gate` and an up-to-date branch, and limit interactions to collaborators for the length of the build | 10 |
-| G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt | 5 |
+| G1 | With WP-01 | Register his other Mac for development-signed builds, and set up signing so that the gate's development-signed step runs without a prompt. Signing on the build Mac was set up on 2026-11-20 | 5 |
 | G1 | With WP-01 | Create an App Store Connect record for the development identifier and an API key, for one internal TestFlight upload of the SP-3 spike app, and hand the key over as a file path through the secret prompt | 20 |
 | G3 | After wave 1 | One spike sitting: SP-1 has 12 rows, and the SP-2 spike app runs its 30 transfers itself | 45 |
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
 | G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
 | G3 | With SP-4 | Sign two devices into iCloud for the second stage of the sync spike, once his signing is set up | 10 |
-| G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac | 30 |
+| G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
 | G2 | Before WP-40 starts | Read the handoff's gap list | 15 |
@@ -507,6 +507,8 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
 - The owner makes the wave 0 recordings with Apple's Voice Memos, on the iPhone and on the Watch, and puts them in the one folder outside every worktree that `KNOT_LOCAL_FIXTURES` names.
+- Until he has made them, speech and cleanup are measured on the synthetic clips alone, and the cleanup sitting of G4 has no pairs of his to read. Whether a pull request that touches speech or cleanup then waits at the gate is open, and it is his to say: it is a point under "For the owner" in `docs/plan/open-points.md`. The orchestrator asks him before the first such pull request reaches the gate, and does not raise the recordings themselves before then.
+- The owner's signing configuration is on the build Mac since 2026-11-20, in a file outside the repository that `KNOT_LOCAL_CONFIG` names. The team's ID never enters a tracked file, and the gate checks that.
 
 ## 11. Risks
 
@@ -559,7 +561,7 @@ WP-00's first PR wrote it, with these sections:
   - A PR that changes the cleanup instructions, the guard or the speech settings reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
   - No agent cuts scope. Scope leaves only on the owner's word.
 - **Working in parallel.** Edit only the paths your package owns. Contract changes and shared files go through the orchestrator. Keep the repository, the build folder and the fixtures folder out of any folder that a cloud file provider syncs: `scripts/doctor.sh` refuses them there.
-- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. Never rebase a branch that was pushed, and never force a push. One branch for each PR. No session links in commits or PR descriptions.
+- **Git.** Branch names `wp/…`, `spike/…`, `contract/…`. Never `master`. Never push to `main`. Never rebase a branch that was pushed, and never force a push. One branch for each PR. No session links in commits or PR descriptions. Commits are recorded in UTC.
 - **Needs Paolo's explicit authorisation.** Moving a tag, distribution signing, notarising, uploading, deploying the CloudKit production schema, every operation on the milestone iCloud container in either environment, deleting an archive branch.
 - **Commands.** `scripts/bootstrap.sh` and `scripts/verify.sh`. Every script sets `DEVELOPER_DIR` from `.xcode-version` and checks the version. Implementers use that Xcode, and the beta only by name. Package criteria name `scripts/verify.sh --quick`, never a bare `swift test`.
 

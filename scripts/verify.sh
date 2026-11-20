@@ -20,19 +20,19 @@
 #   … --tree <path>                            check another tree with these scripts, as the
 #                                              gate does: main's scripts on the candidate
 #
-# Steps: doctor, plan, links, fixtures, format, pins, lint, ownership, core-api, named-tests,
-# package-build, package-test, contract-two-targets, self-test, apps, packaging, launch,
-# mac-ui, soak, perf, tsan, model-report.
+# Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
+# named-tests, package-build, package-test, contract-two-targets, self-test, apps, packaging,
+# launch, mac-ui, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
 # and the command that reruns only that step. Heavy steps wait for a build slot
 # (scripts/build-slot.sh). Logs go to .build/logs/.
 #
-# The gate refuses --only, --module and --skip, and an Xcode named by KNOT_XCODE that is
-# not the pinned one. It runs on a detached head, so the orchestrator names the package
-# with --package or the branch with --branch; it compares with --base, origin/main by
-# default. scripts/gate-steps.txt lists its steps and which are still pending.
+# The gate refuses --only, --module, --skip, KNOT_LOCAL_CONFIG and an Xcode named by
+# KNOT_XCODE that is not the pinned one, and it fails on a skipped step. It runs on a
+# detached head: name the package with --package or the branch with --branch. It compares
+# with --base, origin/main by default. scripts/gate-steps.txt lists its steps.
 
 # --tree <path> checks another tree with these scripts, as KNOT_TREE does. It is read
 # before anything else, because every path of the run depends on it.
@@ -114,6 +114,9 @@ else
             *) usage_fail "Unknown argument: $1" ;;
         esac
     done
+    # A gate that is refused before it runs must not leave an earlier run's line behind:
+    # --status-line prints the file, and the line names no commit.
+    if [[ $TIER == gate ]]; then rm -f "$STATUS_FILE"; fi
     if [[ -n $ONLY || -n $MODULE ]]; then
         [[ -z $TIER ]] || usage_fail "--only and --module run one part. They take no tier."
         [[ -z $ONLY || -z $MODULE ]] || usage_fail "Use --only or --module, not both."
@@ -205,10 +208,14 @@ step_format() {
 step_lint() { (cd "$KNOT_ROOT" && tool lint); }
 
 # The signing team's ID in no tracked file. Without the owner's local configuration on this
-# Mac there is no ID to look for: the step then exits 3 and counts as skipped, and the gate
-# lists it as pending in scripts/gate-steps.txt.
+# Mac there is no ID to look for: the step then exits 3 and counts as skipped, never as
+# passed, and the gate fails on a skipped step.
+#
+# KNOT_TEAM_CONFIG names the configuration for this check alone. Unlike KNOT_LOCAL_CONFIG it
+# links nothing into the tree, so the run builds what every other run builds. The gate
+# takes the configuration this way.
 step_team_id() {
-    local config="${KNOT_LOCAL_CONFIG:-}"
+    local config="${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-}}"
     [[ -n $config ]] || config="$KNOT_CONFIG/Local.xcconfig"
     (cd "$KNOT_ROOT" && tool team-id --team-config "$config")
 }
@@ -679,6 +686,18 @@ else
         soak) STEPS="doctor package-build soak" ;;
         perf) STEPS="doctor perf" ;;
         gate)
+            # The gate builds what every thread builds, signed locally and with no local
+            # configuration linked into the tree: a linked one would give its app steps
+            # build settings that no other run has. So it refuses KNOT_LOCAL_CONFIG, and
+            # it removes a link that an earlier run left. The team-ID check then reads
+            # what KNOT_TEAM_CONFIG names and nothing else. The refusal comes before the
+            # Xcode is selected, because it needs none.
+            if [[ -n ${KNOT_LOCAL_CONFIG:-} ]]; then
+                knot_fail "verify-gate-local-config" "The gate builds with no local configuration, as every thread does, and KNOT_LOCAL_CONFIG is set." \
+                    "Unset KNOT_LOCAL_CONFIG. Name the owner's configuration for the team-ID check with KNOT_TEAM_CONFIG, which links nothing into the tree." \
+                    "safe" "nothing"
+            fi
+            rm -f "$KNOT_CONFIG/Local.xcconfig"
             # The gate builds with the pinned Xcode only.
             knot_select_xcode
             if [[ ${KNOT_XCODE_NOTE:-} == *"named by KNOT_XCODE"* ]]; then
@@ -698,7 +717,9 @@ else
             case $DEPTH in
                 # The lint runs at every depth: its file-name rule catches a copy such as
                 # "docs/x 2.md" in a pull request of documents alone. It builds nothing.
-                documents) STEPS="doctor plan links ownership named-tests lint" ;;
+                # The team-ID check runs at every depth too: a note or a brief is where an
+                # ID is most easily written down.
+                documents) STEPS="doctor plan links ownership named-tests lint team-id" ;;
                 leaf)
                     STEPS="$common package-test contract-two-targets self-test apps launch"
                     [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
@@ -739,6 +760,7 @@ mkdir -p "$KNOT_LOGS"
 START=$(knot_now)
 PASSED=0
 SKIPPED_STEPS=0
+SKIPPED_NAMES=""
 # A step that cannot run on this Mac exits with this status, and counts as skipped.
 SKIPPED_CODE=3
 SKIPPABLE="team-id ownership"
@@ -778,6 +800,7 @@ for step in $STEPS; do
     if ((code == SKIPPED_CODE)) && [[ " $SKIPPABLE " == *" $step "* ]]; then
         # A step that could not run here says so, and counts as skipped, never as passed.
         SKIPPED_STEPS=$((SKIPPED_STEPS + 1))
+        SKIPPED_NAMES="$SKIPPED_NAMES $step"
         printf 'verify: skip  %-22s %s\n' "$step" "$(tail -n 1 "$log")"
     elif ((code == 0)); then
         PASSED=$((PASSED + 1))
@@ -812,6 +835,14 @@ ALLOWED=${ALLOWED:-0}
 pending=$PENDING_COUNT
 status=ok
 [[ -n $FAILED_STEP ]] && status=FAILED
+# The gate refuses a partial run: a step that could not run here fails it. Every other tier
+# reports the step as skipped and ends ok.
+if [[ $TIER == gate && -z $FAILED_STEP && -n $SKIPPED_NAMES ]]; then
+    status=FAILED
+    knot_report "verify-gate-skipped" "The gate could not run:$SKIPPED_NAMES. A gate with a skipped step has not passed." \
+        "For team-id, name the owner's configuration with KNOT_TEAM_CONFIG and run the gate again. A thread without it runs scripts/verify.sh --full, which reports the step as skipped." \
+        "safe" "build products in .build/ only" || true
+fi
 xcode="$( [[ -n ${KNOT_XCODE_VERSION:-} ]] && knot_xcode_label || echo 'Xcode not selected')"
 duration="$(knot_duration $(($(knot_now) - START)))"
 allowed_text=""
@@ -834,4 +865,4 @@ candidate="$short · macOS $(sw_vers -buildVersion)"
 ((${#candidate} <= 140)) && short=$candidate
 short="${short:0:140}"
 printf '%s\n' "$short" >"$STATUS_FILE"
-[[ -z $FAILED_STEP ]]
+[[ $status == ok ]]

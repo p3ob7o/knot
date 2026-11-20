@@ -58,6 +58,7 @@ The rules are in `docs/architecture.md` §6. Three of them:
 - Never rebase a branch you have pushed, and never force a push. The merge queue brings a branch up to date by merging `main` into it.
 - Each pull request has a branch of its own. After a squash, start the next one on a new branch from `main`.
 - No session links in commits or pull-request descriptions.
+- Record every commit in UTC: `TZ=UTC git commit -F <file>`. Its dates then carry no offset of the machine it was made on. A commit that is already pushed keeps its dates.
 
 ## Needs Paolo's explicit authorisation
 
