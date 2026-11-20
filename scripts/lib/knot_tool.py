@@ -698,7 +698,27 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
     used = {}
     for path in files:
         place = (as_prefix + os.path.basename(path)) if as_prefix else path
+        # A fake outside KnotFakes is named Fake… and compiles only under
+        # `#if DEBUG || KNOT_FAKES`; the release scan finds such a type by its name.
+        guards = []
         for number, line, raw in code_lines(path):
+            directive = line.strip()
+            if directive.startswith("#if"):
+                guards.append(re.sub(r"\s", "", directive[3:]) in ("DEBUG||KNOT_FAKES", "KNOT_FAKES||DEBUG"))
+                continue
+            if directive.startswith("#elseif") or directive.startswith("#else"):
+                if guards:
+                    guards[-1] = False
+                continue
+            if directive.startswith("#endif"):
+                if guards:
+                    guards.pop()
+                continue
+            fake = re.search(r"\b(?:class|struct|enum|actor|protocol|typealias)\s+(Fake\w*)", line)
+            if fake and not place.startswith("Packages/KnotKit/Sources/KnotFakes/") and not any(guards):
+                problem(path, number, "fake-unguarded",
+                        f"{fake.group(1)} is a fake by its name: outside KnotFakes it compiles only under "
+                        "#if DEBUG || KNOT_FAKES")
             # The marker sits in a comment, so it is read from the raw line.
             allowed = re.findall(r"knot-lint: allow ([\w-]+)", raw)
             if re.search(r"UserDefaults\s*\.\s*standard|UserDefaults\(\)"
@@ -873,6 +893,167 @@ def option(args, name, default=None):
     return default
 
 
+# ---------------------------------------------------------------- starts that have a limit
+
+LIMITED_CALL = re.compile(r"\bswift test\b|\bxcrun simctl\b|\bxcodebuild\b|(?:^|[\s;(|&])xcb\s")
+LIMIT_HELPERS = ("knot_limit", "knot_run_limited", "knot_sim_call", "knot_swift_test_limited",
+                 "knot_start_tool", "knot_start_app")
+LIMIT_MARKER = re.compile(r"#\s*limit:\s*([A-Za-z_]\w*)\s*$")
+OTHER_PARTS = ("soak",)
+
+
+def logical_lines(text):
+    """A shell file's logical lines, with a backslash continuation joined, each with the
+    number of its first line."""
+    lines, current, first = [], "", None
+    for number, line in enumerate(text.splitlines(), 1):
+        if first is None:
+            first = number
+        if line.rstrip().endswith("\\"):
+            current += line.rstrip()[:-1] + " "
+            continue
+        lines.append((first, current + line))
+        current, first = "", None
+    if current:
+        lines.append((first, current))
+    return lines
+
+
+def code_of(line):
+    """A shell line without its comment and without the text of its plain quoted strings, so
+    that a message that names xcodebuild is not a call of it. A double-quoted string that
+    holds a command substitution is kept whole, since what it runs is a call; and a line
+    whose command is a message, such as echo or knot_fail, is no call at all."""
+    if re.match(r"^\s*(?:\|\||&&)?\s*(?:echo|printf|knot_fail|knot_report|bad|warn|ok)\b", line):
+        return ""
+    line = re.sub(r"'[^']*'", "''", line)
+    line = re.sub(r'"((?:\\.|[^"\\])*)"', lambda m: m.group(0) if "$(" in m.group(1) else '""', line)
+    return re.sub(r"(^|\s)#.*$", "", line)
+
+
+def cmd_unbounded_calls(files):
+    """Fails on a call of `swift test`, `xcrun simctl`, `xcodebuild` or `xcb` in the scripts
+    that is not made through a limit helper (LIMIT_HELPERS). A call inside a wrapper, such as
+    xcb's own xcodebuild, carries `# limit: <wrapper>` at the end of its line, and then every
+    call of that wrapper must go through a helper. The steps other packages own (OTHER_PARTS)
+    are listed and left to them."""
+    found = 0
+    for path in files:
+        with open(path) as f:
+            text = f.read()
+        others = [part_markers(text, name) for name in OTHER_PARTS]
+        lines = logical_lines(text)
+        wrappers = {}
+        for number, line in lines:
+            code = code_of(line)
+            if not LIMITED_CALL.search(code) or any(h in code for h in LIMIT_HELPERS):
+                continue
+            part = next((name for name, span in zip(OTHER_PARTS, others)
+                         if span and span[0] <= number <= span[1]), None)
+            if part:
+                print(f"{path}:{number}: in the {part} step, which its package bounds: {line.strip()[:100]}")
+                continue
+            marker = LIMIT_MARKER.search(line)
+            if marker:
+                wrappers.setdefault(marker.group(1), []).append(number)
+                continue
+            print(f"{path}:{number}: no limit: {line.strip()[:120]}")
+            found += 1
+        for wrapper, where in wrappers.items():
+            call = re.compile(r"(?:^|[\s;(|&])" + re.escape(wrapper) + r"(?:\s|$)")
+            for number, line in lines:
+                code = code_of(line)
+                if call.search(code) and not re.search(re.escape(wrapper) + r"\s*\(\)", code) \
+                        and not any(h in code for h in LIMIT_HELPERS):
+                    print(f"{path}:{number}: {wrapper}, which wraps the call at line {where[0]}, is called with no limit: {line.strip()[:100]}")
+                    found += 1
+    if found:
+        print(f"unbounded-calls: {found} calls with no limit")
+        return 1
+    print(f"unbounded-calls: every call in {', '.join(files)} has a limit")
+    return 0
+
+
+# ---------------------------------------------------------------- this tree's audio fixtures
+
+
+AUDIO_STAMP = "verify-stamp.txt"  # under Fixtures/generated/, beside the audio
+NOT_AUDIO = ("about", "expectedSeconds", "toleranceSeconds")
+
+
+def audio_stamp(committed):
+    """A hash of everything in the committed manifest that decides the audio: the generator's
+    version, the speech rate and the voices, and each clip's entry, its text's checksum,
+    voice, format and seeds among it, all but its description and its expected length."""
+    import hashlib
+    decides = {
+        "generatorVersion": committed.get("generatorVersion"),
+        "speechRate": committed.get("speechRate"),
+        "voices": committed.get("voices"),
+        "audio": [{key: value for key, value in entry.items() if key not in NOT_AUDIO}
+                  for entry in committed.get("audio", [])],
+    }
+    return hashlib.sha256(json.dumps(decides, sort_keys=True).encode()).hexdigest()
+
+
+def cmd_fixtures_audio(fixtures, write_stamp=False):
+    """Whether this tree holds its generated audio, as the fixtures step wants it:
+    Fixtures/generated/manifest.json made by the generator's version that the committed
+    manifest names; every clip that the committed manifest lists, present and matching the
+    checksum the local manifest records; and the step's stamp beside the audio, which says
+    that nothing in the committed manifest that decides the audio, such as a clip's text, its
+    voice or the speech rate, has changed since the audio was spoken. Prints what is missing
+    and exits 1 when the audio is not all there, so the step speaks it again. With
+    --write-stamp, the step records the stamp after it has spoken the audio."""
+    import hashlib
+    fixtures = fixtures or "Fixtures"
+    try:
+        with open(os.path.join(fixtures, "manifest.json")) as f:
+            committed = json.load(f)
+    except (OSError, ValueError):
+        print("Fixtures/manifest.json is missing or unreadable")
+        return 1
+    generated = os.path.dirname(os.path.join(fixtures, committed.get("generatedAudio", "generated/manifest.json")))
+    stamp_path = os.path.join(generated, AUDIO_STAMP)
+    if write_stamp:
+        os.makedirs(generated, exist_ok=True)
+        with open(stamp_path, "w") as f:
+            f.write(audio_stamp(committed) + "\n")
+    try:
+        with open(os.path.join(generated, "manifest.json")) as f:
+            local = json.load(f)
+    except (OSError, ValueError):
+        print("no local audio")
+        return 1
+    if local.get("generatorVersion") != committed.get("generatorVersion"):
+        print("the local audio was made by generator version %s, not %s"
+              % (local.get("generatorVersion"), committed.get("generatorVersion")))
+        return 1
+    sums = {entry.get("file"): entry.get("sha256") for entry in local.get("audio", [])}
+    for entry in committed.get("audio", []):
+        name = entry.get("file")
+        path = os.path.join(fixtures, name)
+        if name not in sums or not os.path.isfile(path):
+            print("the local audio lacks %s" % name)
+            return 1
+        with open(path, "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != sums[name]:
+                print("the local %s does not match its manifest" % name)
+                return 1
+    try:
+        with open(stamp_path) as f:
+            stamp = f.read().strip()
+    except OSError:
+        print("the local audio has no stamp from the fixtures step")
+        return 1
+    if stamp != audio_stamp(committed):
+        print("what decides the audio in Fixtures/manifest.json, a clip's text, voice or format or the speech rate, "
+              "has changed since the local audio was spoken")
+        return 1
+    print("local audio present: %d clips, stamped" % len(committed.get("audio", [])))
+    return 0
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -918,6 +1099,10 @@ def main(argv):
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
         return cmd_links()
+    if command == "unbounded-calls":
+        return cmd_unbounded_calls(args)
+    if command == "fixtures-audio":
+        return cmd_fixtures_audio(option(args, "--fixtures"), "--write-stamp" in args)
     if command == "status":
         return cmd_status("--write" in args)
     print(__doc__)
