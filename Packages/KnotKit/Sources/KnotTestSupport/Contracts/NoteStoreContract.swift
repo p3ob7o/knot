@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "three-moves", run: threeMovesAndThreeReturns),
         Check(name: "run-past-resume", run: aRunThatStartsPastTheResumePointIsNotApplied),
     ]
 
@@ -1675,6 +1676,29 @@ public enum NoteStoreContract {
         #expect(stored.resumeAt == nil && stored.state == .queued, "The resume point and the state stay.")
         _ = try await h.store.appendTranscript(h.run("real", from: .zero, resumeAt: nil), to: segment, job: job)
         #expect(try await h.text(segment) == "real")
+    }
+
+    /// Witness 48: three moves, each leaving a live sibling behind, and three returns.
+    public static func threeMovesAndThreeReturns(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let capture = h.tool("moving", at: 0)
+        let first = try await h.store.record(capture)
+        let segment = SegmentID(capture.id)
+        var notes = [first.noteID]
+        for step in 0..<3 {
+            let current = notes.last!
+            _ = try await h.store.record(
+                h.typed("stays", from: Double(step + 1), to: Double(step + 1), placement: .named(current)))
+            guard case .moved(let moved) = try await h.store.move(segment, from: current) else {
+                Issue.record("Move \(step + 1) moves.")
+                return
+            }
+            notes.append(moved.to.id)
+        }
+        for index in stride(from: 3, through: 1, by: -1) {
+            let back = try await h.store.returnToFormerNote(segment, from: notes[index])
+            #expect(back.to.id == notes[index - 1], "Return \(4 - index) undoes its move.")
+        }
     }
 
     // MARK: Reading
