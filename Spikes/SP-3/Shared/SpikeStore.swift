@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import GRDB
+import Security
 import notify
 
 // The spike's synthetic store and the facts each process reports about itself. The app
@@ -15,10 +16,24 @@ enum Spike {
     static let folder = "SP3-spike"
     static let files = ["spike.sqlite", "spike.sqlite-wal", "spike.sqlite-shm", "group-export.md"]
 
-    /// The development app group. A tool with no Info.plist cannot read it, and falls back
-    /// to the same constant, which is in Apps/Config/Identifiers.xcconfig.
+    /// The app groups this process claims, read from its own signature, so that a tool with
+    /// no Info.plist knows them too. Every piece claims two forms of the development group:
+    /// `group.com.p3ob7o.knot.dev` and the Team-ID form, `<team>.com.p3ob7o.knot.dev`.
+    static var claimedGroups: [String] {
+        guard let task = SecTaskCreateFromSelf(nil) else { return [] }
+        let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil)
+        return value as? [String] ?? []
+    }
+
+    /// `--team-group` on the command line picks the Team-ID form; otherwise the `group.` form.
+    static let wantsTeamGroup = CommandLine.arguments.contains("--team-group")
+
+    static var groupForm: String { wantsTeamGroup ? "team" : "group." }
+
     static var appGroup: String {
-        Bundle.main.object(forInfoDictionaryKey: "KnotAppGroup") as? String ?? "group.com.p3ob7o.knot.dev"
+        let groups = claimedGroups
+        let pick = groups.first { $0.hasPrefix("group.") == !wantsTeamGroup }
+        return pick ?? "none claimed"
     }
 
     static var variant: String {
@@ -50,6 +65,8 @@ enum Spike {
             "sandboxContainerID": ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? "none",
             "home": tilde(NSHomeDirectory()),
             "appGroup": appGroup,
+            "groupForm": groupForm,
+            "claimedGroups": claimedGroups,
         ]
     }
 

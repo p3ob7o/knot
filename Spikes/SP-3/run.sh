@@ -4,6 +4,7 @@
 #
 #   Spikes/SP-3/run.sh build     generate the project and build it, team-signed
 #   Spikes/SP-3/run.sh signing   print what each piece carries, masked
+#   Spikes/SP-3/run.sh checks tool|app   run the checks of one phase, each with a time limit
 #   Spikes/SP-3/run.sh cleanup   remove the spike's files from the group container, by name
 #
 # Needs KNOT_LOCAL_CONFIG linked by scripts/bootstrap.sh. Every line this script prints
@@ -63,7 +64,8 @@ build() {
 
 # Signs every piece with the team's Apple Development certificate, its own entitlements,
 # the hardened runtime and no profile. The group in the entitlements files is a build
-# setting, which this expands to the development group of Identifiers.xcconfig.
+# setting, which this expands: the development group of Identifiers.xcconfig, and the
+# Team-ID form, whose prefix is the team's ID and a dot, as $(TeamIdentifierPrefix) is.
 sign_unprofiled() {
     local identity tmp
     identity="$(security find-identity -v -p codesigning | awk '/"Apple Development/ { print $2; exit }')"
@@ -71,7 +73,8 @@ sign_unprofiled() {
     tmp="$(mktemp -d)"
     local name
     for name in App Tool Tool-inherit Helper; do
-        sed 's/$(KNOT_APP_GROUP_dev)/group.com.p3ob7o.knot.dev/' "$here/Config/$name.entitlements" >"$tmp/$name.entitlements"
+        sed -e 's/$(KNOT_APP_GROUP_dev)/group.com.p3ob7o.knot.dev/' -e "s/\$(TeamIdentifierPrefix)/$team./" \
+            "$here/Config/$name.entitlements" >"$tmp/$name.entitlements"
     done
     sign() { # <path> <entitlements> [identifier]
         codesign --force --sign "$identity" --options runtime --timestamp=none \
@@ -123,5 +126,10 @@ case "${1:-}" in
     build) shift; build "$@" ;;
     signing) signing ;;
     cleanup) cleanup ;;
+    checks)
+        exec python3 -I "$here/checks.py" "$app" "$team" \
+            "$root/.build/DerivedData/Build/Products/Debug/Knot.app/Contents/MacOS/knot-dev" \
+            "${2:?tool or app}" "$logs/checks-${2}.json"
+        ;;
     *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

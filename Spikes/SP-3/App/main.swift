@@ -18,7 +18,7 @@ import notify
 //       tool writes, and the commands to run in Terminal.
 
 setvbuf(stdout, nil, _IOLBF, 0)
-let arguments = Array(CommandLine.arguments.dropFirst())
+let arguments = CommandLine.arguments.dropFirst().filter { $0 != "--team-group" }
 
 func emit(_ object: [String: Any]) { print(Spike.json(object)) }
 

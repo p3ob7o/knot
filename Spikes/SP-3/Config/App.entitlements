@@ -7,6 +7,7 @@
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>$(KNOT_APP_GROUP_dev)</string>
+		<string>$(TeamIdentifierPrefix)com.p3ob7o.knot.dev</string>
 	</array>
 </dict>
 </plist>

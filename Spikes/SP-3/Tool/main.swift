@@ -13,9 +13,12 @@ import Foundation
 //   knot-dev export-group        writes the export into the group container and names it
 //   knot-dev mcp                 one JSON request per line on standard input, one reply per line
 //   knot-dev cleanup             removes the spike's files from the group container, by name
+//
+// Every command takes --team-group, which uses the Team-ID form of the group.
 
 setvbuf(stdout, nil, _IOLBF, 0)
-let arguments = Array(CommandLine.arguments.dropFirst())
+// `--team-group` may come anywhere: Spike reads it, and the commands ignore it.
+let arguments = CommandLine.arguments.dropFirst().filter { $0 != "--team-group" }
 
 func emit(_ object: [String: Any]) { print(Spike.json(object)) }
 
