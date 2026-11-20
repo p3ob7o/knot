@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "short-tail", run: aShortCheckpointDropsTheOldTail),
         Check(name: "three-moves", run: threeMovesAndThreeReturns),
         Check(name: "run-past-resume", run: aRunThatStartsPastTheResumePointIsNotApplied),
     ]
@@ -1699,6 +1700,19 @@ public enum NoteStoreContract {
             let back = try await h.store.returnToFormerNote(segment, from: notes[index])
             #expect(back.to.id == notes[index - 1], "Return \(4 - index) undoes its move.")
         }
+    }
+
+    /// Witness 49: a draft grown to three pieces, then checkpointed short, keeps no old tail.
+    public static func aShortCheckpointDropsTheOldTail(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("short", at: 0)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.checkpoint(
+            CaptureCheckpoint(captureID: draft.id, text: Harness.longText(pieces: 3), revision: 2))
+        _ = try await h.store.checkpoint(CaptureCheckpoint(captureID: draft.id, text: "shorter", revision: 3))
+        #expect(try await h.store.segment(.piece(1, of: draft.id)) == nil, "The second piece is gone.")
+        #expect(try await h.store.segment(.piece(2, of: draft.id)) == nil, "The third piece is gone.")
+        #expect(try await h.text(SegmentID(draft.id)) == "shorter")
     }
 
     // MARK: Reading
