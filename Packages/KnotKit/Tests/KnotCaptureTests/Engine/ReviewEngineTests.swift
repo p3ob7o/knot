@@ -253,4 +253,23 @@ import Testing
             })
         #expect(try await rig.stream().notes.count == 1)
     }
+
+    /// Finding 30. A recording discarded before the store answered its record: the row the
+    /// late answer makes is ended as empty, so no capture stays active.
+    @Test func lateRowOfADiscardedRecordingIsEndedAsEmpty() async throws {
+        let r = Rig(deadline: .immediate)
+        let hold = await r.notes.holdNextCaptureWrite()
+        let begun = try await r.beginRecording()
+        #expect(begun.path == .inbox(KnotError.storeNotOpen.code))
+        _ = await SuiteWait.value("the record call to reach the hold") { await hold.untilReached() }
+        #expect(try await r.engine.discard(begun.captureID).outcome == .discardedEmpty)
+        #expect(try await r.notes.capture(begun.captureID) == nil)
+        hold.release()
+        #expect(
+            await eventually("the late row to be ended as empty") {
+                (try? await r.notes.capture(begun.captureID))?.outcome == .discardedEmpty
+            })
+        #expect(try await r.notes.openCaptures().isEmpty)
+        #expect(try await r.stream().notes.isEmpty)
+    }
 }
