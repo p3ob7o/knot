@@ -107,14 +107,19 @@ public enum ExportNames {
     /// gives a meaning to, or that cannot be seen, becomes a space: path separators and the
     /// colon, the characters Windows refuses, control characters, line and paragraph
     /// separators, and format characters such as the bidirectional overrides, which could
-    /// make a name read differently from what it is. The zero-width joiner stays, as it joins
-    /// the parts of an emoji. Runs of spaces become one, spaces and dots leave both ends, and
-    /// the label is cut at a whole character to `labelBytes`.
+    /// make a name read differently from what it is. The fillers that draw nothing (U+115F,
+    /// U+1160, U+3164, U+FFA0 and U+2800) become spaces too. The zero-width joiner stays, as it
+    /// joins the parts of an emoji. A combining mark, a variation selector or a joiner that
+    /// would open the label or follow a space goes, as it would draw on nothing or on the
+    /// space. Runs of spaces become one, spaces and dots leave both ends, and the label is cut
+    /// at a whole character to `labelBytes`. A label with no character a reader can see, a
+    /// letter, a number, punctuation or a symbol, is no label.
     public static func label(from text: String) -> String? {
         var cleaned = String.UnicodeScalarView()
         var lastWasSpace = true
         for scalar in text.precomposedStringWithCanonicalMapping.unicodeScalars {
             let kept = isAllowed(scalar) ? scalar : " "
+            if lastWasSpace, attaches(kept) { continue }
             if kept == " " {
                 if lastWasSpace { continue }
                 lastWasSpace = true
@@ -132,14 +137,40 @@ public enum ExportNames {
             }
             label = trimmed(cut)
         }
-        return label.isEmpty ? nil : label
+        return label.unicodeScalars.contains(where: isVisible) ? label : nil
+    }
+
+    /// The fillers that draw nothing, though their category says they are letters or symbols.
+    private static let fillers: Set<Unicode.Scalar> = ["\u{115F}", "\u{1160}", "\u{3164}", "\u{FFA0}", "\u{2800}"]
+
+    /// True for a scalar that draws on the one before it: a combining mark, a variation
+    /// selector, which is one, or the joiner.
+    private static func attaches(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "\u{200D}" { return true }
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark: return true
+        default: return false
+        }
+    }
+
+    /// True for a scalar a reader can see on its own.
+    private static func isVisible(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber,
+            .letterNumber, .otherNumber, .connectorPunctuation, .dashPunctuation, .openPunctuation,
+            .closePunctuation, .initialPunctuation, .finalPunctuation, .otherPunctuation, .mathSymbol,
+            .currencySymbol, .modifierSymbol, .otherSymbol:
+            return !fillers.contains(scalar)
+        default:
+            return false
+        }
     }
 
     /// The characters that never reach a name, beside those of the categories below.
     private static let refused: Set<Unicode.Scalar> = ["/", "\\", ":", "*", "?", "\"", "<", ">", "|"]
 
     private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
-        if refused.contains(scalar) { return false }
+        if refused.contains(scalar) || fillers.contains(scalar) { return false }
         if scalar == "\u{200D}" { return true }
         switch scalar.properties.generalCategory {
         case .control, .format, .lineSeparator, .paragraphSeparator, .spaceSeparator, .surrogate, .privateUse,

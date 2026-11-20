@@ -26,7 +26,49 @@ let hostileTitles: [String] = [
     String(repeating: "👍🏽", count: 100),
     "   ",
     " . . ",
+    // Finding 7: titles nobody can see, and a mark that would sit on a space.
+    "\u{200D}",
+    "\u{200D}\u{200D}\u{200D}",
+    "\u{FE0F}",
+    "\u{3164}",
+    "\u{2800}",
+    "\u{0301}\u{0301}",
+    "\u{3164}\u{3164} \u{2800}\u{FFA0}",
+    "a \u{0301}b \u{200D}c \u{FE0F}d",
 ]
+
+/// True when `label` holds a character a reader can see: a letter, a number, punctuation or a
+/// symbol, and not one of the fillers that draw nothing.
+func hasVisibleBase(_ label: Substring) -> Bool {
+    let fillers: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800]
+    return label.unicodeScalars.contains { scalar in
+        guard !fillers.contains(scalar.value) else { return false }
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter, .decimalNumber,
+            .letterNumber, .otherNumber, .connectorPunctuation, .dashPunctuation, .openPunctuation,
+            .closePunctuation, .initialPunctuation, .finalPunctuation, .otherPunctuation, .mathSymbol,
+            .currencySymbol, .modifierSymbol, .otherSymbol:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// True when no combining mark, variation selector or joiner opens the label or follows a space,
+/// where it would draw on nothing, or on the space.
+func marksSitOnCharacters(_ label: Substring) -> Bool {
+    var previous: Unicode.Scalar? = nil
+    for scalar in label.unicodeScalars {
+        let category = scalar.properties.generalCategory
+        let attaches =
+            scalar == "\u{200D}" || category == .nonspacingMark || category == .spacingMark
+            || category == .enclosingMark
+        if attaches, previous == nil || previous == " " { return false }
+        previous = scalar
+    }
+    return true
+}
 
 @Suite struct NameTests {
     /// docs/architecture.md §17: export names made from hostile titles. Every name is one plain
@@ -63,6 +105,8 @@ let hostileTitles: [String] = [
         #expect(!label.isEmpty)
         #expect(label.utf8.count <= ExportNames.labelBytes)
         #expect(label.first != " " && label.first != "." && label.last != " " && label.last != ".")
+        #expect(hasVisibleBase(label), "no visible character in the label")
+        #expect(marksSitOnCharacters(label), "a mark opens the label or follows a space")
 
         // One plain file at the root of the export, and nothing beside the export.
         let manager = FileManager.default
@@ -94,6 +138,21 @@ let hostileTitles: [String] = [
             ExportNames.markdownFile(for: record(note, [voice]), timeZone: .gmt).name
                 == "2026-11-18 Recording 00000080.md")
         #expect(ExportNames.markdownFile(for: record(note, []), timeZone: .gmt).name == "2026-11-18 Note 00000080.md")
+    }
+
+    /// Finding 7: a title nobody can see gives no label, so the name falls back as for an empty
+    /// one; a mark after a space goes with the space.
+    @Test func anInvisibleTitleGivesNoLabel() {
+        for title in [
+            "\u{200D}", "\u{200D}\u{200D}", "\u{FE0F}", "\u{3164}", "\u{2800}", "\u{0301}\u{0301}", " \u{0301} ",
+        ] {
+            #expect(
+                ExportNames.label(from: title) == nil, "\(title.unicodeScalars.map { String($0.value, radix: 16) })")
+        }
+        #expect(ExportNames.label(from: "a \u{0301}b \u{200D}c \u{FE0F}d") == "a b c d")
+        #expect(
+            ExportNames.label(from: "e\u{0301}\u{200D}x \u{2764}\u{FE0F}")
+                == "e\u{0301}\u{200D}x \u{2764}\u{FE0F}".precomposedStringWithCanonicalMapping)
     }
 
     @Test func theSameTitleInEitherNormalisationGivesTheSameName() {
