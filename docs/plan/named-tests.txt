@@ -81,6 +81,7 @@ WP-11	capture-before-open-migration-or-write-lock-engine	A capture begun before 
 WP-11	disk-fills-during-draft-save	A disk that fills during a draft save.
 WP-11	store-call-commits-after-inbox-fallback-engine	A store call that commits after its capture fell back to `Inbox/`.
 WP-11	text-past-size-limit-repeated-engine	Text that runs past the size limit, repeated.
+WP-11	engine-random-interleavings	A seeded test of random interleavings of starts, updates, ends and discards on three surfaces, over a store whose calls are held and released at random, in which every call returns within a limit and every acknowledged text is found.
 WP-12	soak-kill-points-recorder	WP-12 adds one file of kill points to the soak in its own PR, and the soak is among its merge criteria.
 WP-12	press-while-saved-recording-state-is-stale	A press while the saved recording state is stale.
 WP-12	disk-fills-during-recording	A disk that fills during a recording.
