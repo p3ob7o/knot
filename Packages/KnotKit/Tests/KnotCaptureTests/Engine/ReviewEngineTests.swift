@@ -153,4 +153,21 @@ import Testing
         #expect(try await next.notes.capture(a.captureID)?.outcome == .discardedEmpty)
         #expect(try await next.stream().notes.isEmpty)
     }
+
+    /// Finding 8. A recording whose microphone is refused never starts, so the open draft is
+    /// not ended: rule 15 ends the open capture only once the new one has started.
+    @Test(arguments: [false, true])
+    func refusedMicrophoneLeavesTheDraftOpen(draftOffTheStorePath: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        if draftOffTheStorePath { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "before"))
+        r.recorder.failNextStarts(with: .microphonePermissionRefused)
+        await expectError(.microphonePermissionRefused) {
+            try await r.engine.begin(CaptureRequest(kind: .voice, surface: .macPanel))
+        }
+        if !draftOffTheStorePath { #expect(try await r.notes.capture(a.captureID)?.outcome == .open) }
+        let typed = try await r.engine.update(a.captureID, with: .text("before and after"))
+        #expect(typed.outcome == .open)
+        #expect(typed.durableRevision == 2)
+    }
 }

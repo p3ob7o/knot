@@ -112,25 +112,14 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.portUnavailable
         }
         let startedAt = clock.now()
-        let handoff: CaptureID?
-        let sameWay: ErrorCode?
-        switch try await endOpenCapture(before: request, startingAt: startedAt) {
-        case .retry(let pending):
+        // Rule 15 first, so that a start it refuses writes nothing.
+        if case .retry(let pending) = try nextStep(for: request, besides: nil) {
             return try await retryBegin(pending, text: request.text ?? "")
-        case .start(let open, let code):
-            handoff = open
-            sameWay = code
         }
         let id: CaptureID = ids.make()
         var entry = Entry(
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
             shownNote: request.shownNote, startedAt: startedAt)
-        if let sameWay {
-            // The capture this one follows is on the `Inbox/` path and has no note yet: this one
-            // goes the same way, so that ingest takes both in the order they began and places
-            // this one in the other's note.
-            entry.path = .inbox(sameWay)
-        }
         if request.kind == .typed {
             entry.text = request.text ?? ""
             entry.revision = 1
@@ -139,18 +128,73 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id] = entry
         await take(id)
         defer { release(id) }
+        // A recording starts first: one whose microphone cannot open never starts, and ends
+        // nothing.
+        if request.kind == .voice { try await startRecorder(id) }
+
+        // Rule 15 ends the open capture once this one has started: on the store path in this
+        // capture's record-a-capture transaction, which places it in that capture's note;
+        // otherwise the engine ends it at this capture's start, and this capture goes the same way.
+        var handoff: CaptureID?
+        var endAfterStart: CaptureID?
+        var sameWay: ErrorCode?
+        do throws(KnotError) {
+            planning: while true {
+                switch try nextStep(for: request, besides: id) {
+                case .nothing:
+                    break planning
+                case .retry(let pending):
+                    // Another start of this kind on this surface ran while this one waited.
+                    entries[id] = nil
+                    return try await retryBegin(pending, text: request.text ?? "")
+                case .end(let open):
+                    if case .store = entries[open]?.path {
+                        await take(open)
+                        if entries[open]?.outcome == .open, case .store = entries[open]?.path {
+                            handoff = open
+                            break planning
+                        }
+                        release(open)
+                        continue planning
+                    }
+                    if case .inbox(let code) = entries[open]?.path {
+                        sameWay = code
+                        endAfterStart = open
+                    }
+                    break planning
+                }
+            }
+        } catch {
+            await abandonStart(id)
+            throw error
+        }
+        if let sameWay { entries[id]?.path = .inbox(sameWay) }
         let state: CaptureState
         do throws(KnotError) {
             state =
                 request.kind == .typed
                 ? try await beginTyped(id, sameWay: sameWay != nil)
-                : try await beginRecording(id, sameWay: sameWay != nil)
+                : try await recordRecording(id, sameWay: sameWay != nil)
         } catch {
-            if let handoff { await settle(handoff, afterStartOf: id) }
+            // The new capture reached no disk: the open one goes on.
+            if let handoff { release(handoff) }
             throw error
+        }
+        if let endAfterStart {
+            do throws(KnotError) {
+                _ = try await end(endAfterStart, at: startedAt)
+            } catch {
+                log.failure(error.about(capture: endAfterStart), "capture_not_ended")
+            }
         }
         if let handoff { await settle(handoff, afterStartOf: id) }
         return state
+    }
+
+    /// Removes a start that rule 15 refused after its recording had started.
+    private func abandonStart(_ id: CaptureID) async {
+        if let session = entries[id]?.session { await session.discard() }
+        entries[id] = nil
     }
 
     public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
@@ -342,12 +386,12 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     // MARK: Recordings
 
-    private func beginRecording(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
+    /// Starts the recorder, which writes the manifest before the first sample: a recording's
+    /// first durable write. A start that fails leaves no capture.
+    private func startRecorder(_ id: CaptureID) async throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let session: any RecordingSession
         do throws(KnotError) {
-            // The recorder writes the manifest before the first sample: the recording's first
-            // durable write.
             session = try await recorder.start(
                 RecordingRequest(
                     captureID: id, launchID: launchID, origin: origin(entry.surface), placement: entry.placement,
@@ -362,6 +406,11 @@ public actor StandardCaptureEngine: CaptureEngine {
         Task { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
         }
+    }
+
+    /// Writes a started recording's row, unless it goes the way of the capture it follows.
+    private func recordRecording(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
+        guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         if sameWay {
             log.capture(id, "recording_began", .flag("store_path", false))
             return publish(id)
@@ -500,28 +549,30 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// Applies rule 15 to the capture open on this device before `request` starts. Returns
     /// the open capture that the new one's record-a-capture transaction ends, if any, whose
     /// line the caller then holds until `settle`.
-    private enum StartPlan {
-        /// A new capture, with the open capture whose line the caller holds until `settle`, and
-        /// the code of the `Inbox/` path when the capture it follows is on it.
-        case start(handoff: CaptureID?, sameWay: ErrorCode?)
+    private enum Step {
+        /// Nothing open stands in the way.
+        case nothing
         /// A typed start on the surface of the open typed capture, which goes on.
         case retry(CaptureID)
+        /// The open capture ends, and the new one follows it.
+        case end(CaptureID)
     }
 
-    private func endOpenCapture(before request: CaptureRequest, startingAt startedAt: Date) async throws(KnotError)
-        -> StartPlan
-    {
+    /// What rule 15 does with the capture open on this device, besides `own`, when `request`
+    /// starts. It throws a start the open capture refuses.
+    private func nextStep(for request: CaptureRequest, besides own: CaptureID?) throws(KnotError) -> Step {
         // The newest open capture: while one start ends another, two can be open for a moment.
-        let open = entries.values.filter { $0.outcome == .open }.max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
-        guard let open else { return .start(handoff: nil, sameWay: nil) }
+        let open = entries.values.filter { $0.outcome == .open && $0.id != own }
+            .max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
+        guard let open else { return .nothing }
         let decision = OpenCaptureRule.decide(
             open: OpenCapture(
                 captureID: open.id, noteID: open.noteID ?? NoteID(open.id), kind: open.kind, surface: open.surface),
             start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
         switch decision {
         case .nothingOpen, .leaveOpen:
-            return .start(handoff: nil, sameWay: nil)
-        case .continueOpen(let id) where open.kind == .typed:
+            return .nothing
+        case .continueOpen(let id) where open.kind == .typed && request.kind == .typed:
             // The same kind on the same surface: the open capture goes on, and nothing new
             // starts (rule 15). The surface's text is the capture's whole text, so the start is
             // its next save: after a begin that reached no disk, the surface's retry.
@@ -530,28 +581,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.segmentCaptureOpen.about(capture: id)
         case .refused(let error):
             throw error
-        case .endOpenAndAppend:
-            if case .store = open.path {
-                // Its saves finish first; then the store ends it as it stands, in the new
-                // capture's transaction, and places the new one in its note.
-                await take(open.id)
-                // Unless it is still the one open capture, on the store path, another start ran
-                // while this one waited: rule 15 is applied again to what is open now.
-                let stillTheOne = entries.values.filter { $0.outcome == .open }.map(\.id) == [open.id]
-                if stillTheOne, case .store = entries[open.id]?.path {
-                    return .start(handoff: open.id, sameWay: nil)
-                }
-                release(open.id)
-                return try await endOpenCapture(before: request, startingAt: startedAt)
-            }
-            // Off the store path the engine ends it, at the new capture's start, and the new
-            // capture goes the same way.
-            _ = try await end(open.id, at: startedAt)
-            let next = try await endOpenCapture(before: request, startingAt: startedAt)
-            if case .start(let handoff, nil) = next, case .inbox(let code) = open.path {
-                return .start(handoff: handoff, sameWay: code)
-            }
-            return next
+        case .endOpenAndAppend(let ended, _):
+            return .end(ended)
         }
     }
 
