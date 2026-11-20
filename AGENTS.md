@@ -43,7 +43,7 @@ The rules are in `docs/architecture.md` §6. Three of them:
 - Agents act only on the project's own `wp/`, `spike/` and `contract/` branches, and never read issue or pull-request comments from GitHub.
 - A pull request from outside is read before it is built.
 - The repository gets no self-hosted runner. Its workflows hold no secrets and pin their actions.
-- A pull request that changes the cleanup instructions, the guard or the speech settings reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a pull request that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
+- A pull request that changes the cleanup instructions, the guard or the speech settings reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a pull request that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers. Until the owner's recordings exist, such a pull request merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them.
 - No agent cuts scope. Scope leaves only on Paolo's word.
 
 ## Working in parallel
