@@ -182,3 +182,70 @@ final class KeptLog: LogSink {
     /// The records of one event.
     func lines(_ event: String) -> [LogRecord] { all.filter { $0.event == event } }
 }
+
+/// A recorder whose conversions of chosen captures wait at a gate until the test opens it,
+/// and that counts conversions, at once and in all.
+final class GatedRecorder: Recorder {
+    private struct State {
+        var gated: Set<CaptureID> = []
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        var now: [CaptureID: Int] = [:]
+        var most: [CaptureID: Int] = [:]
+        var all: [CaptureID: Int] = [:]
+    }
+
+    let inner: ScriptedRecorder
+    private let state = Box(State())
+
+    init(inner: ScriptedRecorder) { self.inner = inner }
+
+    /// The next conversions of `capture` wait until `open()`.
+    func gate(_ capture: CaptureID) { state.update { _ = $0.gated.insert(capture) } }
+
+    func open() {
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        state.update {
+            $0.gated = []
+            waiters = $0.waiters
+            $0.waiters = []
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func inFlight(_ capture: CaptureID) -> Int { state.value.now[capture] ?? 0 }
+    func mostAtOnce(_ capture: CaptureID) -> Int { state.value.most[capture] ?? 0 }
+    func conversions(_ capture: CaptureID) -> Int { state.value.all[capture] ?? 0 }
+
+    func prepare() async {}
+
+    func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
+        try await inner.start(request)
+    }
+
+    func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
+        try await inner.recoverOrphans(currentLaunch: currentLaunch)
+    }
+
+    func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
+        let capture = recording.captureID
+        state.update {
+            $0.now[capture, default: 0] += 1
+            $0.all[capture, default: 0] += 1
+            $0.most[capture] = max($0.most[capture] ?? 0, $0.now[capture] ?? 0)
+        }
+        defer { state.update { $0.now[capture, default: 1] -= 1 } }
+        await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+            var waits = false
+            state.update { state in
+                waits = state.gated.contains(capture)
+                if waits { state.waiters.append(waiter) }
+            }
+            if !waits { waiter.resume() }
+        }
+        return try await inner.convert(recording)
+    }
+
+    func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        try await inner.removeWorkingFile(of: capture)
+    }
+}

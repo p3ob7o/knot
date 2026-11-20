@@ -78,6 +78,10 @@ public actor WatchCoordinator {
     /// Recordings of this launch whose conversion or admission failed, tried again after the
     /// next stop and at the next launch.
     private var unfinished: [CaptureID: RecordedAudio] = [:]
+    /// The captures being finished now. The coordinator is reentrant while it awaits the
+    /// recorder, so a second finish of the same capture would otherwise convert it twice at
+    /// once.
+    private var finishing: Set<CaptureID> = []
 
     /// - Parameters:
     ///   - launchID: this launch. Recovery finishes only the recordings of other launches.
@@ -101,7 +105,13 @@ public actor WatchCoordinator {
 
     /// Finishes the recordings that earlier launches left, clears what a kill left in the
     /// outbox, and starts the link's resume, without waiting for the session: recording
-    /// never waits for the iPhone. Call it once, before the first press.
+    /// never waits for the iPhone.
+    ///
+    /// What the Watch app may assume: call it once, at launch, and do not wait for it before
+    /// taking presses. A press runs while it is converting an earlier launch's recording,
+    /// because the coordinator takes other calls while it awaits the recorder, and a recording
+    /// is never finished twice at once. The outbox's sweep runs on the link, which also admits,
+    /// so the two never run side by side.
     public func launch() async {
         do {
             for recording in try await recorder.recoverOrphans(currentLaunch: launchID) {
@@ -110,11 +120,7 @@ public actor WatchCoordinator {
         } catch {
             log.failure(error, "watch_recovery_failed")
         }
-        do {
-            try link.outbox.sweep()
-        } catch {
-            log.failure(error, "watch_outbox_sweep_failed")
-        }
+        await link.sweep()
         link.trigger()
     }
 
@@ -188,7 +194,9 @@ public actor WatchCoordinator {
         killPoint(.stopped)
         let outcome = await finish(recorded)
         await finishUnfinished(except: recorded.captureID)
-        return outcome
+        // A recording that has just stopped is finished by nobody else, so there is always an
+        // outcome; were there none, the recording stays in Recording/ for the next launch.
+        return outcome ?? .kept(recorded.captureID, KnotError.illegalTransition.about(capture: recorded.captureID))
     }
 
     /// The coordinator is the one consumer of a session's events. A recording that ends by
@@ -245,8 +253,12 @@ public actor WatchCoordinator {
 
     /// Takes a stopped or recovered recording through conversion, the outbox and the removal
     /// of its working file, from wherever it stands.
-    private func finish(_ recording: RecordedAudio) async -> StopOutcome {
+    ///
+    /// Returns `nil`, and does nothing, when the capture is being finished already.
+    private func finish(_ recording: RecordedAudio) async -> StopOutcome? {
         let capture = recording.captureID
+        guard finishing.insert(capture).inserted else { return nil }
+        defer { finishing.remove(capture) }
         if let entry = link.outbox.entry(capture), entry.hasRecording, entry.manifest != nil {
             // Already in the outbox: only the working file is left to remove.
             return await removeWorkingFile(capture)

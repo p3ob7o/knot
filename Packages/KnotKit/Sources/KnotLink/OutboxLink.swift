@@ -170,6 +170,16 @@ public actor OutboxLink {
         }
     }
 
+    /// Clears what a kill left in the outbox (`WatchOutbox.sweep()`). It runs on the link,
+    /// which admits too, so a sweep never removes a file that an admission is placing.
+    public func sweep() {
+        do {
+            try outbox.sweep()
+        } catch {
+            log.failure(error, "link_outbox_sweep_failed")
+        }
+    }
+
     // MARK: What the outbox holds
 
     /// The captures the iPhone acknowledged, each once, as it leaves the outbox. When the
