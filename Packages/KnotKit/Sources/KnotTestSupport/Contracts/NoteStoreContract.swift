@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "discard-not-final", run: aDiscardIsNotFinalForALaterSave),
         Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
@@ -1786,6 +1787,17 @@ public enum NoteStoreContract {
         _ = try await h.store.end(h.endTyped(draft.id, "old", at: 2, revision: 3))
         #expect(try await h.text(SegmentID(draft.id)) == "newer", "The text stays.")
         #expect(try await h.row(draft.id)?.revision == 4, "The revision stays.")
+    }
+
+    /// Witness 55: a discarded blank draft takes a higher-revision end with its only text.
+    public static func aDiscardIsNotFinalForALaterSave(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft(" ", at: 0)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.end(h.endTyped(draft.id, "", at: 1, revision: 2))
+        let later = try await h.store.end(h.endTyped(draft.id, "only", at: 2, revision: 3))
+        #expect(later.outcome == .stored)
+        #expect(try await h.text(SegmentID(draft.id)) == "only")
     }
 
     // MARK: Reading
