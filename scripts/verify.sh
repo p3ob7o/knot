@@ -503,8 +503,9 @@ step_ios_hosted() {
 # the Watch simulators, a screenshot of each, and the Mac app's window. It holds a
 # simulator slot, which limits how many sets are booted at once.
 step_launch() {
-    local log="$KNOT_LOGS/verify-launch-tests.log" iphone ipad watch
+    local log="$KNOT_LOGS/verify-launch-tests.log" watch_log="$KNOT_LOGS/verify-launch-watch-tests.log" iphone ipad watch
     : >"$log"
+    : >"$watch_log"
     "$KNOT_SCRIPTS/sim.sh" ensure
     iphone="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
     ipad="$("$KNOT_SCRIPTS/sim.sh" udid ipad)"
@@ -512,11 +513,18 @@ step_launch() {
     # Shut the set down whatever happens, so that a failed run leaves nothing booted.
     trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
     knot_generate_project
-    echo "UI tests on $KNOT_WORKTREE_ID-iphone and -ipad"
+    # The UI tests must run and pass: on both iOS simulators, and on the Watch. A run that
+    # executed no test fails (knot_xctest_result).
+    local iphone_name ipad_name
+    iphone_name="$("$KNOT_SCRIPTS/sim.sh" list | awk '$1 == "iphone" { print $2 }')"
+    ipad_name="$("$KNOT_SCRIPTS/sim.sh" list | awk '$1 == "ipad" { print $2 }')"
+    echo "UI tests on $iphone_name and $ipad_name"
     xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -destination "id=$ipad" \
-        -only-testing:Knot-iOS-UITests test
-    echo "UI tests on $KNOT_WORKTREE_ID-watch"
-    xcb "$log" -scheme Knot-watchOS -configuration Debug -destination "id=$watch" test
+        -only-testing:Knot-iOS-UITests test || true
+    knot_xctest_result "$log" "$iphone_name" "$ipad_name"
+    echo "UI tests on the Watch"
+    xcb "$watch_log" -scheme Knot-watchOS -configuration Debug -destination "id=$watch" test || true
+    knot_xctest_result "$watch_log"
 
     local ios bundle role udid
     ios="$(products Debug-iphonesimulator)/Knot.app"
@@ -559,8 +567,9 @@ step_mac_ui() {
     local log="$KNOT_LOGS/verify-mac-ui-tests.log"
     : >"$log"
     knot_generate_project
-    xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' test
-    grep -E "Test Case .* (passed|failed)|Executed" "$log" | tail -n 5
+    xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' test || true
+    # A run that executed no test fails, as one that failed does.
+    knot_xctest_result "$log"
 }
 
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
@@ -780,6 +789,13 @@ count_tests() {
     done
     TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
     TESTS_SKIPPED=$((TESTS_SKIPPED + $(grep -c -E 'Test .* skipped' "$log" || true)))
+    # XCTest cases, such as UI tests, from knot_xctest_result's lines.
+    for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
+        TESTS_PASSED=$((TESTS_PASSED + n))
+    done
+    for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\2/p' "$log"); do
+        TESTS_FAILED=$((TESTS_FAILED + n))
+    done
 }
 
 export KNOT_VERIFY_TIER=$TIER KNOT_VERIFY_MODULE=$MODULE KNOT_VERIFY_TEST_TARGET=$TEST_TARGET \
@@ -821,7 +837,7 @@ for step in $STEPS; do
             # The paths the orchestrator allowed by hand show on the console, not only in the log.
             grep -E '^ownership: allowed by hand: ' "$log" | sed 's/^ownership: /        /' || true
         fi
-        [[ $step == package-test || $step == tsan || $step == soak || $step == ios-hosted ]] && count_tests "$log"
+        [[ " package-test tsan soak ios-hosted launch mac-ui " == *" $step "* ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else

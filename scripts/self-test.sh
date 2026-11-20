@@ -318,7 +318,7 @@ fi
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
 fake_team="ZZ9QX42K7T"
-team_log="$scratch/build.log"
+team_log="$scratch/verify-apps.log"
 {
     echo 'export TeamIdentifierPrefix\='"$fake_team"'. AppIdentifierPrefix\='"$fake_team"'.'
     echo '    "application-identifier" = "'"$fake_team"'.com.p3ob7o.knot.dev";'
@@ -333,6 +333,27 @@ if [[ $filtered != *"$fake_team"* && $filtered == *"keep: com.p3ob7o.knot.dev iC
     pass "the team's ID leaves a build log, by pattern, and the rest stays"
 else
     fail "the team filter left an ID or took too much: $filtered"
+fi
+
+# A UI test run counts only when its cases ran and passed: a run that executed 0 tests, one
+# with a failed case, and one with no pass on a destination it should have run on all fail.
+xct="$scratch/xctest"
+mkdir -p "$xct"
+printf "\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 seconds\n** TEST SUCCEEDED **\n" >"$xct/zero.log"
+printf "Test Case '-[UITests.Launch testMark]' passed (5.7 seconds).\n" >"$xct/serial.log"
+printf "Test case 'Launch.testMark()' passed on 'set-iphone - Runner (1)' (7.4 seconds)\nTest case 'Launch.testMark()' passed on 'set-ipad - Runner (2)' (6.9 seconds)\n" >"$xct/both.log"
+printf "Test case 'Launch.testMark()' passed on 'set-iphone - Runner (1)' (7.4 seconds)\n" >"$xct/one.log"
+printf "Test Case '-[UITests.Launch testMark]' passed (5.7 seconds).\nTest Case '-[UITests.Launch testOther]' failed (1.0 seconds).\n" >"$xct/failed.log"
+cases=0
+knot_xctest_result "$xct/zero.log" >/dev/null || cases=$((cases + 1))
+knot_xctest_result "$xct/serial.log" >/dev/null && cases=$((cases + 1))
+knot_xctest_result "$xct/both.log" set-iphone set-ipad >/dev/null && cases=$((cases + 1))
+knot_xctest_result "$xct/one.log" set-iphone set-ipad >/dev/null || cases=$((cases + 1))
+knot_xctest_result "$xct/failed.log" >/dev/null || cases=$((cases + 1))
+if ((cases == 5)); then
+    pass "a UI test run counts only when its cases ran and passed, on each destination"
+else
+    fail "the UI test judge was right on $cases of 5 logs"
 fi
 
 if ((FAILED)); then

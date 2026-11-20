@@ -260,12 +260,32 @@ KNOT_TEAM_FILTER='
 '
 knot_filter_team() { perl -pe "$KNOT_TEAM_FILTER"; }
 
-# Rewrites, in place, every log that a run kept in a folder, through knot_filter_team.
+# Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
+# the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
+# of a command still writing to it, and a rewrite would give the file a new inode under the
+# writer, whose lines would then be lost.
 knot_scrub_logs() {
     local folder=$1 log
     [[ -d $folder ]] || return 0
-    for log in "$folder"/*; do
+    for log in "$folder"/verify-* "$folder"/bootstrap-*; do
         [[ -f $log ]] || continue
         perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
     done
+}
+
+# Judges the log of an xcodebuild test run of XCTest cases, such as UI tests. Prints one line,
+# "xctest: N passed, M failed", and returns 1 when no case passed, when a case failed, or
+# when a destination named after the log has no passed case: a run that executed 0 tests is
+# a failure, not a pass. A run on several destinations writes "passed on '<name> - …'".
+#   knot_xctest_result <log> [destination name…]
+knot_xctest_result() {
+    local log=$1 passed failed destination missing=""
+    shift
+    passed=$(grep -a -c -E "Test [Cc]ase '[^']+' passed" "$log" || true)
+    failed=$(grep -a -c -E "Test [Cc]ase '[^']+' failed" "$log" || true)
+    for destination in "$@"; do
+        grep -a -F -e "passed on '$destination" "$log" >/dev/null || missing="$missing $destination"
+    done
+    echo "xctest: $passed passed, $failed failed${missing:+, none passed on:$missing}"
+    ((passed > 0 && failed == 0)) && [[ -z $missing ]]
 }
