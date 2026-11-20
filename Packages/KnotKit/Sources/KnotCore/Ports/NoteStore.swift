@@ -51,6 +51,10 @@ public protocol NoteStore: Sendable {
     /// so that a later capture by the window does not join it. A segment ID that another
     /// capture owns, first or derived, is refused as a conflict and nothing is written.
     ///
+    /// A finished capture that is empty when it is first recorded writes its row as
+    /// `discarded_empty` and nothing else: no note, no segment, no other capture ended. Its
+    /// receipt names a note ID that nothing uses. The same holds for `ingest`.
+    ///
     /// Idempotent by capture ID, and strict: a repeat with the same content changes nothing
     /// and returns the latest receipt; one with other content fails with
     /// `capture_id_conflict`, whatever the row's state. An inbox item takes `ingest` instead.

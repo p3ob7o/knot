@@ -722,6 +722,9 @@
                 throw KnotError.captureIDConflict.about(capture: capture.id)
             }
             let now = clock.now()
+            if case .text(let text) = capture.body, capture.endedAt != nil, CaptureText.isEmpty(text) {
+                return discardFirstRecord(capture, at: now, in: &next)
+            }
             let decision: AppendDecision
             if ingesting, capture.arrival == .live, let asked = inboxPlacement(capture, in: next) {
                 decision = asked
@@ -755,14 +758,8 @@
                     id: noteID, createdAt: capture.startedAt, updatedAt: now,
                     lastCaptureEndedAt: capture.endedAt ?? capture.startedAt, revision: counter)
             }
-            var outcome: CaptureOutcome = capture.endedAt == nil ? .open : .stored
-            var segmentIDs: [SegmentID] = []
-            if case .text(let text) = capture.body, capture.endedAt != nil, CaptureText.isEmpty(text) {
-                // Nothing to keep. A note it made stays, emptied and hidden.
-                outcome = .discardedEmpty
-            } else {
-                segmentIDs = try writeSegments(for: capture, in: noteID, joined: joined, at: now, into: &next)
-            }
+            let outcome: CaptureOutcome = capture.endedAt == nil ? .open : .stored
+            let segmentIDs = try writeSegments(for: capture, in: noteID, joined: joined, at: now, into: &next)
             if outcome == .stored, capture.kind == .voice { writeTranscribeJob(for: SegmentID(capture.id), in: &next) }
             touch(noteID, counter: counter, at: now, in: &next)
             let hash = outcome == .stored ? capture.body.content.map { contentHash(capture.kind, $0) } : nil
@@ -776,6 +773,27 @@
                 reason: decision.reason ?? .newNoteAsked, outcome: outcome,
                 revision: stamp(segmentIDs.first.flatMap { next.segments[$0]?.revision } ?? capture.revision),
                 cursor: cursor(counter))
+            next.receipts[capture.id] = receipt
+            return receipt
+        }
+
+        /// A capture that is empty when it is first recorded: its row says `discarded_empty`, and
+        /// it makes no note, joins none and ends no other capture. The receipt names a note ID
+        /// that nothing uses. The emptied note is for a note that existed and was seen.
+        private func discardFirstRecord(_ capture: NewCapture, at now: Date, in next: inout State) -> CaptureReceipt {
+            next.counter += 1
+            next.captures[capture.id] = Capture(
+                id: capture.id, kind: capture.kind, origin: capture.origin, startedAt: capture.startedAt,
+                endedAt: capture.endedAt, outcome: .discardedEmpty, launchID: capture.launchID,
+                placement: capture.placement, contentHash: nil, shownNoteID: capture.shownNote,
+                revision: capture.revision, lastSavedAt: now)
+            let receipt = CaptureReceipt(
+                captureID: capture.id, noteID: ids.make(), segmentIDs: [], joinedExistingNote: false,
+                reason: capture.placement == .window
+                    ? .noEarlierCapture
+                    : capture.placement == .newNote
+                        ? .newNoteAsked : .namedNote,
+                outcome: .discardedEmpty, revision: stamp(capture.revision), cursor: cursor(next.counter))
             next.receipts[capture.id] = receipt
             return receipt
         }

@@ -1503,6 +1503,21 @@ public enum NoteStoreContract {
         _ = try await h.store.end(h.endTyped(blank.id, "  ", at: 5.3, revision: 2))
         #expect(try await h.store.note(kept.noteID)?.isShown == true, "A note that holds other segments stays shown.")
 
+        // A capture that is empty when it is first recorded makes no note at all: the emptied
+        // note is for a note that existed and was seen (finding 61).
+        let before = try await h.store.cursor()
+        let blankNow = try await h.store.record(h.typed(" \n", from: 6, to: 6.1))
+        let blankLater = try await h.store.ingest(h.inboxText("  ", at: 7, revision: 1)).receipt
+        for blankReceipt in [blankNow, blankLater] {
+            #expect(blankReceipt.outcome == .discardedEmpty && blankReceipt.segmentIDs.isEmpty)
+            #expect(!blankReceipt.joinedExistingNote)
+            #expect(try await h.store.note(blankReceipt.noteID) == nil, "No note for a capture empty from the start.")
+            #expect(try await h.row(blankReceipt.captureID)?.outcome == .discardedEmpty)
+        }
+        #expect(
+            try await h.store.changes(after: before, limit: 10).changes.isEmpty,
+            "No note is made, joined or touched.")
+
         h.clock.advance(by: 31 * 86_400)
         _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
         #expect(try await h.store.note(receipt.noteID) == nil, "The purge removes the emptied note.")
