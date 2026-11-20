@@ -84,7 +84,7 @@ struct RefusingChangesStore: NoteStore {
     func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError) -> CleanupApplied {
         try await inner.applyCleanup(result, to: segment)
     }
-    func saveJob(_ job: Job) async throws(KnotError) { try await inner.saveJob(job) }
+    func saveJob(_ job: Job) async throws(KnotError) -> Job { try await inner.saveJob(job) }
     func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] { try await inner.jobs(for: segment) }
     func purge(before date: Date) async throws(KnotError) -> PurgeResult { try await inner.purge(before: date) }
 }

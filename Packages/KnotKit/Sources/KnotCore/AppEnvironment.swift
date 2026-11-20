@@ -17,6 +17,30 @@ public struct AppEnvironment: Sendable {
     /// The one processing queue. On watchOS there is none.
     public var queue: any ProcessingQueue
 
+    // The ports of WP-02's third pull request. Each is a stored property with its unavailable
+    // version as its default, so the initialiser above is unchanged: a composition sets the
+    // ones it fills in.
+
+    public var inkRecogniser: any InkRecogniser = UnavailableInkRecogniser()
+    public var drawingImages: any DrawingImages = UnavailableDrawingImages()
+    /// The sync engine, which exists only when the switch is on and the `sync` gate is open.
+    public var sync: any SyncEngine = UnavailableSyncEngine()
+    /// The Watch's link to its iPhone. Only the Watch has one.
+    public var watchLink: any WatchLink = UnavailableWatchLink()
+    public var player: any AudioPlayer = UnavailableAudioPlayer()
+    public var fetcher: any AssetFetcher = UnavailableAssetFetcher()
+    public var recordingState: any RecordingStateStore = UnavailableRecordingStateStore()
+    /// iPhone and iPad only.
+    public var recordingActivity: any RecordingActivity = UnavailableRecordingActivity()
+    public var settings: any SettingsStore = UnavailableSettingsStore()
+    public var gates: any FeatureGates = UnavailableFeatureGates()
+    public var surfaces: any SurfaceRouter = UnavailableSurfaceRouter()
+    public var cues: any CueEmitter = UnavailableCueEmitter()
+    public var freeSpace: any FreeSpaceProbe = UnavailableFreeSpaceProbe()
+    public var installIdentity: any InstallIdentity = UnavailableInstallIdentity()
+    public var notifier: any ProcessNotifier = UnavailableProcessNotifier()
+    public var lifecycle: any Lifecycle = UnavailableLifecycle()
+
     public init(
         notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, transcriber: any Transcriber,
         cleaner: any Cleaner, clock: any WallClock, ids: any IDGenerator, engine: any CaptureEngine,

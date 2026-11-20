@@ -41,7 +41,9 @@
             var script: Script
             var startFailures: [KnotError] = []
             var conversionFailures: [KnotError] = []
-            var orphans: [(launch: LaunchID, audio: RecordedAudio)] = []
+            /// Every working file on the drive, with the launch that made it, until
+            /// `removeWorkingFile` takes it: the orphans of earlier launches among them.
+            var workingFiles: [CaptureID: (launch: LaunchID, audio: RecordedAudio)] = [:]
             var sessions: [CaptureID: (launch: LaunchID, session: ScriptedSession)] = [:]
             var prepared = 0
         }
@@ -90,13 +92,12 @@
             try files.place(try request.manifest(startedAt: clock.now()).encoded(), at: manifestURL(capture))
             try files.place(bytes(frames: frames), at: workingURL(capture))
             state.withLock {
-                $0.orphans.append(
-                    (
-                        launch,
-                        RecordedAudio(
-                            captureID: capture, frames: frames, sampleRate: sampleRate, ending: .recovered,
-                            workingFile: workingURL(capture))
-                    ))
+                $0.workingFiles[capture] = (
+                    launch,
+                    RecordedAudio(
+                        captureID: capture, frames: frames, sampleRate: sampleRate, ending: .recovered,
+                        workingFile: workingURL(capture))
+                )
             }
         }
 
@@ -122,23 +123,33 @@
                 remove: { [files] in
                     try? files.remove(self.workingURL(request.captureID))
                     try? files.remove(self.manifestURL(request.captureID))
+                    self.state.withLock { _ = $0.workingFiles.removeValue(forKey: request.captureID) }
+                },
+                ended: { audio in
+                    // A recording that ended leaves its working file until it is removed.
+                    self.state.withLock { $0.workingFiles[request.captureID] = (request.launchID, audio) }
                 })
             state.withLock { $0.sessions[request.captureID] = (request.launchID, session) }
             session.begin()
             return session
         }
 
+        /// Every working file of an earlier launch that `removeWorkingFile` has not removed: a
+        /// recording that died while it ran, finished as recovered, and one that stopped and was
+        /// never converted, or whose conversion failed, as it ended (finding 23).
         public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
-            state.withLock { state in
-                let recovered = state.orphans.filter { $0.launch != currentLaunch }
-                state.orphans.removeAll { $0.launch != currentLaunch }
-                // A session of an earlier launch that never ended is an orphan too.
-                var fromSessions: [RecordedAudio] = []
-                for (capture, entry) in state.sessions where entry.launch != currentLaunch {
-                    if let audio = entry.session.recoverIfLive() { fromSessions.append(audio) }
-                    state.sessions[capture] = nil
-                }
-                return recovered.map(\.audio) + fromSessions
+            // A session of an earlier launch that never ended is finished as recovered, which
+            // keeps its working file among the others. It is finished outside the lock, because
+            // its ending records the file under that lock.
+            let earlier = state.withLock { state in
+                let earlier = state.sessions.filter { $0.value.launch != currentLaunch }
+                for capture in earlier.keys { state.sessions[capture] = nil }
+                return earlier.values.map(\.session)
+            }
+            for session in earlier { _ = session.recoverIfLive() }
+            return state.withLock { state in
+                state.workingFiles.values.filter { $0.launch != currentLaunch }.map(\.audio)
+                    .sorted { $0.captureID < $1.captureID }
             }
         }
 
@@ -169,6 +180,7 @@
             for url in [workingURL(capture), manifestURL(capture)] where layer.entryKind(url) != nil {
                 try files.remove(url)
             }
+            state.withLock { _ = $0.workingFiles.removeValue(forKey: capture) }
         }
 
         // MARK: Files
@@ -206,18 +218,21 @@
         private let workingFile: URL
         private let write: @Sendable (Int64) -> Void
         private let remove: @Sendable () -> Void
+        private let ended: @Sendable (RecordedAudio) -> Void
         private let state = Mutex(State())
         private let feeder = Mutex<Task<Void, Never>?>(nil)
 
         init(
             captureID: CaptureID, script: ScriptedRecorder.Script, workingFile: URL,
-            write: @escaping @Sendable (Int64) -> Void, remove: @escaping @Sendable () -> Void
+            write: @escaping @Sendable (Int64) -> Void, remove: @escaping @Sendable () -> Void,
+            ended: @escaping @Sendable (RecordedAudio) -> Void
         ) {
             self.captureID = captureID
             self.script = script
             self.workingFile = workingFile
             self.write = write
             self.remove = remove
+            self.ended = ended
             (events, eventSink) = AsyncStream.makeStream(of: RecordingEvent.self)
             // A slow consumer loses the oldest audio; the file never waits.
             (liveAudio, audioSink) = AsyncStream.makeStream(of: AudioChunk.self, bufferingPolicy: .bufferingNewest(8))
@@ -268,7 +283,12 @@
             guard first else { return (result, false) }
             feeder.withLock { $0?.cancel() }
             // The file is on the drive before the ending is told.
-            if discarding { remove() } else { write(result.frames) }
+            if discarding {
+                remove()
+            } else {
+                write(result.frames)
+                ended(result)
+            }
             let waiters = state.withLock { state in
                 state.settled = true
                 defer { state.waiters = [] }
