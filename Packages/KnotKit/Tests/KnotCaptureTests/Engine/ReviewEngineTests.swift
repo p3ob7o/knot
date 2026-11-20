@@ -170,4 +170,27 @@ import Testing
         #expect(typed.outcome == .open)
         #expect(typed.durableRevision == 2)
     }
+
+    /// Finding 9. A conversion that failed is tried again: by `retryConversions()`, which the
+    /// composition calls when the app comes forward, and by the engine's next call once 30
+    /// seconds have passed. The capture is then stored and goes on to transcription.
+    @Test(arguments: [false, true])
+    func failedConversionIsTriedAgain(byTheNextCall: Bool) async throws {
+        let r = Rig()
+        let a = try await r.beginRecording()
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let ended = try await r.engine.end(a.captureID)
+        #expect(ended.outcome == .failed(KnotError.conversionFailed.code))
+        if byTheNextCall {
+            _ = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "soon"))
+            #expect(try await r.notes.capture(a.captureID)?.outcome == .failed(KnotError.conversionFailed.code))
+            r.clock.advance(by: 30)
+            _ = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "later"))
+        } else {
+            await r.engine.retryConversions()
+        }
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .stored)
+        #expect(try await r.notes.jobs(for: SegmentID(a.captureID)).map(\.kind) == [.transcribe])
+        #expect(r.layer.entryKind(r.locations.recordingAudio(a.captureID, format: .caf)) == nil)
+    }
 }

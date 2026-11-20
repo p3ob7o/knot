@@ -71,6 +71,13 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// their rows are ended as empty when the store next answers. Recovery ends them at the
     /// next launch otherwise, since no file is left.
     private var pendingDiscards: Set<CaptureID> = []
+    /// Recordings whose conversion failed, with what `convert` needs to try again.
+    private struct PendingConversion {
+        let audio: RecordedAudio
+        let endedAt: Date
+        let triedAt: Date
+    }
+    private var pendingConversions: [CaptureID: PendingConversion] = [:]
 
     /// - Parameters:
     ///   - deviceID: this device, the origin of every capture the engine makes.
@@ -105,6 +112,7 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     public func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
         await endPendingDiscards()
+        await retryConversions(dueOnly: true)
         switch request.kind {
         case .typed, .voice: break
         default:
@@ -191,6 +199,33 @@ public actor StandardCaptureEngine: CaptureEngine {
         return state
     }
 
+    /// Tries again the conversion of each recording whose conversion failed in this launch:
+    /// the composition calls it when the app comes forward, and the engine's own calls do once
+    /// `conversionRetryDelay` has passed since the last try.
+    public func retryConversions() async {
+        await retryConversions(dueOnly: false)
+    }
+
+    /// How long the engine waits after a failed conversion before its next call tries it again.
+    public static let conversionRetryDelay: TimeInterval = 30
+
+    private func retryConversions(dueOnly: Bool) async {
+        let now = clock.now()
+        for (id, pending) in pendingConversions
+        where !dueOnly || now.timeIntervalSince(pending.triedAt) >= Self.conversionRetryDelay {
+            await take(id)
+            if pendingConversions[id] != nil {
+                do throws(KnotError) {
+                    try await storeRecording(id, audio: pending.audio, endedAt: pending.endedAt)
+                } catch {
+                    log.failure(error.about(capture: id), "conversion_not_retried")
+                }
+                publish(id)
+            }
+            release(id)
+        }
+    }
+
     /// Removes a start that rule 15 refused after its recording had started.
     private func abandonStart(_ id: CaptureID) async {
         if let session = entries[id]?.session { await session.discard() }
@@ -199,6 +234,7 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
         await endPendingDiscards()
+        await retryConversions(dueOnly: true)
         guard let entry = entries[capture] else { throw KnotError.notFound.about(capture: capture) }
         guard case .text(let text) = content, entry.kind == .typed else {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
@@ -215,6 +251,7 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         await endPendingDiscards()
+        await retryConversions(dueOnly: true)
         return try await end(capture, at: nil)
     }
 
@@ -235,6 +272,7 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         await endPendingDiscards()
+        await retryConversions(dueOnly: true)
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
         await take(capture)
         defer { release(capture) }
@@ -450,6 +488,14 @@ public actor StandardCaptureEngine: CaptureEngine {
         let audio = await session.stop()
         let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
+        try await storeRecording(id, audio: audio, endedAt: endedAt)
+    }
+
+    /// Converts a stopped recording, moves it into the `AssetStore` and ends its capture with
+    /// it. A conversion that fails leaves the working file as the recording and the capture
+    /// failed, and is tried again (docs/architecture.md §8).
+    private func storeRecording(_ id: CaptureID, audio: RecordedAudio, endedAt: Date) async throws(KnotError) {
+        guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let stored: StoredFile
         let duration: Duration
         do throws(KnotError) {
@@ -457,10 +503,13 @@ public actor StandardCaptureEngine: CaptureEngine {
             stored = try await assets.move(converted.file, as: .ofCapture(id), kind: .audio)
             duration = converted.duration
         } catch {
-            // The working file stays as the recording (docs/architecture.md §8).
+            // The working file stays as the recording (docs/architecture.md §8), and the
+            // conversion is tried again.
+            pendingConversions[id] = PendingConversion(audio: audio, endedAt: endedAt, triedAt: clock.now())
             try await failRecording(id, endedAt: endedAt, error.about(capture: id))
             return
         }
+        pendingConversions[id] = nil
         let asset = Asset(
             id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
             sha256: stored.sha256)
