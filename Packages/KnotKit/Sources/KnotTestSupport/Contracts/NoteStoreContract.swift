@@ -303,6 +303,21 @@ public enum NoteStoreContract {
             if !one.hasMore { break }
         }
         #expect(seen == [a.noteID, moved.to.id], "Paging by one sees both notes of a move.")
+
+        // A save that changes a note's segments gives that note a counter value too: a later
+        // end that shortens a long capture reaches the note its continuation was moved to
+        // (finding 43).
+        let long = h.tool(Harness.longText(pieces: 2), at: 200)
+        let made = try await h.store.record(long)
+        _ = try await h.store.record(h.typed("A sibling", from: 200.5, to: 200.6, placement: .named(made.noteID)))
+        guard case .moved(let away) = try await h.store.move(made.segmentIDs[1], from: made.noteID) else {
+            Issue.record("The continuation moves.")
+            return
+        }
+        let beforeEnd = try await h.store.cursor()
+        _ = try await h.store.end(h.endTyped(long.id, "short", at: 201, revision: 2))
+        let reached = try await h.store.changes(after: beforeEnd, limit: 10).changes.map(\.noteID)
+        #expect(reached.contains(away.to.id), "The note the save changed is reported.")
     }
 
     /// A cursor ahead of the store is reported, and a foreign one refused
