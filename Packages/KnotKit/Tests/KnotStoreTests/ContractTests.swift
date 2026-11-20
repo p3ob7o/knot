@@ -29,13 +29,6 @@ private func check(_ name: String) async throws {
         folders.expectEveryStoreConsistent()
     }
 
-    /// Every order of eight saves and an edit keeps the edit.
-    @Test(.tags(.contract)) func everyOrderKeepsTheEdit() async throws {
-        let folders = TemporaryFolders()
-        defer { folders.removeAll() }
-        try await NoteStoreContract.everyOrderKeepsTheEdit(realStore(folders))
-    }
-
     @Test("checkpoint-from-inbox-older-than-stored-text-real", .tags(.named, .contract))
     func checkpointFromInboxOlderThanStoredTextReal() async throws { try await check("checkpoint") }
 

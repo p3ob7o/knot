@@ -182,6 +182,8 @@ private actor Driver {
             switch (target.kind, random.next(in: 0...5)) {
             case (_, 0): outcome = .discardedEmpty
             case (_, 1): outcome = .failed("write_failed")
+            // Recovery ends an open row as it stands, at its last durable save.
+            case (.typed, 2): outcome = .stored(.none)
             case (.typed, _): outcome = .stored(.text(text()))
             case (.voice, _): outcome = .stored(.file(asset(.audio, for: target.id), duration: .seconds(30)))
             default: outcome = chance(50) ? .stored(.none) : .stored(.file(asset(.ink, for: target.id), duration: nil))

@@ -30,7 +30,10 @@ public final class NoteRepository: NoteStore {
     /// Holds the next write that records, saves, ends or ingests a capture until the hold is
     /// released, so that a test can let another call commit first, as when a store call commits
     /// after its capture fell back to `Inbox/`.
-    public func holdNextCaptureWrite() -> WriteHold {
+    ///
+    /// It is `async`, as the in-memory store's is, so that a test written for one runs on the
+    /// other.
+    public func holdNextCaptureWrite() async -> WriteHold {
         let hold = WriteHold()
         seams.withLock { $0.holds.append(hold) }
         return hold
@@ -38,7 +41,7 @@ public final class NoteRepository: NoteStore {
 
     /// The next writes that record, save, end or ingest a capture fail with these errors, in
     /// order, and write nothing, as a store that is not open yet or that another process holds.
-    public func failNextCaptureWrites(with errors: KnotError...) {
+    public func failNextCaptureWrites(with errors: KnotError...) async {
         seams.withLock { $0.failures += errors }
     }
 
