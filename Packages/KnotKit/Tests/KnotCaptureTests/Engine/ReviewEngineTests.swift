@@ -383,6 +383,31 @@ import Testing
         #expect(r.inboxText(a) == "first, updated")
     }
 
+    /// Finding 49, the re-check's D10. When the new capture's store call did not end the open
+    /// capture, the engine ends it at the new capture's start, not at the time it gets to it.
+    /// Every store call takes 0.2 s of the clock here.
+    @Test func openCaptureEndsAtTheStartOfTheOneThatFollows() async throws {
+        let box = ClockBox()
+        let r = Rig(
+            deadline: StoreDeadline {
+                box.advance(by: 0.2)
+                try? await Task.sleep(for: .seconds(900))
+            })
+        box.set(r.clock)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        #expect(a.path == .store)
+        r.clock.advance(by: 1)
+        let startOfB = r.clock.now()
+        await r.notes.failNextCaptureWrites(with: .storeBusy, .storeBusy)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code))
+        #expect(
+            await eventually("the typed capture to end") {
+                (try? await r.notes.capture(a.captureID))?.outcome == .stored
+            })
+        #expect(try await r.notes.capture(a.captureID)?.endedAt == startOfB)
+    }
+
     /// Finding 35, the re-check's N5. A typed start on another surface that reached no disk
     /// leaves the open capture going on (finding 8); once its retry reaches disk, rule 15 ends
     /// the open capture as a first start does, so one capture is open.
