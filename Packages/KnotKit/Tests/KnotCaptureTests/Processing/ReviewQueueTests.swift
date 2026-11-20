@@ -130,6 +130,23 @@ import Testing
         #expect(await r.drain() == .idle)
         #expect(await r.queue.drain(using: StoreNotAnsweringRunner()) { _ in } == .idle)
     }
+
+    /// Finding 24. Every log line the queue writes about a job carries the capture ID of the
+    /// job's segment.
+    @Test func queueLogLinesCarryTheCaptureID() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        r.transcriber.failNextRuns(with: .transcriptionFailed)
+        #expect(await r.drain() == .idle)
+        r.clock.advance(by: 60)
+        #expect(await r.drain() == .idle)
+        let events = ["transcribed", "cleaned", "job_step_failed", "clean_job_written"]
+        let lines = r.logs.lines.filter { line in events.contains { line.hasPrefix($0 + " ") } }
+        #expect(Set(lines.compactMap { $0.split(separator: " ").first.map(String.init) }) == Set(events))
+        for line in lines { #expect(line.contains("capture=\(begun.captureID)"), "\(line)") }
+    }
 }
 
 /// A runner whose work meets a store that does not answer.

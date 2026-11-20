@@ -71,7 +71,9 @@ public actor StandardProcessingQueue: ProcessingQueue {
             } else {
                 await moveSegment(job.segmentID, .deferred)
             }
-            log.log(.notice, "job_found_running", .job(job.id), .number("deaths", next.deaths))
+            log.capture(
+                Self.capture(of: job.segmentID), "job_found_running", .job(job.id), .number("deaths", next.deaths),
+                level: .notice)
         }
         for job in try await notes.jobs(for: nil) where job.state == .done {
             // A death between a job's last save and its segment's state leaves the segment in
@@ -133,7 +135,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
             return .idle
         } catch {
             if error.isYield || error.code == KnotError.noBackgroundTime.code { return .yielded }
-            log.failure(error, "drain_stopped")
+            log.failure(Self.aboutCapture(error), "drain_stopped")
             // `idle` promises that nothing is left that a later drain could run. A drain that
             // stopped on an error, such as a store that does not answer, says `yielded` while
             // queued work is left, or while the store cannot say.
@@ -168,6 +170,18 @@ public actor StandardProcessingQueue: ProcessingQueue {
             finished += 1
             report(BackgroundProgress(fraction: Double(finished) / Double(max(total, 1)), step: job.kind))
         }
+    }
+
+    /// The capture a job's segment came from, for the log line about the job: every line about a
+    /// capture carries its ID. A recording's or a drawing's segment shares its capture's ID
+    /// (docs/architecture.md §4), and only they have jobs, so the queue knows it without
+    /// reading the segment.
+    private static func capture(of segment: SegmentID) -> CaptureID { CaptureID(segment) }
+
+    /// An error with the capture of the segment it names, if it names one.
+    private static func aboutCapture(_ error: KnotError) -> KnotError {
+        guard error.context.captureID == nil, let segment = error.context.segmentID else { return error }
+        return error.about(capture: capture(of: segment))
     }
 
     /// `JobMachine`, with an illegal transition as the taxonomy's case.
@@ -220,7 +234,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
             try await stepFailed(job, error, step: .transcribe)
             return
         }
-        log.log(.info, "transcribed", .segment(segment), .job(job.id))
+        log.capture(Self.capture(of: segment), "transcribed", .job(job.id))
         try await writeCleanJobIfMissing(for: segment)
     }
 
@@ -248,7 +262,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
         try await notes.saveJob(job)
         await publish(job.id, of: segment)
         await moveSegment(segment, applied.textReplaced ? .cleaned : .keepRawTranscript)
-        log.log(.info, "cleaned", .segment(segment), .flag("replaced", applied.textReplaced))
+        log.capture(Self.capture(of: segment), "cleaned", .job(job.id), .flag("replaced", applied.textReplaced))
     }
 
     // MARK: Jobs
@@ -272,7 +286,9 @@ public actor StandardProcessingQueue: ProcessingQueue {
         try await notes.saveJob(next)
         await publish(job.id, of: job.segmentID)
         await moveSegment(job.segmentID, segmentEvent(after: error, job: next, step: step))
-        log.failure(error.with(.init(segmentID: job.segmentID, jobID: job.id)), "job_step_failed")
+        log.failure(
+            error.with(.init(captureID: Self.capture(of: job.segmentID), segmentID: job.segmentID, jobID: job.id)),
+            "job_step_failed")
         if error.isYield { throw KnotError.cancelled }
         if error.isDeferral || next.state != .queued { deferred.insert(job.id) }
     }
@@ -302,7 +318,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
         let job = Job(id: ids.make(), segmentID: segment, kind: .clean)
         try await notes.saveJob(job)
         broadcast.send(job)
-        log.log(.info, "clean_job_written", .segment(segment), .job(job.id))
+        log.capture(Self.capture(of: segment), "clean_job_written", .job(job.id))
     }
 
     private func reread(_ job: Job) async throws(KnotError) -> Job {
