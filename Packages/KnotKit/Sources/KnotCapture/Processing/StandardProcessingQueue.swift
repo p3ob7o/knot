@@ -259,7 +259,14 @@ public actor StandardProcessingQueue: ProcessingQueue {
             return
         }
         job = try Self.reduce(job, .succeeded)
-        try await notes.saveJob(job)
+        let done = job
+        let notes = self.notes
+        do throws(KnotError) {
+            try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(done) }
+        } catch {
+            try await stepFailed(job, error, step: .clean)
+            return
+        }
         await publish(job.id, of: segment)
         await moveSegment(segment, applied.textReplaced ? .cleaned : .keepRawTranscript)
         log.capture(Self.capture(of: segment), "cleaned", .job(job.id), .flag("replaced", applied.textReplaced))
@@ -272,7 +279,11 @@ public actor StandardProcessingQueue: ProcessingQueue {
         let running = try Self.reduce(job, .start)
         try await notes.saveJob(running)
         runningHere.insert(job.id)
-        let stored = try await reread(running)
+        // Saved as running: from here every way out of the step leaves it not running. A read
+        // that fails takes the revision the save gave it.
+        var stored = running
+        stored.revision += 1
+        if let reread = try? await reread(running) { stored = reread }
         broadcast.send(stored)
         return stored
     }
@@ -280,10 +291,16 @@ public actor StandardProcessingQueue: ProcessingQueue {
     /// A step that threw: a yield, a deferral, a final error or an attempt, each as
     /// `JobMachine` says, with the segment's state to match. A yield ends the drain.
     private func stepFailed(_ job: Job, _ error: KnotError, step: JobKind) async throws(KnotError) {
-        let current = (try? await reread(job)) ?? job
+        // The step's way out is written outside the task around it, which a yield cancelled: a
+        // job still marked running then means only that the process died (§4).
+        let notes = self.notes
+        let current =
+            (try? await outsideCancellation { () async throws(KnotError) in
+                try await notes.jobs(for: job.segmentID).first { $0.id == job.id }
+            }) ?? job
         let retryAt = error.isDeferral ? error.context.retryAt : clock.now().addingTimeInterval(backoff(current))
         let next = try Self.reduce(current, .stepFailed(error, retryAt: retryAt))
-        try await notes.saveJob(next)
+        try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(next) }
         await publish(job.id, of: job.segmentID)
         await moveSegment(job.segmentID, segmentEvent(after: error, job: next, step: step))
         log.failure(
@@ -335,10 +352,28 @@ public actor StandardProcessingQueue: ProcessingQueue {
 
     /// Moves a voice segment by `VoiceMachine`, and leaves it when the event does not apply.
     private func moveSegment(_ segment: SegmentID, _ event: VoiceEvent) async {
-        guard let read = try? await notes.segment(segment), case .voice(let state) = read.state,
-            let next = try? VoiceMachine.reduce(state, event), next != state
-        else { return }
-        _ = try? await notes.setState(.voice(next), of: segment)
+        let notes = self.notes
+        _ = try? await outsideCancellation { () async throws(KnotError) in
+            guard let read = try await notes.segment(segment), case .voice(let state) = read.state,
+                let next = try? VoiceMachine.reduce(state, event), next != state
+            else { return }
+            _ = try await notes.setState(.voice(next), of: segment)
+        }
+    }
+
+    /// Runs `body` in a task of its own, which the cancellation of the calling task does not
+    /// reach: the writes that end a step must not be lost to the yield that ended it.
+    private func outsideCancellation<T: Sendable>(_ body: @escaping @Sendable () async throws(KnotError) -> T)
+        async throws(KnotError) -> T
+    {
+        let result = await Task { () async -> Result<T, KnotError> in
+            do throws(KnotError) {
+                return .success(try await body())
+            } catch {
+                return .failure(error)
+            }
+        }.value
+        return try result.get()
     }
 
     // MARK: Waking

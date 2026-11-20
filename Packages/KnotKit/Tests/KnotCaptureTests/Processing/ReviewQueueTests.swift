@@ -147,6 +147,35 @@ import Testing
         #expect(Set(lines.compactMap { $0.split(separator: " ").first.map(String.init) }) == Set(events))
         for line in lines { #expect(line.contains("capture=\(begun.captureID)"), "\(line)") }
     }
+
+    /// Finding 25. A step cut short by the end of background time leaves its job queued, not
+    /// running, even when a store call made in the cancelled task answers `cancelled`: the
+    /// yield's own write is made outside that task (docs/architecture.md §4).
+    @Test func yieldLeavesNoJobRunning() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        r.transcriber.setRunDelay(.seconds(600))
+        let queue = StandardProcessingQueue(
+            notes: CancellationSensitiveStore(store: r.notes), assets: r.assets, transcriber: r.transcriber,
+            cleaner: r.cleaner, clock: r.clock, ids: r.ids)
+        let runner = StraightThroughRunner()
+        let jobs = queue.jobs()
+        let draining = Task { await queue.drain(using: runner) { _ in } }
+        let started = await SuiteWait.value("the transcribe job to start") {
+            for await job in jobs where job.kind == .transcribe && job.state == .running { return true }
+            return false
+        }
+        #expect(started == true)
+        runner.endTime()
+        #expect(await SuiteWait.value("the drain to end") { await draining.value } == .yielded)
+        let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first)
+        #expect(job.state == .queued)
+        #expect(job.attempts == 0)
+        #expect(job.deaths == 0)
+        #expect(try await r.notes.segment(SegmentID(begun.captureID))?.state == .voice(.recorded))
+    }
 }
 
 /// A runner whose work meets a store that does not answer.
