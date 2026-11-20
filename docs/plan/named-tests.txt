@@ -25,7 +25,7 @@ WP-02	capture-surface-prediction-agrees-with-decision	The note that a capture su
 WP-02	file-layer-drops-unsynced-writes	A file-layer test drops every write that was not synced and checks that recovery still holds.
 WP-02	error-case-lacks-code-or-docs-entry	A test fails when a case of the error taxonomy lacks a code or an entry in `docs/errors.md`.
 WP-02	ink-reducer-rejects-ready-to-drawing	The reducer tests of the ink state machine reject a transition from ready back to drawing.
-WP-02	repeated-capture-id-returns-first-result	A repeated capture ID with the same content changes nothing and returns the first result.
+WP-02	repeated-capture-id-returns-first-result	A repeated capture ID with the same content changes nothing and returns the capture's receipt as the store now holds it.
 WP-02	stale-revision-fails	A stale revision fails.
 WP-02	changes-after-cursor-include-late-capture-and-deletion	Changes after a cursor include a late capture and a deletion.
 WP-02	cursor-ahead-of-store-is-reported	A cursor ahead of the store is reported.
