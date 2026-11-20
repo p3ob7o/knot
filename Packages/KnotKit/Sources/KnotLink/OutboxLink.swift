@@ -60,6 +60,8 @@ public actor OutboxLink {
     private var acknowledged: Set<CaptureID> = []
     private var context: LinkContext?
     private var consumer: Task<Void, Never>?
+    private let runningTriggers = Mutex(0)
+    private var handledEvents = 0
     private let acknowledgementSubscribers = Subscribers<CaptureID>()
     private let changeSubscribers = Subscribers<Void>()
 
@@ -114,8 +116,21 @@ public actor OutboxLink {
 
     /// Runs `resume()` without waiting for it, so that a caller never waits for the session.
     public nonisolated func trigger() {
-        Task { await self.resume() }
+        runningTriggers.withLock { $0 += 1 }
+        Task {
+            await self.resume()
+            self.runningTriggers.withLock { $0 -= 1 }
+        }
     }
+
+    // MARK: Quiet
+
+    /// How many triggered resumes have not finished. With `eventsHandled` it tells a caller,
+    /// such as a test, when the link has nothing left to do.
+    public nonisolated var triggersRunning: Int { runningTriggers.withLock { $0 } }
+
+    /// How many of the transport's events the link has handled so far.
+    public var eventsHandled: Int { handledEvents }
 
     // MARK: Resuming
 
@@ -219,6 +234,7 @@ public actor OutboxLink {
     }
 
     private func handle(_ event: LinkEvent) {
+        defer { handledEvents += 1 }
         switch event {
         case .stateChanged(let state):
             let wasReachable = session.isReachable

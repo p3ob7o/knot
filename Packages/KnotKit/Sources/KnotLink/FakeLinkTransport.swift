@@ -335,6 +335,7 @@
         public let events: AsyncStream<LinkEvent>
         private let continuation: AsyncStream<LinkEvent>.Continuation
         private let ended = Mutex(false)
+        private let yielded = Mutex(0)
 
         init(system: FakeLinkSystem, side: FakeLinkSystem.Side) {
             self.system = system
@@ -342,7 +343,13 @@
             (events, continuation) = AsyncStream.makeStream(of: LinkEvent.self)
         }
 
-        func yield(_ event: LinkEvent) { continuation.yield(event) }
+        func yield(_ event: LinkEvent) {
+            yielded.withLock { $0 += 1 }
+            continuation.yield(event)
+        }
+
+        /// How many events this launch has been given.
+        public var eventsYielded: Int { yielded.withLock { $0 } }
 
         /// This launch ended: its app is gone, and what it still calls does nothing.
         func end() {

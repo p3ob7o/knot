@@ -82,7 +82,7 @@ final class LinkHarness: Sendable {
     let outbox: WatchOutbox
     let phone: TestPhone
     let files: StoreFiles
-    private let watches = Mutex<[OutboxLink]>([])
+    private let watches = Box<[(link: OutboxLink, transport: FakeLinkTransport)]>([])
     private let acknowledgedOnWatch = Box<[CaptureID]>([])
 
     init(seed: UInt64 = 1) {
@@ -109,8 +109,27 @@ final class LinkHarness: Sendable {
         Task { [acknowledgedOnWatch] in
             for await capture in stream { acknowledgedOnWatch.update { $0.append(capture) } }
         }
-        watches.withLock { $0.append(link) }
+        watches.update { $0.append((link, transport)) }
         return (link, transport)
+    }
+
+    /// Waits until the link is quiet: every resume it was triggered to run has finished, and
+    /// it has handled every event its transport was given. The session must activate.
+    func settle(_ link: OutboxLink, sourceLocation: SourceLocation = #_sourceLocation) async {
+        guard let transport = watches.value.first(where: { $0.link === link })?.transport else {
+            Issue.record("A link this harness did not launch.", sourceLocation: sourceLocation)
+            return
+        }
+        await eventually("the link quiet", sourceLocation: sourceLocation) {
+            let handled = await link.eventsHandled
+            return link.triggersRunning == 0 && handled == transport.eventsYielded
+                && link.triggersRunning == 0
+        }
+    }
+
+    /// The transfers of one capture that the session still holds.
+    func outstanding(_ capture: CaptureID) -> [OutstandingFile] {
+        system.outstanding().filter { $0.captureID == capture }
     }
 
     /// The captures the Watch's links reported as acknowledged.

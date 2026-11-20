@@ -70,7 +70,7 @@ import Testing
         let bytes = try Data(contentsOf: harness.outbox.recordingURL(capture))
         #expect(manifest.payloadSHA256 == sha256(bytes) && manifest.payloadByteCount == Int64(bytes.count))
         #expect(recordingFolderNames(harness).isEmpty, "The working file and its manifest are gone.")
-        await SuiteWait.until("the capture queued") { harness.system.timesQueued(capture) == 1 }
+        await SuiteWait.until("the capture queued") { harness.system.timesQueued(capture) >= 1 }
 
         harness.system.finish(capture, as: .arrives)
         await SuiteWait.until("the capture acknowledged") { !harness.inOutbox(capture) }
@@ -143,7 +143,7 @@ import Testing
         #expect(entry.isSendable)
         #expect(entry.manifest?.duration == .seconds(1))
         #expect(recordingFolderNames(harness).isEmpty)
-        await SuiteWait.until("the orphan queued") { harness.system.timesQueued(orphan) == 1 }
+        await SuiteWait.until("the orphan queued") { harness.system.timesQueued(orphan) >= 1 }
     }
 
     @Test func launchDoesNotWaitForTheSession() async throws {

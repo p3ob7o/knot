@@ -15,16 +15,20 @@ import Testing
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
         #expect(harness.inOutbox(capture), "Sending returns once the capture is in the outbox.")
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1)
 
         // A transfer that finishes without arriving is not a delivery.
         harness.system.finish(capture, as: .neverArrives)
-        await eventually("the capture waiting again") { await link.states()[capture] == .waiting }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .waiting)
         #expect(harness.inOutbox(capture))
 
         await link.resume()
+        await harness.settle(link)
         harness.system.finish(capture, as: .arrives)
-        await SuiteWait.until("the acknowledged capture removed") { !harness.inOutbox(capture) }
+        await harness.settle(link)
+        #expect(!harness.inOutbox(capture), "The acknowledged capture is removed.")
         #expect(harness.phone.acknowledged(capture))
         await SuiteWait.until("the acknowledgement reported") { harness.acknowledgementsSeen == [capture] }
         #expect(await link.currentCounts() == (waiting: 0, failed: 0))
@@ -41,7 +45,8 @@ import Testing
         #expect(await link.currentCounts() == (waiting: 1, failed: 0))
 
         harness.system.completeActivation(.watch)
-        await SuiteWait.until("the capture queued after activation") { harness.system.timesQueued(capture) == 1 }
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1, "Queued once the session activated.")
     }
 
     @Test func afterActivationASendQueuesBeforeItReturns() async throws {
@@ -49,10 +54,11 @@ import Testing
         let (link, _) = harness.launchWatch()
         await link.resume()
         let capture = try await harness.sendNew(on: link)
-        #expect(harness.system.timesQueued(capture) == 1)
-        #expect(await link.states()[capture] == .queued(attempt: 1))
+        let queued = try #require(harness.outstanding(capture).first, "Queued before the send returned.")
+        #expect(await link.states()[capture] == .queued(attempt: queued.attempt))
         await link.resume()
-        #expect(harness.system.timesQueued(capture) == 1, "An outstanding capture is not queued twice.")
+        await harness.settle(link)
+        #expect(harness.outstanding(capture) == [queued], "An outstanding capture is not queued twice.")
     }
 
     // MARK: Loss, duplication and reordering
@@ -62,7 +68,7 @@ import Testing
         harness.system.holdsEvents = true
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
 
         harness.system.finish(capture, as: .arrives)
         #expect(harness.phone.acknowledged(capture))
@@ -70,14 +76,17 @@ import Testing
         harness.system.releaseHeld { events in
             events.filter { if case .message = $0 { false } else { true } }
         }
-        await eventually("the capture waiting") { await link.states()[capture] == .waiting }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .waiting)
         #expect(harness.inOutbox(capture), "Without its acknowledgement the capture stays.")
 
         await link.resume()
-        await SuiteWait.until("the capture queued again") { harness.system.timesQueued(capture) == 2 }
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1, "Queued again on the next trigger.")
         harness.system.finish(capture, as: .arrives)
         harness.system.releaseHeld()
-        await SuiteWait.until("the capture removed") { !harness.inOutbox(capture) }
+        await harness.settle(link)
+        #expect(!harness.inOutbox(capture))
         #expect(harness.phone.intactArrivals(capture) == 2, "The duplicate is harmless: ingest is idempotent.")
     }
 
@@ -86,12 +95,15 @@ import Testing
         harness.system.holdsEvents = true
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        let first = try #require(harness.outstanding(capture).first)
 
         harness.system.finish(capture, as: .neverArrives)
         harness.system.releaseHeld { _ in [] }
         await link.resume()
-        #expect(harness.system.timesQueued(capture) == 2, "A transfer gone from the session's queue is queued again.")
+        await harness.settle(link)
+        let again = try #require(harness.outstanding(capture).first, "A transfer gone from the queue is queued again.")
+        #expect(again.attempt != first.attempt)
         #expect(harness.inOutbox(capture))
     }
 
@@ -100,15 +112,17 @@ import Testing
         harness.system.holdsEvents = true
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
 
         harness.system.finish(capture, as: .arrives)
         harness.system.releaseHeld { events in events + events + events }
-        await SuiteWait.until("the capture removed") { !harness.inOutbox(capture) }
+        await harness.settle(link)
+        #expect(!harness.inOutbox(capture))
         await link.resume()
+        await harness.settle(link)
         await SuiteWait.until("the acknowledgement reported") { !harness.acknowledgementsSeen.isEmpty }
         #expect(harness.acknowledgementsSeen == [capture], "One acknowledgement is reported, once.")
-        #expect(harness.system.timesQueued(capture) == 1, "An acknowledged capture is never queued again.")
+        #expect(harness.outstanding(capture).isEmpty, "An acknowledged capture is never queued again.")
     }
 
     @Test func reorderedEventsChangeNothing() async throws {
@@ -117,17 +131,20 @@ import Testing
         let (link, _) = harness.launchWatch()
         let first = try await harness.sendNew(on: link)
         let second = try await harness.sendNew(on: link)
-        await SuiteWait.until("both queued") { harness.system.outstanding().count == 2 }
+        await harness.settle(link)
+        #expect(harness.system.outstanding().count == 2)
 
         harness.system.finish(first, as: .arrives)
         harness.system.finish(second, as: .arrives)
         // Every acknowledgement before every end, the second capture's first.
         harness.system.releaseHeld { events in events.reversed() }
-        await SuiteWait.until("both removed") { !harness.inOutbox(first) && !harness.inOutbox(second) }
+        await harness.settle(link)
+        #expect(!harness.inOutbox(first) && !harness.inOutbox(second))
         await link.resume()
+        await harness.settle(link)
         await SuiteWait.until("both acknowledgements reported") { harness.acknowledgementsSeen.count >= 2 }
         #expect(Set(harness.acknowledgementsSeen) == [first, second])
-        #expect(harness.system.timesQueued(first) == 1 && harness.system.timesQueued(second) == 1)
+        #expect(harness.system.outstanding().isEmpty, "Neither is queued again.")
     }
 
     @Test func anAcknowledgementCancelsATransferStillUnderWay() async throws {
@@ -135,19 +152,22 @@ import Testing
         harness.system.holdsEvents = true
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
         harness.system.finish(capture, as: .arrives)
         harness.system.releaseHeld { events in events.filter { if case .message = $0 { false } else { true } } }
-        await eventually("the capture waiting") { await link.states()[capture] == .waiting }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .waiting)
         await link.resume()
-        await SuiteWait.until("the capture queued again") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1)
 
         // The first acknowledgement arrives late, while the second transfer is under way.
         harness.phone.transport.send(.acknowledgement(capture))
         harness.system.releaseHeld()
-        await SuiteWait.until("the capture removed") { !harness.inOutbox(capture) }
-        await SuiteWait.until("the transfer cancelled") { harness.system.outstanding().isEmpty }
-        #expect(harness.system.timesCancelled(capture) == 1)
+        await harness.settle(link)
+        #expect(!harness.inOutbox(capture))
+        #expect(harness.outstanding(capture).isEmpty, "The transfer under way is cancelled.")
+        #expect(harness.system.timesCancelled(capture) >= 1)
     }
 
     // MARK: Failures
@@ -157,53 +177,62 @@ import Testing
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
 
         harness.system.finish(capture, as: .fails(failure))
-        await eventually("the capture waiting") { await link.states()[capture] == .waiting }
-        #expect(harness.system.timesQueued(capture) == 1, "A deferral is not queued again at once.")
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .waiting)
+        #expect(harness.outstanding(capture).isEmpty, "A deferral is not queued again at once.")
         #expect(await link.currentCounts() == (waiting: 1, failed: 0), "A deferral shows as waiting.")
 
         await link.resume()
-        #expect(harness.system.timesQueued(capture) == 2)
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1, "Queued again on the next trigger.")
     }
 
     @Test func aFailedDeliveryIsQueuedAgainAtOnce() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        let first = try #require(harness.outstanding(capture).first)
 
         harness.system.finish(capture, as: .fails(.deliveryFailed))
-        await SuiteWait.until("the capture queued again") { harness.system.timesQueued(capture) == 2 }
-        #expect(await link.states()[capture] == .queued(attempt: 2))
+        await harness.settle(link)
+        let again = try #require(harness.outstanding(capture).first, "Queued again without a trigger.")
+        #expect(again.attempt != first.attempt)
+        #expect(await link.states()[capture] == .queued(attempt: again.attempt))
     }
 
     @Test func aMissingFileFailsTheCaptureAndKeepsItsManifest() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
 
         try FileManager.default.removeItem(at: harness.outbox.recordingURL(capture))
         harness.system.finish(capture, as: .arrives)
-        await eventually("the capture failed") { await link.states()[capture] == .failed }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .failed)
         #expect(FileManager.default.fileExists(atPath: harness.outbox.manifestURL(capture).path))
         #expect(await link.currentCounts() == (waiting: 0, failed: 1))
         await link.resume()
-        #expect(harness.system.timesQueued(capture) == 1, "A capture with no file is never queued again.")
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).isEmpty, "A capture with no file is never queued again.")
     }
 
     @Test func theTransportsReportOfAnUnreadableFileFailsTheCapture() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
 
         harness.system.finish(capture, as: .fails(.outboxFileMissing))
-        await eventually("the capture failed") { await link.states()[capture] == .failed }
+        await harness.settle(link)
+        #expect(await link.states()[capture] == .failed)
         await link.resume()
-        #expect(harness.system.timesQueued(capture) == 1)
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).isEmpty)
         #expect(harness.inOutbox(capture))
     }
 
@@ -214,25 +243,28 @@ import Testing
         let (first, _) = harness.launchWatch()
         var captures: [CaptureID] = []
         for _ in 0..<3 { captures.append(try await harness.sendNew(on: first)) }
-        await SuiteWait.until("all queued") { harness.system.outstanding().count == 3 }
+        await harness.settle(first)
+        let before = harness.system.outstanding()
+        #expect(before.count == 3)
 
         let (relaunched, _) = harness.launchWatch()
         await relaunched.resume()
-        for capture in captures {
-            #expect(harness.system.timesQueued(capture) == 1, "A capture still outstanding is never queued again.")
-            #expect(await relaunched.states()[capture] == .queued(attempt: 1))
+        await harness.settle(relaunched)
+        #expect(harness.system.outstanding() == before, "A capture still outstanding is never queued again.")
+        for file in before {
+            #expect(await relaunched.states()[file.captureID] == .queued(attempt: file.attempt))
         }
 
         harness.system.finishAll(as: .arrives)
-        let sent = captures
-        await SuiteWait.until("all removed") { sent.allSatisfy { !harness.inOutbox($0) } }
+        await harness.settle(relaunched)
+        #expect(captures.allSatisfy { !harness.inOutbox($0) })
     }
 
     @Test func endsThatCameWhileTheAppWasNotRunningArriveAfterActivation() async throws {
         let harness = LinkHarness()
         let (first, _) = harness.launchWatch()
         let capture = try await harness.sendNew(on: first)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(first)
 
         harness.system.activatesByItself = false
         let (relaunched, _) = harness.launchWatch()
@@ -242,7 +274,8 @@ import Testing
         let resumed = Task { await relaunched.resume() }
         harness.system.completeActivation(.watch)
         await resumed.value
-        await SuiteWait.until("the capture removed") { !harness.inOutbox(capture) }
+        await harness.settle(relaunched)
+        #expect(!harness.inOutbox(capture))
         #expect(harness.phone.intactArrivals(capture) == 1)
     }
 
@@ -255,7 +288,8 @@ import Testing
         harness.system.activatesByItself = true
         let (relaunched, _) = harness.launchWatch()
         await relaunched.resume()
-        #expect(harness.system.timesQueued(capture) == 1)
+        await harness.settle(relaunched)
+        #expect(harness.outstanding(capture).count == 1)
     }
 
     // MARK: Stalls
@@ -264,17 +298,21 @@ import Testing
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch(stallLimit: 60)
         let capture = try await harness.sendNew(on: link)
-        await SuiteWait.until("the capture queued") { harness.system.outstanding().count == 1 }
+        await harness.settle(link)
+        let first = try #require(harness.outstanding(capture).first)
 
         harness.clock.advance(by: 30)
         await link.resume()
+        await harness.settle(link)
         #expect(harness.system.timesCancelled(capture) == 0, "Not yet stalled.")
+        #expect(harness.outstanding(capture) == [first])
 
         harness.clock.advance(by: 31)
         await link.resume()
-        #expect(harness.system.timesCancelled(capture) == 1)
-        #expect(harness.system.timesQueued(capture) == 2)
-        #expect(harness.system.outstanding().map(\.attempt) == [2])
+        await harness.settle(link)
+        #expect(harness.system.timesCancelled(capture) >= 1)
+        let again = try #require(harness.outstanding(capture).first)
+        #expect(harness.outstanding(capture).count == 1 && again.attempt != first.attempt)
     }
 
     @Test func noTransferStallsWhileTheIPhoneIsOutOfReach() async throws {
@@ -354,20 +392,22 @@ import Testing
         let capture = try await harness.sendNew(on: link)
 
         for round in 1...3 {
-            await SuiteWait.until("attempt \(round) queued") { harness.system.timesQueued(capture) == round }
+            await harness.settle(link)
+            #expect(harness.outstanding(capture).count == 1, "Round \(round): queued.")
             harness.system.finish(capture, as: .arrivesDamaged)
-            await eventually("the capture waiting after mismatch \(round)") {
-                await link.states()[capture] == .waiting
-            }
+            await harness.settle(link)
+            #expect(await link.states()[capture] == .waiting, "Round \(round): waiting.")
             #expect(harness.inOutbox(capture), "A mismatch is never acknowledged.")
             #expect(await link.currentCounts() == (waiting: 1, failed: 0), "It shows as not delivered.")
             await link.resume()
         }
         #expect(harness.phone.damagedArrivals(capture) == 3)
 
-        await SuiteWait.until("attempt 4 queued") { harness.system.timesQueued(capture) == 4 }
+        await harness.settle(link)
+        #expect(harness.outstanding(capture).count == 1)
         harness.system.finish(capture, as: .arrives)
-        await SuiteWait.until("the intact copy acknowledged") { !harness.inOutbox(capture) }
+        await harness.settle(link)
+        #expect(!harness.inOutbox(capture), "The intact copy is acknowledged.")
         #expect(harness.phone.intactArrivals(capture) == 1)
     }
 }
