@@ -70,8 +70,22 @@ public actor StandardProcessingQueue: ProcessingQueue {
             }
             log.log(.notice, "job_found_running", .job(job.id), .number("deaths", next.deaths))
         }
-        for job in try await notes.jobs(for: nil) where job.kind == .transcribe && job.state == .done {
-            try await writeCleanJobIfMissing(for: job.segmentID)
+        for job in try await notes.jobs(for: nil) where job.state == .done {
+            // A death between a job's last save and its segment's state leaves the segment in
+            // a step that nothing runs any more: it moves on as the step's end would have.
+            guard let read = try await notes.segment(job.segmentID), case .voice(let state) = read.state else {
+                continue
+            }
+            switch (job.kind, state) {
+            case (.transcribe, .transcribing):
+                let hasWords = !CaptureText.isEmpty(read.rawTranscript ?? "")
+                await moveSegment(job.segmentID, .transcribed(hasWords: hasWords))
+            case (.clean, .cleaning):
+                await moveSegment(job.segmentID, read.textOrigin == .cleaned ? .cleaned : .keepRawTranscript)
+            default:
+                break
+            }
+            if job.kind == .transcribe { try await writeCleanJobIfMissing(for: job.segmentID) }
         }
         watchAvailability()
     }
