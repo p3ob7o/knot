@@ -414,7 +414,7 @@ A manifest is larger than its bound.
 
 ### `checksum_mismatch`
 
-A file from the watch does not match its manifest's checksum. The watch sends it again.
+A file does not match the checksum its manifest or its record names: a file from the watch, which the watch sends again; a file placed in, or read from, the asset store; or a file the asset fetcher brought from another device, which is fetched again.
 
 - Class: failure
 - Next: wait_and_retry
@@ -444,10 +444,10 @@ The other side of the watch link is missing: the devices are not paired, or the 
 
 ### `counterpart_full`
 
-The receiving side of the watch link has no room. The capture waits in the outbox.
+The receiving side of the watch link, the iPhone, has no room. The capture waits in the outbox.
 
 - Class: deferral
-- Next: free_space
+- Next: free_iphone_space
 - Retry: safe, as often as needed
 - Written: content_kept
 - Exit code: 1

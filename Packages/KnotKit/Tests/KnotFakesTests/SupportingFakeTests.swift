@@ -37,8 +37,9 @@ import Testing
         let here = try identity.installID()
         identity.moveToAnotherDevice()
         #expect(try identity.installID() != here)
-        identity.failNextRead(with: .writeFailed)
-        #expect(throws: KnotError.writeFailed) { try identity.installID() }
+        identity.failNextRead(with: .deviceLocked)
+        #expect(throws: KnotError.deviceLocked) { try identity.installID() }
+        #expect(try identity.installID() != here, "The ID stands after a read that failed.")
     }
 
     @Test(.tags(.contract)) func theProcessNotifierContract() async throws {

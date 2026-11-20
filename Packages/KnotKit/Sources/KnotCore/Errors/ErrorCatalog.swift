@@ -177,7 +177,9 @@ extension KnotError {
     public static let manifestTooLarge = KnotError(
         code: "manifest_too_large", next: .reportProblem, retry: .notSafe, written: .contentKept,
         exitStatus: .unexpected)
-    /// A file from the watch does not match its manifest's checksum. The watch sends it again.
+    /// A file does not match the checksum its manifest or its record names: a file from the
+    /// watch, which the watch sends again; a file placed in, or read from, the asset store; or a
+    /// file the asset fetcher brought from another device, which is fetched again.
     public static let checksumMismatch = KnotError(
         code: "checksum_mismatch", next: .waitAndRetry, retry: .safe, written: .contentKept, exitStatus: .unexpected)
     /// The watch link's session is not activated yet, or the iPhone is switching watches. The
@@ -192,7 +194,8 @@ extension KnotError {
         written: .contentKept, exitStatus: .unexpected)
     /// The receiving side of the watch link has no room. The capture waits in the outbox.
     public static let counterpartFull = KnotError(
-        code: "counterpart_full", errorClass: .deferral, next: .freeSpace, retry: .safe, written: .contentKept,
+        code: "counterpart_full", errorClass: .deferral, next: .freeIPhoneSpace, retry: .safe,
+        written: .contentKept,
         exitStatus: .unexpected)
     /// A transfer over the watch link did not complete. It is an attempt, and the capture is
     /// queued again.

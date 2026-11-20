@@ -5,6 +5,8 @@ import Foundation
 // fail throws `port_unavailable`; a read answers what a port that is not there would.
 
 /// An `InkRecogniser` that is not there yet: no language is read, and a recognition fails.
+/// Its answer, an unsupported language, is a final verdict by the port, so it is harmless only
+/// while ink is gated off (docs/architecture.md §18): no drawing reaches it before WP-18.
 public struct UnavailableInkRecogniser: InkRecogniser {
     public init() {}
 

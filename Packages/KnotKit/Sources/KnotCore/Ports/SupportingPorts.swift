@@ -55,7 +55,8 @@ public protocol FreeSpaceProbe: Sendable {
 /// backup, the two no longer match. KnotStore implements it.
 public protocol InstallIdentity: Sendable {
     /// This install's ID, made on the first call and the same on every later one. A Keychain
-    /// that cannot be read fails with `write_failed`.
+    /// that cannot be read while the device is locked fails with `device_locked`, a deferral;
+    /// any other failure to read it with `unexpected`.
     func installID() throws(KnotError) -> UUID
 }
 

@@ -78,7 +78,8 @@ public protocol SyncEngine: Sendable {
 
     /// Fetches, then sends. It throws a sync condition, `sync_transient` to
     /// `sync_final`, with the time to retry in `context.retryAt` when the server gave one. While
-    /// sync is off or paused it does nothing.
+    /// sync is off or paused it does nothing. The unavailable port of `AppEnvironment.unavailable`,
+    /// which stands in where no engine exists, answers `port_unavailable` instead.
     ///
     /// A send that finds the zone missing throws `sync_zone_missing`, and the status becomes the
     /// zone-removed pause, `paused(.zoneRemoved(loss))`: `.purged` when the user deleted the zone
