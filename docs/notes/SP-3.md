@@ -74,9 +74,9 @@ Not run: it needs the owner's word and an App Store Connect key. What the owner 
 - An API key with the right to manage profiles, as a file path through the secret prompt, with its key ID and issuer ID, for one upload, revoked after it.
 - His word for the upload.
 
-The key lets Xcode make the explicit App IDs `com.p3ob7o.knot.dev` and `com.p3ob7o.knot.dev.cli` with App Groups, and their distribution profiles. On this Mac, development builds got only the wildcard team profile, which authorises no group, whatever the project asked.
+The key lets Xcode make the explicit App ID `com.p3ob7o.knot.dev` with App Groups, and its distribution profile. On this Mac, development builds got only the wildcard team profile, which authorises no group, whatever the project asked.
 
-Before the upload, the report half drops the two counter-examples, `knot-dev-noplist` and `knot-dev-inherit`, from the app it uploads: each traps at launch by design. Then, from the worktree, with `KNOT_AGENT=1` and `KNOT_LOCAL_CONFIG` exported, and the key's ID and the issuer's ID each in a file of its own beside the key:
+Before the upload, the report half drops three pieces from the app it uploads: the two counter-examples, `knot-dev-noplist` and `knot-dev-inherit`, which trap at launch by design, and the helper bundle. The helper and the bare tool carry one identifier, `com.p3ob7o.knot.dev.cli`, and App Store Connect may refuse two pieces with the same one. Giving the helper an identifier of its own would put one more name under the owner's account, which he was not asked for. So the helper's route stays untested, and the upload checks the bare tool only. Then, from the worktree, with `KNOT_AGENT=1` and `KNOT_LOCAL_CONFIG` exported, and the key's ID and the issuer's ID each in a file of its own beside the key:
 
 ```sh
 scripts/bootstrap.sh
@@ -130,7 +130,6 @@ At G3 the owner installs the build from TestFlight and opens Knot Dev once. Its 
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" add synthetic
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" probe --team-group
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" add synthetic --team-group
-"/Applications/Knot Dev.app/Contents/Helpers/knot-dev.app/Contents/MacOS/knot-dev" probe
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" cleanup
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" cleanup --team-group
 ```
@@ -161,7 +160,8 @@ docs/architecture.md is the orchestrator's file, so this note does not edit it. 
 
 ## Not verified yet
 
-- The distribution-signed check: both forms of the group in a TestFlight build, and whether App Store Connect accepts the upload with the tool and the helper.
+- The distribution-signed check: both forms of the group in a TestFlight build, and whether App Store Connect accepts the upload with the bare tool in it.
+- The helper bundle with a distribution profile: it is dropped from the upload, because it shares the tool's identifier, and a new identifier for it is the owner's to give.
 - A profile that authorises the `group.` group in a development build, which needs an explicit App ID.
 - The in-app route to PATH through an open panel, which needs a window and the owner.
 - A store in the group container under the app's own `KnotStore/` layout and `fullfsync`, with WP-10's real store; the spike used a synthetic store with the same settings.
