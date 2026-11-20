@@ -382,24 +382,22 @@ knot_swift_test_limited() {
     return "$status"
 }
 
-# Prints the fakes that a Mach-O file holds, one a line, and returns 0 when it holds any.
-# The fakes are listed in <list>, one qualified name a line, as `scripts/lib/knot_tool.py
-# fake-types` prints them: each top-level type declared under an `#if` that names
-# KNOT_FAKES, in any module, such as KnotLink.FakeLinkSystem. The file's symbols and strings
-# are demangled before they are matched, because Swift abbreviates repeated words in a
-# mangled name, and a name matches only whole, so KnotLink.FakeLinkSystem does not match
-# KnotLink.FakeLinkSystems. The KnotFakes module counts too, whatever it declares: its
-# mangled name in a symbol, or its name in a string, as the scan has looked for it since
-# WP-01. A symbol's debug-map path, such as Sources/KnotFakes/, is neither.
-#   knot_fakes_in <Mach-O file> <list>
+# Prints the fakes that a Mach-O file holds, one a line, and returns 0 when it holds any: the
+# KnotFakes module, by its mangled name in a symbol or its name in a string, as the scan has
+# looked for it since WP-01, and any type of one of this project's modules whose name begins
+# with Fake, such as KnotLink.FakeLinkSystem, which is how a fake outside KnotFakes is named
+# (docs/architecture.md §17). The types are matched in the demangled symbols and strings,
+# because Swift abbreviates repeated words in a mangled name (FakeLinkSystem in KnotLink is
+# 04FakeB6System). A symbol's debug-map path, such as Sources/KnotFakes/, is none of these.
+# An internal type that an optimised, stripped build keeps no symbol for can still go
+# unseen here; the lint is what catches a fake whose guard was lost (fake-unguarded).
+#   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
-    local file=$1 list=$2 symbols strings found
+    local file=$1 symbols strings found
     symbols="$(nm -a "$file" 2>/dev/null || true)"
     strings="$(strings -a "$file" 2>/dev/null || true)"
     found="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle |
-        awk 'NR == FNR { if ($0 != "") { name = $0; gsub(/[.]/, "[.]", name); names[$0] = name "([^A-Za-z0-9_]|$)" } next }
-            { for (n in names) if ($0 ~ names[n]) seen[n] = 1 }
-            END { for (n in seen) print n }' "$list" - | sort)"
+        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.Fake[A-Za-z0-9_]*' | sort -u || true)"
     if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
         found="${found:+$found$'\n'}the module KnotFakes"
     fi

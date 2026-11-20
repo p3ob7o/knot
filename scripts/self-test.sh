@@ -453,22 +453,18 @@ if [[ $swift_hang_status == 124 && $swift_message == *"The step package-test did
 else
     fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
 fi
-# The release scan finds a fake that lives outside KnotFakes: knot_tool.py fake-types lists
-# every top-level type declared under an `#if` naming KNOT_FAKES, in any module, and
-# knot_fakes_in finds it in a binary. A made-up KnotLink holds a guarded FakeLinkSystem and a
-# nested type and an #else branch that are not fakes; it is compiled once with KNOT_FAKES and
-# once without. The old scan, which looked for the KnotFakes module only, missed it.
+# The release scan finds a fake that lives outside KnotFakes, by its name: a type of a Knot
+# module named Fake…, matched demangled, since Swift abbreviates it in the mangled name. A
+# made-up KnotLink holds FakeLinkSystem under the guard; it is compiled once with
+# KNOT_FAKES and once without. The old scan, for the KnotFakes module only, missed it.
 fk="$scratch/fakes"
 mkdir -p "$fk/Sources/KnotLink"
 cat >"$fk/Sources/KnotLink/Link.swift" <<'SWIFT'
 #if DEBUG || KNOT_FAKES
     public struct FakeLinkSystem {
-        public struct State { public var sent = 0 }
         public init() {}
         public func send() -> Int { 42 }
     }
-#else
-    public struct ReleaseOnlyLink {}
 #endif
 
 public func linkValue() -> Int {
@@ -480,20 +476,18 @@ public func linkValue() -> Int {
 }
 SWIFT
 knot_select_xcode
-python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fake-types --sources "$fk/Sources" >"$fk/list.txt"
 built=0
 xcrun swiftc -emit-library -O -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/with-fakes.dylib" >/dev/null 2>&1 && built=$((built + 1))
 xcrun swiftc -emit-library -O -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/release.dylib" >/dev/null 2>&1 && built=$((built + 1))
-with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" "$fk/list.txt" || true)"
-release="$(knot_fakes_in "$fk/release.dylib" "$fk/list.txt" || true)"
+with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" || true)"
+release="$(knot_fakes_in "$fk/release.dylib" || true)"
 old_scan="$({ nm -a "$fk/with-fakes.dylib"; strings -a "$fk/with-fakes.dylib"; } 2>/dev/null | grep -c -e KnotFakes || true)"
-if [[ $built == 2 && "$(cat "$fk/list.txt")" == "KnotLink.FakeLinkSystem" &&
-    $with_fakes == "KnotLink.FakeLinkSystem" && -z $release && $old_scan == 0 ]]; then
-    pass "the release scan finds a fake in another module, by its guard, and not in a build without it"
+if [[ $built == 2 && $with_fakes == "KnotLink.FakeLinkSystem" && -z $release && $old_scan == 0 ]]; then
+    pass "the release scan finds a fake in another module by its name, and nothing in a build without it"
 else
-    fail "the scan for fakes outside KnotFakes: built $built, list $(tr '\n' ';' <"$fk/list.txt"), with fakes '$with_fakes', release '$release', old scan $old_scan"
+    fail "the scan for fakes outside KnotFakes: built $built, with fakes '$with_fakes', release '$release', old scan $old_scan"
 fi
 
 # The fixtures step speaks this tree's audio when it lacks it (knot_tool.py fixtures-audio

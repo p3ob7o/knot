@@ -512,21 +512,17 @@ step_packaging() {
     check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets || failed=1
 
     # Scans every Mach-O file of an app bundle, its main executable included, for fakes:
-    # the KnotFakes module, and every type that any module declares under an `#if` naming
-    # KNOT_FAKES, such as a fake transport inside KnotLink (knot_fakes_in, with the list
-    # that `knot_tool.py fake-types` derives from the sources). It fails when it scanned
-    # nothing, so it cannot pass by finding no file. `want` is "none" for a release build
-    # and "some" for the debug control.
-    local fakes="$KNOT_LOGS/verify-fake-types.txt"
-    (cd "$KNOT_ROOT" && tool fake-types) >"$fakes"
-    echo "      $(wc -l <"$fakes" | tr -d ' ') fake types from the sources, in $(cut -d. -f1 "$fakes" | sort -u | tr '\n' ' ')"
+    # the KnotFakes module, and any type of a Knot module named Fake…, such as a fake
+    # transport inside KnotLink (knot_fakes_in). It fails when it scanned nothing, so it
+    # cannot pass by finding no file. `want` is "none" for a release build and "some" for
+    # the debug control.
     scan_for_fakes() {
         local app=$1 want=$2 f main scanned=0 main_seen=0 found=0 held
         main="$(main_executable "$app")"
         while IFS= read -r -d '' f; do
             scanned=$((scanned + 1))
             [[ $f == "$main" ]] && main_seen=1
-            if held="$(knot_fakes_in "$f" "$fakes")"; then
+            if held="$(knot_fakes_in "$f")"; then
                 echo "      fakes in $f: $(tr '\n' ' ' <<<"$held" | cut -c1-200)"
                 found=$((found + 1))
             fi
