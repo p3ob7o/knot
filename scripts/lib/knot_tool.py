@@ -873,6 +873,66 @@ def option(args, name, default=None):
     return default
 
 
+# ---------------------------------------------------------------- the fakes in a release build
+
+FAKE_GUARD = re.compile(r"^\s*#if\b(.*)$")
+TOP_TYPE = re.compile(
+    r"^(?:@[A-Za-z_][\w.]*(?:\([^)]*\))?\s+)*"
+    r"(?:(?:public|package|internal|fileprivate|private|open|final|indirect|nonisolated)\s+)*"
+    r"(?:class|struct|enum|actor|protocol)\s+([A-Za-z_]\w*)")
+
+
+def guarded_types(text):
+    """The top-level types that a file declares inside an `#if` whose condition names
+    KNOT_FAKES, such as `#if DEBUG || KNOT_FAKES`: the fakes, wherever they live. An `#else` or
+    `#elseif` branch of such a block is not a fake."""
+    found, frames, depth = [], [], 0
+    for line in text.splitlines():
+        directive = line.strip()
+        if directive.startswith("#if"):
+            condition = FAKE_GUARD.match(line).group(1)
+            frames.append("KNOT_FAKES" in condition and "!" not in condition)
+            continue
+        if directive.startswith("#elseif") or directive.startswith("#else"):
+            if frames:
+                frames[-1] = False
+            continue
+        if directive.startswith("#endif"):
+            if frames:
+                frames.pop()
+            continue
+        code = re.sub(r'"(?:\\.|[^"\\])*"', '""', line.split("//", 1)[0])
+        if depth == 0 and any(frames):
+            match = TOP_TYPE.match(code.strip())
+            if match:
+                found.append(match.group(1))
+        depth = max(0, depth + code.count("{") - code.count("}"))
+    return found
+
+
+def cmd_fake_types(sources):
+    """Prints each fake type of the package's modules by its qualified name, such as
+    KnotLink.FakeLinkSystem: what the packaging step looks for, demangled, in a release
+    binary. A nested type's name starts with its parent's, so the parent covers it."""
+    sources = sources or os.path.join("Packages", "KnotKit", "Sources")
+    seen = set()
+    for module in sorted(os.listdir(sources)):
+        folder = os.path.join(sources, module)
+        if not os.path.isdir(folder):
+            continue
+        for base, _, files in sorted(os.walk(folder)):
+            for name in sorted(files):
+                if not name.endswith(".swift"):
+                    continue
+                with open(os.path.join(base, name), encoding="utf-8") as f:
+                    for type_name in guarded_types(f.read()):
+                        qualified = f"{module}.{type_name}"
+                        if qualified not in seen:
+                            seen.add(qualified)
+                            print(qualified)
+    return 0
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -918,6 +978,8 @@ def main(argv):
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
         return cmd_links()
+    if command == "fake-types":
+        return cmd_fake_types(option(args, "--sources"))
     if command == "status":
         return cmd_status("--write" in args)
     print(__doc__)

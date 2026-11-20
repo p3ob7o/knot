@@ -86,7 +86,7 @@ Signing has two configurations, chosen by `KNOT_SIGNING`:
 
 ## The fakes in an optimised build
 
-KnotFakes, which holds the fakes and the preview environment, and KnotUIPreviews compile only under `DEBUG` or `KNOT_FAKES`: every file of both sits inside `#if DEBUG || KNOT_FAKES`. Xcode links a package product into every configuration of an app, so without that guard a release app would carry the fakes. `scripts/verify.sh --only packaging` fails when a Release binary holds a KnotFakes symbol.
+KnotFakes, which holds the fakes and the preview environment, and KnotUIPreviews compile only under `DEBUG` or `KNOT_FAKES`: every file of both sits inside `#if DEBUG || KNOT_FAKES`. Xcode links a package product into every configuration of an app, so without that guard a release app would carry the fakes. A fake can also live in another module, such as a fake transport inside KnotLink, under the same guard. `scripts/verify.sh --only packaging` fails when a Release binary holds the KnotFakes module or any fake type: `scripts/lib/knot_tool.py fake-types` lists every top-level type declared under an `#if` that names `KNOT_FAKES`, in any module of the package, and the step looks for each, demangled, in every Mach-O file of the Release apps. A new fake needs no list: its guard puts it in. A guarded extension's members, which are not a type, are not in the list.
 
 An optimised build that needs the fakes, such as `scripts/verify.sh --perf` or an optimised soak child, opts in by defining `KNOT_FAKES`:
 

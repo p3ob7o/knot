@@ -463,6 +463,49 @@ else
     fail "the package tests' limit, ${KNOT_SWIFT_TEST_LIMIT}s, does not outlast the longest run of waits in one test: ${longest:-not counted}"
 fi
 
+# The release scan finds a fake that lives outside KnotFakes: knot_tool.py fake-types lists
+# every top-level type declared under an `#if` naming KNOT_FAKES, in any module, and
+# knot_fakes_in finds it in a binary. A made-up KnotLink holds a guarded FakeLinkSystem and a
+# nested type and an #else branch that are not fakes; it is compiled once with KNOT_FAKES and
+# once without. The old scan, which looked for the KnotFakes module only, missed it.
+fk="$scratch/fakes"
+mkdir -p "$fk/Sources/KnotLink"
+cat >"$fk/Sources/KnotLink/Link.swift" <<'SWIFT'
+#if DEBUG || KNOT_FAKES
+    public struct FakeLinkSystem {
+        public struct State { public var sent = 0 }
+        public init() {}
+        public func send() -> Int { 42 }
+    }
+#else
+    public struct ReleaseOnlyLink {}
+#endif
+
+public func linkValue() -> Int {
+    #if DEBUG || KNOT_FAKES
+        return FakeLinkSystem().send()
+    #else
+        return 0
+    #endif
+}
+SWIFT
+knot_select_xcode
+python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fake-types --sources "$fk/Sources" >"$fk/list.txt"
+built=0
+xcrun swiftc -emit-library -O -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
+    -o "$fk/with-fakes.dylib" >/dev/null 2>&1 && built=$((built + 1))
+xcrun swiftc -emit-library -O -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
+    -o "$fk/release.dylib" >/dev/null 2>&1 && built=$((built + 1))
+with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" "$fk/list.txt" || true)"
+release="$(knot_fakes_in "$fk/release.dylib" "$fk/list.txt" || true)"
+old_scan="$({ nm -a "$fk/with-fakes.dylib"; strings -a "$fk/with-fakes.dylib"; } 2>/dev/null | grep -c -e KnotFakes || true)"
+if [[ $built == 2 && "$(cat "$fk/list.txt")" == "KnotLink.FakeLinkSystem" &&
+    $with_fakes == "KnotLink.FakeLinkSystem" && -z $release && $old_scan == 0 ]]; then
+    pass "the release scan finds a fake in another module, by its guard, and not in a build without it"
+else
+    fail "the scan for fakes outside KnotFakes: built $built, list $(tr '\n' ';' <"$fk/list.txt"), with fakes '$with_fakes', release '$release', old scan $old_scan"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
