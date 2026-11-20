@@ -444,19 +444,22 @@ knot_sim_call() {
 # Starts an app that Knot built and waits up to <seconds> for its first window, which the
 # probe finds: the probe is called with the app's process ID appended, and prints the
 # windows it sees, or nothing. Then it ends the app and everything the app started. What the
-# app writes to standard error goes to the step's log. Prints "windows: …" and returns 0
+# app writes to standard error goes to a file that is printed to standard error when the start
+# ends, so that a process the app starts that leaves its family holds no pipe of the caller's
+# open. Prints "windows: …" and returns 0
 # when a window came. Fails when the app exited first; when the probe itself failed or did
 # not answer, saying so; and when no window came in time although the probe ran, which on
 # this Mac most likely means a system dialog holds the start.
 #   knot_start_app <seconds> <app executable> <probe…>
 knot_start_app() {
-    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note="" probe_limit
+    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors app_errors pid probe_status probe_note="" probe_limit
     shift 2
     out="$(mktemp)"
     errors="$(mktemp)"
-    # The app's standard error is the step's. It is started directly and waited for: a
-    # version that ran it in a disowned subshell hung the self-test on a hosted runner.
-    "$app" >/dev/null &
+    app_errors="$(mktemp)"
+    # The app is started directly and waited for: a version that ran it in a disowned
+    # subshell hung the self-test on a hosted runner.
+    "$app" >/dev/null 2>"$app_errors" &
     pid=$!
     deadline=$(($(knot_now) + seconds))
     while (($(knot_now) < deadline)); do
@@ -488,7 +491,8 @@ knot_start_app() {
         knot_end_process "$pid"
         wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$out" "$errors"
+    cat "$app_errors" >&2
+    rm -f "$out" "$errors" "$app_errors"
     if [[ -n $found ]]; then
         echo "windows: $found"
         return 0

@@ -442,9 +442,10 @@ pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 # The app's start says why it failed: a probe that cannot run is no system dialog, and what
 # the app writes to standard error reaches the step's log.
 printf '#!/bin/sh\necho "the probe cannot run" >&2\nexit 1\n' >"$lim/broken-probe"
-printf '#!/bin/sh\necho "the app says something" >&2\nsleep 30\n' >"$lim/talks"
-# A window comes after the app has started, so this probe sees it after half a second.
-printf '#!/bin/sh\nsleep 0.5\necho "$1 layer 0 320x240"\n' >"$lim/a-later-window"
+printf '#!/bin/sh\necho "the app says something" >&2\ntouch "%s/talked"\nsleep 30\n' "$lim" >"$lim/talks"
+# The window comes once the app has written its line: the probe waits for the app's sign,
+# so the case cannot race.
+printf '#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do\n    [ -e "%s/talked" ] && break\n    sleep 0.25\ndone\necho "$1 layer 0 320x240"\n' "$lim" >"$lim/a-later-window"
 chmod +x "$lim/broken-probe" "$lim/talks" "$lim/a-later-window"
 timed app_probe knot_start_app 2 "$lim/hangs" "$lim/broken-probe"
 timed app_talks knot_start_app 30 "$lim/talks" "$lim/a-later-window"
@@ -457,6 +458,23 @@ else
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 pkill -KILL -f "$lim/talks" 2>/dev/null || true
+
+# The app's standard error reaches the caller through a file, printed after the start: a
+# process the app starts that leaves its family keeps the app's standard error, and must not
+# hold the caller's pipe. Here it holds it for 20 s; the start, piped, ends in a few.
+# The app's child has left once the app touches its sign; the probe waits for the sign.
+printf '#!/bin/sh\n( sleep 20 >&2 & )\ntouch "%s/left"\nsleep 30\n' "$lim" >"$lim/leaves"
+printf '#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do\n    [ -e "%s/left" ] && break\n    sleep 0.25\ndone\necho "$1 layer 0 320x240"\n' "$lim" >"$lim/after-it-left"
+chmod +x "$lim/leaves" "$lim/after-it-left"
+piped_started=$(knot_now)
+{ knot_start_app 30 "$lim/leaves" "$lim/after-it-left" 2>&1 | cat >/dev/null; } || true
+piped_seconds=$(($(knot_now) - piped_started))
+if ((piped_seconds < 8)); then
+    pass "the app's standard error reaches the caller through a file, so a child that leaves holds no pipe"
+else
+    fail "the app's start, piped, waited ${piped_seconds}s for a child the app left behind"
+fi
+pkill -KILL -f "$lim/leaves" 2>/dev/null || true
 
 # The app's start keeps to its own limit, whatever the probe does: a probe that never
 # answers is cut at the time left, not after its own 15 seconds.
