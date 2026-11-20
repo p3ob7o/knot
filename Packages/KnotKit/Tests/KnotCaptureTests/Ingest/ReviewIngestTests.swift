@@ -256,4 +256,25 @@ import Testing
         #expect(sa.noteID == sb.noteID)
         #expect(r.inboxFiles().isEmpty)
     }
+
+    /// Finding 20, the review's R3. A recording whose conversion failed keeps its working file
+    /// as the recording; the next launch's recovery finds it among the orphans, converts it
+    /// again and stores it, and it goes on to transcription.
+    @Test func failedConversionIsTriedAgainAtTheNextLaunch() async throws {
+        let r = Rig()
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .failed(KnotError.conversionFailed.code))
+
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[begun.captureID] == .ended(.stored))
+        #expect(try await next.notes.capture(begun.captureID)?.outcome == .stored)
+        #expect(try await next.notes.jobs(for: SegmentID(begun.captureID)).map(\.kind) == [.transcribe])
+        #expect(next.layer.entryKind(next.locations.recordingAudio(begun.captureID, format: .caf)) == nil)
+        // Recovery run again finds nothing more to do with it.
+        let again = try await next.recovery.run(ingest: next.ingest)
+        #expect(again[begun.captureID] == nil)
+    }
 }
