@@ -98,26 +98,50 @@ import Testing
         )
     }
 
+    /// True when the run of `markdown` that holds `needle` is in a code block, as Foundation's
+    /// CommonMark parser reads it.
+    static func isInCode(_ needle: String, of markdown: String) throws -> Bool {
+        let parsed = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full))
+        let run = try #require(parsed.runs.first { String(parsed[$0.range].characters).contains(needle) })
+        return run.presentationIntent?.components.contains {
+            if case .codeBlock = $0.kind { true } else { false }
+        } ?? false
+    }
+
+    /// Findings 9, 13 and 21: every case so far of a fence a segment's text leaves open, or does
+    /// not. A close is added only when the text after the segment would land in a code block, and
+    /// the close added puts it outside.
     @Test(arguments: [
+        // An open fence at the margin, indented by one to three spaces, with tildes, longer.
         ("```swift\nlet x = 1", "```swift\nlet x = 1\n```"),
+        (" ```\nindented by one", " ```\nindented by one\n ```"),
+        ("  ```\nindented by two", "  ```\nindented by two\n  ```"),
+        ("   ```\nindented by three", "   ```\nindented by three\n   ```"),
+        ("~~~\ntildes", "~~~\ntildes\n~~~"),
         ("~~~~\ncode\n~~~", "~~~~\ncode\n~~~\n~~~~"),
         ("````\ncode\n```", "````\ncode\n```\n````"),
-        ("  ```\nindented by two", "  ```\nindented by two\n  ```"),
-        // Finding 13: a fence in a list item is closed with its opening line's own spaces, so
-        // the close stays in the item; one in a nested list or a quote is left to its container.
-        ("- Step one\n\n  ```\n  let x = 1", "- Step one\n\n  ```\n  let x = 1\n  ```"),
-        ("1. Step one\n\n   ~~~~\n   let x = 1", "1. Step one\n\n   ~~~~\n   let x = 1\n   ~~~~"),
+        // Inside a list item that is open: the item ends at the next block, which closes it.
+        ("- Step one\n\n  ```\n  let x = 1", "- Step one\n\n  ```\n  let x = 1"),
+        ("1. Step one\n\n   ~~~~\n   let x = 1", "1. Step one\n\n   ~~~~\n   let x = 1"),
+        // Inside a list item that has ended, in a nested list, behind a quote's marker.
+        ("- Example\n\n  ~~~\n  one\n\nOutside the list.", "- Example\n\n  ~~~\n  one\n\nOutside the list."),
         ("- Outer\n  - Inner\n\n    ```\n    let x = 1", "- Outer\n  - Inner\n\n    ```\n    let x = 1"),
         ("> ```\n> let x = 1", "> ```\n> let x = 1"),
+        // Two fences in one segment, the second left open.
+        ("```\nfirst\n```\n\n~~~\nsecond", "```\nfirst\n```\n\n~~~\nsecond\n~~~"),
+        // Fences that close, and lines that are not fences.
         ("```\nclosed\n```", "```\nclosed\n```"),
         ("```\nclosed by a longer one\n`````", "```\nclosed by a longer one\n`````"),
         ("    ```\nan indented code block, not a fence", "    ```\nan indented code block, not a fence"),
         ("``` a`b\nnot a fence: a backtick in its info", "``` a`b\nnot a fence: a backtick in its info"),
-        ("```\nfirst\n```\n\n~~~\nsecond", "```\nfirst\n```\n\n~~~\nsecond\n~~~"),
+        // A segment with no fence.
+        ("Just a line.", "Just a line."),
     ])
-    func aFenceLeftOpenIsClosedInTheMarkdown(text: String, expected: String) throws {
+    func aFenceLeftOpenIsClosedOnlyWhenTheRestWouldBeCode(text: String, expected: String) throws {
         let (markdown, plain) = try Self.render(text)
         #expect(markdown.contains("\n\(expected)\n\n*Recording, 0:03: not on this device, not exported.*\n\nAfter.\n"))
+        #expect(try !Self.isInCode("Recording, 0:03", of: markdown))
+        #expect(try !Self.isInCode("After.", of: markdown))
         #expect(plain == "\(text)\n\nAfter.\n")
     }
 
@@ -135,5 +159,44 @@ import Testing
         #expect(NoteMarkdown.render(record(note, [line])).contains("\n\n\(expected)\n\nBody.\n"))
         #expect(
             NoteMarkdown.plainText(record(note, [line])).hasPrefix("\(title.trimmingCharacters(in: .whitespaces))\n\n"))
+    }
+}
+
+/// Finding 22: a title is text, and its heading shows it as written.
+@Suite struct TitleAsTextTests {
+    /// The heading's text, as Foundation's CommonMark parser reads the heading line.
+    static func headingText(of title: String) throws -> (heading: String, plain: String) {
+        let note = try Note(id: fixedID(0x85), createdAt: t0, title: title, titleOrigin: .user)
+        let line = try Build.typed(fixedID(0x86), in: note.id, from: t0, text: "Body.", origin: .cli)
+        let markdown = NoteMarkdown.render(record(note, [line]))
+        let heading = try #require(markdown.split(separator: "\n").first { $0.hasPrefix("# ") })
+        let parsed = try AttributedString(markdown: String(heading), options: .init(interpretedSyntax: .full))
+        return (String(parsed.characters), NoteMarkdown.plainText(record(note, [line])))
+    }
+
+    @Test(arguments: [
+        "How to spell &amp; in HTML",
+        "Entities &copy; &#169; &#xA9; and a lone & sign",
+        "Emphasis *one* **two** _three_ __four__ and a*b*c",
+        "Code `span` and ``double`` ticks",
+        "A [link](https://example.com) and ![an image](x.png) and [ref][1]",
+        "An autolink <https://example.com> and <mail@example.com> and <b>html</b> <!-- c -->",
+        "A back\\slash, \\* and \\\\ two",
+        "~~struck~~ and ~one~",
+        "Issue #",
+        "C# and #hashtag",
+    ])
+    func aTitleReadsBackAsWritten(title: String) throws {
+        let (heading, plain) = try Self.headingText(of: title)
+        #expect(heading == title)
+        #expect(plain.hasPrefix("\(title)\n\n"))
+    }
+
+    /// One title made of every character CommonMark reads as markup in a line of text.
+    @Test func aTitleOfEveryMarkupCharacterReadsBackAsWritten() throws {
+        let title = "\\ ` * _ [ ] ( ) < > & ! ~ # &amp; *a* _b_ `c` [d](e) <f@g.h> <https://i.j> ~~k~~ \\* ###"
+        let (heading, plain) = try Self.headingText(of: title)
+        #expect(heading == title)
+        #expect(plain.hasPrefix("\(title)\n\n"))
     }
 }
