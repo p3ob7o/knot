@@ -125,18 +125,16 @@ runtime_for() {
 runtime_for iOS iphonesimulator
 runtime_for watchOS watchsimulator
 
-# 6. Automation Mode and developer mode, which Mac UI tests need. Enabling them asks for
-#    the owner's password once, so no agent can do it.
-automation_on=0
-developer_on=0
-automationmodetool 2>/dev/null | grep -e "Automation Mode is enabled" >/dev/null && automation_on=1
-DevToolsSecurity -status 2>/dev/null | grep -e "enabled" >/dev/null && developer_on=1
-if ((automation_on && developer_on)); then
-    ok automation "Automation Mode and developer mode are on"
+# 6. Mac UI tests need two settings that only the owner can make, once, with his
+#    password: Automation Mode that turns on without authentication, and developer mode.
+#    Automation Mode itself reads "disabled" between test runs; a run turns it on.
+missing="$(knot_mac_ui_ready "$(automationmodetool 2>&1 || true)" "$(DevToolsSecurity -status 2>&1 || true)" || true)"
+if [[ -z $missing ]]; then
+    ok automation "Mac UI tests can run: Automation Mode needs no authentication, and developer mode is on"
 else
-    message="Automation Mode or developer mode is off. The owner runs, once: sudo automationmodetool enable-automationmode-without-authentication && sudo DevToolsSecurity -enable"
+    message="Mac UI tests cannot run: $(printf '%s' "$missing" | tr '\n' ';' | sed 's/;$//; s/;/; /g')."
     if ((MAC_UI)); then
-        bad "doctor-automation-mode" "$message" "Ask the owner to run the two commands (gate G1)." "safe" "nothing"
+        bad "doctor-automation-mode" "$message" "Ask the owner to run the command named above, once (gate G1)." "safe" "nothing"
     else
         warn automation "$message"
     fi
