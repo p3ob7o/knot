@@ -230,15 +230,21 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         #expect(try await transcriber.transcribe(file: Self.speech, from: .zero, budget: nil).pieces.count == 8)
     }
 
+    /// A run cancelled while it runs yields, and returns long before its scripted wait could
+    /// have ended. The proof is by what happens, not by a bound on the wall clock: the wait is
+    /// ten minutes, so a run that returned at all within half of it was cancelled, however
+    /// loaded the machine (finding 84).
     @Test func aRunCancelledWhileItRunsIsAYield() async {
         let transcriber = Self.scripted()
-        transcriber.setRunDelay(.seconds(30))
+        let wait: Duration = .seconds(600)
+        transcriber.setRunDelay(wait)
         let task = Task { try await transcriber.transcribe(file: Self.speech, from: .zero, budget: nil) }
-        try? await Task.sleep(for: .milliseconds(20))
+        // Cancel once the run has begun, however long the scheduler takes to start it.
+        while transcriber.runCount == 0 { await Task.yield() }
         let started = ContinuousClock.now
         task.cancel()
         await #expect(throws: KnotError.cancelled) { try await task.value }
-        #expect(ContinuousClock.now - started < .seconds(1))
+        #expect(ContinuousClock.now - started < wait / 2, "It returned before the scripted wait could end.")
     }
 
     @Test func liveTextIsVolatileAndThenFinal() async {
