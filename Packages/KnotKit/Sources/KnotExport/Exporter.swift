@@ -48,6 +48,9 @@ public struct LeftOut: Hashable, Sendable {
         /// A file of a kind this build does not know, which a newer Knot made. It stays behind,
         /// and its note's Markdown says so in a line.
         case unknownKind
+        /// A file that is on this device and could not be read, for want of permission or by a
+        /// failure of the drive. It stays behind, and its note's Markdown says so in a line.
+        case unreadable
     }
 
     public var note: NoteID
@@ -74,7 +77,7 @@ public struct LeftOut: Hashable, Sendable {
     /// tells the caller which of the two it was.
     public var isMissing: Bool {
         switch reason {
-        case .notOnThisDevice, .unknownKind: true
+        case .notOnThisDevice, .unknownKind, .unreadable: true
         case .drawingWithoutImage: false
         }
     }
@@ -279,8 +282,8 @@ public struct Exporter: Sendable {
     // MARK: - Writing
 
     /// Writes a segment's recording or drawing, and returns the line its note's Markdown gives
-    /// it. A file that cannot be read, because it went since it was found, counts as not on
-    /// this device.
+    /// it. A file that went since it was found counts as not on this device; one that is there
+    /// and cannot be read counts as unreadable.
     private func exportFile(
         _ assetID: AssetID, of segment: Segment, in note: NoteID, to sink: some ExportSink, report: inout ExportReport
     ) async throws(KnotError) -> SegmentFileLine? {
@@ -295,10 +298,17 @@ public struct Exporter: Sendable {
                 report.written.append(path)
                 return .drawingImage(path)
             }
-            guard let data = try? Data(contentsOf: stored.url, options: .mappedIfSafe) else {
+            let data: Data
+            do {
+                data = try Data(contentsOf: stored.url, options: .mappedIfSafe)
+            } catch {
+                // A file that went since it was found is not on this device; one that is still
+                // there and cannot be read is a failure of its own, and says so.
+                let gone = !FileManager.default.fileExists(atPath: stored.url.path(percentEncoded: false))
+                let reason: LeftOut.Reason = gone ? .notOnThisDevice : .unreadable
                 report.leftOut.append(
-                    LeftOut(note: note, segment: segment.id, asset: assetID, kind: kind, reason: .notOnThisDevice))
-                return Self.notHereLine(kind, segment)
+                    LeftOut(note: note, segment: segment.id, asset: assetID, kind: kind, reason: reason))
+                return gone ? Self.notHereLine(kind, segment) : Self.unreadableLine(kind, segment)
             }
             let path = ExportNames.attachment(assetID, kind: kind)
             try await sink.write(data, at: path)
@@ -311,6 +321,15 @@ public struct Exporter: Sendable {
                 return .drawingData(path)
             }
             return .recording(path, duration: segment.duration)
+        }
+    }
+
+    /// The line of a file that is here and could not be read.
+    private static func unreadableLine(_ kind: AssetKind, _ segment: Segment) -> SegmentFileLine {
+        switch kind {
+        case .audio: .recordingUnreadable(duration: segment.duration)
+        case .ink: .drawingUnreadable
+        case .unknown: .newerFile
         }
     }
 
