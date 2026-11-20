@@ -137,7 +137,8 @@ public enum RecorderContract {
         following.followsCaptureID = followed
         let session = try await recorder.start(following)
         let bytes = subject.read(subject.locations.recordingManifest(following.captureID))
-        let manifest = try CaptureManifest.decode(try #require(bytes, "The manifest is written before the start returns."))
+        let written = try #require(bytes, "The manifest is written before the start returns.")
+        let manifest = try CaptureManifest.decode(written)
         #expect(manifest.captureID == following.captureID && manifest.kind == .voice)
         #expect(manifest.launchID == following.launchID && manifest.origin == following.origin)
         #expect(manifest.placement == following.placement && manifest.shownNoteID == following.shownNote)
