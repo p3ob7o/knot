@@ -210,7 +210,10 @@ public enum ExportNames {
 /// characters of their IDs. Some file systems also take two names that differ only in case or
 /// in Unicode normalisation as one file. The first note keeps its name, and a later one whose
 /// name would be the same file takes its whole ID instead, which no other note has. The
-/// order of the stream decides which is first, so a store gives the same names every time.
+/// order of the stream decides which is first, so the same store gives the same names every
+/// time. Two exports of a store that changed between them may not: a note that gains a
+/// capture moves ahead of the other in the stream, and a new note can take a name first, so
+/// which of the two notes keeps the short name can differ from one export to the next.
 struct ExportNameBook {
     private var taken: Set<String> = []
     let timeZone: TimeZone
