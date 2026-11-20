@@ -87,8 +87,9 @@ public enum SegmentFileLine: Hashable, Sendable {
 /// segment that leaves the note (`ExportedSegments`) is a paragraph of its own: the line of
 /// its recording or drawing when the caller gives one, then its text as it is, since a
 /// segment's text is already lightly styled Markdown (§7). Segments are separated by spacing
-/// alone, as in the note. A code fence that a segment's text leaves open is closed after it, so
-/// that it does not turn the rest of the note into code, and a title's closing `#` characters
+/// alone, as in the note. A code fence that a segment's text leaves open is closed after it when
+/// it would turn the rest of the note into code, as Foundation's CommonMark parser reads it
+/// (`closingOpenFence`), and a title's closing `#` characters
 /// are escaped, so the heading keeps them. Nothing else in a segment's text is closed: an HTML
 /// comment or block it leaves open, such as `<!--` or `<pre>`, still reaches past it.
 public enum NoteMarkdown {
@@ -153,36 +154,61 @@ public enum NoteMarkdown {
         return before + "\\" + String(repeating: "#", count: hashes)
     }
 
-    /// A segment's text with a code fence it opened and never closed closed after it, with the
-    /// fence's own character and length and the opening line's own leading spaces, so that it
-    /// does not turn the rest of the note into code. The spaces keep the close inside a list
-    /// item whose fence they indent: a close at the margin would end the item and open a fence
-    /// at the top level. The fences are those of CommonMark: three or more backticks or tildes,
-    /// indented by at most three spaces, with no backtick after a backtick fence; a fence closes
-    /// with the same character, at least as many, and nothing after it but spaces. A fence
-    /// indented further, as in a nested list, or behind a quote's marker is not read here, and
-    /// its container's end closes it. The plain text is left as it is.
+    /// A segment's text, with a close after it when the block that follows it in the note would
+    /// otherwise land in a code block that the text opened and never closed.
+    ///
+    /// Whether it would is not worked out by hand: CommonMark's lists, quotes and indentation
+    /// decide where a fence ends, and a tracker that does not know them gets it wrong. So the
+    /// text is given to Foundation's CommonMark parser with a probe paragraph after it, at the
+    /// margin and after a blank line, as the next block of the note always is, and a close is
+    /// added only when the parser puts the probe in a code block. The close is the first of the
+    /// candidates, from the text's last fence line back, that the parser then shows putting the
+    /// probe outside: the fence's own characters, with its line's leading spaces and then at the
+    /// margin. A fence that a list item or a quote holds is closed by its container's end, so it
+    /// takes no close. Text with no run of three backticks or tildes holds no fence and is not
+    /// parsed. If no candidate puts the probe outside, the text is left as it is. The plain text
+    /// is left as it is.
     static func closingOpenFence(_ text: String) -> String {
-        var open: (character: Character, length: Int, indent: Int)?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let indent = line.prefix { $0 == " " }.count
-            guard indent <= 3 else { continue }
-            let rest = line.dropFirst(indent)
-            guard let mark = rest.first, mark == "`" || mark == "~" else { continue }
-            let length = rest.prefix { $0 == mark }.count
-            guard length >= 3 else { continue }
-            let after = rest.dropFirst(length)
-            if let fence = open {
-                if mark == fence.character, length >= fence.length, after.allSatisfy({ $0 == " " || $0 == "\t" }) {
-                    open = nil
-                }
-            } else if !(mark == "`" && after.contains("`")) {
-                open = (mark, length, indent)
-            }
+        guard text.contains("```") || text.contains("~~~"), probeLandsInCode(after: text) else { return text }
+        for close in fenceCloses(in: text) where !probeLandsInCode(after: text + "\n" + close) {
+            return text + "\n" + close
         }
-        guard let fence = open else { return text }
-        return text + "\n" + String(repeating: " ", count: fence.indent)
-            + String(repeating: fence.character, count: fence.length)
+        return text
+    }
+
+    /// A paragraph that no note holds, whose place the parser reports.
+    private static let probe = "KnotExportProbe7F3A9C"
+
+    /// True when a paragraph put after `text`, at the margin and after a blank line, lands in a
+    /// code block. A probe the parser does not return is taken as swallowed.
+    static func probeLandsInCode(after text: String) -> Bool {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
+        guard let parsed = try? AttributedString(markdown: text + "\n\n" + probe + "\n", options: options) else {
+            return false
+        }
+        guard let run = parsed.runs.first(where: { String(parsed[$0.range].characters).contains(probe) }) else {
+            return true
+        }
+        return run.presentationIntent?.components.contains {
+            if case .codeBlock = $0.kind { true } else { false }
+        } ?? false
+    }
+
+    /// The closes to try, from the text's last fence line back: for each line whose first
+    /// characters after spaces are three or more backticks or tildes, the same run with the
+    /// line's own leading spaces, then at the margin.
+    private static func fenceCloses(in text: String) -> [String] {
+        var closes: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).reversed() {
+            let spaces = line.prefix { $0 == " " }
+            let rest = line.dropFirst(spaces.count)
+            guard let mark = rest.first, mark == "`" || mark == "~" else { continue }
+            let run = rest.prefix { $0 == mark }
+            guard run.count >= 3 else { continue }
+            for close in [String(spaces) + run, String(run)] where !closes.contains(close) { closes.append(close) }
+        }
+        return closes
     }
 
     /// A segment's text as a paragraph: Windows and old Mac line endings become line feeds,

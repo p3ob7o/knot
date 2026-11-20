@@ -98,26 +98,50 @@ import Testing
         )
     }
 
+    /// True when the run of `markdown` that holds `needle` is in a code block, as Foundation's
+    /// CommonMark parser reads it.
+    static func isInCode(_ needle: String, of markdown: String) throws -> Bool {
+        let parsed = try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .full))
+        let run = try #require(parsed.runs.first { String(parsed[$0.range].characters).contains(needle) })
+        return run.presentationIntent?.components.contains {
+            if case .codeBlock = $0.kind { true } else { false }
+        } ?? false
+    }
+
+    /// Findings 9, 13 and 21: every case so far of a fence a segment's text leaves open, or does
+    /// not. A close is added only when the text after the segment would land in a code block, and
+    /// the close added puts it outside.
     @Test(arguments: [
+        // An open fence at the margin, indented by one to three spaces, with tildes, longer.
         ("```swift\nlet x = 1", "```swift\nlet x = 1\n```"),
+        (" ```\nindented by one", " ```\nindented by one\n ```"),
+        ("  ```\nindented by two", "  ```\nindented by two\n  ```"),
+        ("   ```\nindented by three", "   ```\nindented by three\n   ```"),
+        ("~~~\ntildes", "~~~\ntildes\n~~~"),
         ("~~~~\ncode\n~~~", "~~~~\ncode\n~~~\n~~~~"),
         ("````\ncode\n```", "````\ncode\n```\n````"),
-        ("  ```\nindented by two", "  ```\nindented by two\n  ```"),
-        // Finding 13: a fence in a list item is closed with its opening line's own spaces, so
-        // the close stays in the item; one in a nested list or a quote is left to its container.
-        ("- Step one\n\n  ```\n  let x = 1", "- Step one\n\n  ```\n  let x = 1\n  ```"),
-        ("1. Step one\n\n   ~~~~\n   let x = 1", "1. Step one\n\n   ~~~~\n   let x = 1\n   ~~~~"),
+        // Inside a list item that is open: the item ends at the next block, which closes it.
+        ("- Step one\n\n  ```\n  let x = 1", "- Step one\n\n  ```\n  let x = 1"),
+        ("1. Step one\n\n   ~~~~\n   let x = 1", "1. Step one\n\n   ~~~~\n   let x = 1"),
+        // Inside a list item that has ended, in a nested list, behind a quote's marker.
+        ("- Example\n\n  ~~~\n  one\n\nOutside the list.", "- Example\n\n  ~~~\n  one\n\nOutside the list."),
         ("- Outer\n  - Inner\n\n    ```\n    let x = 1", "- Outer\n  - Inner\n\n    ```\n    let x = 1"),
         ("> ```\n> let x = 1", "> ```\n> let x = 1"),
+        // Two fences in one segment, the second left open.
+        ("```\nfirst\n```\n\n~~~\nsecond", "```\nfirst\n```\n\n~~~\nsecond\n~~~"),
+        // Fences that close, and lines that are not fences.
         ("```\nclosed\n```", "```\nclosed\n```"),
         ("```\nclosed by a longer one\n`````", "```\nclosed by a longer one\n`````"),
         ("    ```\nan indented code block, not a fence", "    ```\nan indented code block, not a fence"),
         ("``` a`b\nnot a fence: a backtick in its info", "``` a`b\nnot a fence: a backtick in its info"),
-        ("```\nfirst\n```\n\n~~~\nsecond", "```\nfirst\n```\n\n~~~\nsecond\n~~~"),
+        // A segment with no fence.
+        ("Just a line.", "Just a line."),
     ])
-    func aFenceLeftOpenIsClosedInTheMarkdown(text: String, expected: String) throws {
+    func aFenceLeftOpenIsClosedOnlyWhenTheRestWouldBeCode(text: String, expected: String) throws {
         let (markdown, plain) = try Self.render(text)
         #expect(markdown.contains("\n\(expected)\n\n*Recording, 0:03: not on this device, not exported.*\n\nAfter.\n"))
+        #expect(try !Self.isInCode("Recording, 0:03", of: markdown))
+        #expect(try !Self.isInCode("After.", of: markdown))
         #expect(plain == "\(text)\n\nAfter.\n")
     }
 
