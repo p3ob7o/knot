@@ -227,4 +227,30 @@ import Testing
         await expectError(.illegalTransition) { try await r.engine.update(a.captureID, with: .text("later")) }
         #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "first")
     }
+
+    /// Finding 17, the second review's R1: rule 15 off the store path keeps one note, with
+    /// the engine's own ingest on and off. A typed capture the store refused, then a recording
+    /// with appending off: the recording goes the same way (finding 4), and is the next
+    /// segment of the typed capture's note.
+    @Test(arguments: [false, true])
+    func ruleFifteenOffTheStorePathKeepsOneNote(engineIngests: Bool) async throws {
+        let rig = Rig(engineIngests: engineIngests)
+        await rig.notes.setWindow(.off)
+        await rig.notes.failNextCaptureWrites(with: .storeBusy)
+        let typed = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "p"))
+        #expect(typed.path == .inbox(KnotError.storeBusy.code))
+        _ = try await rig.engine.update(typed.captureID, with: .text("pay the plumber"))
+        rig.clock.advance(by: 3)
+        let recording = try await rig.beginRecording()
+        #expect(recording.path == .inbox(KnotError.storeBusy.code))
+        _ = try await rig.engine.end(recording.captureID)
+        _ = await rig.ingest.ingestAll()
+        #expect(
+            await eventually("both captures to be stored") {
+                let first = try? await rig.notes.capture(typed.captureID)
+                let second = try? await rig.notes.capture(recording.captureID)
+                return first?.outcome == .stored && second?.outcome == .stored
+            })
+        #expect(try await rig.stream().notes.count == 1)
+    }
 }
