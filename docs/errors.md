@@ -298,6 +298,26 @@ Handwriting recognition failed. The drawing is kept.
 - Written: content_kept
 - Exit code: 1
 
+### `drawing_unreadable`
+
+The drawing's data cannot be decoded. No retry fixes it: the job ends, and the drawing is kept, shown as "Kept, no text".
+
+- Class: final
+- Next: none
+- Retry: not safe
+- Written: content_kept
+- Exit code: 1
+
+### `handwriting_language_unsupported`
+
+The recogniser does not read handwriting in the language set. The job ends, and the drawing is kept, shown as "Kept, no text".
+
+- Class: final
+- Next: none
+- Retry: not safe
+- Written: content_kept
+- Exit code: 1
+
 ## Deferrals: a step that cannot run now
 
 ### `requests_limited`
@@ -336,6 +356,16 @@ The device is locked and the step needs it unlocked.
 
 - Class: deferral
 - Next: unlock_device
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `app_not_in_foreground`
+
+The step runs only while the app is in the foreground, as recognition does (`docs/architecture.md` §10). It is not counted, and it runs when the app comes forward.
+
+- Class: deferral
+- Next: open_knot
 - Retry: safe, as often as needed
 - Written: nothing
 - Exit code: 1
@@ -384,11 +414,61 @@ A manifest is larger than its bound.
 
 ### `checksum_mismatch`
 
-A file from the watch does not match its manifest's checksum. The watch sends it again.
+A file does not match the checksum its manifest or its record names: a file from the watch, which the watch sends again; a file placed in, or read from, the asset store; or a file the asset fetcher brought from another device, which is fetched again.
 
 - Class: failure
 - Next: wait_and_retry
 - Retry: safe, as often as needed
+- Written: content_kept
+- Exit code: 1
+
+### `link_not_ready`
+
+The watch link's session is not activated yet, or the iPhone is switching watches. The capture waits in the outbox.
+
+- Class: deferral
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: content_kept
+- Exit code: 1
+
+### `counterpart_missing`
+
+The other side of the watch link is missing: the devices are not paired, or the other app is not installed. The capture waits in the outbox, shown as waiting.
+
+- Class: deferral
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: content_kept
+- Exit code: 1
+
+### `counterpart_full`
+
+The receiving side of the watch link, the iPhone, has no room. The capture waits in the outbox.
+
+- Class: deferral
+- Next: free_iphone_space
+- Retry: safe, as often as needed
+- Written: content_kept
+- Exit code: 1
+
+### `delivery_failed`
+
+A transfer over the watch link did not complete. It is an attempt, and the capture is queued again.
+
+- Class: failure
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: content_kept
+- Exit code: 1
+
+### `outbox_file_missing`
+
+The outbox file of a capture is missing or cannot be read. The capture fails at once, and its manifest is kept.
+
+- Class: failure
+- Next: report_problem
+- Retry: not safe
 - Written: content_kept
 - Exit code: 1
 
@@ -440,6 +520,78 @@ A restored store waits for consent before it uploads.
 
 - Class: failure
 - Next: answer_upload_question
+- Retry: not safe
+- Written: nothing
+- Exit code: 1
+
+The sync conditions follow: the errors of the engine that SP-4's code half sorted (`docs/notes/SP-4.md`). Only a manual sync throws them. Otherwise they surface as the engine's status. `sync_transient` is a deferral, which carries the time to try again, and `sync_final` is final.
+
+### `sync_transient`
+
+The network, the account or the service is not available for now, or the server limits requests. The engine retries by itself, and `context.retryAt` says when, when the server gave a time.
+
+- Class: deferral
+- Next: wait_and_retry
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `sync_server_record_changed`
+
+The server holds a newer version of a record. It is merged like a fetched record and sent again.
+
+- Class: failure
+- Next: retry
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `sync_zone_missing`
+
+A send found the zone missing: the user deleted it, or it went with a reset of the encrypted data. It leads to the zone-removed pause.
+
+- Class: failure
+- Next: answer_upload_question
+- Retry: not safe
+- Written: nothing
+- Exit code: 1
+
+### `sync_limit_exceeded`
+
+A batch was over the server's limits. The adapter splits it and sends again.
+
+- Class: failure
+- Next: retry
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `sync_quota_exceeded`
+
+The user's iCloud storage is full. Sending stops until the person frees some, and the status says so. A retry after that is safe.
+
+- Class: failure
+- Next: free_icloud_storage
+- Retry: safe, as often as needed
+- Written: nothing
+- Exit code: 1
+
+### `sync_unknown_item`
+
+A record is gone from the server. The rule of a long absence decides what follows (`docs/architecture.md` §11).
+
+- Class: failure
+- Next: none
+- Retry: not safe
+- Written: nothing
+- Exit code: 1
+
+### `sync_final`
+
+Any other error of the engine. No retry fixes it on this device.
+
+- Class: final
+- Next: report_problem
 - Retry: not safe
 - Written: nothing
 - Exit code: 1

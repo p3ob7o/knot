@@ -10,8 +10,8 @@ import Foundation
 /// The store writes a stored recording's transcribe job; the clean job is the queue's to
 /// write. It writes it when the transcription's last run is saved, and `resume()` writes it
 /// at launch for a transcribed recording that lacks one, so that a death between the two
-/// leaves no transcript without its cleanup. Writing it twice changes nothing: the queue
-/// looks for the segment's clean job first.
+/// leaves no transcript without its cleanup. Writing it twice changes nothing: its ID is
+/// derived from the segment's, `JobID.clean(of:)`, and the queue looks for it first.
 public protocol ProcessingQueue: Sendable {
     /// Finds the jobs marked running at launch, which died with the process, and counts the
     /// death (`JobMachine`). It also writes the clean job of each transcribed recording that

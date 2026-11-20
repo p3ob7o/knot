@@ -95,6 +95,7 @@ public enum NoteStoreContract {
         Check(name: "processing", run: transcriptAndCleanupAreStoredWithWhatMadeThem),
         Check(name: "recording-job", run: aStoredRecordingAlwaysHasItsJob),
         Check(name: "job-forward", run: aJobOnlyMovesForward),
+        Check(name: "job-save-returns", run: aSavedJobIsWhatTheStoreHolds),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
         Check(name: "title-time", run: theTitlesTimeIsSetByEachChange),
@@ -113,6 +114,7 @@ public enum NoteStoreContract {
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
         Check(name: "unreadable-item", run: anUnreadableInboxItemIsAFailedSegment),
         Check(name: "small-ones", run: theSmallOnes),
+        Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -1700,6 +1702,29 @@ public enum NoteStoreContract {
         await refuses(.illegalTransition, "Counters never fall.") { try await h.store.saveJob(lowered) }
     }
 
+    /// `saveJob` returns the job as the store now holds it, revision included: a job added and
+    /// each save after it return what a read then gives, and the revision returned is the one
+    /// the next save names (finding 26 on pull request 41).
+    public static func aSavedJobIsWhatTheStoreHolds(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let recording = try await h.store.record(h.watchRecording(from: 0, to: 1))
+        let segment = recording.segmentIDs[0]
+        func stored(_ id: JobID) async throws -> Job? {
+            try await h.store.jobs(for: segment).first { $0.id == id }
+        }
+
+        let added = try await h.store.saveJob(Job(id: .clean(of: segment), segmentID: segment, kind: .clean))
+        #expect(added == (try await stored(added.id)), "A job added is returned as the store holds it.")
+
+        var job = try #require(try await stored(.transcribe(of: segment)))
+        for event in [JobEvent.start, .stepFailed(.transcriptionFailed, retryAt: nil), .start] {
+            let before = job.revision
+            job = try await h.store.saveJob(try JobMachine.reduce(job, event))
+            #expect(job == (try await stored(job.id)), "A save returns the job as a read then gives it.")
+            #expect(job.revision > before, "Each save raises the revision it returns.")
+        }
+    }
+
     /// Every write returns its revisions stamped with the store and its generation, as the
     /// reads do, so no caller builds a stamp (finding 46).
     public static func everyWriteReturnsStampedRevisions(_ make: NoteStoreFactory) async throws {
@@ -2303,6 +2328,40 @@ public enum NoteStoreContract {
         }
         #expect(try await h.text(SegmentID(draft.id)) == "Draft", "Nothing is written.")
         #expect(try await h.row(draft.id)?.outcome == .open)
+    }
+
+    /// The counterpart of `applyCleanup` for ink: a recognition sets the text with the origin
+    /// `recognised` and its provenance, and the drawing is ready; applied twice it changes
+    /// nothing; and it never replaces text a person edited.
+    public static func aRecognitionIsAppliedOnce(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let drawing = h.drawingStart(at: 0)
+        _ = try await h.store.record(drawing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: drawing.id, endedAt: h.at(1),
+                outcome: .stored(.file(h.asset(.ink, for: drawing.id), duration: nil)), revision: 0))
+        let segment = SegmentID(drawing.id)
+        let before = try #require(try await h.store.segment(segment))
+        let provenance = RecognitionProvenance(engineVersion: 2, language: "en-GB", osBuild: "build 1")
+        let applied = try await h.store.applyRecognition(
+            InkRecognition(text: "milk eggs bread", provenance: provenance), to: segment)
+        #expect(applied.segment.text == "milk eggs bread" && applied.segment.textOrigin == .recognised)
+        #expect(applied.segment.recognition == provenance, "Its provenance is kept beside the text.")
+        #expect(applied.segment.state == .ink(.ready), "The drawing is ready.")
+        #expect(applied.revision.value > before.revision.value, "The text changed, so its revision rose.")
+
+        let cursor = try await h.store.cursor()
+        let again = try await h.store.applyRecognition(
+            InkRecognition(text: "milk eggs bread", provenance: provenance), to: segment)
+        #expect(again.revision == applied.revision, "Applied twice, it changes nothing.")
+        #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Nor any note.")
+
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "milk and eggs", origin: .edited, writer: .app))
+        let later = try await h.store.applyRecognition(
+            InkRecognition(text: "something else", provenance: provenance), to: segment)
+        #expect(later.segment.text == "milk and eggs" && later.segment.textOrigin == .edited, "A person's text stays.")
     }
 
     // MARK: Reading

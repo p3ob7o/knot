@@ -104,16 +104,21 @@ import Testing
                 == Set(
                     [
                         KnotError.cleanupModelNotReady, .speechModelNotInstalled, .requestsLimited, .noBackgroundTime,
-                        .deviceLocked, .systemResourcesLimited,
+                        .deviceLocked, .systemResourcesLimited, .appNotInForeground, .linkNotReady, .counterpartMissing,
+                        .counterpartFull, .syncTransient,
                     ].map(\.code)))
     }
 
-    @Test func threeErrorsAreFinal() {
+    @Test func sixErrorsAreFinal() {
         // docs/architecture.md §4 and §5: no retry on this device can fix them, so the job
         // ends at once and is not tried again.
         #expect(
             Set(KnotError.catalog.filter(\.isFinal).map(\.code))
-                == Set([KnotError.speechUnavailable, .audioUnreadable, .cleanupModelUnavailable].map(\.code)))
+                == Set(
+                    [
+                        KnotError.speechUnavailable, .audioUnreadable, .cleanupModelUnavailable, .drawingUnreadable,
+                        .handwritingLanguageUnsupported, .syncFinal,
+                    ].map(\.code)))
         for error in KnotError.catalog where error.isFinal {
             #expect(!error.retry.isSafe, "\(error.code) is final, so no retry is offered.")
         }
@@ -148,5 +153,13 @@ import Testing
         let error = KnotError.cleanupDeclined.with(.init(segmentID: id(3), detail: .guardRejected))
         let data = try JSONEncoder().encode(error)
         #expect(try JSONDecoder().decode(KnotError.self, from: data) == error)
+    }
+}
+
+@Suite struct SyncQuotaTests {
+    /// A full iCloud storage needs the person to free it, after which a retry is safe.
+    @Test func aFullICloudStorageAsksForRoom() {
+        #expect(KnotError.syncQuotaExceeded.next.rawValue == "free_icloud_storage")
+        #expect(KnotError.syncQuotaExceeded.retry.isSafe)
     }
 }

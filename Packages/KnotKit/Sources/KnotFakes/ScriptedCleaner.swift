@@ -30,13 +30,13 @@
 
         // MARK: Scripting
 
-        /// Changes the availability and tells every watcher.
+        /// Changes the availability and tells every watcher, under the lock, so changes arrive
+        /// in the order they were made (finding 28).
         public func setAvailability(_ availability: CleanupAvailability) {
-            let watchers = state.withLock { state in
+            state.withLock { state in
                 state.availability = availability
-                return Array(state.watchers.values)
+                for watcher in state.watchers.values { watcher.yield(availability) }
             }
-            for watcher in watchers { watcher.yield(availability) }
         }
 
         /// The next requests end with these outcomes, or throw these errors, in order.
@@ -64,11 +64,12 @@
         public func availabilityChanges() -> AsyncStream<CleanupAvailability> {
             let (stream, continuation) = AsyncStream.makeStream(of: CleanupAvailability.self)
             let key = UUID()
-            let current = state.withLock { state in
+            // The current availability is given under the lock that records the subscriber, so
+            // no change can reach it first (finding 28).
+            state.withLock { state in
                 state.watchers[key] = continuation
-                return state.availability
+                continuation.yield(state.availability)
             }
-            continuation.yield(current)
             continuation.onTermination = { [weak self] _ in
                 _ = self?.state.withLock { $0.watchers.removeValue(forKey: key) }
             }

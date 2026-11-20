@@ -1,0 +1,281 @@
+import Foundation
+import KnotCore
+import Synchronization
+import Testing
+
+/// Values one task records and another reads.
+final class ValueLog: Sendable {
+    private let recorded = Mutex<[Double]>([])
+    func add(_ value: Double) { recorded.withLock { $0.append(value) } }
+    var values: [Double] { recorded.withLock { $0 } }
+}
+
+/// The first value of a stream that gives its current value first.
+func current<Value: Sendable>(_ updates: AsyncStream<Value>, _ what: String) async -> Value? {
+    await SuiteWait.value(what) {
+        var iterator = updates.makeAsyncIterator()
+        return await iterator.next()
+    } ?? nil
+}
+
+/// The contract suite of `AudioPlayer` (docs/architecture.md §5). It moves no time: what it
+/// checks holds however long a step takes.
+public enum AudioPlayerContract {
+    /// - Parameters:
+    ///   - file: a recording the player reads, of length `length`.
+    ///   - unreadable: a file that is not a recording.
+    public static func run(
+        file: URL, length: Duration, unreadable: URL, _ make: @Sendable () async throws -> any AudioPlayer
+    ) async throws {
+        let player = try await make()
+        #expect(await current(player.states(), "the first state") == .empty, "Nothing is loaded at first.")
+        await player.play()
+        #expect(await current(player.states(), "the state") == .empty, "With nothing loaded, play changes nothing.")
+        await refuses(.audioUnreadable) { try await player.load(unreadable) }
+
+        let loaded = try await player.load(file)
+        #expect(loaded == length, "Loading gives the recording's length.")
+        // One subscription held across the changes, which must see them as they happen.
+        let watching = player.states()
+        #expect(await current(player.states(), "the state") == .paused(at: .zero, of: length), "Paused at the start.")
+        await player.play()
+        guard case .playing(_, let playingLength)? = await current(player.states(), "the state") else {
+            Issue.record("Play plays.")
+            return
+        }
+        #expect(playingLength == length)
+        // A seek while playing keeps playing, from where it was sent.
+        await player.seek(to: length / 4)
+        guard case .playing(let from, _)? = await current(player.states(), "the state") else {
+            Issue.record("A seek while playing keeps playing.")
+            return
+        }
+        #expect(from >= length / 4 && from <= length, "It plays on from where it was sent.")
+        let sawSeek = await SuiteWait.value("a held subscription to see the seek") {
+            for await state in watching {
+                if case .playing(let at, _) = state, at >= length / 4 { return true }
+            }
+            return false
+        }
+        #expect(sawSeek == true, "A held subscription sees the changes.")
+        await player.pause()
+        guard case .paused(let at, _)? = await current(player.states(), "the state") else {
+            Issue.record("Pause pauses.")
+            return
+        }
+        #expect(at >= .zero && at <= length)
+        await player.seek(to: length / 2)
+        #expect(await current(player.states(), "the state") == .paused(at: length / 2, of: length))
+        await player.seek(to: length * 2)
+        #expect(await current(player.states(), "the state") == .paused(at: length, of: length), "Held at the end.")
+        await player.seek(to: .seconds(-1))
+        #expect(await current(player.states(), "the state") == .paused(at: .zero, of: length), "Held at the start.")
+
+        // Subscribers that join while seeks run see the state current when they joined, then
+        // each later state, in order (finding 28). Each round ends at the end of the recording,
+        // where no other seek of the round goes.
+        let seeks = 16
+        try await JoiningSubscribers.check("The player's states", rounds: 16) { _ in
+            await player.seek(to: .zero)
+            return try await JoiningSubscribers.round(
+                "the player's states", subscribe: { player.states() },
+                changes: (1...seeks).map { step in { await player.seek(to: length * step / (seeks + 1)) } },
+                last: { await player.seek(to: length) }, isLast: { $0 == .paused(at: length, of: length) })
+        }
+    }
+}
+
+/// The contract suite of `AssetFetcher` (docs/architecture.md §5 and §11).
+public enum AssetFetcherContract {
+    /// - Parameters:
+    ///   - remote: an asset made on another device, whose file iCloud holds.
+    ///   - gone: an asset whose file is gone from iCloud.
+    public static func run(remote: Asset, gone: Asset, _ make: @Sendable () async throws -> any AssetFetcher)
+        async throws
+    {
+        let fetcher = try await make()
+        let progress = ValueLog()
+        let fetched = try await fetcher.fetch(remote) { progress.add($0) }
+        #expect(fetched.id == remote.id && fetched.sha256 == remote.sha256)
+        #expect(fetched.availability == .local, "A fetched asset is on this device.")
+        let steps = progress.values
+        #expect(steps == steps.sorted() && steps.last == 1, "Progress rises to 1: \(steps).")
+        #expect(steps.allSatisfy { (0...1).contains($0) }, "Progress stays between 0 and 1: \(steps).")
+
+        let again = ValueLog()
+        #expect(try await fetcher.fetch(fetched) { again.add($0) } == fetched, "A local asset returns at once.")
+        await refuses(.syncUnknownItem, "A file gone from iCloud.") { try await fetcher.fetch(gone) { _ in } }
+    }
+}
+
+/// The contract suite of `RecordingStateStore` (docs/architecture.md §5; docs/notes/SP-1.md).
+/// The real one runs it across two processes in the iOS Simulator.
+public enum RecordingStateStoreContract {
+    public static func run(_ make: @Sendable () async throws -> any RecordingStateStore) async throws {
+        let store = try await make()
+        #expect(store.read() == .idle, "Nothing written reads as idle.")
+        let now = Date(timeIntervalSince1970: 1_795_000_000)
+        let recording = RecordingStateSnapshot(
+            phase: .recording, captureID: Identifier(uuid: UUID()), startedAt: now, heartbeat: now,
+            ownerLaunch: Identifier(uuid: UUID()), ownerPID: 42)
+        store.write(recording)
+        #expect(store.read() == recording, "A write is read back whole.")
+        // Every phase is kept as written, the stopping one too, which a widget shows until the
+        // recorder has stopped (finding 20).
+        for phase in RecordingPhase.allCases {
+            var snapshot = recording
+            snapshot.phase = phase
+            store.write(snapshot)
+            #expect(store.read() == snapshot, "\(phase) is kept.")
+        }
+        store.write(.idle)
+        #expect(store.read() == .idle)
+    }
+}
+
+/// A `RecordingActivity` under test, with a way to see the activities that run.
+public struct RecordingActivitySubject: Sendable {
+    public let activity: any RecordingActivity
+    /// The activities that run, with the content each shows.
+    public let running: @Sendable () async -> [CaptureID: RecordingActivityContent]
+    /// An activity that a launch that died left.
+    public let leaveActivity: @Sendable (CaptureID) async -> Void
+
+    public init(
+        activity: any RecordingActivity,
+        running: @escaping @Sendable () async -> [CaptureID: RecordingActivityContent],
+        leaveActivity: @escaping @Sendable (CaptureID) async -> Void
+    ) {
+        self.activity = activity
+        self.running = running
+        self.leaveActivity = leaveActivity
+    }
+}
+
+/// The contract suite of `RecordingActivity` (docs/architecture.md §5; docs/notes/SP-1.md), for
+/// an app whose Live Activities are on. The real one runs it in the iOS Simulator.
+public enum RecordingActivityContract {
+    public static func run(_ make: @Sendable () async throws -> RecordingActivitySubject) async throws {
+        let subject = try await make()
+        let activity = subject.activity
+        #expect(activity.isEnabled)
+        let start = Date(timeIntervalSince1970: 1_795_000_000)
+        let capture: CaptureID = Identifier(uuid: UUID())
+        let recording = RecordingActivityContent(phase: .recording, startedAt: start)
+        try activity.start(captureID: capture, content: recording)
+        #expect(await subject.running() == [capture: recording], "The activity of the capture runs.")
+        let saving = RecordingActivityContent(phase: .saving, startedAt: start)
+        await activity.update(captureID: capture, saving)
+        #expect(await subject.running() == [capture: saving], "An update shows (finding 20).")
+        await activity.update(
+            captureID: Identifier(uuid: UUID()), RecordingActivityContent(phase: .saved, startedAt: start))
+        #expect(await subject.running() == [capture: saving], "An update of no activity changes nothing.")
+
+        // At launch, every activity but the current recording's ends.
+        let orphan: CaptureID = Identifier(uuid: UUID())
+        await subject.leaveActivity(orphan)
+        #expect(await activity.endAll(except: capture) == 1, "The activity that a dead launch left ends.")
+        #expect(await subject.running().keys.sorted() == [capture])
+        await activity.end(
+            captureID: capture, RecordingActivityContent(phase: .saved, startedAt: start), dismissAfter: .seconds(4))
+        #expect(await subject.running().isEmpty, "The end ends it.")
+        #expect(await activity.endAll(except: nil) == 0)
+    }
+}
+
+/// A `SettingsStore` under test, with a way to make a synced change arrive.
+public struct SettingsStoreSubject: Sendable {
+    public let store: any SettingsStore
+    /// A change of the synced settings arrives by sync.
+    public let arriveBySync: @Sendable (Settings) async throws -> Void
+
+    public init(store: any SettingsStore, arriveBySync: @escaping @Sendable (Settings) async throws -> Void) {
+        self.store = store
+        self.arriveBySync = arriveBySync
+    }
+}
+
+/// The contract suite of `SettingsStore` (docs/architecture.md §5; docs/product-spec.md §11).
+public enum SettingsStoreContract {
+    public static func run(_ make: @Sendable () async throws -> SettingsStoreSubject) async throws {
+        let subject = try await make()
+        let store = subject.store
+        #expect(try await store.load() == .defaults, "A new store has the defaults.")
+        #expect(await current(store.changes(), "the current settings") == .defaults)
+
+        var edited = Settings.defaults
+        edited.cleanupEnabled = false
+        edited.launchAtLogin = true
+        let changed = edited
+        let watching = store.changes()
+        try await store.save(changed)
+        #expect(try await store.load() == changed, "A save is loaded back whole.")
+        let seen = await SuiteWait.value("the saved settings to be published") {
+            for await settings in watching where settings == changed { return true }
+            return false
+        }
+        #expect(seen == true, "A save is published.")
+
+        // A synced change takes the synced settings and leaves this device's own.
+        var synced = Settings.defaults
+        synced.appendWindow = try AppendWindow(minutes: 10)
+        synced.cleanupEnabled = !changed.cleanupEnabled
+        synced.englishVariant = .locale("en_GB")
+        synced.launchAtLogin = false
+        let held = store.changes()
+        try await subject.arriveBySync(synced)
+        let window = synced.appendWindow
+        // The first change after the current value is the synced one, with its window.
+        let sawSync = await SuiteWait.value("a held subscription to see the synced change") {
+            var iterator = held.dropFirst().makeAsyncIterator()
+            return await iterator.next()?.appendWindow == window
+        }
+        #expect(sawSync == true, "A held subscription sees a synced change.")
+        let after = try await store.load()
+        #expect(after.appendWindow == synced.appendWindow, "The append window syncs.")
+        #expect(after.cleanupEnabled == synced.cleanupEnabled, "The cleanup switch syncs (finding 20).")
+        #expect(after.englishVariant == synced.englishVariant, "The English variant syncs.")
+        #expect(after.launchAtLogin, "Launch at login belongs to this device.")
+
+        // Subscribers that join while saves run see the settings current when they joined,
+        // then each later save, in order (finding 28). Each round ends with the longest append
+        // window, which no other save of the round sets.
+        let longest = try AppendWindow(minutes: AppendWindow.maximumMinutes)
+        try await JoiningSubscribers.check("The settings' changes", rounds: 16) { _ in
+            try await store.save(.defaults)
+            return try await JoiningSubscribers.round(
+                "the settings' changes", subscribe: { store.changes() },
+                changes: (1...16).map { minutes in
+                    {
+                        var settings = Settings.defaults
+                        settings.appendWindow = try AppendWindow(minutes: minutes)
+                        try await store.save(settings)
+                    }
+                },
+                last: {
+                    var settings = Settings.defaults
+                    settings.appendWindow = longest
+                    try await store.save(settings)
+                }, isLast: { $0.appendWindow == longest })
+        }
+    }
+}
+
+/// The contract suite of `FeatureGates` (docs/architecture.md §5 and §18): each gate answers as
+/// its configuration says, and the same way every time it is asked. Several configurations, so
+/// that gates with a fixed answer fail (finding 20).
+public enum FeatureGatesContract {
+    /// - Parameter configurations: gates, each with the features it must open.
+    public static func run(
+        _ configurations: @Sendable () async throws -> [(gates: any FeatureGates, open: Set<Feature>)]
+    ) async throws {
+        let configurations = try await configurations()
+        #expect(Set(configurations.map(\.open)).count > 1, "More than one configuration.")
+        for (gates, open) in configurations {
+            for feature in Feature.allCases {
+                #expect(gates.isOpen(feature) == open.contains(feature), "\(feature) in \(open)")
+                #expect(gates.isOpen(feature) == gates.isOpen(feature), "A gate answers the same way twice.")
+            }
+        }
+    }
+}

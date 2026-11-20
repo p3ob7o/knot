@@ -15,7 +15,9 @@ public protocol CaptureEngine: Sendable {
     func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState
 
     /// Saves the content of an open capture so far: a typed capture's text, or a drawing's
-    /// data. A recording takes no update: its audio is the recorder's.
+    /// data. A recording takes no update: its audio is the recorder's. Revisions are numbered in
+    /// the order the engine takes the calls, so a surface sends its updates from one task, in
+    /// order: two calls in flight at once would be numbered in whichever order they arrive.
     func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState
 
     /// Ends an open capture: stops a recording, finishes a draft or a drawing. It returns once
