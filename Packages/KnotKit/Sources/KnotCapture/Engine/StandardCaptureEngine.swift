@@ -155,11 +155,9 @@ public actor StandardCaptureEngine: CaptureEngine {
         // before it waits for anything.
         let state = try await withLine(id) { () async throws(KnotError) -> CaptureState in
             // A recording starts first: one whose microphone cannot open never starts, and ends
-            // nothing.
-            if request.kind == .voice {
-                try await startRecorder(id)
-                markFollows(id)
-            }
+            // nothing. Its request names the capture it follows, so the recorder's first manifest
+            // write carries the link that every later item carries too (finding 54).
+            if request.kind == .voice { try await startRecorder(id) }
             // A capture that follows one on the `Inbox/` path goes the same way, so that ingest
             // places it after that capture.
             var sameWay: ErrorCode?
@@ -438,7 +436,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             session = try await recorder.start(
                 RecordingRequest(
                     captureID: id, launchID: launchID, origin: origin(entry.surface), placement: entry.placement,
-                    shownNote: entry.shownNote))
+                    shownNote: entry.shownNote, followsCaptureID: entry.follows))
         } catch {
             entries[id] = nil
             log.failure(error.about(capture: id), "recording_not_started")
@@ -448,19 +446,6 @@ public actor StandardCaptureEngine: CaptureEngine {
         let events = session.events
         Task.detached { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
-        }
-    }
-
-    /// Names, in a started recording's manifest, the capture it follows, so that recovery places
-    /// it in that capture's note after a death during the recording. The recorder writes the
-    /// manifest before the first sample and leaves it; a manifest that could not be changed
-    /// leaves the recording placed by the window.
-    private func markFollows(_ id: CaptureID) {
-        guard let follows = entries[id]?.follows else { return }
-        do throws(KnotError) {
-            try inbox.markRecording(id, follows: follows)
-        } catch {
-            log.failure(error.about(capture: id), "recording_manifest_not_marked")
         }
     }
 
@@ -810,6 +795,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             log.capture(id, "line_nested", .segment(SegmentID(held)))
         }
         if !line.take(id) {
+            // IDs only. The call is in the line once this is logged: nothing suspends between the
+            // two, so a test can order a later call after it.
             log.capture(id, "call_waits_for_line")
             await withCheckedContinuation { line.enqueue(id, $0) }
         }
