@@ -11,17 +11,54 @@ public struct DrawingImage: Hashable, Sendable {
     }
 
     /// The eight bytes that open every PNG file.
-    static let signature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    static let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
 
-    /// True when the data opens as a PNG file does.
-    var isPNG: Bool { png.starts(with: Self.signature) }
+    /// True when the data is a whole PNG file: the signature, then chunks that run from `IHDR`,
+    /// first and 13 bytes long, to `IEND`, empty and last, each within the data and with its
+    /// CRC-32 right, and nothing after `IEND`. It reads the file's structure and decodes no
+    /// pixel, so it needs no image framework. Anything less is not an image, and the drawing
+    /// leaves as its stored data.
+    var isPNG: Bool {
+        let bytes = [UInt8](png)
+        guard bytes.starts(with: Self.signature) else { return false }
+        var offset = Self.signature.count
+        var first = true
+        while bytes.count - offset >= 12 {
+            let length = Int(Self.uint32(bytes, at: offset))
+            guard length <= bytes.count - offset - 12 else { return false }
+            let type = Array(bytes[(offset + 4)..<(offset + 8)])
+            let end = offset + 8 + length
+            guard Self.crc32(bytes[(offset + 4)..<end]) == Self.uint32(bytes, at: end) else { return false }
+            if first {
+                guard type == Array("IHDR".utf8), length == 13 else { return false }
+                first = false
+            }
+            offset = end + 4
+            if type == Array("IEND".utf8) { return length == 0 && offset == bytes.count }
+        }
+        return false
+    }
+
+    private static func uint32(_ bytes: [UInt8], at offset: Int) -> UInt32 {
+        bytes[offset..<(offset + 4)].reduce(0) { $0 << 8 | UInt32($1) }
+    }
+
+    /// The CRC-32 that PNG uses, the one of ISO 3309.
+    private static func crc32(_ bytes: ArraySlice<UInt8>) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc & 1) == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
+    }
 }
 
 /// Gives the image of a stored drawing (docs/architecture.md §3 and §10).
 ///
 /// KnotExport does not draw: KnotInk does, and the command line cannot reach it. So the
 /// caller passes the images in, through this provider of KnotCore types. Where it gives none,
-/// or gives something that is not a PNG, export writes the drawing's stored data file under
+/// or gives something that is not a whole PNG (`DrawingImage.isPNG`), export writes the drawing's stored data file under
 /// its ID and names it in the list of what it left out. A drawing is never dropped.
 public protocol DrawingImageSource: Sendable {
     /// The image of the drawing that `asset` holds for `segment`, or `nil` when there is none.
