@@ -67,7 +67,7 @@ final class HookedAssets: AssetStore {
 }
 
 /// Runs `hook` before every write it takes, with the write's number, and keeps the files.
-final class EveryWriteSink: ExportSink {
+final class NumberedHookSink: ExportSink {
     let files = MemoryExportSink()
     private let count = Mutex(0)
     private let hook: @Sendable (Int) async throws -> Void
@@ -163,7 +163,7 @@ final class EveryWriteSink: ExportSink {
         let extra = 800
         let world = try World(seed: try Self.notes())
         let notes = world.notes
-        let sink = EveryWriteSink { number in
+        let sink = NumberedHookSink { number in
             guard number <= extra else { return }
             let start = t0.addingTimeInterval(Double(Self.count * 60 + 600 + number * 60))
             _ = try await notes.record(
