@@ -330,7 +330,9 @@ public actor OutboxLink {
             log.capture(capture, "link_acknowledged_again", level: .debug)
             return
         }
-        acknowledged.insert(capture)
+        // Reported once: a repeat that comes while its files are still being removed is not
+        // news to a subscriber.
+        let isNew = inOutbox && acknowledged.insert(capture).inserted
         // A transfer of it still under way would only deliver it again.
         for file in transport.outstandingFiles() where file.captureID == capture {
             transport.cancelFile(captureID: capture, attempt: file.attempt)
@@ -338,7 +340,7 @@ public actor OutboxLink {
         queued[capture] = nil
         unreadable.remove(capture)
         removeAcknowledged()
-        if inOutbox {
+        if isNew {
             log.capture(capture, "link_acknowledged")
             acknowledgementSubscribers.yield(capture)
         }

@@ -147,6 +147,37 @@ import Testing
         #expect(harness.system.outstanding().isEmpty, "Neither is queued again.")
     }
 
+    /// acknowledgements() reports each capture once, even when the files cannot be removed
+    /// and the iPhone acknowledges it again.
+    @Test func anAcknowledgementIsReportedOnceWhileItsRemovalFails() async throws {
+        let harness = LinkHarness()
+        let (link, _) = harness.launchWatch()
+        let stream = link.acknowledgements()
+        let capture = try await harness.sendNew(on: link)
+        // A second capture, acknowledged last, marks the end of what the stream is read for.
+        let sentinel = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        let outbox = harness.locations.outbox.path
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: outbox)
+        harness.system.finish(capture, as: .arrives)
+        await harness.settle(link)
+        harness.phone.transport.send(.acknowledgement(capture))
+        await harness.settle(link)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: outbox)
+        harness.system.finish(sentinel, as: .arrives)
+        await harness.settle(link)
+
+        let seen = await SuiteWait.value("the acknowledgements up to the sentinel") { () async -> [CaptureID] in
+            var seen: [CaptureID] = []
+            for await acknowledged in stream {
+                if acknowledged == sentinel { break }
+                seen.append(acknowledged)
+            }
+            return seen
+        }
+        #expect(seen == [capture])
+    }
+
     @Test func anAcknowledgementCancelsATransferStillUnderWay() async throws {
         let harness = LinkHarness()
         harness.system.holdsEvents = true
