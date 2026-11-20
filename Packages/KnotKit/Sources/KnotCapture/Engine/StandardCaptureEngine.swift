@@ -106,17 +106,26 @@ public actor StandardCaptureEngine: CaptureEngine {
             // Drawings come with the ink types: no operation of `NoteStore` saves an open one yet.
             throw KnotError.portUnavailable
         }
+        let startedAt = clock.now()
         let handoff: CaptureID?
-        switch try await endOpenCapture(before: request) {
+        let sameWay: ErrorCode?
+        switch try await endOpenCapture(before: request, startingAt: startedAt) {
         case .retry(let pending):
             return try await retryBegin(pending, text: request.text ?? "")
-        case .start(let open):
+        case .start(let open, let code):
             handoff = open
+            sameWay = code
         }
         let id: CaptureID = ids.make()
         var entry = Entry(
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
-            shownNote: request.shownNote, startedAt: clock.now())
+            shownNote: request.shownNote, startedAt: startedAt)
+        if let sameWay {
+            // The capture this one follows is on the `Inbox/` path and has no note yet: this one
+            // goes the same way, so that ingest takes both in the order they began and places
+            // this one in the other's note.
+            entry.path = .inbox(sameWay)
+        }
         if request.kind == .typed {
             entry.text = request.text ?? ""
             entry.revision = 1
@@ -127,7 +136,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         defer { release(id) }
         let state: CaptureState
         do throws(KnotError) {
-            state = request.kind == .typed ? try await beginTyped(id) : try await beginRecording(id)
+            state =
+                request.kind == .typed
+                ? try await beginTyped(id, sameWay: sameWay != nil)
+                : try await beginRecording(id, sameWay: sameWay != nil)
         } catch {
             if let handoff { await settle(handoff, afterStartOf: id) }
             throw error
@@ -152,15 +164,20 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+        try await end(capture, at: nil)
+    }
+
+    /// Ends a capture at `endedAt`, or now: rule 15 ends one at the next one's start.
+    private func end(_ capture: CaptureID, at endedAt: Date?) async throws(KnotError) -> CaptureState {
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
         await take(capture)
         defer { release(capture) }
         guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
         switch entry.kind {
         case .typed:
-            try await saveTyped(capture, ending: clock.now())
+            try await saveTyped(capture, ending: endedAt ?? clock.now())
         default:
-            try await endRecording(capture)
+            try await endRecording(capture, at: endedAt)
         }
         return publish(capture)
     }
@@ -184,8 +201,13 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     // MARK: Typed captures
 
-    private func beginTyped(_ id: CaptureID) async throws(KnotError) -> CaptureState {
+    private func beginTyped(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
+        if sameWay {
+            try writeTypedItem(id, endedAt: nil)
+            log.capture(id, "capture_began", .flag("store_path", false))
+            return publish(id)
+        }
         let capture = NewCapture(
             id: id, kind: .typed, origin: origin(entry.surface), launchID: launchID, placement: entry.placement,
             startedAt: entry.startedAt, body: .text(entry.text), revision: entry.revision,
@@ -312,7 +334,7 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     // MARK: Recordings
 
-    private func beginRecording(_ id: CaptureID) async throws(KnotError) -> CaptureState {
+    private func beginRecording(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let session: any RecordingSession
         do throws(KnotError) {
@@ -331,6 +353,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         let events = session.events
         Task { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
+        }
+        if sameWay {
+            log.capture(id, "recording_began", .flag("store_path", false))
+            return publish(id)
         }
         let capture = NewCapture(
             id: id, kind: .voice, origin: origin(entry.surface), launchID: launchID, placement: entry.placement,
@@ -360,12 +386,12 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
     }
 
-    private func endRecording(_ id: CaptureID) async throws(KnotError) {
+    private func endRecording(_ id: CaptureID, at time: Date?) async throws(KnotError) {
         guard let entry = entries[id], let session = entry.session else {
             throw KnotError.notFound.about(capture: id)
         }
         let audio = await session.stop()
-        let endedAt = clock.now()
+        let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
         let stored: StoredFile
         let duration: Duration
@@ -465,23 +491,26 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// the open capture that the new one's record-a-capture transaction ends, if any, whose
     /// line the caller then holds until `settle`.
     private enum StartPlan {
-        /// A new capture, with the open capture whose line the caller holds until `settle`.
-        case start(handoff: CaptureID?)
+        /// A new capture, with the open capture whose line the caller holds until `settle`, and
+        /// the code of the `Inbox/` path when the capture it follows is on it.
+        case start(handoff: CaptureID?, sameWay: ErrorCode?)
         /// A typed start on the surface of the open typed capture, which goes on.
         case retry(CaptureID)
     }
 
-    private func endOpenCapture(before request: CaptureRequest) async throws(KnotError) -> StartPlan {
+    private func endOpenCapture(before request: CaptureRequest, startingAt startedAt: Date) async throws(KnotError)
+        -> StartPlan
+    {
         // The newest open capture: while one start ends another, two can be open for a moment.
         let open = entries.values.filter { $0.outcome == .open }.max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
-        guard let open else { return .start(handoff: nil) }
+        guard let open else { return .start(handoff: nil, sameWay: nil) }
         let decision = OpenCaptureRule.decide(
             open: OpenCapture(
                 captureID: open.id, noteID: open.noteID ?? NoteID(open.id), kind: open.kind, surface: open.surface),
             start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
         switch decision {
         case .nothingOpen, .leaveOpen:
-            return .start(handoff: nil)
+            return .start(handoff: nil, sameWay: nil)
         case .continueOpen(let id) where open.kind == .typed:
             // The same kind on the same surface: the open capture goes on, and nothing new
             // starts (rule 15). The surface's text is the capture's whole text, so the start is
@@ -499,12 +528,20 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // Unless it is still the one open capture, on the store path, another start ran
                 // while this one waited: rule 15 is applied again to what is open now.
                 let stillTheOne = entries.values.filter { $0.outcome == .open }.map(\.id) == [open.id]
-                if stillTheOne, case .store = entries[open.id]?.path { return .start(handoff: open.id) }
+                if stillTheOne, case .store = entries[open.id]?.path {
+                    return .start(handoff: open.id, sameWay: nil)
+                }
                 release(open.id)
-                return try await endOpenCapture(before: request)
+                return try await endOpenCapture(before: request, startingAt: startedAt)
             }
-            _ = try await end(open.id)
-            return try await endOpenCapture(before: request)
+            // Off the store path the engine ends it, at the new capture's start, and the new
+            // capture goes the same way.
+            _ = try await end(open.id, at: startedAt)
+            let next = try await endOpenCapture(before: request, startingAt: startedAt)
+            if case .start(let handoff, nil) = next, case .inbox(let code) = open.path {
+                return .start(handoff: handoff, sameWay: code)
+            }
+            return next
         }
     }
 
@@ -576,7 +613,9 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     private func runIngest(_ id: CaptureID) {
         guard let ingest else { return }
-        Task { _ = await ingest.ingest(id) }
+        // Every item, in the order the captures began, so that a capture that followed another
+        // on the `Inbox/` path is placed after it.
+        Task { _ = await ingest.ingestAll() }
     }
 
     // MARK: Helpers

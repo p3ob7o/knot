@@ -85,4 +85,32 @@ import Testing
         _ = try await r.engine.end(a.captureID)
         #expect(try await r.notes.segment(SegmentID(a.captureID))?.text == "winner")
     }
+
+    /// Finding 4. With appending off, typing on the `Inbox/` path and then a recording are one
+    /// note (product spec §3, rules 2 and 15): the recording goes the same way, the typed
+    /// capture ends at its start, and ingest takes both in the order they began.
+    @Test(arguments: [false, true])
+    func handoffFromACaptureOnTheInboxPathStaysInOneNote(engineIngests: Bool) async throws {
+        let r = Rig(engineIngests: engineIngests)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let b = try await r.beginRecording()
+        #expect(b.path == .inbox(KnotError.storeBusy.code), "The later capture goes the same way.")
+        _ = try await r.engine.end(b.captureID)
+        _ = await r.ingest.ingestAll()
+        #expect(
+            await eventually("both to be stored") {
+                let first = try? await r.notes.capture(a.captureID)
+                let second = try? await r.notes.capture(b.captureID)
+                return first?.outcome == .stored && second?.outcome == .stored
+            })
+        let first = try #require(try await r.notes.segment(SegmentID(a.captureID)))
+        let second = try #require(try await r.notes.segment(SegmentID(b.captureID)))
+        #expect(first.noteID == second.noteID)
+        let endedAt = try await r.notes.capture(a.captureID)?.endedAt
+        let startedAt = try await r.notes.capture(b.captureID)?.startedAt
+        #expect(endedAt == startedAt)
+    }
 }

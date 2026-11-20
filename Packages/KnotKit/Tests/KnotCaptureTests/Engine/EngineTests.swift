@@ -116,14 +116,21 @@ import Testing
     }
 
     /// A typed capture on the `Inbox/` path is ended by the engine itself when a recording
-    /// starts; nothing of it is lost.
+    /// starts, and the recording goes the same way, into its note; nothing of it is lost.
     @Test func recordingStartEndsAnOpenCaptureOffTheStorePath() async throws {
         let rig = Rig()
         await rig.notes.failNextCaptureWrites(with: .storeBusy)
         let typed = try await rig.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "p"))
         _ = try await rig.engine.update(typed.captureID, with: .text("pay the plumber"))
         let recording = try await rig.beginRecording()
-        #expect(recording.path == .store)
+        #expect(recording.path == .inbox(KnotError.storeBusy.code))
+        _ = try await rig.engine.end(recording.captureID)
+        #expect(
+            await eventually("the recording's item to be ingested") {
+                (try? await rig.notes.capture(recording.captureID))?.outcome == .stored
+            })
+        let notes = try await rig.stream().notes
+        #expect(notes.count == 1)
         #expect(
             await eventually("the typed capture's item to be ingested") {
                 (try? await rig.notes.capture(typed.captureID))?.outcome == .stored
