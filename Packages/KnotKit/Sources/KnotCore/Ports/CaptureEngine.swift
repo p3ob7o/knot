@@ -67,8 +67,13 @@ public enum CaptureUpdate: Hashable, Sendable {
 public enum CapturePath: Hashable, Sendable {
     /// In the store, through `NoteStore`.
     case store
-    /// In `Inbox/`, because the store did not answer in time, with the code of what it said
-    /// or `store_not_open`. Ingest stores it later, where its manifest says.
+    /// In `Inbox/`, because the store path did not take the capture: the store did not answer
+    /// in time, or it answered with an error. A capture reaches disk before anything else
+    /// happens to it, so a refusal falls back as a slow answer does. The code is that error's,
+    /// or `store_not_open`. Ingest stores the capture later, where its manifest says. This is
+    /// what makes the strict `NoteStore.record` safe: a typed capture whose named note was
+    /// deleted under it is refused with `note_deleted`, goes to `Inbox/`, and ingest gives it
+    /// a new note.
     case inbox(ErrorCode)
 }
 
