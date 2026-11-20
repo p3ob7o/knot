@@ -110,6 +110,42 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         try await NoteStoreContract.everyOrderKeepsTheEdit(inMemoryStore())
     }
 
+    /// The reviewer's sequence for finding 36: show A, hold the draft's record, force a new
+    /// note B, release the record, ingest the manifest naming A: the capture is in A.
+    @Test func aHeldRecordAndItsIngestAgreeOnTheNoteShown() async throws {
+        let clock = FakeClock()
+        let ids = SeededIDGenerator(seed: 11, clock: clock)
+        let device: DeviceID = ids.make()
+        let store = InMemoryNoteStore(clock: clock, ids: ids, deviceID: device)
+        let launch: LaunchID = ids.make()
+        let origin = CaptureOrigin(source: .device(device), surface: .app)
+        let a = try await store.record(
+            NewCapture(
+                id: ids.make(), kind: .typed, origin: CaptureOrigin(source: .cli, surface: .commandLine),
+                launchID: launch,
+                placement: .window, startedAt: clock.now(), endedAt: clock.now(), body: .text("A")))
+        clock.advance(by: 60)
+        var draft = NewCapture(
+            id: ids.make(), kind: .typed, origin: origin, launchID: launch, placement: .window, startedAt: clock.now(),
+            body: .text("start"), revision: 1)
+        draft.shownNote = a.noteID
+        let request = draft
+        let hold = await store.holdNextCaptureWrite()
+        let late = Task { try await store.record(request) }
+        await hold.untilReached()
+        _ = try await store.record(
+            NewCapture(
+                id: ids.make(), kind: .typed, origin: origin, launchID: launch, placement: .newNote,
+                startedAt: clock.now(), endedAt: clock.now(), body: .text("B")))
+        hold.release()
+        _ = try await late.value
+        draft.endedAt = clock.now().addingTimeInterval(60)
+        draft.body = .text("all")
+        draft.revision = 3
+        let result = try await store.ingest(draft)
+        #expect(result.receipt.noteID == a.noteID)
+    }
+
     /// A store call that commits after its capture fell back to `Inbox/`: the hold lets the
     /// ingest of the inbox item commit first, and the late call then finds the row ended and
     /// changes nothing it should not.

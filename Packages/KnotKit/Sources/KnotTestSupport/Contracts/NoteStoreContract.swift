@@ -61,7 +61,7 @@ public enum NoteStoreContract {
         Check(name: "later-save", run: aLaterSaveAppliesToAnEndedCapture),
         Check(name: "edit-protected", run: aLateSaveNeverTouchesAPersonsEdit),
         Check(name: "ingest", run: ingestReconcilesEachStateOfTheRow),
-        Check(name: "inbox-placement", run: anInboxItemGoesWhereItsManifestSays),
+        Check(name: "shown-note", run: aCaptureGoesToTheNoteItsSurfaceShowed),
         Check(name: "end-outcomes", run: endWithEachOutcome),
         Check(name: "failed", run: aFailedCaptureNeedsYouAndARetryStoresIt),
         Check(name: "recovery", run: recoveryOfTheThreeKinds),
@@ -529,22 +529,52 @@ public enum NoteStoreContract {
         #expect(try await h.store.segment(SegmentID(failing.id))?.segment.state == .typed(.ready))
     }
 
-    /// An inbox item made in the app goes where its manifest says: the note its surface showed,
-    /// or a new note when it showed none, whatever came since. Only a late delivery is placed
-    /// by rule 7.
-    public static func anInboxItemGoesWhereItsManifestSays(_ make: NoteStoreFactory) async throws {
+    /// A capture goes to the note its surface showed, whenever the request names one and that
+    /// note can still take it, through `record` as through `ingest`, so a late store call and
+    /// the ingest of the same capture's file agree whichever wins. Otherwise the append rule
+    /// decides (finding 36).
+    public static func aCaptureGoesToTheNoteItsSurfaceShowed(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
         let shown = try await h.store.record(h.typed("The note on screen", from: 0, to: 0.2))
-        // Another capture takes the window before ingest runs.
+        // The capture starts while its surface shows that note; its store call is slow.
+        var late = h.typedDraft("Typed while the store was busy", at: 0.5)
+        late.shownNote = shown.noteID
+        var second = h.typedDraft("Second", at: 0.6)
+        second.shownNote = shown.noteID
+        // Another capture forces a new note before either call for the shown captures commits.
         let other = try await h.store.record(h.typed("Asked for a new note", from: 1, to: 1.1, placement: .newNote))
-        var item = h.inboxText("Typed while the store was busy", at: 1.2, revision: 3)
-        item.shownNote = shown.noteID
-        let placed = try await h.store.ingest(item)
-        #expect(placed.receipt.noteID == shown.noteID, "The item goes to the note its surface showed.")
-        #expect(try await h.row(item.id)?.shownNoteID == shown.noteID, "The row records the note shown.")
-        #expect(try await h.row(item.id)?.placement == .window, "The row records what was asked.")
-        let none = try await h.store.ingest(h.inboxText("The surface showed a new note", at: 1.3, revision: 1))
-        #expect(!none.receipt.joinedExistingNote && none.receipt.noteID != other.noteID)
+        let recorded = try await h.store.record(late)
+        #expect(recorded.noteID == shown.noteID, "record places it in the note shown.")
+        var item = late
+        item.endedAt = h.at(1.3)
+        item.body = .text("Typed while the store was busy, done")
+        item.revision = 3
+        let ingested = try await h.store.ingest(item)
+        #expect(ingested.receipt.noteID == shown.noteID, "ingest agrees.")
+        let row = try await h.row(late.id)
+        #expect(row?.shownNoteID == shown.noteID && row?.placement == .window, "The row records both.")
+
+        // The other order: the ingest first, then the late call.
+        var secondItem = second
+        secondItem.endedAt = h.at(1.5)
+        secondItem.revision = 2
+        secondItem.body = .text("Second, done")
+        #expect(try await h.store.ingest(secondItem).receipt.noteID == shown.noteID)
+        #expect(try await h.store.record(second).noteID == shown.noteID)
+
+        // No note shown: the append rule decides, as for any capture.
+        let unshown = h.inboxText("No note shown", at: 1.6, revision: 1)
+        let rule = try await h.store.predictPlacement(unshown.appendRequest, kind: .typed, surface: .app)
+        let none = try await h.store.ingest(unshown)
+        // The shown note is closed by now, so the rule starts a new note, as the prediction says.
+        #expect(rule == .newNote(.latestNoteClosed) && !none.receipt.joinedExistingNote, "The append rule decides.")
+        #expect(other.noteID != shown.noteID)
+
+        // A shown note that "New note" closed before the capture started cannot take it.
+        _ = try await h.store.record(h.typed("Close the shown note", from: 2, to: 2.1, placement: .newNote))
+        var afterClose = h.typedDraft("After the close", at: 2.2)
+        afterClose.shownNote = shown.noteID
+        #expect(try await h.store.record(afterClose).noteID != shown.noteID, "A closed note takes nothing new.")
     }
 
     /// `end` with each outcome sets the segment's state: a voice file, a drawing, empty text,

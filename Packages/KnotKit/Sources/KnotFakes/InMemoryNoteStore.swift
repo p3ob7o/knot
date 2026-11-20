@@ -701,12 +701,13 @@
             }
             let now = clock.now()
             let decision: AppendDecision
-            if ingesting, capture.arrival == .live {
-                decision = inboxPlacement(capture, in: next)
+            if ingesting, capture.arrival == .live, let asked = inboxPlacement(capture, in: next) {
+                decision = asked
             } else {
+                // Rule 15 for a capture made now; an inbox item's moment has passed.
                 decision = try decide(
                     capture.appendRequest, kind: capture.kind, surface: capture.origin.surface, in: &next,
-                    predicting: false)
+                    predicting: false, openRule: !ingesting, shown: shownNote(of: capture, in: next))
             }
             let noteID: NoteID
             let joined: Bool
@@ -797,7 +798,7 @@
 
         /// Where an inbox item made in the app goes: the note its surface showed, or a new note
         /// when it showed none or that note can no longer take it (rules 10 and 11).
-        private func inboxPlacement(_ capture: NewCapture, in next: State) -> AppendDecision {
+        private func inboxPlacement(_ capture: NewCapture, in next: State) -> AppendDecision? {
             switch capture.placement {
             case .named(let note):
                 guard let named = next.notes[note], named.deletedAt == nil else {
@@ -807,13 +808,19 @@
             case .newNote:
                 return .newNote(.newNoteAsked)
             case .window:
-                if let shown = capture.shownNote, let note = next.notes[shown], note.deletedAt == nil,
-                    hasLiveSegment(shown, in: next)
-                {
-                    return .join(shown, .insideWindow)
-                }
-                return .newNote(.outsideWindow)
+                return nil
             }
+        }
+
+        /// The note a capture's surface showed, if the capture asked to follow the window and that
+        /// note can still take it: not deleted, a live segment left, and not closed by "New note"
+        /// before the capture started (finding 36).
+        private func shownNote(of capture: NewCapture, in next: State) -> NoteID? {
+            guard capture.placement == .window, capture.arrival == .live, let shown = capture.shownNote,
+                let note = next.notes[shown], note.deletedAt == nil, hasLiveSegment(shown, in: next)
+            else { return nil }
+            if let closedAt = note.closedAt, closedAt < capture.startedAt { return nil }
+            return shown
         }
 
         /// Rule 4: "New note" closes the note the window would have joined, at the capture's start.
@@ -1032,10 +1039,12 @@
         /// A capture of another kind or surface ends the open one in `next`; a prediction ends
         /// nothing.
         private func decide(
-            _ request: AppendRequest, kind: SegmentKind, surface: CaptureSurface, in next: inout State, predicting: Bool
+            _ request: AppendRequest, kind: SegmentKind, surface: CaptureSurface, in next: inout State,
+            predicting: Bool,
+            openRule: Bool = true, shown: NoteID? = nil
         ) throws(KnotError) -> AppendDecision {
             let ignoresOpen = predicting && faults.contains(.predictionIgnoresOpenCapture)
-            if request.arrival == .live, !ignoresOpen, let open = openOnDevice(in: next),
+            if openRule, request.arrival == .live, !ignoresOpen, let open = openOnDevice(in: next),
                 let openNote = next.receipts[open.id]?.noteID
             {
                 let decision = OpenCaptureRule.decide(
@@ -1056,8 +1065,10 @@
                     throw error
                 }
             }
+            // The note the surface showed, when it can still take the capture.
+            if let shown { return .join(shown, .insideWindow) }
             var context = appendContext(for: request, in: next)
-            if ignoresOpen { context.openCapture = nil }
+            if ignoresOpen || !openRule { context.openCapture = nil }
             return AppendRule.decide(request, in: context)
         }
 

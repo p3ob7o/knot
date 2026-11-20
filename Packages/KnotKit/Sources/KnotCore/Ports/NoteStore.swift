@@ -42,6 +42,11 @@ public protocol NoteStore: Sendable {
     /// when text runs past the size limit. A capture placed as a late arrival is marked as
     /// arrived (`Segment.arrivedAt`).
     ///
+    /// A capture that follows the window goes to the note its surface showed, whenever it names
+    /// one and that note can still take it: not deleted, a live segment left, and not closed by
+    /// "New note" before the capture started. So a store call that commits late and the ingest
+    /// of the same capture's file agree, whichever wins. Otherwise the append rule decides.
+    ///
     /// "New note" closes the note the window would have joined, at the capture's start (rule 4),
     /// so that a later capture by the window does not join it. A segment ID that another
     /// capture owns, first or derived, is refused as a conflict and nothing is written.
@@ -54,8 +59,8 @@ public protocol NoteStore: Sendable {
     /// Reconciles a finished capture from `Inbox/`, as its manifest gives it, with what the
     /// store holds, in one transaction (docs/architecture.md §6, rules 2 and 6):
     ///
-    /// - no row: the row and the segments are made. A capture made live is placed in the note
-    ///   its surface showed, or in a new note when it showed none; a late one by rule 7.
+    /// - no row: the row and the segments are made, placed as `record` places them, a named
+    ///   note that can no longer take the item giving a new note; a late delivery by rule 7.
     /// - an open row: the content is applied by revision, and the capture ends.
     /// - a failed row: it becomes stored.
     /// - an ended row with the same content: nothing changes.
@@ -223,7 +228,8 @@ public struct NewCapture: Hashable, Sendable {
     /// The checkpoint revision of the content, which later checkpoints must pass.
     public var revision: Int64
     /// The note the capture surface showed before the first keystroke, which an `Inbox/`
-    /// manifest records with the placement asked for.
+    /// manifest records with the placement asked for. The store places the capture there when
+    /// that note can still take it.
     public var shownNote: NoteID?
     /// For a finished recording, the ID of its first job, which the store writes with it.
     public var transcribeJob: JobID?
