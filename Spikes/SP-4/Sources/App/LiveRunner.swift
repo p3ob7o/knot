@@ -20,6 +20,8 @@
 //   asset-probe BYTES                    one asset of that size
 //   probe-cleanup                        remove the Probe zone
 //   attachments-put, attachments-delete-zone, asset-fetch
+//   schema-seed                          one note and one segment with every field set, so the
+//                                        development schema holds every field before a deploy
 //   -SP4Container dev | spike4, -SP4Timeout SECONDS (300)
 //
 // It runs only in a build signed with the team, whose Info.plist says KnotSyncAvailable = YES.
@@ -46,7 +48,7 @@ enum LiveRunner {
         }
         say("target container=\(target.container) environment=\(target.environment)")
         let database = CKContainer(identifier: target.container).privateCloudDatabase
-        let directCommands = ["future-write", "future-read", "size-probe", "asset-probe", "probe-cleanup",
+        let directCommands = ["schema-seed", "future-write", "future-read", "size-probe", "asset-probe", "probe-cleanup",
                       "attachments-put", "attachments-delete-zone", "asset-fetch", "delete-zone"]
         if directCommands.contains(command), target.environment != "Development" {
             say("refused \(command) outside the development environment")
@@ -70,6 +72,7 @@ enum LiveRunner {
             _ = try await database.modifyRecordZones(saving: [], deleting: [Zones.attachments])
         }
         case "asset-fetch": return await assetFetch(database)
+        case "schema-seed": return await schemaSeed(database)
         default: break
         }
         let store = load(file)
@@ -391,6 +394,29 @@ enum LiveRunner {
         say("asset-probe bytes=\(bytes) \(result.ok ? "saved" : "refused code=\(result.code ?? 0)") \(milliseconds(since: start)) ms")
         try? FileManager.default.removeItem(at: folder)
         return result.ok ? 0 : 1
+    }
+
+    /// Before a deploy: the development schema gets a field only when a saved record has a
+    /// value for it, so one note and one segment carry every field. They are deleted after.
+    static func schemaSeed(_ database: CKDatabase) async -> Int32 {
+        let mapping = RecordMapping()
+        let now = Date()
+        let note = NoteValue(id: UUID(), createdAt: now, title: "Schema", titleOrigin: TitleOrigin.user,
+                             titleEditedAt: now, closedAt: now, deletedAt: now)
+        let segment = SegmentValue(id: UUID(), noteID: note.id, noteGeneration: 1, kind: Tag("voice"), origin: Tag("device"),
+                                   startedAt: now, endedAt: now, text: "Schema", textOrigin: TextOrigin.cleaned,
+                                   rawTranscript: "schema", processingOwner: UUID(), ownerGeneration: 1, state: Tag("ready"),
+                                   assetID: UUID(), conflictOf: UUID(), deletedAt: now)
+        guard let n = try? mapping.record(for: .note(note), systemFields: nil),
+              let g = try? mapping.record(for: .segment(segment), systemFields: nil) else { return 1 }
+        g[Schema.Segment.assetUpload] = "published"
+        return await direct(database, "schema-seed") {
+            _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: Zones.stream)], deleting: [])
+            let (saves, _) = try await database.modifyRecords(saving: [n, g], deleting: [])
+            for (_, result) in saves { if case .failure(let error) = result { throw error } }
+            say("schema-seed note fields=\(n.allKeys().count) segment fields=\(g.allKeys().count)")
+            _ = try await database.modifyRecords(saving: [], deleting: [n.recordID, g.recordID])
+        }
     }
 
     /// Statement 11, first half: a field this build does not know, written to a note.
