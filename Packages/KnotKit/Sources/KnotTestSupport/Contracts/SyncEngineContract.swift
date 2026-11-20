@@ -16,6 +16,9 @@ public struct SyncEngineSubject: Sendable {
     /// `userDeletedZone` for `.purged`, its `zoneNotFound` with
     /// `CKErrorUserDidResetEncryptedDataKey` for `.encryptedDataReset`.
     public let zoneMissingOnNextSend: @Sendable (ZoneLoss) async -> Void
+    /// The source meets a pause while the next manual sync is finishing: after its send, before
+    /// it is idle.
+    public let pauseDuringNextSync: @Sendable (SyncQuestion) async -> Void
     /// An event of the run before the last stop arrives now.
     public let deliverLateEvent: @Sendable () async -> Void
 
@@ -24,6 +27,7 @@ public struct SyncEngineSubject: Sendable {
         pause: @escaping @Sendable (SyncQuestion) async -> Void,
         failNextSync: @escaping @Sendable (KnotError) async -> Void,
         zoneMissingOnNextSend: @escaping @Sendable (ZoneLoss) async -> Void,
+        pauseDuringNextSync: @escaping @Sendable (SyncQuestion) async -> Void,
         deliverLateEvent: @escaping @Sendable () async -> Void
     ) {
         self.engine = engine
@@ -31,6 +35,7 @@ public struct SyncEngineSubject: Sendable {
         self.pause = pause
         self.failNextSync = failNextSync
         self.zoneMissingOnNextSend = zoneMissingOnNextSend
+        self.pauseDuringNextSync = pauseDuringNextSync
         self.deliverLateEvent = deliverLateEvent
     }
 }
@@ -86,6 +91,28 @@ public enum SyncEngineContract {
             await engine.answer(.zoneRemoved(loss), .upload)
         }
 
+        // Every pause holds until it is answered, an account change first of all: a real engine
+        // that went on could upload under another iCloud account (finding 14).
+        let questions: [SyncQuestion] = [
+            .accountChanged, .signedOut, .largeDelete(notes: 40, ofTotal: 100), .restoredStore, .environmentChanged,
+            .recordTooLarge(count: 2),
+        ]
+        for asked in questions {
+            await subject.pause(asked)
+            #expect(await first(of: engine) == .paused(asked), "\(asked) pauses sync.")
+            await engine.answer(asked, .upload)
+            guard case .idle = await first(of: engine) else {
+                Issue.record("Upload leaves the pause for idle: \(asked).")
+                continue
+            }
+        }
+
+        // A pause that arrives while a sync is finishing wins: the sync does not end it.
+        await subject.pauseDuringNextSync(.accountChanged)
+        try await engine.syncNow()
+        #expect(await first(of: engine) == .paused(.accountChanged), "Only an answer ends a pause.")
+        await engine.answer(.accountChanged, .upload)
+
         // A pause asks, keeps sync paused until answered, and takes the two answers.
         let question = SyncQuestion.zoneRemoved(.purged)
         await subject.pause(question)
@@ -97,8 +124,10 @@ public enum SyncEngineContract {
         await engine.answer(question, .keepPaused)
         #expect(await first(of: engine) == .paused(question), "Keep paused keeps it paused.")
         await engine.answer(question, .upload)
-        let resumed = await first(of: engine)
-        #expect(resumed != .paused(question) && resumed != .off, "Upload leaves the pause.")
+        guard case .idle = await first(of: engine) else {
+            Issue.record("Upload leaves the pause for idle.")
+            return
+        }
 
         // A stop drops every later event of its run.
         await engine.stop()

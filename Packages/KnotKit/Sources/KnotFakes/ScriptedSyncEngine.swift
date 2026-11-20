@@ -17,6 +17,7 @@
             var failures: [(error: KnotError, loss: ZoneLoss?)] = []
             var watchers: [UUID: AsyncStream<SyncStatus>.Continuation] = [:]
             var syncs = 0
+            var pauseDuringSync: SyncQuestion?
         }
 
         private let clock: any WallClock
@@ -46,6 +47,11 @@
         public func pause(_ question: SyncQuestion) {
             let generation = state.withLock { $0.generation }
             deliver(.paused(question), from: generation)
+        }
+
+        /// The source meets `question` while the next manual sync is finishing, after its send.
+        public func pauseDuringNextSync(_ question: SyncQuestion) {
+            state.withLock { $0.pauseDuringSync = question }
         }
 
         /// An event of the run before the last stop arrives now, as an operation in flight may
@@ -116,6 +122,12 @@
                 throw failure
             }
             deliver(.sending(remaining: pending), from: generation)
+            if let question = state.withLock({ state -> SyncQuestion? in
+                defer { state.pauseDuringSync = nil }
+                return state.pauseDuringSync
+            }) {
+                pause(question)
+            }
             let now = clock.now()
             state.withLock { state in
                 if state.generation == generation {
@@ -127,23 +139,27 @@
         }
 
         public func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async {
-            let resume = state.withLock { state -> (Int, Date?)? in
-                guard state.status == .paused(question), answer == .upload else { return nil }
-                return (state.generation, state.lastSuccess)
+            state.withLock { state in
+                // Only the answer `upload` to the question asked ends a pause.
+                guard state.status == .paused(question), answer == .upload else { return }
+                state.status = .idle(lastSuccess: state.lastSuccess)
+                for watcher in state.watchers.values { watcher.yield(state.status) }
             }
-            guard let (generation, lastSuccess) = resume else { return }
-            deliver(.idle(lastSuccess: lastSuccess), from: generation)
         }
 
-        /// Sets the status from an event of the run `generation`, and tells every watcher. An
-        /// event of an older run, or one that arrives while sync is off, is dropped.
+        /// Sets the status from an event of the run `generation`, and tells every watcher, in the
+        /// order of the changes. An event of an older run, or one that arrives while sync is off,
+        /// is dropped. A pause wins over the run: no event of it but another pause replaces one,
+        /// so nothing but an answer, or a stop, ends a pause (finding 14).
         private func deliver(_ status: SyncStatus, from generation: Int) {
-            let watchers = state.withLock { state -> [AsyncStream<SyncStatus>.Continuation] in
-                guard generation == state.generation, state.status != .off else { return [] }
+            state.withLock { state in
+                guard generation == state.generation, state.status != .off else { return }
+                if case .paused = state.status {
+                    guard case .paused = status else { return }
+                }
                 state.status = status
-                return Array(state.watchers.values)
+                for watcher in state.watchers.values { watcher.yield(status) }
             }
-            for watcher in watchers { watcher.yield(status) }
         }
     }
 #endif

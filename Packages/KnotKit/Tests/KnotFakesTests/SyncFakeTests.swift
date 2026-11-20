@@ -12,7 +12,8 @@ import Testing
                 engine: engine, setPending: { engine.setPending($0) }, pause: { engine.pause($0) },
                 failNextSync: { engine.failNextSyncs(with: $0) },
                 zoneMissingOnNextSend: { engine.zoneMissingOnNextSend($0) },
-                deliverLateEvent: { engine.deliverLateEvent() })
+                pauseDuringNextSync: { engine.pauseDuringNextSync($0) }, deliverLateEvent: { engine.deliverLateEvent() }
+            )
         }
     }
 }

@@ -87,6 +87,8 @@ public protocol SyncEngine: Sendable {
     func syncNow() async throws(KnotError)
 
     /// Answers the question of a pause. An answer to a question that is not asked changes
-    /// nothing. `upload` leaves the pause, and `keepPaused` keeps it.
+    /// nothing. `upload` leaves the pause for `idle`, and `keepPaused` keeps it. A pause wins
+    /// over a sync that is finishing: nothing but this answer, or a stop, ends it, so sync never
+    /// goes on under an account the person has not agreed to.
     func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async
 }
