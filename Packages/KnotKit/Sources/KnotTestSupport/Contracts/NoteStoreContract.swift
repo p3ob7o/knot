@@ -1329,6 +1329,34 @@ public enum NoteStoreContract {
         #expect(next.noteID == blankReceipt.noteID, "The recording joins the draft's note.")
         #expect(try await h.store.note(next.noteID) != nil, "That note lives on with it.")
         #expect(try await h.row(blank.id)?.outcome == .discardedEmpty)
+        _ = try await h.store.end(
+            CaptureEnd(captureID: next.captureID, endedAt: h.at(32), outcome: .discardedEmpty, revision: 0))
+
+        // A drawing that a handoff ended before its file was known takes its file from a later
+        // save, by end or by ingest (finding 40).
+        for byIngest in [false, true] {
+            let drawing = h.drawingStart(at: byIngest ? 50 : 40)
+            _ = try await h.store.record(drawing)
+            let recording = h.recordingStart(at: byIngest ? 51 : 41, surface: .control)
+            _ = try await h.store.record(recording)
+            let asset = h.asset(.ink, for: drawing.id)
+            if byIngest {
+                var item = drawing
+                item.endedAt = h.at(50.5)
+                item.body = .file(asset, duration: nil)
+                _ = try await h.store.ingest(item)
+            } else {
+                _ = try await h.store.end(
+                    CaptureEnd(
+                        captureID: drawing.id, endedAt: h.at(40.5), outcome: .stored(.file(asset, duration: nil)),
+                        revision: 0))
+            }
+            let segment = try #require(try await h.store.segment(SegmentID(drawing.id))).segment
+            #expect(segment.assetID == asset.id && segment.state == .ink(.recognising), "The file joins the drawing.")
+            _ = try await h.store.end(
+                CaptureEnd(
+                    captureID: recording.id, endedAt: h.at(byIngest ? 52 : 42), outcome: .discardedEmpty, revision: 0))
+        }
     }
 
     // MARK: Deletes

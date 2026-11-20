@@ -948,8 +948,13 @@
                         (row.kind == .voice) == (asset.kind == .audio)
                     else { throw KnotError.unexpected.about(capture: id) }
                     let hash = contentHash(row.kind, content)
+                    // A capture that a handoff ended before its file was known takes its file
+                    // from a later save, as a later save of text applies (findings 21 and 40).
+                    var takesFile = row.outcome == .stored && row.contentHash == nil
+                    if case .failed = row.outcome { takesFile = true }
+                    if row.outcome == .open { takesFile = true }
                     switch row.outcome {
-                    case .open, .failed:
+                    case _ where takesFile:
                         if next.segments[first] == nil {
                             receipt.segmentIDs = [try remake(row, in: &receipt.noteID, into: &next)]
                         }
