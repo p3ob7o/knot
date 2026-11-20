@@ -66,6 +66,10 @@ Read from the bundles installed on the build Mac and from public pages; neither 
 
 Day One is the direct route with the Team-ID form. DetailsPro is a bare `group.` tool that passes review, but it reaches its data through the running app over the network, which Knot does not use.
 
+## Privacy manifests
+
+The brief asks that the spike app carry the privacy manifests with their required reasons, so that App Store Connect checks them in wave 1. The built app carries two: its own, `Contents/Resources/PrivacyInfo.xcprivacy`, a copy of the Mac app's with its four reasons, and GRDB's, in `Contents/Resources/GRDB_GRDB.bundle`. The helper bundle carries the same two. The bare tool, which links GRDB statically, carries none: a bare executable has no `Resources` folder for one, and the spike did not try to embed one. Whether App Store Connect counts the app's manifest for the tool, or asks the tool for its own, the upload shows.
+
 ## The distribution-signed check, prepared
 
 Not run: it needs the owner's word and an App Store Connect key. What the owner hands over, at G1:
@@ -150,7 +154,8 @@ docs/architecture.md is the orchestrator's file, so this note does not edit it. 
 4. **Product spec §10 and §11, the PATH.** Command-line access in Settings installs a shell script that `exec`s the tool, not a symbolic link, in a folder the user picks or by a line the user runs. Which of the two is WP-34's, with the owner.
 5. **Product spec §10, `knot export <folder>`.** The tool cannot write to the folder. The command writes to standard output, as an archive or one stream, or into a folder in the group container that it names; the report chooses.
 6. **§7 and §18, two signers.** A team-signed build of a development identifier on the build Mac needs one consent dialog per new signer of each container, answered by the owner, and blocks every start of that identifier while the dialog waits. Every start of a sandboxed build in `scripts/verify.sh` gets a time limit: the packaging step runs `knot-dev --version` with none.
-7. **§20, new rows.**
+7. **§19, privacy manifests.** "A required reason for each API that needs one, in every target" meets a target that cannot hold a manifest: the bare tool has no `Resources` folder, and it links GRDB, whose manifest sits in a bundle the tool does not carry. §19 says whether a bare executable carries a manifest of its own, and if it cannot, where its reasons go: in the app's manifest, which the distribution-signed check shows App Store Connect accepting or not.
+8. **§20, new rows.**
    - A development-signed bare executable, which carries no profile, is refused a `group.` app group without a prompt, and so are a helper bundle with no profile or with the wildcard profile and an app with the wildcard profile; the log names platform binary, Mac App Store, profile-validated entitlements, iPad app and TestFlight as the signatures that pass. The Team-ID form is approved with no profile (build Mac, 2026-11-20).
    - A sandboxed command-line tool cannot write to a folder passed as an argument: confirmed, 513 (build Mac). This replaces the row "Expected from the sandbox rules. SP-3 confirms."
    - A tool with its own sandbox traps in sandbox setup when a sandboxed app starts it; an `inherit` tool runs in its parent's container (build Mac).
