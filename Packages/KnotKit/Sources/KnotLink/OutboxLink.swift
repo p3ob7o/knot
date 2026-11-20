@@ -404,7 +404,9 @@ public actor OutboxLink {
         newestSpoken[capture] = attempt
         if failure?.handling == .failure {
             log.capture(capture, "link_transfer_failed_late", .number("attempt", attempt.number))
-            lostEnds[capture] = nil
+            // Only the attempts older than this one are done with: a newer one given up may still
+            // end and say the file was read, and then it decides.
+            lostEnds[capture] = lostEnds[capture]?.filter { Self.isNewer($0, than: attempt) }
             if let current = queued[capture] {
                 transport.cancelFile(captureID: capture, attempt: current.attempt)
                 // Its own end may already have happened, and may still say the file was read.
