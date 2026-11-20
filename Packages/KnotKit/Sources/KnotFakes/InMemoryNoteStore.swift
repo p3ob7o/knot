@@ -934,7 +934,12 @@
                     var text = ""
                     if case .text(let incomingText) = incoming { text = incomingText }
                     if isFailed {
-                        // A failed capture becomes stored when a retry succeeds.
+                        // A failed capture becomes stored when a retry succeeds, through the same
+                        // precedence as an ended row: a person's text since is not touched, and
+                        // the retry's content is kept as a conflict copy of it (finding 64).
+                        if revision >= row.revision, textReplacedSinceEnd(id, in: next), text != stored {
+                            return try settleRetry(text, of: id, revision: revision, endingAt: endingAt, in: &next)
+                        }
                         if revision >= row.revision {
                             winner = text
                             winnerRevision = revision
@@ -1125,6 +1130,36 @@
             next.captures[capture] = row
             next.counter += 1
             touch(original.noteID, counter: next.counter, at: clock.now(), in: &next)
+            receipt.cursor = cursor(next.counter)
+            next.receipts[capture] = receipt
+            return true
+        }
+
+        /// The retry of a failed typed capture whose text a person replaced since it failed: the
+        /// capture is stored, the person's segments are left with their text and no longer
+        /// failed, and the retry's content, unless empty, is kept as a conflict copy.
+        private func settleRetry(
+            _ text: String, of capture: CaptureID, revision: Int64, endingAt: Date?, in next: inout State
+        ) throws(KnotError) -> Bool {
+            if !CaptureText.isEmpty(text) {
+                _ = try keepAsCopy(text, of: capture, revision: revision, endingAt: endingAt, in: &next)
+            }
+            guard var row = next.captures[capture], var receipt = next.receipts[capture] else {
+                throw KnotError.notFound.about(capture: capture)
+            }
+            let now = clock.now()
+            for (id, owner) in next.segmentCapture where owner == capture {
+                next.segments[id]?.state = .typed(.ready)
+            }
+            row.outcome = .stored
+            row.contentHash = contentHash(.typed, .text(text))
+            row.revision = max(row.revision, revision)
+            row.lastSavedAt = now
+            next.captures[capture] = row
+            next.counter += 1
+            touch(receipt.noteID, counter: next.counter, at: now, in: &next)
+            receipt.outcome = .stored
+            receipt.revision = stamp(receipt.segmentIDs.first.flatMap { next.segments[$0]?.revision } ?? row.revision)
             receipt.cursor = cursor(next.counter)
             next.receipts[capture] = receipt
             return true
@@ -1332,7 +1367,9 @@
                 id: SegmentID(row.id), noteID: note, kind: row.kind, origin: row.origin.source,
                 startedAt: row.startedAt, textOrigin: voice ? .rawTranscript : .recognised,
                 processingOwner: voice && !row.origin.source.isTool ? deviceID : nil,
-                state: voice ? .voice(.recorded) : .ink(.recognising), revision: row.revision)
+                state: voice ? .voice(.recorded) : .ink(.recognising),
+                // The store's own revision, never the producer's (finding 64).
+                revision: (next.highestRevision[SegmentID(row.id)] ?? 0) + 1)
             next.segments[segment.id] = segment
             next.segmentCapture[segment.id] = row.id
             return segment.id

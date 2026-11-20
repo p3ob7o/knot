@@ -101,7 +101,11 @@ public protocol NoteStore: Sendable {
     /// recording, by `end`, `record` or `ingest`. An end of a capture that has ended returns its
     /// receipt when the content is the same; at a higher revision it is a later save of the
     /// capture, kept as a conflict copy when a person replaced the text since; at the same
-    /// revision with other content it fails with `capture_id_conflict`.
+    /// revision with other content it fails with `capture_id_conflict`. The retry of a failed
+    /// capture, by `end` or `ingest`, stores it through the same precedence: a person's text
+    /// since the failure stays, and the retry's content is kept as a conflict copy. A segment's
+    /// revision is the store's own: never taken from a producer's content revision, and it
+    /// only rises.
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt
 
     /// The captures whose rows are open, of every launch. Recovery finishes those of other

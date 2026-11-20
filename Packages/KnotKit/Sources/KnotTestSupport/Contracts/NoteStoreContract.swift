@@ -1838,6 +1838,41 @@ public enum NoteStoreContract {
         _ = try await h.store.end(h.endTyped(draft.id, "old", at: 2, revision: 3))
         #expect(try await h.text(SegmentID(draft.id)) == "newer", "The text stays.")
         #expect(try await h.row(draft.id)?.revision == 4, "The revision stays.")
+
+        // A failed capture's retry goes through the same precedence as an ended row's later
+        // save, and a segment's revision is the store's own, which only rises (finding 64).
+        for byIngest in [false, true] {
+            let h = await Harness(make)
+            let lost = h.typedDraft("Lost connection", at: 0)
+            _ = try await h.store.record(lost)
+            _ = try await h.store.end(
+                CaptureEnd(
+                    captureID: lost.id, endedAt: h.at(0.5), outcome: .failed(KnotError.diskFull.code), revision: 1))
+            let edited = try await h.store.replaceText(
+                TextReplacement(segment: SegmentID(lost.id), text: "My corrected words", origin: .edited, writer: .app)
+            ).revision
+            let retry = h.typed("Lost connection", from: 0, to: 0.5)
+            if byIngest {
+                var item = lost
+                item.endedAt = h.at(0.5)
+                item.body = retry.body
+                let result = try await h.store.ingest(item)
+                #expect(result.receipt.outcome == .stored, "The ingest stores the item.")
+            } else {
+                let ended = try await h.store.end(
+                    CaptureEnd(
+                        captureID: lost.id, endedAt: h.at(1), outcome: .stored(.text("Lost connection")), revision: 1))
+                #expect(ended.outcome == .stored, "The retry stores the capture.")
+            }
+            let after = try #require(try await h.store.segment(SegmentID(lost.id)))
+            #expect(after.segment.text == "My corrected words", "The retry leaves the person's text as it is.")
+            #expect(after.revision.value >= edited.value, "A segment's revision never falls.")
+            #expect(after.segment.state == .typed(.ready), "The person's text is no longer a failed capture.")
+            let copy = try #require(
+                try await h.store.segment(.keptSave(of: lost.id)), "The retry's content is kept as a conflict copy.")
+            #expect(copy.segment.text == "Lost connection" && copy.segment.conflictOf == SegmentID(lost.id))
+            #expect(try await h.row(lost.id)?.outcome == .stored)
+        }
     }
 
     /// Witness 55: a discarded blank draft takes a higher-revision end with its only text.
