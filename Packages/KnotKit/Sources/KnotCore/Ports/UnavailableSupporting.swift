@@ -114,3 +114,47 @@ public struct UnavailableSettingsStore: SettingsStore {
     public func save(_ settings: Settings) async throws(KnotError) { throw KnotError.portUnavailable }
     public func changes() -> AsyncStream<Settings> { AsyncStream { $0.finish() } }
 }
+
+/// A `SurfaceRouter` that is not there: nothing comes forward.
+public struct UnavailableSurfaceRouter: SurfaceRouter {
+    public init() {}
+
+    public func open(_ destination: SurfaceDestination) async {}
+}
+
+/// A `CueEmitter` that is not there: no cue plays.
+public struct UnavailableCueEmitter: CueEmitter {
+    public init() {}
+
+    public func emit(_ cue: Cue) {}
+}
+
+/// A `FreeSpaceProbe` that is not there: it cannot tell.
+public struct UnavailableFreeSpaceProbe: FreeSpaceProbe {
+    public init() {}
+
+    public func availableBytes(forVolumeAt url: URL) -> Int64? { nil }
+}
+
+/// An `InstallIdentity` that is not there yet.
+public struct UnavailableInstallIdentity: InstallIdentity {
+    public init() {}
+
+    public func installID() throws(KnotError) -> UUID { throw KnotError.portUnavailable }
+}
+
+/// A `ProcessNotifier` that is not there: notices go nowhere, and none arrives.
+public struct UnavailableProcessNotifier: ProcessNotifier {
+    public init() {}
+
+    public func postStoreChanged() {}
+    public func storeChanges() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+/// A `Lifecycle` that is not there: the app counts as in front, and no event arrives.
+public struct UnavailableLifecycle: Lifecycle {
+    public init() {}
+
+    public var isInForeground: Bool { true }
+    public func events() -> AsyncStream<LifecycleEvent> { AsyncStream { $0.finish() } }
+}

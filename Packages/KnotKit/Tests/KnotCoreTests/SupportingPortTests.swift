@@ -73,3 +73,23 @@ import Testing
         await #expect(throws: KnotError.portUnavailable) { try await UnavailableSettingsStore().load() }
     }
 }
+
+@Suite struct SupportingPortTests {
+    @Test func theUnavailableSupportingPortsSayTheyAreNotThere() async {
+        await UnavailableSurfaceRouter().open(.capture)
+        UnavailableCueEmitter().emit(.saved)
+        #expect(UnavailableFreeSpaceProbe().availableBytes(forVolumeAt: URL(fileURLWithPath: "/")) == nil)
+        #expect(throws: KnotError.portUnavailable) { try UnavailableInstallIdentity().installID() }
+        var notices = 0
+        for await _ in UnavailableProcessNotifier().storeChanges() { notices += 1 }
+        #expect(notices == 0)
+        #expect(UnavailableLifecycle().isInForeground)
+    }
+
+    @Test func theCuesAreThoseOfTheProductSpec() {
+        #expect(
+            Cue.allCases.map(\.rawValue) == [
+                "recording_live", "saved", "could_not_start", "discarded", "stopped_early",
+            ])
+    }
+}
