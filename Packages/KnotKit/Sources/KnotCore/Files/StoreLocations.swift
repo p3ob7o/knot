@@ -180,7 +180,7 @@ public struct StoreLocations: Hashable, Sendable {
         outbox.appending(path: "\(capture).\(AssetKind.audio.fileExtension)", directoryHint: .notDirectory)
     }
 
-    private static func payloadExtension(_ kind: SegmentKind) -> String {
+    static func payloadExtension(_ kind: SegmentKind) -> String {
         switch kind {
         case .typed: "txt"
         case .voice: AssetKind.audio.fileExtension
