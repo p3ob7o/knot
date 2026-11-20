@@ -161,3 +161,42 @@ import Testing
             NoteMarkdown.plainText(record(note, [line])).hasPrefix("\(title.trimmingCharacters(in: .whitespaces))\n\n"))
     }
 }
+
+/// Finding 22: a title is text, and its heading shows it as written.
+@Suite struct TitleAsTextTests {
+    /// The heading's text, as Foundation's CommonMark parser reads the heading line.
+    static func headingText(of title: String) throws -> (heading: String, plain: String) {
+        let note = try Note(id: fixedID(0x85), createdAt: t0, title: title, titleOrigin: .user)
+        let line = try Build.typed(fixedID(0x86), in: note.id, from: t0, text: "Body.", origin: .cli)
+        let markdown = NoteMarkdown.render(record(note, [line]))
+        let heading = try #require(markdown.split(separator: "\n").first { $0.hasPrefix("# ") })
+        let parsed = try AttributedString(markdown: String(heading), options: .init(interpretedSyntax: .full))
+        return (String(parsed.characters), NoteMarkdown.plainText(record(note, [line])))
+    }
+
+    @Test(arguments: [
+        "How to spell &amp; in HTML",
+        "Entities &copy; &#169; &#xA9; and a lone & sign",
+        "Emphasis *one* **two** _three_ __four__ and a*b*c",
+        "Code `span` and ``double`` ticks",
+        "A [link](https://example.com) and ![an image](x.png) and [ref][1]",
+        "An autolink <https://example.com> and <mail@example.com> and <b>html</b> <!-- c -->",
+        "A back\\slash, \\* and \\\\ two",
+        "~~struck~~ and ~one~",
+        "Issue #",
+        "C# and #hashtag",
+    ])
+    func aTitleReadsBackAsWritten(title: String) throws {
+        let (heading, plain) = try Self.headingText(of: title)
+        #expect(heading == title)
+        #expect(plain.hasPrefix("\(title)\n\n"))
+    }
+
+    /// One title made of every character CommonMark reads as markup in a line of text.
+    @Test func aTitleOfEveryMarkupCharacterReadsBackAsWritten() throws {
+        let title = "\\ ` * _ [ ] ( ) < > & ! ~ # &amp; *a* _b_ `c` [d](e) <f@g.h> <https://i.j> ~~k~~ \\* ###"
+        let (heading, plain) = try Self.headingText(of: title)
+        #expect(heading == title)
+        #expect(plain.hasPrefix("\(title)\n\n"))
+    }
+}

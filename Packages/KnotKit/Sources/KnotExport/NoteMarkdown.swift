@@ -89,9 +89,10 @@ public enum SegmentFileLine: Hashable, Sendable {
 /// segment's text is already lightly styled Markdown (§7). Segments are separated by spacing
 /// alone, as in the note. A code fence that a segment's text leaves open is closed after it when
 /// it would turn the rest of the note into code, as Foundation's CommonMark parser reads it
-/// (`closingOpenFence`), and a title's closing `#` characters
-/// are escaped, so the heading keeps them. Nothing else in a segment's text is closed: an HTML
-/// comment or block it leaves open, such as `<!--` or `<pre>`, still reaches past it.
+/// (`closingOpenFence`). Nothing else in a segment's text is closed: an HTML comment or block
+/// it leaves open, such as `<!--` or `<pre>`, still reaches past it. A title is text: every
+/// character of it that would be read as markup, its closing `#` characters among them, is
+/// escaped, so the heading shows it as written.
 public enum NoteMarkdown {
     /// The note as Markdown. `files` holds the line of each segment whose recording or drawing
     /// the caller exported or left out; a segment it does not name gets no such line, as when a
@@ -106,7 +107,7 @@ public enum NoteMarkdown {
             "---",
         ]
         var blocks: [String] = []
-        if let heading = heading(note.title) { blocks.append("# \(escapingClosingHashes(heading))") }
+        if let heading = heading(note.title) { blocks.append("# \(escapingClosingHashes(escapingMarkup(heading)))") }
         for segment in ExportedSegments.of(record) {
             if let line = files[segment.id] { blocks.append(fileLine(line)) }
             if let text = body(segment.text) { blocks.append(closingOpenFence(text)) }
@@ -142,6 +143,25 @@ public enum NoteMarkdown {
         let line = title.split(whereSeparator: \.isNewline).joined(separator: " ")
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The characters that CommonMark, and the strikethrough of GitHub's dialect, read as
+    /// markup in a line of text: the backslash itself, code spans, emphasis, links and images,
+    /// the `<` that opens an autolink or HTML, entities, and strikethrough. `>` is not among them:
+    /// it is markup only at the start of a block, and a backslash before it would land inside a
+    /// bare URL that GitHub's dialect links.
+    private static let inlineMarkup: Set<Character> = ["\\", "`", "*", "_", "[", "]", "<", "&", "~"]
+
+    /// A title as the text of a heading that shows it as written: each character that would be
+    /// read as markup is escaped with a backslash, which CommonMark allows before any ASCII
+    /// punctuation. The plain text keeps the title as it is.
+    static func escapingMarkup(_ text: String) -> String {
+        var escaped = ""
+        for character in text {
+            if inlineMarkup.contains(character) { escaped.append("\\") }
+            escaped.append(character)
+        }
+        return escaped
     }
 
     /// A heading's text with a closing sequence escaped: a run of `#` at its end that a space
