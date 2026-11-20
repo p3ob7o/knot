@@ -204,6 +204,26 @@ import Testing
         #expect(await link.states()[capture] == .queued(attempt: again.attempt))
     }
 
+    /// A transfer's end matches the attempt it names: the end of an earlier attempt, repeated
+    /// by the network, never ends the attempt that replaced it.
+    @Test func aRepeatedEndOfAnEarlierAttemptDoesNotEndTheCurrentOne() async throws {
+        let harness = LinkHarness()
+        harness.system.holdsEvents = true
+        let (link, _) = harness.launchWatch()
+        await link.resume()
+        let capture = try await harness.sendNew(on: link)
+        await harness.settle(link)
+        let first = try #require(harness.outstanding(capture).first)
+
+        harness.system.finish(capture, attempt: first.attempt, as: .fails(.deliveryFailed))
+        harness.system.releaseHeld { events in events + events + events }
+        await harness.settle(link)
+        let current = harness.outstanding(capture)
+        #expect(current.count == 1, "One transfer of a capture at a time: \(current)")
+        #expect(current.first?.attempt != first.attempt)
+        #expect(await link.states()[capture] == .queued(attempt: current.first?.attempt ?? -1))
+    }
+
     @Test func aMissingFileFailsTheCaptureAndKeepsItsManifest() async throws {
         let harness = LinkHarness()
         let (link, _) = harness.launchWatch()
