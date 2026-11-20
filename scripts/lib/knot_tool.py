@@ -577,7 +577,11 @@ def code_lines(path):
             start = number
         parts.append(line.strip())
         raws.append(raw.strip())
-        depth += line.count("(") - line.count(")")
+        # Parentheses inside a string literal, interpolations included, open no call: they
+        # are counted only outside the literals, so that a "(" in a string does not join the
+        # lines after it into one statement.
+        bare = re.sub(r'"(?:\\.|[^"\\])*"', '""', line)
+        depth += bare.count("(") - bare.count(")")
         if depth <= 0:
             yield start, " ".join(parts), " ".join(raws)
             start, parts, raws, depth = None, [], [], 0
