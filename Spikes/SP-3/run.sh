@@ -48,12 +48,14 @@ build() {
     #                     profiles. Needs an Xcode account signed in to the team; the first
     #                     run registers the development identifiers in that account.
     local signing_args=(CODE_SIGNING_ALLOWED=NO)
-    if [[ ${1:-} == --profiles ]]; then signing_args=(-allowProvisioningUpdates); fi
+    # --profiles also lets Xcode register the Mac it runs on as a development device, which
+    # a Mac development profile needs. It registers that Mac only.
+    if [[ ${1:-} == --profiles ]]; then signing_args=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration REGISTER_APP_GROUPS=YES); fi
     "$root/scripts/build-slot.sh" run --label "SP-3 spike build" -- \
         xcodebuild -project "$here/SP3.xcodeproj" -scheme SP3 -configuration Debug \
         -destination 'platform=macOS' -derivedDataPath "$derived" \
         -clonedSourcePackagesDirPath "$out/SourcePackages" COMPILER_INDEX_STORE_ENABLE=NO \
-        ENABLE_DEBUG_DYLIB=NO KNOT_SIGNING=team "${signing_args[@]}" build >"$logs/build.log" 2>&1 || {
+        ENABLE_DEBUG_DYLIB=NO KNOT_SIGNING=team "${signing_args[@]}" ${SP3_CLEAN:+clean} build >"$logs/build.log" 2>&1 || {
         grep -E 'error:|warning:|BUILD' "$logs/build.log" | mask | tail -n 30
         exit 1
     }

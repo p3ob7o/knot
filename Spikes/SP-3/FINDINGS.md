@@ -40,8 +40,10 @@ signing team `<team>`, and a certificate's holder `<holder>`.
 - `codesign` signs with the Apple Development identity without a prompt.
 - Morning: Xcode had no account ("No Accounts"). Afternoon, after the owner signed in:
   `xcodebuild -allowProvisioningUpdates` stops at "Device … isn't registered in your
-  developer account", so no Mac development profile exists yet. The build log does not say
-  whether the App IDs were registered before that stop.
+  developer account". With the owner's word, `-allowProvisioningDeviceRegistration`
+  registered this Mac at 12:46, and the build then signs the app and the helper with the
+  wildcard Mac team profile. The build logs do not say whether explicit App IDs were
+  registered.
 - With manual signing and no profile, Xcode refuses an app or helper bundle that claims a
   `group.` group: "requires a provisioning profile". A tool target with the same entitlement
   builds. So `run.sh build` builds unsigned and signs each piece with `codesign`.
@@ -89,6 +91,20 @@ first start and after the last run.
 | Day One 2026.23 | `Contents/MacOS/dayone`, a CLI | Bare executable, identifier `com.bloombuilt.dayone.cli`, its own `app-sandbox`, an Info.plist in its binary (12 entries), app groups in the Team-ID form only, signed by Apple Mac OS Application Signing. No profile. | Its public guide has the user run `sudo bash …/install_cli.sh`, which writes `/usr/local/bin/dayone`; the installed version carries no such script in its bundle. The CLI finds the app through `DAYONE_APP_PATH`. |
 | DetailsPro 6.20.0 | `Contents/MacOS/detailspro-mcp`, an MCP server | Bare executable, identifier `app.funfocus.DetailsPro.mcp`, its own `app-sandbox`, an Info.plist in its binary (6 entries), a `group.` app group and `network.client`, signed by Apple. | The app shows a configuration with the absolute path into its bundle, and `claude mcp add` / `codex mcp add` lines. The server bridges to the running app over loopback port 13777: "DetailsPro must be running on the user's Mac for this MCP server to work." |
 
+### Afternoon: the sitting with the owner, 12:44 to 12:49
+
+| Time | Run | What happened |
+|---|---|---|
+| 12:44:30 | The app's first team-signed start, `--self-test --team-group`, limit 90 s | secinitd: "binary identity <<team>/com.p3ob7o.knot.dev; signer:development> not in ACL for container ~/Library/Containers/com.p3ob7o.knot.dev/Data …; prompting". The owner allowed it at 12:44:35. The Team-ID group: "APPROVED", no dialog. The app opened the store. |
+| 12:44:56 | `run.sh checks app`: the app runs, the tool writes, the app spawns each packaging | The app saw the tool's write through the Darwin notification. Its spawned bare tool raised a second dialog at 12:44:58: the tool's identity was "not in ACL" for the app's data container, `~/Library/Containers/com.p3ob7o.knot.dev/Data`. The owner allowed it at 12:45:02, after the child had been killed at its 3 s limit. |
+| 12:45:58 | `run.sh checks app` again | No prompt. Spawned by the sandboxed app, the bare tool, the helper and the no-Info.plist tool each trap in sandbox setup (signal 5); the `inherit` tool runs, inside the app's container (`APP_SANDBOX_CONTAINER_ID` is the app's). |
+| 12:46:32 | `run.sh build --profiles` with `-allowProvisioningDeviceRegistration` | Xcode registered this Mac and fetched a profile; the first try failed on the profile's file not yet being on disk, the second built. |
+| 12:47 | Explicit App Groups: the capability in the project, `REGISTER_APP_GROUPS=YES`, a clean build | Xcode still signs the app and the helper with the wildcard "Mac Team Provisioning Profile: *", one device, which authorises no app group. |
+| 12:48:13 | Both phases on the profiled build | As without a profile: `group.` refused for the app and the helper too, the Team-ID form works, no prompt. The app's own `probe` in the `group.` form fails with 513. |
+
+The gate's local `knot-dev --version` started after every run, and the locally signed app
+showed its 320x240 window at 12:46 and at 12:49.
+
 ## What it shows so far
 
 1. **Packaging rule 1 holds.** A tool started from Terminal needs its own `app-sandbox`
@@ -116,26 +132,31 @@ first start and after the last run.
 6. **A locally signed and a team-signed build of one identifier can share a container only
    after the owner allows it.** Each new signer raises a dialog, and while it waits every
    start of that identifier, the first signer's included, waits.
+7. **The app sees the tool's write while it runs**, through the Darwin notification, in the
+   Team-ID group container.
+8. **A sandboxed parent cannot start the tool.** A tool with its own sandbox traps in sandbox
+   setup when a sandboxed app starts it; an `inherit` tool runs, but in the parent's
+   container and the parent's groups, and its identity must be allowed into the parent's
+   data container. So an MCP client that is itself a sandboxed app cannot start Knot's tool.
+9. **A development profile does not change the group's answer** while Xcode picks the
+   wildcard team profile, which authorises no group.
 
-## Left for the sitting with the owner
+## Left over
 
-- The app's first team-signed start. Its data container was made by the locally signed
-  build, so it raises the same dialog the tool did ("Allow" makes the team a second signer).
-  It then runs `--self-test --spawn --team-group` (`run.sh checks app`): the app opens the
-  store, the tool writes while it runs, the app sees it, and the app starts each packaging
-  of the tool as a sandboxed parent. The Team-ID group container was made by the tool; if it
-  keeps a signer list too, a second dialog may follow.
-- Registering this Mac as a device in the account, so that the app and the helper get Mac
-  development profiles and the `group.` form can be tried with profile-validated
-  entitlements. It needs the owner's word, or his registering the Mac himself.
+- A profile that authorises the `group.` group. Xcode signs with the wildcard team profile,
+  which authorises none, and an explicit App ID with App Groups needs the developer website
+  or an App Store Connect key. The distribution-signed check needs explicit App IDs anyway.
+- The distribution-signed check itself (docs/notes/SP-3.md lists its commands).
 
-## State on the Mac at 12:39
+## State on the Mac at 12:49
 
-- `~/Library/Containers/com.p3ob7o.knot.dev` and `….cli`, from 2026-11-19, the team now a
-  second signer of `….cli`.
+- `~/Library/Containers/com.p3ob7o.knot.dev` and `….cli`, from 2026-11-19. The team is now a
+  second signer of both, and the tool's identity a third signer of the app's.
 - `~/Library/Group Containers/group.com.p3ob7o.knot.dev` and its `Application Scripts`
   folder, made by the system at 01:23:42; the spike wrote nothing there.
 - `~/Library/Group Containers/<team>.com.p3ob7o.knot.dev` and its `Application Scripts`
-  folder, made at 12:35:54 by the tool; empty of the spike's files after `cleanup`.
+  folder, made at 12:35:54 by the tool; empty of the spike's files after the last `cleanup`.
+- This Mac is registered as a development device in the owner's account, and Xcode holds a
+  Mac wildcard team profile. The spike's crash reports were removed by name.
 - No spike process running. The build is in the worktree's `.build/sp3/`. Containers are
   left in place.

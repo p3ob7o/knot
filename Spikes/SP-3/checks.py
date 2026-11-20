@@ -76,7 +76,7 @@ def run(name, argv, limit=15, stdin=None, shell=False, env=None):
     prompting, rejected = prompts_since(start)
     record = {
         "check": name, "at": start.strftime("%H:%M:%SZ"), "status": status, "seconds": seconds,
-        "stdout": mask(out.strip())[:900], "stderr": mask(err.strip())[:400],
+        "stdout": mask(out.strip())[:8000], "stderr": mask(err.strip())[:400],
         "groupRejected": [mask(l)[24:260] for l in rejected][:2],
         "prompted": [mask(l)[24:300] for l in prompting][:2],
     }

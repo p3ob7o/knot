@@ -36,6 +36,12 @@ targets:
   SP3App:
     type: application
     platform: macOS
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.Mac:
+          enabled: 1
+        com.apple.Sandbox:
+          enabled: 1
     sources: [App, Shared]
     settings:
       base:
@@ -140,6 +146,12 @@ targets:
   KnotDevCLI:
     type: application
     platform: macOS
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.Mac:
+          enabled: 1
+        com.apple.Sandbox:
+          enabled: 1
     sources: [Tool, Shared, Helper]
     settings:
       base:
