@@ -479,7 +479,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its first start would raise a consent dialog that has nothing to do with the app group. On a Mac where no Knot Dev build has run, no signer's dialog is expected, and any dialog is the group's | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
 | G3 | With SP-4 | Sign two simulators into iCloud with his additional Apple ID, one that is not tied to his developer account, for the second stage of the sync spike, once his signing is set up | 10 |
-| G3 | With SP-4, after its first runs | Deploy the spike's schema to the production side of its throwaway container in the CloudKit Console, purge it, and change the account once | 15 |
+| G3 | With SP-4, after its first runs | Deploy the spike's schema to the production side of its throwaway container in the CloudKit Console, run the purge the spike asks for, and change the account once | 15 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
