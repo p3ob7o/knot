@@ -3,28 +3,61 @@ import KnotCore
 
 /// The segments of a note that leave it, in the order they are written.
 ///
-/// A deleted segment stays behind. A conflict copy leaves with the rest, straight after the
-/// segment it copies, as the note shows it (docs/product-spec.md §9); a copy whose segment is
-/// deleted takes its own place. Otherwise the order is the note's (`SegmentOrder`).
+/// Every live segment leaves once, and a deleted one stays behind. A conflict copy goes after
+/// the capture of the segment it copies (all of that capture's pieces, which hold one text),
+/// as the note shows it (docs/product-spec.md §9). A copy of a copy follows the chain of
+/// `conflictOf` back to the first live segment that is not itself a copy of a live one, and
+/// goes after that segment's capture, nearer copies first. A copy whose segment is deleted or
+/// not in the note, and a segment whose chain runs into a cycle, keep their own place. Places
+/// otherwise follow the note's order (`SegmentOrder`).
 public enum ExportedSegments {
     public static func of(_ record: NoteRecord) -> [Segment] {
         let live = SegmentOrder.sorted(record.segments.filter { $0.deletedAt == nil })
-        let liveIDs = Set(live.map(\.id))
-        var copies: [SegmentID: [Segment]] = [:]
+        let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        // Each copy that follows another segment, keyed by the capture it goes after.
+        var followers: [SegmentID: [(depth: Int, segment: Segment)]] = [:]
+        var placed: [Segment] = []
         for segment in live {
-            if let original = segment.conflictOf, liveIDs.contains(original), original != segment.id {
-                copies[original, default: []].append(segment)
+            if let (anchor, depth) = anchor(of: segment, in: byID) {
+                followers[capture(of: anchor), default: []].append((depth, segment))
+            } else {
+                placed.append(segment)
             }
         }
+
         var ordered: [Segment] = []
         ordered.reserveCapacity(live.count)
-        for segment in live {
-            if let original = segment.conflictOf, liveIDs.contains(original), original != segment.id { continue }
+        for (index, segment) in placed.enumerated() {
             ordered.append(segment)
-            ordered.append(contentsOf: copies[segment.id] ?? [])
+            let key = capture(of: segment)
+            let next = index + 1 < placed.count ? capture(of: placed[index + 1]) : nil
+            guard next != key, let after = followers.removeValue(forKey: key) else { continue }
+            ordered += after.sorted { lhs, rhs in
+                lhs.depth != rhs.depth ? lhs.depth < rhs.depth : SegmentOrder.precedes(lhs.segment, rhs.segment)
+            }.map(\.segment)
         }
+        // Never reached, as every anchor is placed; kept so that no live segment can be lost.
+        for key in followers.keys.sorted() { ordered += followers[key, default: []].map(\.segment) }
         return ordered
     }
+
+    /// The live segment a copy goes after, and how many copies away it is; `nil` for a
+    /// segment that keeps its own place.
+    private static func anchor(of segment: Segment, in byID: [SegmentID: Segment]) -> (Segment, Int)? {
+        var current = segment
+        var depth = 0
+        var visited: Set<SegmentID> = [segment.id]
+        while let next = current.conflictOf.flatMap({ byID[$0] }) {
+            guard visited.insert(next.id).inserted else { return nil }
+            current = next
+            depth += 1
+        }
+        return depth > 0 ? (current, depth) : nil
+    }
+
+    /// The capture a segment belongs to: its first piece.
+    private static func capture(of segment: Segment) -> SegmentID { segment.pieceOf ?? segment.id }
 }
 
 /// What a note's Markdown says about a segment's recording or drawing.
