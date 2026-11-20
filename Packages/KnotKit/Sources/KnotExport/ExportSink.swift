@@ -19,9 +19,10 @@ public protocol ExportSink: Sendable {
 /// Writes an export into a folder the caller was given: its Markdown files at the root, its
 /// recordings and drawings in `attachments/`.
 ///
-/// It makes the folder and `attachments/` when they are missing, and replaces a file of an
-/// earlier export at the same path whole, through a temporary file beside it, so a file is
-/// either the old one or the new one. It leaves every other file in the folder alone.
+/// It makes the folder and `attachments/` when they are missing, and refuses an `attachments`
+/// that is a symbolic link. It replaces a file of an earlier export at the same path whole,
+/// through a temporary file beside it, so a file is either the old one or the new one. It
+/// leaves every other file in the folder alone.
 public struct FolderExportSink: ExportSink {
     public let root: URL
 
@@ -31,7 +32,10 @@ public struct FolderExportSink: ExportSink {
 
     public func write(_ data: Data, at path: ExportPath) throws(KnotError) {
         var folder = root
-        if let name = path.folder { folder = folder.appending(path: name, directoryHint: .isDirectory) }
+        if let name = path.folder {
+            try Self.refuseLink(root.appending(path: name, directoryHint: .notDirectory))
+            folder = folder.appending(path: name, directoryHint: .isDirectory)
+        }
         let destination = folder.appending(path: path.name, directoryHint: .notDirectory)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -39,6 +43,18 @@ public struct FolderExportSink: ExportSink {
         } catch {
             throw Self.knotError(error)
         }
+    }
+
+    /// Refuses a folder inside the export that is a symbolic link, before anything is written
+    /// through it: the link would send the export's files wherever it points. The root, and the
+    /// path that leads to it, are the caller's, and are not checked. A link where a file goes
+    /// needs no check: the write replaces it by a rename, which never follows it.
+    ///
+    /// The check reads the link itself, from a path with no trailing slash, which would follow it.
+    static func refuseLink(_ folder: URL) throws(KnotError) {
+        let path = folder.path(percentEncoded: false)
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil else { return }
+        throw KnotError.writeFailed.with(ErrorContext(posixError: ELOOP))
     }
 
     /// A full volume is told apart from any other failed write. The error holds no path, since
