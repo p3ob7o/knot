@@ -127,6 +127,8 @@ final class OpenMicrophone: OpenAudioInput {
             // down to one channel in the working file's format before it is written.
             try input.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(sampleRate / 10), format: nil) {
                 buffer, _ in
+                // An empty buffer holds nothing to write and says nothing about the input.
+                guard buffer.frameLength > 0 else { return }
                 guard let mono = Downmix.mono(buffer, into: format) else {
                     // Another rate or a sample format the file cannot take: the input changed.
                     deliver(.ended(.lost))
