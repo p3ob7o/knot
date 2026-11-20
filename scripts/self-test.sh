@@ -535,6 +535,30 @@ else
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
+# Every start in the scripts is wired through a limit (knot_tool.py unbounded-calls): no call
+# of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh or nightly.sh is
+# made without a limit helper. A copy of verify.sh with the hosted run's limit taken off,
+# and one with a wrapper called bare, fail.
+wiring="$scratch/wiring"
+mkdir -p "$wiring"
+wiring_check() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" unbounded-calls "$@" >"$wiring/out" 2>&1; }
+real=0
+wiring_check "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/sim.sh" "$KNOT_SCRIPTS/nightly.sh" || real=$?
+sed 's/knot_run_limited "The hosted iOS tests" "\$limit" xcb/xcb/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/hosted.sh"
+sed 's/knot_swift_test_limited package-test package_tests/package_tests/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/wrapper.sh"
+hosted=0
+wiring_check "$wiring/hosted.sh" || hosted=$?
+hosted_out="$(cat "$wiring/out")"
+wrapper=0
+wiring_check "$wiring/wrapper.sh" || wrapper=$?
+wrapper_out="$(cat "$wiring/out")"
+if [[ $real == 0 && $hosted == 1 && $hosted_out == *"no limit"*"Knot-iOS-Tests"* && $wrapper == 1 && $wrapper_out == *"package_tests"*"no limit"* ]] &&
+    ! cmp -s "$wiring/hosted.sh" "$KNOT_SCRIPTS/verify.sh" && ! cmp -s "$wiring/wrapper.sh" "$KNOT_SCRIPTS/verify.sh"; then
+    pass "every swift test, simctl, xcodebuild and xcb call in the scripts goes through a limit, and a bare one is found"
+else
+    fail "the wiring of the limits: real $real, hosted mutant $hosted, wrapper mutant $wrapper: $hosted_out / $wrapper_out"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

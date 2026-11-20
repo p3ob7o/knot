@@ -873,6 +873,87 @@ def option(args, name, default=None):
     return default
 
 
+# ---------------------------------------------------------------- starts that have a limit
+
+LIMITED_CALL = re.compile(r"\bswift test\b|\bxcrun simctl\b|\bxcodebuild\b|(?:^|[\s;(|&])xcb\s")
+LIMIT_HELPERS = ("knot_limit", "knot_run_limited", "knot_sim_call", "knot_swift_test_limited",
+                 "knot_start_tool", "knot_start_app")
+LIMIT_MARKER = re.compile(r"#\s*limit:\s*([A-Za-z_]\w*)\s*$")
+OTHER_PARTS = ("soak",)
+
+
+def logical_lines(text):
+    """A shell file's logical lines, with a backslash continuation joined, each with the
+    number of its first line."""
+    lines, current, first = [], "", None
+    for number, line in enumerate(text.splitlines(), 1):
+        if first is None:
+            first = number
+        if line.rstrip().endswith("\\"):
+            current += line.rstrip()[:-1] + " "
+            continue
+        lines.append((first, current + line))
+        current, first = "", None
+    if current:
+        lines.append((first, current))
+    return lines
+
+
+def code_of(line):
+    """A shell line without its comment and without the text of its plain quoted strings, so
+    that a message that names xcodebuild is not a call of it. A double-quoted string that
+    holds a command substitution is kept whole, since what it runs is a call; and a line
+    whose command is a message, such as echo or knot_fail, is no call at all."""
+    if re.match(r"^\s*(?:\|\||&&)?\s*(?:echo|printf|knot_fail|knot_report|bad|warn|ok)\b", line):
+        return ""
+    line = re.sub(r"'[^']*'", "''", line)
+    line = re.sub(r'"((?:\\.|[^"\\])*)"', lambda m: m.group(0) if "$(" in m.group(1) else '""', line)
+    return re.sub(r"(^|\s)#.*$", "", line)
+
+
+def cmd_unbounded_calls(files):
+    """Fails on a call of `swift test`, `xcrun simctl`, `xcodebuild` or `xcb` in the scripts
+    that is not made through a limit helper (LIMIT_HELPERS). A call inside a wrapper, such as
+    xcb's own xcodebuild, carries `# limit: <wrapper>` at the end of its line, and then every
+    call of that wrapper must go through a helper. The steps other packages own (OTHER_PARTS)
+    are listed and left to them."""
+    found = 0
+    for path in files:
+        with open(path) as f:
+            text = f.read()
+        others = [part_markers(text, name) for name in OTHER_PARTS]
+        lines = logical_lines(text)
+        wrappers = {}
+        for number, line in lines:
+            code = code_of(line)
+            if not LIMITED_CALL.search(code) or any(h in code for h in LIMIT_HELPERS):
+                continue
+            part = next((name for name, span in zip(OTHER_PARTS, others)
+                         if span and span[0] <= number <= span[1]), None)
+            if part:
+                print(f"{path}:{number}: in the {part} step, which its package bounds: {line.strip()[:100]}")
+                continue
+            marker = LIMIT_MARKER.search(line)
+            if marker:
+                wrappers.setdefault(marker.group(1), []).append(number)
+                continue
+            print(f"{path}:{number}: no limit: {line.strip()[:120]}")
+            found += 1
+        for wrapper, where in wrappers.items():
+            call = re.compile(r"(?:^|[\s;(|&])" + re.escape(wrapper) + r"(?:\s|$)")
+            for number, line in lines:
+                code = code_of(line)
+                if call.search(code) and not re.search(re.escape(wrapper) + r"\s*\(\)", code) \
+                        and not any(h in code for h in LIMIT_HELPERS):
+                    print(f"{path}:{number}: {wrapper}, which wraps the call at line {where[0]}, is called with no limit: {line.strip()[:100]}")
+                    found += 1
+    if found:
+        print(f"unbounded-calls: {found} calls with no limit")
+        return 1
+    print(f"unbounded-calls: every call in {', '.join(files)} has a limit")
+    return 0
+
+
 # ---------------------------------------------------------------- this tree's audio fixtures
 
 
@@ -1021,6 +1102,8 @@ def main(argv):
         return cmd_team_id(option(args, "--team-config"))
     if command == "links":
         return cmd_links()
+    if command == "unbounded-calls":
+        return cmd_unbounded_calls(args)
     if command == "fixtures-audio":
         return cmd_fixtures_audio(option(args, "--fixtures"))
     if command == "fake-types":
