@@ -70,11 +70,25 @@ public enum SyncEngineContract {
             Issue.record("A manual sync fetches and sends: \(run).")
         }
         #expect(run.contains(.sending(remaining: 3)), "A send reports what remains.")
+        #expect(run.filter { $0 == .fetching }.count == 1, "One fetch is published once: \(run).")
+        guard case .idle(let lastSuccess?)? = run.last else { return }
+
+        // What was sent no longer waits: the next send reports nothing remaining.
+        let again = engine.statusUpdates()
+        try await engine.syncNow()
+        let second = await statuses(of: again, through: { if case .idle(let last?) = $0 { last } else { nil } })
+        #expect(second.contains(.sending(remaining: 0)), "Records sent are no longer pending: \(second).")
 
         // A transient condition says when to try again, as the status does.
         let retryAt = Date(timeIntervalSince1970: 1_795_000_000)
         await subject.failNextSync(KnotError.syncTransient.with(.init(retryAt: retryAt)))
-        await refuses(.syncTransient, "The manual sync throws the condition.") { try await engine.syncNow() }
+        do {
+            try await engine.syncNow()
+            Issue.record("The manual sync throws the condition.")
+        } catch {
+            #expect(error.code == KnotError.syncTransient.code, "The manual sync throws the condition.")
+            #expect(error.context.retryAt == retryAt, "The error it throws carries the time to retry.")
+        }
         #expect(await first(of: engine) == .waiting(until: retryAt), "The status waits until the time given.")
 
         // Another condition is a failed status, with its code.
@@ -129,12 +143,16 @@ public enum SyncEngineContract {
             return
         }
 
-        // A stop drops every later event of its run.
+        // A stop is published to those already listening, and drops every later event of its run.
+        let listening = engine.statusUpdates()
         await engine.stop()
         #expect(await first(of: engine) == .off, "A stopped engine is off.")
         await subject.deliverLateEvent()
         await subject.pause(.signedOut)
         #expect(await first(of: engine) == .off, "An event after the stop never arrives.")
+        // While off, a manual sync does nothing, and uses up nothing: the condition the source
+        // holds for the next sync is still there once sync runs again.
+        await subject.failNextSync(.syncQuotaExceeded)
         try await engine.syncNow()
         #expect(await first(of: engine) == .off, "A manual sync while off does nothing.")
 
@@ -142,12 +160,19 @@ public enum SyncEngineContract {
         // what the run's generation is for (docs/notes/SP-4.md).
         await engine.start()
         let restarted = await first(of: engine)
-        guard case .idle = restarted else {
-            Issue.record("A restarted engine is idle, not \(String(describing: restarted)).")
-            return
+        #expect(restarted == .idle(lastSuccess: lastSuccess), "A restarted engine keeps the time of its last success.")
+        let heard = await SuiteWait.value("the listener to hear the stop") {
+            // The first value is the status when the subscription began.
+            for await status in listening.dropFirst() {
+                if status == .off { return true }
+                if case .idle = status, status == restarted { return false }
+            }
+            return false
         }
+        #expect(heard == true, "Those already listening hear the stop.")
         await subject.deliverLateEvent()
         #expect(await first(of: engine) == restarted, "An event of the stopped run never reaches the new one.")
+        await refuses(.syncQuotaExceeded, "Nothing was used up while off.") { try await engine.syncNow() }
     }
 
     /// The first status a new subscriber gets: the current one.
@@ -159,13 +184,14 @@ public enum SyncEngineContract {
         } ?? nil
     }
 
-    /// The statuses of `updates` up to the first for which `end` gives a value.
+    /// The statuses of `updates` after the one it began with, up to the first for which `end`
+    /// gives a value.
     static func statuses(of updates: AsyncStream<SyncStatus>, through end: @escaping @Sendable (SyncStatus) -> Date?)
         async -> [SyncStatus]
     {
         await SuiteWait.value("the run's statuses") {
             var seen: [SyncStatus] = []
-            for await status in updates {
+            for await status in updates.dropFirst() {
                 seen.append(status)
                 if end(status) != nil { break }
             }

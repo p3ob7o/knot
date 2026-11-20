@@ -48,4 +48,13 @@ private final class CallbackClock: WallClock {
         #expect(link.queueCount(capture) == 2)
         #expect(counts == WatchLinkCounts(waiting: 1, failed: 0))
     }
+
+    /// Finding 18: a manual sync while off uses up nothing.
+    @Test func aSyncWhileOffKeepsTheNextFailure() async throws {
+        let engine = ScriptedSyncEngine(clock: FakeClock())
+        engine.failNextSyncs(with: .syncQuotaExceeded)
+        try await engine.syncNow()
+        await engine.start()
+        await #expect(throws: KnotError.syncQuotaExceeded) { try await engine.syncNow() }
+    }
 }

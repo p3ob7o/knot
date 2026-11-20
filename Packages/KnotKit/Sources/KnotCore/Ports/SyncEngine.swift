@@ -67,11 +67,13 @@ public protocol SyncEngine: Sendable {
     /// ends; sync is not affected.
     func statusUpdates() -> AsyncStream<SyncStatus>
 
-    /// Starts the engine. Starting a started engine changes nothing.
+    /// Starts the engine: it is then idle, with the time of its last success, which a stop does
+    /// not forget. Starting a started engine changes nothing.
     func start() async
 
     /// Stops the engine: it cancels what runs and drops every later event of this run, so an
-    /// event that arrives after the stop never reaches the notes. The status is then `off`.
+    /// event that arrives after the stop never reaches the notes. The status is then `off`, and
+    /// those already listening hear it.
     func stop() async
 
     /// Fetches, then sends. It throws a sync condition, `sync_transient` to

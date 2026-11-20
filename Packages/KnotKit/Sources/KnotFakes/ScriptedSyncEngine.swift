@@ -80,36 +80,35 @@
         }
 
         public func start() async {
-            let started = state.withLock { state -> (SyncStatus, [AsyncStream<SyncStatus>.Continuation])? in
-                guard state.status == .off else { return nil }
+            state.withLock { state in
+                guard state.status == .off else { return }
                 state.generation += 1
                 state.status = .idle(lastSuccess: state.lastSuccess)
-                return (state.status, Array(state.watchers.values))
+                for watcher in state.watchers.values { watcher.yield(state.status) }
             }
-            guard let (status, watchers) = started else { return }
-            for watcher in watchers { watcher.yield(status) }
         }
 
         public func stop() async {
-            let watchers = state.withLock { state in
+            state.withLock { state in
                 // A later event of this run is dropped: its generation is no longer current.
                 state.generation += 1
                 state.status = .off
-                return Array(state.watchers.values)
+                for watcher in state.watchers.values { watcher.yield(.off) }
             }
-            for watcher in watchers { watcher.yield(.off) }
         }
 
         public func syncNow() async throws(KnotError) {
-            let (generation, status, pending, failure) = state.withLock { state in
+            let run = state.withLock { state -> (Int, Int, (error: KnotError, loss: ZoneLoss?)?)? in
                 state.syncs += 1
+                // While off or paused a manual sync does nothing, and uses up nothing.
+                switch state.status {
+                case .off, .paused: return nil
+                default: break
+                }
                 let failure = state.failures.isEmpty ? nil : state.failures.removeFirst()
-                return (state.generation, state.status, state.pending, failure)
+                return (state.generation, state.pending, failure)
             }
-            switch status {
-            case .off, .paused: return
-            default: break
-            }
+            guard let (generation, pending, failure) = run else { return }
             deliver(.fetching, from: generation)
             if let (failure, loss) = failure {
                 if let loss {
