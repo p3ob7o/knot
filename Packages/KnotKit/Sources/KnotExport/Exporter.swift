@@ -138,19 +138,23 @@ public struct ExportReport: Hashable, Sendable {
 /// changes can move behind the export's position, where no later page returns it, or ahead
 /// of it, where a later page returns it again. Only a note that changed can do either, so the
 /// export takes the store's cursor before its first page, writes each note once, by its ID,
-/// and after the last page reads the notes changed since that cursor and writes those shown
-/// that it has not written. It repeats that from the cursor it reached until a pass writes
-/// nothing, at most `catchUpPasses` times. One pass is enough for every note that was shown
-/// when the export began and is still shown: one the pages missed changed before its page was
-/// read, so before the first pass. A further pass only takes notes that became shown during
-/// the export, such as one a new capture made, and the bound keeps a store that never stops
-/// changing from holding the export for ever. A note that changed after it was written leaves
-/// as it was when it was read.
+/// and then catches up in passes. Each pass takes the store's cursor at its start, reads the
+/// notes changed since the previous cursor until it reaches that one, and writes those shown
+/// that it has not written. The passes stop when one writes nothing, and after at most
+/// `catchUpPasses`.
+///
+/// So the export always ends: a pass reads up to a cursor fixed at its start, and the passes
+/// are limited. The first pass is what the export needs: a note shown when the export began
+/// that the pages missed changed before its page was read, so before the first pass's cursor.
+/// The second takes the notes that became shown while the pages and the first pass ran, such
+/// as one a new capture made. A note that first changes after the last pass's cursor is after
+/// the export: it leaves as the pages or a pass read it, and not at all if neither did. A note
+/// that changed after it was written leaves as it was when it was read.
 public struct Exporter: Sendable {
     /// Notes read from the stream, or changes read from the store, at a time.
     public static let pageSize = 100
     /// The most passes over the notes that changed while the export ran (see above).
-    public static let catchUpPasses = 4
+    public static let catchUpPasses = 2
 
     private let notes: any NoteStore
     private let assets: any AssetStore
@@ -237,8 +241,9 @@ public struct Exporter: Sendable {
             position = page.next
         } while position != nil
         for _ in 0..<Self.catchUpPasses {
+            let until = try await notes.cursor()
             var added = false
-            var more = true
+            var more = since.counter < until.counter
             while more {
                 let page = try await notes.changes(after: since, limit: Self.pageSize)
                 for change in page.changes where !change.isDeleted {
@@ -247,7 +252,7 @@ public struct Exporter: Sendable {
                     try await body(record)
                 }
                 since = page.cursor
-                more = page.hasMore
+                more = page.hasMore && since.counter < until.counter
             }
             guard added else { return }
         }

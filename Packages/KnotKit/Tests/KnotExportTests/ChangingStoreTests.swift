@@ -66,6 +66,26 @@ final class HookedAssets: AssetStore {
     }
 }
 
+/// Runs `hook` before every write it takes, with the write's number, and keeps the files.
+final class EveryWriteSink: ExportSink {
+    let files = MemoryExportSink()
+    private let count = Mutex(0)
+    private let hook: @Sendable (Int) async throws -> Void
+
+    init(hook: @escaping @Sendable (Int) async throws -> Void) {
+        self.hook = hook
+    }
+
+    func write(_ data: Data, at path: ExportPath) async throws(KnotError) {
+        let number = count.withLock { value in
+            value += 1
+            return value
+        }
+        do { try await hook(number) } catch { Issue.record("The hook failed: \(error)") }
+        files.write(data, at: path)
+    }
+}
+
 /// Finding 3: the stream is paged by position, so a note that changes while an export runs
 /// can move behind the export's position, and be missed, or ahead of it, and be read again.
 @Suite struct ChangingStoreTests {
@@ -134,6 +154,35 @@ final class HookedAssets: AssetStore {
         #expect(ids.count == Self.count + 1)
         #expect(Set(ids).count == Self.count + 1)
         #expect(Set(report.written).count == report.written.count)
+    }
+
+    /// Finding 14: a store that gains a note at every write the export makes. Each pass reads
+    /// the changes up to the cursor taken at its start, so it ends, and the passes are limited:
+    /// the export ends long before the store stops, with every note that was shown when it began.
+    @Test func aStoreThatNeverStopsChangingDoesNotHoldTheExport() async throws {
+        let extra = 800
+        let world = try World(seed: try Self.notes())
+        let notes = world.notes
+        let sink = EveryWriteSink { number in
+            guard number <= extra else { return }
+            let start = t0.addingTimeInterval(Double(Self.count * 60 + 600 + number * 60))
+            _ = try await notes.record(
+                NewCapture(
+                    id: fixedID(UInt64(0x20000 + number)), kind: .typed,
+                    origin: CaptureOrigin(source: .device(thisDevice), surface: .app), launchID: fixedID(0x99),
+                    placement: .newNote, startedAt: start, endedAt: start.addingTimeInterval(5),
+                    body: .text("New \(number).")))
+        }
+        let report = try await world.exporter().export(to: sink)
+
+        let bound = Self.count + (Exporter.catchUpPasses + 1) * (Self.count + Exporter.pageSize)
+        #expect(report.notes < Self.count + extra)
+        #expect(report.notes <= bound)
+        let ids = Set(Self.exportedIDs(sink.files))
+        #expect(ids.count == report.notes)
+        for index in 0..<Self.count {
+            #expect(ids.contains("id: \(fixedID(UInt64(0x1000 + index)) as NoteID)"))
+        }
     }
 
     @Test func aPreviewCountsANoteThatMovesInFrontOfIt() async throws {
