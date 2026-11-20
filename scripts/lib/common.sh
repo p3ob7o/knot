@@ -407,6 +407,12 @@ knot_fakes_in() {
     printf '%s\n' "$found"
 }
 
+# The limit on one xcodebuild build, in seconds: 40 minutes. A build here takes 13 s for the
+# Debug apps and about 70 s for the two Release apps when DerivedData is warm, and a fresh
+# clone ran every step in under 10 minutes; codesign asking for a keychain is what could
+# hold one for ever. It stays under the hour another run waits for a build slot.
+KNOT_BUILD_LIMIT=${KNOT_BUILD_LIMIT:-2400}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

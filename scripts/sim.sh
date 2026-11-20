@@ -19,6 +19,18 @@
 # as in wp-01-tooling-1a2b3c-xcode27.3-iphone.
 
 source "$(dirname "$0")/lib/common.sh"
+
+# Every simctl call of this script goes through here, with a limit (KNOT_SIMCTL_LIMIT, 120
+# seconds; a boot's wait has its own), so that a CoreSimulator that no longer answers, or
+# a simulator stuck in a shutdown, fails the call instead of holding the run.
+simctl() {
+    local status=0 limit=${KNOT_SIMCTL_LIMIT:-120}
+    knot_limit "$limit" xcrun simctl "$@" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        echo "sim: xcrun simctl $1 did not end within ${limit}s. CoreSimulator may be stuck, or a simulator; scripts/sim.sh shutdown ends this worktree's, and quitting Simulator.app may help." >&2
+    fi
+    return "$status"
+}
 knot_select_xcode
 
 ROLES="iphone ipad watch"
@@ -38,7 +50,7 @@ name_of() { printf '%s%s-%s' "$KNOT_WORKTREE_ID" "$(set_suffix)" "$1"; }
 # Every simulator on this Mac, available or not, as lines of: udid, name, state,
 # availability, runtime, device type.
 devices() {
-    xcrun simctl list devices -j | python3 -I -c '
+    simctl list devices -j | python3 -I -c '
 import json, sys
 for runtime, devices in json.load(sys.stdin)["devices"].items():
     for d in devices:
@@ -62,7 +74,7 @@ runtime_for() {
         watchOS) version="${KNOT_SIM_WATCHOS_VERSION:-}" ;;
     esac
     [[ -n $version ]] || version="$(xcrun --sdk "$sdk" --show-sdk-version)"
-    xcrun simctl list runtimes -j | python3 -I -c '
+    simctl list runtimes -j | python3 -I -c '
 import json, sys
 platform, sdk, device = sys.argv[1], [int(p) for p in sys.argv[2].split(".")], sys.argv[3]
 def key(r): return [int(p) for p in r["version"].split(".")]
@@ -77,7 +89,7 @@ print(choice["identifier"] if choice else "")' "$platform" "$version" "$type"
 
 # The first device type in the list that this Xcode knows.
 device_type() {
-    xcrun simctl list devicetypes -j | python3 -I -c '
+    simctl list devicetypes -j | python3 -I -c '
 import json, sys
 known = {t["identifier"] for t in json.load(sys.stdin)["devicetypes"]}
 for wanted in sys.argv[1:]:
@@ -104,9 +116,9 @@ remove() {
     local udid=$1 name=$2 state
     state="$(devices | field 1 "$udid" 3)"
     if [[ $state != Shutdown && -n $state ]]; then
-        xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+        simctl shutdown "$udid" >/dev/null 2>&1 || true
     fi
-    xcrun simctl delete "$udid" 2>/dev/null ||
+    simctl delete "$udid" 2>/dev/null ||
         knot_fail "infra-simulator-delete" "simctl could not delete the simulator $name ($udid), state $state." \
             "Shut it down (xcrun simctl shutdown $udid), or quit Simulator.app, then rerun scripts/sim.sh ensure." \
             "safe" "the simulators of this worktree that came before it in the list"
@@ -122,7 +134,7 @@ create() {
             "Install the runtime: DEVELOPER_DIR=$DEVELOPER_DIR xcodebuild -downloadPlatform $([[ $role == watch ]] && echo watchOS || echo iOS)" \
             "safe" "nothing"
     fi
-    xcrun simctl create "$name" "$type" "$runtime" ||
+    simctl create "$name" "$type" "$runtime" ||
         knot_fail "infra-simulator-create" "simctl could not create $name on $runtime." \
             "Check the runtime with xcrun simctl list runtimes, then rerun scripts/sim.sh ensure." "safe" \
             "the simulators of this worktree that came before it"
@@ -156,8 +168,8 @@ ensure() {
     local phone watch
     phone="$(udid_of "$(name_of iphone)")"
     watch="$(udid_of "$(name_of watch)")"
-    if ! xcrun simctl list pairs | grep -e "$watch" >/dev/null; then
-        xcrun simctl pair "$watch" "$phone" >/dev/null ||
+    if ! simctl list pairs | grep -e "$watch" >/dev/null; then
+        simctl pair "$watch" "$phone" >/dev/null ||
             knot_fail "infra-simulator-pair" "simctl could not pair $(name_of watch) with $(name_of iphone)." \
                 "Rerun scripts/sim.sh ensure. If it fails again, delete the set with scripts/sim.sh delete." "safe" \
                 "this worktree's simulators were created"
@@ -213,7 +225,7 @@ case ${1:-} in
                 "Rerun the step. If it fails again, run scripts/sim.sh delete and scripts/sim.sh ensure." "safe" "nothing" ;;
     shutdown)
         devices | awk -F'\t' -v id="$KNOT_WORKTREE_ID" 'index($2, id "-") == 1 && $3 != "Shutdown" { print $1 }' |
-            while IFS= read -r udid; do xcrun simctl shutdown "$udid" 2>/dev/null || true; done ;;
+            while IFS= read -r udid; do simctl shutdown "$udid" 2>/dev/null || true; done ;;
     delete)
         # Every simulator of this worktree: each set named by its ID, available or not. Old
         # names, without the hash, are listed and left alone.

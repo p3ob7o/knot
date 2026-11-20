@@ -144,7 +144,7 @@ xcb() {
     knot_xcodebuild_settings
     # Xcode writes the team's prefix into the log of every app build on a Mac that knows the
     # team, so the log is filtered as it is written (knot_filter_team).
-    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log"
+    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log" # limit: xcb
 }
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
@@ -375,7 +375,8 @@ step_pins() {
     check_resolved "$KNOT_PACKAGE/Package.resolved" "$version" "$revision"
     echo "Xcode"
     knot_generate_project
-    xcb /dev/stdout -scheme Knot-iOS -resolvePackageDependencies
+    knot_run_limited "Resolving the packages for Xcode" "$KNOT_BUILD_LIMIT" \
+        xcb /dev/stdout -scheme Knot-iOS -resolvePackageDependencies
     check_resolved "$KNOT_SOURCE_PACKAGES/workspace-state.json" "$version" "$revision"
 }
 
@@ -394,7 +395,7 @@ step_package_test() {
     fi
     package_tests() {
         swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
-            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"
+            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
     }
     knot_swift_test_limited package-test package_tests
     # A run that matched no test is a failure, not a pass.
@@ -450,9 +451,11 @@ step_apps() {
     : >"$log"
     knot_generate_project
     echo "Knot-iOS, Debug, iOS Simulator"
-    xcb "$log" -scheme Knot-iOS -configuration Debug -destination 'generic/platform=iOS Simulator' build
+    knot_run_limited "The Debug build of Knot-iOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-iOS -configuration Debug -destination 'generic/platform=iOS Simulator' build
     echo "Knot-macOS, Debug"
-    xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
+    knot_run_limited "The Debug build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
 }
 
 # The packaging that otherwise fails late, each proven with one trivial instance
@@ -462,8 +465,10 @@ step_packaging() {
     local log="$KNOT_LOGS/verify-packaging-release.log"
     : >"$log"
     echo "Knot-iOS and Knot-macOS, Release"
-    xcb "$log" -scheme Knot-iOS -configuration Release -destination 'generic/platform=iOS Simulator' build
-    xcb "$log" -scheme Knot-macOS -configuration Release -destination 'platform=macOS' build
+    knot_run_limited "The Release build of Knot-iOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-iOS -configuration Release -destination 'generic/platform=iOS Simulator' build
+    knot_run_limited "The Release build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Release -destination 'platform=macOS' build
 
     local ios mac failed=0
     ios="$(products Debug-iphonesimulator)/Knot.app"
@@ -702,7 +707,7 @@ step_perf() {
     swift build --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES --build-tests
     perf_tests() {
         swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
-            --filter 'Performance' 2>&1 | tee "$output"
+            --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
     }
     knot_swift_test_limited perf perf_tests || return 1
     if grep -E 'Test run with [1-9][0-9]* tests?|Executed [1-9]' "$output" >/dev/null; then
@@ -724,7 +729,14 @@ step_tsan() {
 step_model_report() {
     local last="$KNOT_BUILD_FOLDER/models-last.txt" now
     mkdir -p "$KNOT_BUILD_FOLDER"
-    now="$(xcrun swift "$KNOT_SCRIPTS/lib/models.swift")"
+    local output="$KNOT_LOGS/verify-model-report.out" status=0
+    knot_limit "${KNOT_MODEL_REPORT_LIMIT:-600}" xcrun swift "$KNOT_SCRIPTS/lib/models.swift" >"$output" || status=$?
+    if ((KNOT_LIMIT_HIT)); then
+        knot_dialog_message "The model report" "${KNOT_MODEL_REPORT_LIMIT:-600}"
+        return 1
+    fi
+    ((status == 0)) || return "$status"
+    now="$(cat "$output")"
     echo "$now"
     if [[ -f $last ]] && ! diff -u "$last" <(printf '%s\n' "$now") >/dev/null; then
         echo "model-report: the models or the system changed since the last report:"
