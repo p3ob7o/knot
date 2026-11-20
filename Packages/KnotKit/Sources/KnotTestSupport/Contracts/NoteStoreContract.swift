@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
         Check(name: "grow-all", run: aGrowingCheckpointWritesEveryPiece),
         Check(name: "short-tail", run: aShortCheckpointDropsTheOldTail),
@@ -1740,6 +1741,23 @@ public enum NoteStoreContract {
             let piece = try #require(try await h.store.segment(.piece(position, of: draft.id))).segment
             #expect(piece.pieceOf == SegmentID(draft.id) && piece.piece == position)
         }
+    }
+
+    /// Witness 52: the continuation of an ended long capture can move while a sibling stays.
+    public static func aContinuationMoves(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("short", at: 0)
+        _ = try await h.store.record(draft)
+        let ended = try await h.store.end(h.endTyped(draft.id, Harness.longText(pieces: 2), at: 1, revision: 2))
+        _ = try await h.store.record(h.typed("A sibling", from: 1.5, to: 1.6, placement: .named(ended.noteID)))
+        let continuation = SegmentID.piece(1, of: draft.id)
+        guard case .moved(let moved) = try await h.store.move(continuation, from: ended.noteID) else {
+            Issue.record("The continuation moves.")
+            return
+        }
+        #expect(try await h.store.segment(continuation)?.segment.noteID == moved.to.id)
+        _ = try await h.store.returnToFormerNote(continuation, from: moved.to.id)
+        #expect(try await h.store.segment(continuation)?.segment.noteID == ended.noteID)
     }
 
     // MARK: Reading
