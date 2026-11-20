@@ -89,6 +89,18 @@ struct CopyShape: CustomTestStringConvertible, Sendable {
     }
 }
 
+/// Finding 16: where a copy of a copy goes, with IDs whose order is not the copies' order, so
+/// that the note's own order cannot give the right answer by chance.
+@Suite struct CopyOfACopyTests {
+    @Test func aCopyOfACopyGoesAfterTheCopyItCopies() throws {
+        let segments = [
+            try shapeSegment(0x05, copyOf: 0x50), try shapeSegment(0x50, copyOf: 0x11), try shapeSegment(0x11),
+        ]
+        let ids = ExportedSegments.of(record(Build.note(fixedID(0x100), at: t0), segments)).map(\.id)
+        #expect(ids == [0x11, 0x50, 0x05].map { fixedID($0) as SegmentID })
+    }
+}
+
 /// Finding 5: a copy shares its original's start, so only the move after the original keeps
 /// it there when its ID sorts first.
 @Suite struct CopyPlacementTests {
