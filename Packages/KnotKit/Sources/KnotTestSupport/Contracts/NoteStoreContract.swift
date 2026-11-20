@@ -384,6 +384,17 @@ public enum NoteStoreContract {
             CaptureCheckpoint(captureID: draft.id, text: "Half a thought, finished.", revision: 3))
         #expect(!check.applied, "Precedence keeps the person's text.")
         #expect(try await h.text(SegmentID(draft.id)) == "My words")
+
+        // A finished capture takes a checkpoint at a higher revision, and its text changes; one
+        // at its own revision changes nothing (finding 41).
+        let finished = h.tool("ended", at: 5)
+        _ = try await h.store.record(finished)
+        let stale = try await h.store.checkpoint(CaptureCheckpoint(captureID: finished.id, text: "stale", revision: 1))
+        let afterStale = try await h.text(SegmentID(finished.id))
+        #expect(!stale.applied && afterStale == "ended")
+        let saved = try await h.store.checkpoint(CaptureCheckpoint(captureID: finished.id, text: "late", revision: 2))
+        #expect(saved.applied && saved.storedRevision == 2)
+        #expect(try await h.text(SegmentID(finished.id)) == "late")
     }
 
     /// A late save onto text a person replaced changes nothing, the first time and every time:
