@@ -146,6 +146,11 @@ final class RecordingSink: LogSink {
     private let records = Mutex<[LogRecord]>([])
     func write(_ record: LogRecord) { records.withLock { $0.append(record) } }
     var lines: [String] { records.withLock { $0.map(\.line) } }
+    /// True once any line is of `event`.
+    func logged(_ event: String) -> Bool {
+        records.withLock { $0.contains { $0.event == event } }
+    }
+
     /// True once a line of `event` names `capture`.
     func logged(_ event: String, _ capture: CaptureID) -> Bool {
         records.withLock { $0.contains { $0.event == event && $0.fields.contains(.capture(capture)) } }

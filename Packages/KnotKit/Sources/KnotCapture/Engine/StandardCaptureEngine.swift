@@ -160,6 +160,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                     return try await retryBegin(pending, text: request.text ?? "")
                 case .end(let open):
                     if case .store = entries[open]?.path {
+                        log.capture(id, "start_waits_for_open_capture", .segment(SegmentID(open)))
                         await take(open)
                         if entries[open]?.outcome == .open, case .store = entries[open]?.path {
                             handoff = open

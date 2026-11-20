@@ -372,4 +372,96 @@ import Testing
                 return Set(texts) == ["buy milk", "call mom"]
             })
     }
+
+    // MARK: Finding 39: wrong engines the tests let through
+
+    /// Finding 39, n02. A start that waited for an open capture, which then ended, finds an
+    /// older start of its own kind on its surface that reached no disk: it becomes that one's
+    /// retry, and leaves no entry of its own open behind.
+    @Test func startThatBecomesARetryLeavesNoEntryOpen() async throws {
+        let r = Rig()
+        let x = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "x"))
+        // P starts before X by the clock, and reaches no disk: X goes on (finding 8).
+        r.clock.advance(by: -10)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        r.layer.failNextWrite(with: .diskFull)
+        let failed = await expectError(.diskFull) {
+            try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "p"))
+        }
+        let p = try #require(failed?.context.captureID)
+        r.clock.advance(by: 20)
+        // X's end waits in the store; a typed start on P's surface waits for X's line.
+        let hold = await r.notes.holdNextCaptureWrite()
+        let engine = r.engine
+        let ending = Task { try? await engine.end(x.captureID) }
+        await reached(hold)
+        let starting = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "c")) }
+        #expect(await eventually("the start to wait for X") { r.logs.logged("start_waits_for_open_capture") })
+        hold.release()
+        _ = await SuiteWait.value("X's end") { await ending.value }
+        let started = await SuiteWait.value("the start") { try? await starting.value }
+        let c = try #require(started ?? nil)
+        #expect(c.captureID == p, "The start became P's retry.")
+        // No entry of the start's own is left open: once P ends, a start on that surface is a
+        // capture of its own, at its first revision, and not the retry of a leftover entry.
+        _ = try await engine.end(p)
+        let again = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "again"))
+        #expect(again.captureID != p)
+        #expect(again.durableRevision == 1)
+    }
+
+    /// Finding 39, n05 and n06. A typed start that reaches no disk ends nothing: the open
+    /// capture, on the store path or on the `Inbox/` path, goes on and takes saves.
+    @Test(arguments: [false, true])
+    func startThatReachesNoDiskEndsNothing(openOffTheStorePath: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        if openOffTheStorePath { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "a"))
+        #expect((a.path == .store) != openOffTheStorePath)
+        if !openOffTheStorePath { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+        r.layer.failNextWrite(with: .diskFull)
+        await expectError(.diskFull) {
+            try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "b"))
+        }
+        let goesOn = try await r.engine.update(a.captureID, with: .text("a, then more"))
+        #expect(goesOn.outcome == .open)
+        if !openOffTheStorePath { #expect(try await r.notes.capture(a.captureID)?.outcome == .open) }
+    }
+
+    /// Finding 39, n07. A conversion tried again and stored is no longer pending: a later retry
+    /// converts nothing.
+    @Test func storedConversionIsNoLongerPending() async throws {
+        let r = Rig()
+        let recorder = WatchedRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
+        let first = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        r.recorder.failNextConversions(with: .conversionFailed)
+        _ = try await engine.end(first.captureID)
+        await engine.retryConversions()
+        #expect(try await r.notes.capture(first.captureID)?.outcome == .stored)
+        #expect(recorder.conversions == 2)
+        await engine.retryConversions()
+        #expect(recorder.conversions == 2)
+    }
+
+    /// Finding 39, n08. Two retries at once: the second waits for the recording's line, looks
+    /// again, finds it no longer pending, and converts nothing.
+    @Test func secondRetryLooksAgainAfterWaiting() async throws {
+        let r = Rig()
+        let recorder = WatchedRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
+        let first = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        r.recorder.failNextConversions(with: .conversionFailed)
+        _ = try await engine.end(first.captureID)
+        recorder.conversionDelay.withLock { $0 = .milliseconds(200) }
+        let one = Task { await engine.retryConversions() }
+        #expect(await eventually("the first retry to convert") { recorder.conversions == 2 })
+        let two = Task { await engine.retryConversions() }
+        _ = await SuiteWait.value("the retries") {
+            await one.value
+            await two.value
+        }
+        #expect(recorder.conversions == 2)
+        #expect(try await r.notes.capture(first.captureID)?.outcome == .stored)
+    }
 }
