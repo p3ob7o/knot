@@ -242,7 +242,7 @@ The panel floats above other windows, including full-screen apps, on the display
 - A capture syncs once it has ended. Drafts and recordings in progress stay on their device.
 - A title edited on two devices keeps the later edit. A note deleted on one device and edited on another stays deleted, with the edit kept in the recoverable copy.
 - The append window, the cleanup switch and the English variant sync. The Mac hotkey, launch at login and the sync switch itself belong to each device.
-- If the notes are removed from iCloud, this device keeps its notes, pauses sync and asks before uploading them again.
+- If the notes are removed from iCloud, this device keeps its notes, pauses sync and asks before uploading them again. When the notes were removed on purpose, by a purge in Settings or a reset of the encrypted data, the prompt's default is to keep sync paused.
 - Sync sits behind a feature gate so that it can become a paid feature later. In v1 the gate is open and there is no purchase flow.
 - The watch does not use iCloud. It talks to its iPhone directly, so it works with sync off.
 
