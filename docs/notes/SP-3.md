@@ -1,6 +1,6 @@
 # SP-3 code half: command-line access to the store
 
-The code half of SP-3, 2026-11-20, on the build Mac: macOS 27.3 (26C5047e), Xcode 27.2 (27B52), the MacOSX 27.2 SDK. Its code is the spike app on the branch `spike/agent-access`, in `Spikes/SP-3/`, at `edf96730`, which is never merged; `Spikes/SP-3/FINDINGS.md` there is the run-by-run record. This note has three readers: WP-10 and WP-34, which build the second process and the tool; the orchestrator, which keeps docs/architecture.md and the runbook; and the report, `docs/spikes/SP-3.md`, which follows the distribution-signed check.
+The code half of SP-3, 2026-11-20, on the build Mac: macOS 27.3 (26C5047e), Xcode 27.2 (27B52), the MacOSX 27.2 SDK. Its code is the spike app on the branch `spike/agent-access`, in `Spikes/SP-3/`, at `a9c95718`, which is never merged; `Spikes/SP-3/FINDINGS.md` there is the run-by-run record. This note has three readers: WP-10 and WP-34, which build the second process and the tool; the orchestrator, which keeps docs/architecture.md and the runbook; and the report, `docs/spikes/SP-3.md`, which follows the distribution-signed check.
 
 Everything here was signed for development with the owner's team, under the development identifiers only: the app `com.p3ob7o.knot.dev`, the tool `com.p3ob7o.knot.dev.cli`, and the app group in two forms, `group.com.p3ob7o.knot.dev` and the Team-ID form, written `$(TeamIdentifierPrefix)com.p3ob7o.knot.dev`. No iCloud and no push. A development build cannot say what a TestFlight build does, so the questions of the brief are marked "answered here", "needs the distribution-signed check" or "needs the owner". Times are UTC; `<team>` stands for the team's ID and `~` for the home folder.
 
@@ -105,7 +105,7 @@ The export options name the method `app-store-connect`, the destination `upload`
 
 A secinitd line "… not in ACL for container ~/Library/Containers/com.p3ob7o.knot.dev…/Data …; prompting" is a signer's dialog: he allows it, and it does not fail the check. A line about the group container, a containermanagerd "REJECTED" or a tccd request naming `knot.dev`, is the group's, and it fails the check for that form. The lines carry the team's ID: they are read, not pasted into a note.
 
-At G3 the owner installs the build from TestFlight, opens Knot Dev once, and runs in Terminal, watching its window refresh:
+At G3 the owner installs the build from TestFlight and opens Knot Dev once. Its window probes both forms of the group on each refresh, one line each, "group. form: store …, counter n (moved)" and "team form: …", because both forms post the same notification and a window that read one form would refresh with a counter that did not move after an add in the other. He runs in Terminal the lines the window lists:
 
 ```sh
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" probe
@@ -117,7 +117,7 @@ At G3 the owner installs the build from TestFlight, opens Knot Dev once, and run
 "/Applications/Knot Dev.app/Contents/MacOS/knot-dev" cleanup --team-group
 ```
 
-He notes any dialog and its text. The check passes for a form when `probe` says `"store":"opened"`, `add` raises the counter and the window shows it, with no dialog. TestFlight on macOS 15.1 or later is one of the signatures the log names, so the `group.` form is expected to pass there; a development build cannot show it.
+He notes any dialog and its text. The check passes for a form when `probe` in that form says `"store":"opened"`, `add` in that form raises its counter, and the window's line for that form reads "moved", with no group's dialog. TestFlight on macOS 15.1 or later is one of the signatures the log names, so the `group.` form is expected to pass there; a development build cannot show it.
 
 ## Declarations read
 
