@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
         Check(name: "grow-all", run: aGrowingCheckpointWritesEveryPiece),
@@ -1758,6 +1759,19 @@ public enum NoteStoreContract {
         #expect(try await h.store.segment(continuation)?.segment.noteID == moved.to.id)
         _ = try await h.store.returnToFormerNote(continuation, from: moved.to.id)
         #expect(try await h.store.segment(continuation)?.segment.noteID == ended.noteID)
+    }
+
+    /// Witness 53: a checkpoint before the first `record` commits is refused, writes nothing,
+    /// and the same checkpoint after the record applies.
+    public static func aCheckpointBeforeItsRecordIsRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("first", at: 0, revision: 1)
+        let early = CaptureCheckpoint(captureID: draft.id, text: "first words", revision: 2)
+        await refuses(.notFound) { try await h.store.checkpoint(early) }
+        #expect(try await h.row(draft.id) == nil, "Nothing is written.")
+        _ = try await h.store.record(draft)
+        #expect(try await h.store.checkpoint(early).applied, "The retry after the record applies.")
+        #expect(try await h.text(SegmentID(draft.id)) == "first words")
     }
 
     // MARK: Reading
