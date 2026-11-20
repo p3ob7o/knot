@@ -72,7 +72,8 @@
     }
 
     /// The notices between processes, in memory: every `FakeProcessNotifier` on one channel is a
-    /// process, and a notice reaches every process but the one that posted it.
+    /// process, and a notice reaches every process but the one that posted it, which the port
+    /// allows: a process may receive its own notices, and need not.
     public final class FakeProcessChannel: Sendable {
         private struct Listener {
             let process: UUID

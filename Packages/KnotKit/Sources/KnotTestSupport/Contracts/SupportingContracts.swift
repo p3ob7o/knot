@@ -46,7 +46,8 @@ public enum InstallIdentityContract {
 }
 
 /// The contract suite of `ProcessNotifier` (docs/architecture.md §7): a notice that one process
-/// posts reaches another, and not the one that posted it.
+/// posts reaches another, either way. Whether the poster hears its own is left open: Darwin
+/// notifications deliver it, and acting on it is harmless.
 public enum ProcessNotifierContract {
     /// - Parameters:
     ///   - poster: the notifier of the process that writes, such as the `knot` command.

@@ -60,15 +60,18 @@ public protocol InstallIdentity: Sendable {
 }
 
 /// The notice between processes: the `knot` command posts one after it writes, and the app
-/// refreshes its observers when it arrives (docs/architecture.md §7). A notice is a hint: one
-/// can be lost, so the app also compares the store's change counter when it comes forward.
-/// KnotStore implements it.
+/// refreshes its observers when it arrives (docs/architecture.md §7). KnotStore implements it.
+///
+/// A notice is a hint and carries nothing. One can be lost, so the app also compares the
+/// store's change counter when it comes forward. A process may receive its own notices too,
+/// as Darwin notifications deliver them to the poster, and acting on its own is harmless: it
+/// refreshes from the store as it would for another's.
 public protocol ProcessNotifier: Sendable {
     /// Tells the other processes that the store changed.
     func postStoreChanged()
 
-    /// One element for each notice another process posted. When the consumer goes away, its
-    /// subscription ends.
+    /// One element for each notice that arrives, another process's or this one's own. When the
+    /// consumer goes away, its subscription ends.
     func storeChanges() -> AsyncStream<Void>
 }
 
