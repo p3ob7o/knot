@@ -151,6 +151,11 @@ tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
 
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
+# xcodebuild's own test limits, for every run of tests in a simulator or on the desktop: a
+# case that hangs fails after its allowance, three minutes and five at most.
+KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
+    -maximum-test-execution-time-allowance 300)
+
 # ui_tests <what> <log> [destination name…] -- <xcodebuild arguments…>
 # Runs one UI test bundle, which the arguments name with -only-testing. xcodebuild's own test
 # limits are on, so a case that hangs fails after its allowance, and an outer limit round the
@@ -167,13 +172,8 @@ ui_tests() {
         shift
     done
     shift
-    knot_limit "$limit" xcb "$log" "$@" -test-timeouts-enabled YES \
-        -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 300 test ||
-        status=$?
-    if ((KNOT_LIMIT_HIT)); then
-        knot_dialog_message "$what" "$limit"
-        return 1
-    fi
+    knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
+    ((KNOT_LIMIT_HIT == 0)) || return 1
     knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"} || return 1
     if ((status != 0)); then
         echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
@@ -515,20 +515,29 @@ step_packaging() {
 }
 
 # The tests hosted in the iOS app, in the worktree's iPhone simulator: the contract suites
-# that can run only there (docs/architecture.md §5). It holds a simulator slot.
+# that can run only there (docs/architecture.md §5). It holds a simulator slot. Like the UI
+# tests, the run has xcodebuild's own test limits and an outer limit round the whole call
+# (KNOT_HOSTED_TEST_LIMIT, 20 minutes), whose failure says that a system dialog may be
+# holding it. The results are read first, then xcodebuild's status.
 step_ios_hosted() {
-    local log="$KNOT_LOGS/verify-ios-hosted-tests.log" iphone
+    local log="$KNOT_LOGS/verify-ios-hosted-tests.log" iphone limit=${KNOT_HOSTED_TEST_LIMIT:-1200} status=0
     : >"$log"
     "$KNOT_SCRIPTS/sim.sh" ensure
     iphone="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
     trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
     knot_generate_project
-    xcb "$log" -scheme Knot-iOS -configuration Debug -destination "id=$iphone" -only-testing:Knot-iOS-Tests test
-    grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5
+    knot_run_limited "The hosted iOS tests" "$limit" xcb "$log" -scheme Knot-iOS -configuration Debug \
+        -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
+    ((KNOT_LIMIT_HIT == 0)) || return 1
+    grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."
         return 1
     }
+    if ((status != 0)); then
+        echo "The hosted iOS tests: xcodebuild exited with $status after the tests above. Its log is $log."
+        return 1
+    fi
 }
 
 # The three apps launch and show the placeholder: the UI tests on the iPhone, the iPad and
