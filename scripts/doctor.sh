@@ -94,15 +94,11 @@ else
     ok xcode "$(knot_xcode_label) at $DEVELOPER_DIR"
 fi
 
-# 4. XcodeGen at its pinned version.
-if ! command -v xcodegen >/dev/null; then
-    bad "infra-xcodegen-missing" "XcodeGen is not installed." \
-        "Install XcodeGen $KNOT_XCODEGEN_VERSION: brew install xcodegen (docs/dev-setup.md)." "safe" "nothing"
-elif [[ "$(xcodegen --version | awk '{ print $2 }')" != "$KNOT_XCODEGEN_VERSION" ]]; then
-    bad "infra-xcodegen-version" "XcodeGen is $(xcodegen --version), not $KNOT_XCODEGEN_VERSION." \
-        "Install XcodeGen $KNOT_XCODEGEN_VERSION (docs/dev-setup.md)." "safe" "nothing"
+# 4. XcodeGen at its pinned version, as the scripts choose it (knot_resolve_xcodegen).
+if knot_check_xcodegen; then
+    ok xcodegen "$KNOT_XCODEGEN_VERSION, from $KNOT_XCODEGEN_FROM, at $KNOT_XCODEGEN_PATH"
 else
-    ok xcodegen "$KNOT_XCODEGEN_VERSION"
+    bad "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
 fi
 
 # 5. Simulator runtimes for the pinned Xcode's SDKs. Package tests do not need them.
