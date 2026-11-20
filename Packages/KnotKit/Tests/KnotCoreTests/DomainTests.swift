@@ -196,18 +196,45 @@ func segment(
 @Suite struct SegmentSetterTests {
     static let tooLong = String(repeating: "x", count: Limits.segmentTextBytes + 1)
 
-    @Test func textAndTranscriptChangeOnlyWithinTheLimit() throws {
+    @Test func textChangesOnlyWithinTheLimit() throws {
         var segment = try SegmentLimitTests.build(text: "x")
         #expect(throws: KnotError.textTooLong) { try segment.replaceText(Self.tooLong, origin: .edited) }
-        #expect(throws: KnotError.textTooLong) { try segment.setRawTranscript(Self.tooLong) }
         #expect(segment.text == "x")
         try segment.replaceText("edited", origin: .edited)
-        try segment.setRawTranscript("raw")
         #expect(segment.text == "edited")
         #expect(segment.textOrigin == .edited)
-        #expect(segment.rawTranscript == "raw")
         // What encodes also decodes.
         #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+
+    /// The raw transcript is never modified (docs/architecture.md §4): it grows as the runs
+    /// of a transcription deliver their pieces, and nothing replaces, shortens or clears it.
+    @Test func theRawTranscriptOnlyGrows() throws {
+        var segment = try SegmentLimitTests.build(text: "")
+        #expect(segment.rawTranscript == nil)
+        try segment.appendToRawTranscript("Buy milk")
+        #expect(segment.rawTranscript == "Buy milk")
+        // A piece joins what is there with one space, unless either side already has one.
+        try segment.appendToRawTranscript("and eggs.")
+        #expect(segment.rawTranscript == "Buy milk and eggs.")
+        try segment.appendToRawTranscript(" Then")
+        try segment.appendToRawTranscript("\ncall home")
+        #expect(segment.rawTranscript == "Buy milk and eggs. Then\ncall home")
+        // An empty piece, as a run over silence gives, changes nothing.
+        try segment.appendToRawTranscript("")
+        #expect(segment.rawTranscript == "Buy milk and eggs. Then\ncall home")
+        #expect(try JSONDecoder().decode(Segment.self, from: JSONEncoder().encode(segment)) == segment)
+    }
+
+    @Test func aRawTranscriptThatWouldPassTheLimitIsRefusedAndKept() throws {
+        var segment = try SegmentLimitTests.build(text: "", raw: "kept")
+        #expect(throws: KnotError.textTooLong) { try segment.appendToRawTranscript(Self.tooLong) }
+        let room = String(repeating: "y", count: Limits.segmentTextBytes - "kept ".utf8.count)
+        try segment.appendToRawTranscript(room)
+        #expect(segment.rawTranscript?.utf8.count == Limits.segmentTextBytes)
+        #expect(throws: KnotError.textTooLong) { try segment.appendToRawTranscript("z") }
+        #expect(segment.rawTranscript?.hasPrefix("kept y") == true)
+        #expect(segment.rawTranscript?.utf8.count == Limits.segmentTextBytes)
     }
 }
 
@@ -224,12 +251,32 @@ func segment(
     }
 }
 
+@Suite struct NoteTitleTimeTests {
+    /// `titleEditedAt` is the time the caller gives for a change to the title or its origin; a
+    /// note that never had a title has none, and a note written without the field reads as nil.
+    @Test func theTitleTimeComesFromTheCaller() throws {
+        var note = Note(id: id(1), createdAt: at("09:00"))
+        #expect(note.titleEditedAt == nil)
+        try note.setTitle("Plans", origin: .user, at: at("09:05"))
+        #expect(note.titleEditedAt == at("09:05"))
+        try note.setTitle(nil, origin: .none, at: at("09:06"))
+        #expect(note.title == nil && note.titleEditedAt == at("09:06"), "Clearing a title is a change of it.")
+        let decoded = try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note))
+        #expect(decoded == note)
+        let old = String(decoding: try JSONEncoder().encode(Note(id: id(2), createdAt: at("09:00"))), as: UTF8.self)
+        #expect(!old.contains("titleEditedAt"))
+        #expect(try JSONDecoder().decode(Note.self, from: Data(old.utf8)).titleEditedAt == nil)
+    }
+}
+
 @Suite struct NoteTitleSetterTests {
     @Test func theTitleChangesOnlyWithinItsBound() throws {
         var note = Note(id: id(1), createdAt: at("09:00"))
-        #expect(throws: KnotError.textTooLong) { try note.setTitle(NoteTitleBoundTests.tooLong, origin: .user) }
+        #expect(throws: KnotError.textTooLong) {
+            try note.setTitle(NoteTitleBoundTests.tooLong, origin: .user, at: at("09:01"))
+        }
         #expect(note.title == nil)
-        try note.setTitle(String(repeating: "t", count: 200), origin: .user)
+        try note.setTitle(String(repeating: "t", count: 200), origin: .user, at: at("09:01"))
         #expect(note.titleOrigin == .user)
         #expect(throws: KnotError.textTooLong) {
             try Note(id: id(2), createdAt: at("09:00"), title: NoteTitleBoundTests.tooLong, titleOrigin: .user)

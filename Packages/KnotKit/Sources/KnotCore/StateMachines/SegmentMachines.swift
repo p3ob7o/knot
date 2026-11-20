@@ -18,6 +18,10 @@ public enum TypedEvent: Hashable, Sendable {
     case end(isEmpty: Bool)
     /// A draft was found at relaunch after a crash (rule 12).
     case recoverAtRelaunch(isEmpty: Bool)
+    /// The capture's save failed; its text waits in `Inbox/` (§6, rule 6).
+    case saveFailed
+    /// A retry stored the capture that had failed.
+    case retrySaved
 }
 
 /// The typed segment's state machine (docs/architecture.md §4).
@@ -28,6 +32,8 @@ public enum TypedMachine {
         switch (state, event) {
         case (.draft, .end(let isEmpty)), (.draft, .recoverAtRelaunch(let isEmpty)):
             return isEmpty ? .discarded : .ready
+        case (.draft, .saveFailed): return .failed
+        case (.failed, .retrySaved): return .ready
         default:
             throw IllegalTransition(from: state, event: event)
         }
@@ -66,6 +72,8 @@ public enum VoiceEvent: Hashable, Sendable {
     case audioUnreadable
     /// The step failed for good, after its attempts.
     case stepFailed(ErrorCode)
+    /// The recording could not be saved as a capture; its audio is kept.
+    case saveFailed(ErrorCode)
     /// A person pressed Retry.
     case retry
 }
@@ -93,6 +101,9 @@ public enum VoiceMachine {
         case (.cleaning, .cleaned): return .ready
         case (.cleaning, .deferred): return .transcribed
         case (.cleaning, .stepFailed(let code)): return .failed(.clean, code)
+        case (.recording, .saveFailed(let code)), (.recovered, .saveFailed(let code)):
+            return .failed(.record, code)
+        case (.failed(.record, _), .retry): return .recorded
         case (.failed(.transcribe, _), .retry): return .recorded
         case (.failed(.clean, _), .retry): return .transcribed
         default: throw IllegalTransition(from: state, event: event)
@@ -110,6 +121,8 @@ public enum InkEvent: Hashable, Sendable {
     case recoverAtRelaunch(isEmpty: Bool)
     case recognised
     case stepFailed(ErrorCode)
+    /// The drawing could not be saved as a capture; its data is kept.
+    case saveFailed(ErrorCode)
     case retry
 }
 
@@ -126,7 +139,7 @@ public enum InkMachine {
         case (.drawing, .end(let isEmpty)), (.drawing, .recoverAtRelaunch(let isEmpty)):
             return isEmpty ? .discarded : .recognising
         case (.recognising, .recognised): return .ready
-        case (.recognising, .stepFailed(let code)): return .failed(code)
+        case (.recognising, .stepFailed(let code)), (.drawing, .saveFailed(let code)): return .failed(code)
         case (.failed, .retry): return .recognising
         default: throw IllegalTransition(from: state, event: event)
         }

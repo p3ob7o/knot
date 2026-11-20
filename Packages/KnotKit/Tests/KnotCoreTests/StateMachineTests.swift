@@ -12,9 +12,11 @@ private let failure = KnotError.transcriptionFailed.code
     static let states = TypedState.allCases
     static let events: [TypedEvent] = [
         .end(isEmpty: false), .end(isEmpty: true), .recoverAtRelaunch(isEmpty: false),
-        .recoverAtRelaunch(isEmpty: true),
+        .recoverAtRelaunch(isEmpty: true), .saveFailed, .retrySaved,
     ]
     static let legal: [(TypedState, TypedEvent, TypedState)] = [
+        (.draft, .saveFailed, .failed),
+        (.failed, .retrySaved, .ready),
         (.draft, .end(isEmpty: false), .ready),
         (.draft, .end(isEmpty: true), .discarded),
         // Rule 12: a draft found after a crash becomes a finished typed segment at relaunch.
@@ -41,12 +43,12 @@ private let failure = KnotError.transcriptionFailed.code
 @Suite struct VoiceMachineTests {
     static let states: [VoiceState] = [
         .recording, .recovered, .recorded, .transcribing, .transcribed, .cleaning, .ready, .discarded, .onWatch,
-        .delivered, .failed(.transcribe, failure), .failed(.clean, failure),
+        .delivered, .failed(.transcribe, failure), .failed(.clean, failure), .failed(.record, failure),
     ]
     static let events: [VoiceEvent] = [
         .stop, .discardAccidental, .killed, .recoveryFinished, .transferred, .ingested, .startTranscribing,
         .transcribed(hasWords: true), .transcribed(hasWords: false), .startCleaning, .keepRawTranscript, .cleaned,
-        .deferred, .stepFailed(failure), .retry, .speechUnavailableHere, .audioUnreadable,
+        .deferred, .stepFailed(failure), .retry, .speechUnavailableHere, .audioUnreadable, .saveFailed(failure),
     ]
     static let legal: [(VoiceState, VoiceEvent, VoiceState)] = [
         (.recording, .stop, .recorded),
@@ -72,6 +74,10 @@ private let failure = KnotError.transcriptionFailed.code
         (.cleaning, .keepRawTranscript, .ready),
         (.cleaning, .deferred, .transcribed),
         (.cleaning, .stepFailed(failure), .failed(.clean, failure)),
+        // A recording whose save failed keeps its audio, and a retry stores it.
+        (.recording, .saveFailed(failure), .failed(.record, failure)),
+        (.recovered, .saveFailed(failure), .failed(.record, failure)),
+        (.failed(.record, failure), .retry, .recorded),
         (.failed(.transcribe, failure), .retry, .recorded),
         (.failed(.clean, failure), .retry, .transcribed),
     ]
@@ -107,7 +113,7 @@ private let failure = KnotError.transcriptionFailed.code
     static let states: [InkState] = [.drawing, .recognising, .ready, .discarded, .failed(code)]
     static let events: [InkEvent] = [
         .stroke, .end(isEmpty: false), .end(isEmpty: true), .recoverAtRelaunch(isEmpty: false),
-        .recoverAtRelaunch(isEmpty: true), .recognised, .stepFailed(code), .retry,
+        .recoverAtRelaunch(isEmpty: true), .recognised, .stepFailed(code), .retry, .saveFailed(code),
     ]
     static let legal: [(InkState, InkEvent, InkState)] = [
         (.drawing, .stroke, .drawing),
@@ -118,6 +124,7 @@ private let failure = KnotError.transcriptionFailed.code
         (.drawing, .recoverAtRelaunch(isEmpty: true), .discarded),
         (.recognising, .recognised, .ready),
         (.recognising, .stepFailed(code), .failed(code)),
+        (.drawing, .saveFailed(code), .failed(code)),
         (.failed(code), .retry, .recognising),
     ]
 

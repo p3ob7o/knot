@@ -35,14 +35,18 @@ public struct ErrorCode: RawRepresentable, Hashable, Sendable, Codable, Expressi
     }
 }
 
-/// Whether an error is a failure, a step that cannot run now, or final (docs/architecture.md §4).
+/// Whether an error is a failure, a step that cannot run now, a cancelled step, or final
+/// (docs/architecture.md §4).
 ///
 /// A failure counts as an attempt. A deferral is never counted: the work runs again when the
-/// app comes forward or the model's availability changes. A final error is one that no retry
-/// on this device can fix: the job ends at once and is not tried again here.
+/// app comes forward or the model's availability changes. A yield is a step that was
+/// cancelled, because background time ran out or the queue was asked to stop: it is not an
+/// attempt, not a decline and not an error, and the job stays queued. A final error is one
+/// that no retry on this device can fix: the job ends at once and is not tried again here.
 public enum ErrorClass: String, Hashable, Sendable, Codable {
     case failure
     case deferral
+    case yield
     case final
 }
 
@@ -226,6 +230,9 @@ public struct KnotError: Error, Hashable, Sendable, Codable {
 
     /// True for an error that no retry on this device can fix.
     public var isFinal: Bool { errorClass == .final }
+
+    /// True for a cancelled step, which the queue counts as a yield.
+    public var isYield: Bool { errorClass == .yield }
 
     /// The same case with its context.
     public func with(_ context: ErrorContext) -> KnotError {
