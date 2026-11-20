@@ -173,9 +173,15 @@ knot_select_xcode() {
     export DEVELOPER_DIR="$app/Contents/Developer"
     KNOT_XCODE_VERSION="${identity% *}"
     KNOT_XCODE_BUILD="${identity#* }"
-    # Check that the tools answer as the version the files claim.
-    local reported
-    reported="$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
+    # Check that the tools answer as the version the files claim, within a limit: a dialog,
+    # such as Xcode's licence or a component to install, can hold xcodebuild's first start.
+    local reported status=0 limit=${KNOT_XCODE_ANSWER_LIMIT:-120}
+    reported="$(knot_limit "$limit" xcodebuild -version 2>/dev/null)" || status=$?
+    if ((status == 124)); then
+        knot_fail "infra-xcode-silent" "xcodebuild -version in $DEVELOPER_DIR did not answer within ${limit}s. A system dialog, such as Xcode's licence or a component to install, may be waiting for the owner on this Mac; no agent answers it." \
+            "Ask him to look at the screen, or to run the Xcode once." "safe" "nothing"
+    fi
+    reported="$(tr '\n' ' ' <<<"$reported")"
     if [[ $reported != "Xcode $KNOT_XCODE_VERSION Build version $KNOT_XCODE_BUILD " ]]; then
         knot_fail "infra-xcode-mismatch" "xcodebuild in $DEVELOPER_DIR reports '$reported', not Xcode $identity." \
             "Run the Xcode once to finish its installation (xcodebuild -runFirstLaunch), or reinstall it." \

@@ -101,14 +101,19 @@ else
     bad "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
 fi
 
-# 5. Simulator runtimes for the pinned Xcode's SDKs. Package tests do not need them.
+# 5. Simulator runtimes for the pinned Xcode's SDKs. Package tests do not need them. The list
+#    is read once, with a limit: CoreSimulator that does not answer would hold every run.
+runtimes_status=0
+runtimes="$(knot_limit "${KNOT_SIMCTL_LIMIT:-120}" xcrun simctl list runtimes 2>/dev/null)" || runtimes_status=$?
+((runtimes_status != 124)) ||
+    warn simulators "xcrun simctl list runtimes did not answer within ${KNOT_SIMCTL_LIMIT:-120}s: CoreSimulator may be stuck"
 runtime_for() {
     local platform=$1 sdk=$2 version runtime
     version="$(xcrun --sdk "$sdk" --show-sdk-version 2>/dev/null || true)"
     # The runtime of the SDK's own version first, else any of the same major version.
-    runtime="$(xcrun simctl list runtimes 2>/dev/null | grep "^$platform $version " | head -n 1 | sed 's/ - com\.apple.*//' || true)"
+    runtime="$(grep "^$platform $version " <<<"$runtimes" | head -n 1 | sed 's/ - com\.apple.*//' || true)"
     [[ -n $runtime ]] ||
-        runtime="$(xcrun simctl list runtimes 2>/dev/null | grep "^$platform ${version%%.*}\." | tail -n 1 | sed 's/ - com\.apple.*//' || true)"
+        runtime="$(grep "^$platform ${version%%.*}\." <<<"$runtimes" | tail -n 1 | sed 's/ - com\.apple.*//' || true)"
     if [[ -n $runtime ]]; then
         ok "$platform" "$runtime, for SDK $version"
     elif [[ $TIER == quick ]]; then
