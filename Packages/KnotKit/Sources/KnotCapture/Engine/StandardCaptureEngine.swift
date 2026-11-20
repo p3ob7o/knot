@@ -111,8 +111,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     public nonisolated func states() -> AsyncStream<CaptureState> { broadcast.subscribe() }
 
     public func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
-        await endPendingDiscards()
-        await retryConversions(dueOnly: true)
+        defer { scheduleHousekeeping() }
         switch request.kind {
         case .typed, .voice: break
         default:
@@ -199,11 +198,29 @@ public actor StandardCaptureEngine: CaptureEngine {
         return state
     }
 
-    /// Tries again the conversion of each recording whose conversion failed in this launch:
-    /// the composition calls it when the app comes forward, and the engine's own calls do once
-    /// `conversionRetryDelay` has passed since the last try.
+    /// Does the engine's old work now: ends the rows of recordings discarded while the store did
+    /// not take their end, and tries again every conversion that failed in this launch. The
+    /// composition calls it when the app comes forward. The engine's own calls never do old
+    /// work ahead of their own write: each schedules it to run after it has returned, and then
+    /// a failed conversion is tried again once `conversionRetryDelay` has passed.
     public func retryConversions() async {
+        await endPendingDiscards()
         await retryConversions(dueOnly: false)
+    }
+
+    private var housekeepingScheduled = false
+
+    /// Runs the old work after the current call has returned, once at a time.
+    private func scheduleHousekeeping() {
+        guard !housekeepingScheduled, !pendingDiscards.isEmpty || !pendingConversions.isEmpty else { return }
+        housekeepingScheduled = true
+        Task { [weak self] in await self?.housekeeping() }
+    }
+
+    private func housekeeping() async {
+        housekeepingScheduled = false
+        await endPendingDiscards()
+        await retryConversions(dueOnly: true)
     }
 
     /// How long the engine waits after a failed conversion before its next call tries it again.
@@ -236,8 +253,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// it takes the calls, not the order the caller made them, so a surface sends the updates of
     /// one capture from one task, each after the one before has returned.
     public func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
-        await endPendingDiscards()
-        await retryConversions(dueOnly: true)
+        defer { scheduleHousekeeping() }
         guard let entry = entries[capture] else { throw KnotError.notFound.about(capture: capture) }
         guard case .text(let text) = content, entry.kind == .typed else {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
@@ -253,8 +269,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
-        await endPendingDiscards()
-        await retryConversions(dueOnly: true)
+        defer { scheduleHousekeeping() }
         return try await end(capture, at: nil)
     }
 
@@ -274,8 +289,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
-        await endPendingDiscards()
-        await retryConversions(dueOnly: true)
+        defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
         await take(capture)
         defer { release(capture) }

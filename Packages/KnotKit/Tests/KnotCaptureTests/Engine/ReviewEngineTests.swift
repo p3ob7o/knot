@@ -3,6 +3,7 @@ import KnotCapture
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// The sequences the review of pull request 40 found, each a witness first shown failing.
@@ -125,20 +126,26 @@ import Testing
         #expect(discarded.path == .inbox(KnotError.storeBusy.code))
         _ = await r.ingest.ingestAll()
         _ = try await r.engine.discard(a.captureID)
-        #expect(try await r.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+        #expect(
+            await eventually("the row to be ended") {
+                (try? await r.notes.capture(a.captureID))?.outcome == .discardedEmpty
+            })
         #expect(try await r.notes.openCaptures().isEmpty)
     }
 
-    /// Finding 6. The next start retries the discard first, so the row it left does not hold
-    /// rule 15 against the new capture.
-    @Test func nextStartEndsTheRowOfARefusedDiscard() async throws {
+    /// Finding 6, with finding 34. The discard the store refused is ended after the call, not
+    /// ahead of the next start's own write, and its row does not stay open.
+    @Test func refusedDiscardIsEndedAfterTheCall() async throws {
         let r = Rig()
         let a = try await r.beginRecording()
         await r.notes.failNextCaptureWrites(with: .storeBusy)
         _ = try await r.engine.discard(a.captureID)
         let typed = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
-        #expect(typed.path == .store)
-        #expect(try await r.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+        #expect(typed.durableRevision == 1)
+        #expect(
+            await eventually("the discarded recording's row to be ended") {
+                (try? await r.notes.capture(a.captureID))?.outcome == .discardedEmpty
+            })
     }
 
     /// Finding 6. After a relaunch, recovery ends the row of a refused discard as empty: its
@@ -172,8 +179,9 @@ import Testing
     }
 
     /// Finding 9. A conversion that failed is tried again: by `retryConversions()`, which the
-    /// composition calls when the app comes forward, and by the engine's next call once 30
-    /// seconds have passed. The capture is then stored and goes on to transcription.
+    /// composition calls when the app comes forward, and after the engine's next call once 30
+    /// seconds have passed (finding 34: after the call, never ahead of its own write). The
+    /// capture is then stored and goes on to transcription.
     @Test(arguments: [false, true])
     func failedConversionIsTriedAgain(byTheNextCall: Bool) async throws {
         let r = Rig()
@@ -189,9 +197,13 @@ import Testing
         } else {
             await r.engine.retryConversions()
         }
-        #expect(try await r.notes.capture(a.captureID)?.outcome == .stored)
+        #expect(
+            await eventually("the recording to be stored and its working file gone") {
+                let row = try? await r.notes.capture(a.captureID)
+                return row?.outcome == .stored
+                    && r.layer.entryKind(r.locations.recordingAudio(a.captureID, format: .caf)) == nil
+            })
         #expect(try await r.notes.jobs(for: SegmentID(a.captureID)).map(\.kind) == [.transcribe])
-        #expect(r.layer.entryKind(r.locations.recordingAudio(a.captureID, format: .caf)) == nil)
     }
 
     /// Finding 15. A capture on the `Inbox/` path names no note: the file path has not
@@ -271,5 +283,55 @@ import Testing
             })
         #expect(try await r.notes.openCaptures().isEmpty)
         #expect(try await r.stream().notes.isEmpty)
+    }
+
+    /// Finding 34. A start does no old work ahead of its own write: the recorder starts the
+    /// new recording before it converts an old one whose conversion failed, and that old one is
+    /// still stored afterwards.
+    @Test func startConvertsNoOldRecordingFirst() async throws {
+        let r = Rig()
+        let recorder = WatchedRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
+        let first = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        r.recorder.failNextConversions(with: .conversionFailed)
+        #expect(try await engine.end(first.captureID).outcome == .failed(KnotError.conversionFailed.code))
+        r.clock.advance(by: 31)
+        recorder.conversionDelay.withLock { $0 = .milliseconds(300) }
+        let before = recorder.calls.count
+        let second = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        #expect(recorder.calls.dropFirst(before).first == "start", "\(recorder.calls)")
+        #expect(
+            await eventually("the old recording to be stored") {
+                (try? await r.notes.capture(first.captureID))?.outcome == .stored
+            })
+        _ = try await engine.discard(second.captureID)
+    }
+
+    /// Finding 34. A start does no old work ahead of its own write: while an old discard's end
+    /// and its retry after the call both wait in the store, a start still returns, and the old
+    /// row is ended once the store answers.
+    @Test func startWaitsForNoOldDiscard() async throws {
+        let impatient = Mutex(false)
+        let r = Rig(
+            deadline: StoreDeadline {
+                if impatient.withLock({ $0 }) { return }
+                try? await Task.sleep(for: SuiteWait.limit)
+            })
+        let recording = try await r.beginRecording()
+        #expect(recording.path == .store)
+        impatient.withLock { $0 = true }
+        let ownEnd = await r.notes.holdNextCaptureWrite()
+        let retry = await r.notes.holdNextCaptureWrite()
+        _ = try await r.engine.discard(recording.captureID)
+        // The discard's end did not answer in time; its retry, after the call, waits too.
+        await reached(retry)
+        let typed = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "t"))
+        #expect(typed.durableRevision == 1)
+        ownEnd.release()
+        retry.release()
+        #expect(
+            await eventually("the discarded recording's row to be ended") {
+                (try? await r.notes.capture(recording.captureID))?.outcome == .discardedEmpty
+            })
     }
 }
