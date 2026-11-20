@@ -39,10 +39,42 @@ enum FixtureBytes {
         try Data(contentsOf: FixtureFiles.url("ink/line.json"))
     }
 
-    /// A synthetic PNG: the eight bytes that open every PNG file, then a fixture's bytes.
+    /// A synthetic PNG built here: one grey pixel, its chunks running from `IHDR` to `IEND`,
+    /// each with its CRC.
     static func png() throws -> Data {
-        Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-            + (try Data(contentsOf: FixtureFiles.url("ink/line.svg")))
+        SyntheticPNG.signature + SyntheticPNG.ihdr + SyntheticPNG.idat + SyntheticPNG.iend
+    }
+}
+
+/// The pieces of a small PNG, for tests of what counts as an image.
+enum SyntheticPNG {
+    static let signature = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    /// One pixel wide and high, 8-bit greyscale.
+    static let ihdr = chunk("IHDR", [0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0])
+    /// The one row, filter 0 and a grey value, in a stored zlib block with its Adler-32.
+    static let idat = chunk("IDAT", [0x78, 0x01, 0x01, 0x02, 0x00, 0xFD, 0xFF, 0x00, 0x80, 0x00, 0x82, 0x00, 0x81])
+    static let iend = chunk("IEND", [])
+
+    /// A chunk: its length, its type, its data and the CRC-32 of its type and data.
+    static func chunk(_ type: String, _ data: [UInt8], crc: UInt32? = nil) -> Data {
+        let body = Array(type.utf8) + data
+        return bigEndian(UInt32(data.count)) + Data(body) + bigEndian(crc ?? crc32(body))
+    }
+
+    static func bigEndian(_ value: UInt32) -> Data {
+        Data([
+            UInt8(value >> 24), UInt8(truncatingIfNeeded: value >> 16), UInt8(truncatingIfNeeded: value >> 8),
+            UInt8(truncatingIfNeeded: value),
+        ])
+    }
+
+    static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc & 1) == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
     }
 }
 
