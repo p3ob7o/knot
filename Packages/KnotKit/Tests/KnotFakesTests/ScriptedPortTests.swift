@@ -320,6 +320,11 @@ final class ProgressLog: Sendable {
         }
     }
 
+    @Test(.tags(.contract)) func theAvailabilityIsPublishedInOrder() async throws {
+        let cleaner = ScriptedCleaner()
+        try await CleanerContract.availabilityChangesInOrder(cleaner) { cleaner.setAvailability($0) }
+    }
+
     @Test(arguments: [
         ErrorDetail.cleanupRefused, .guardrailViolation, .cleanupEmpty, .cleanupMalformed, .guardRejected,
         .textTooLongForModel, .unsupportedLanguage, .unsupportedRequest,

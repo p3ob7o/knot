@@ -19,25 +19,26 @@
 
         var value: Value { state.withLock { $0.value } }
 
-        /// Sets the value with `change`, and tells every watcher.
+        /// Sets the value with `change`, and tells every watcher, under the lock, so changes
+        /// arrive in the order they were made (finding 28).
         @discardableResult
         func update(_ change: (inout Value) -> Void) -> Value {
-            let (value, watchers) = state.withLock { state in
+            state.withLock { state in
                 change(&state.value)
-                return (state.value, Array(state.watchers.values))
+                for watcher in state.watchers.values { watcher.yield(state.value) }
+                return state.value
             }
-            for watcher in watchers { watcher.yield(value) }
-            return value
         }
 
         func stream() -> AsyncStream<Value> {
             let (stream, continuation) = AsyncStream.makeStream(of: Value.self)
             let key = UUID()
-            let current = state.withLock { state in
+            // The current value is given under the lock that records the subscriber, so no
+            // change can reach it first (finding 28).
+            state.withLock { state in
                 state.watchers[key] = continuation
-                return state.value
+                continuation.yield(state.value)
             }
-            continuation.yield(current)
             continuation.onTermination = { [weak self] _ in
                 self?.state.withLock { _ = $0.watchers.removeValue(forKey: key) }
             }

@@ -68,11 +68,12 @@
         public func statusUpdates() -> AsyncStream<SyncStatus> {
             let (stream, continuation) = AsyncStream.makeStream(of: SyncStatus.self)
             let key = UUID()
-            let current = state.withLock { state in
+            // The current status is given under the lock that records the subscriber, so no
+            // change can reach it first (finding 28).
+            state.withLock { state in
                 state.watchers[key] = continuation
-                return state.status
+                continuation.yield(state.status)
             }
-            continuation.yield(current)
             continuation.onTermination = { [weak self] _ in
                 self?.state.withLock { _ = $0.watchers.removeValue(forKey: key) }
             }

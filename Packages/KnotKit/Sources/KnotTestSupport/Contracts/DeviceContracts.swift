@@ -70,6 +70,18 @@ public enum AudioPlayerContract {
         #expect(await current(player.states(), "the state") == .paused(at: length, of: length), "Held at the end.")
         await player.seek(to: .seconds(-1))
         #expect(await current(player.states(), "the state") == .paused(at: .zero, of: length), "Held at the start.")
+
+        // Subscribers that join while seeks run see the state current when they joined, then
+        // each later state, in order (finding 28). Each round ends at the end of the recording,
+        // where no other seek of the round goes.
+        let seeks = 16
+        try await JoiningSubscribers.check("The player's states", rounds: 16) { _ in
+            await player.seek(to: .zero)
+            return try await JoiningSubscribers.round(
+                "the player's states", subscribe: { player.states() },
+                changes: (1...seeks).map { step in { await player.seek(to: length * step / (seeks + 1)) } },
+                last: { await player.seek(to: length) }, isLast: { $0 == .paused(at: length, of: length) })
+        }
     }
 }
 
@@ -224,6 +236,28 @@ public enum SettingsStoreContract {
         #expect(after.cleanupEnabled == synced.cleanupEnabled, "The cleanup switch syncs (finding 20).")
         #expect(after.englishVariant == synced.englishVariant, "The English variant syncs.")
         #expect(after.launchAtLogin, "Launch at login belongs to this device.")
+
+        // Subscribers that join while saves run see the settings current when they joined,
+        // then each later save, in order (finding 28). Each round ends with the longest append
+        // window, which no other save of the round sets.
+        let longest = try AppendWindow(minutes: AppendWindow.maximumMinutes)
+        try await JoiningSubscribers.check("The settings' changes", rounds: 16) { _ in
+            try await store.save(.defaults)
+            return try await JoiningSubscribers.round(
+                "the settings' changes", subscribe: { store.changes() },
+                changes: (1...16).map { minutes in
+                    {
+                        var settings = Settings.defaults
+                        settings.appendWindow = try AppendWindow(minutes: minutes)
+                        try await store.save(settings)
+                    }
+                },
+                last: {
+                    var settings = Settings.defaults
+                    settings.appendWindow = longest
+                    try await store.save(settings)
+                }, isLast: { $0.appendWindow == longest })
+        }
     }
 }
 

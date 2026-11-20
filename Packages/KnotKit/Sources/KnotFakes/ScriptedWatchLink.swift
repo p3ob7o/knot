@@ -111,11 +111,12 @@
         public func counts() -> AsyncStream<WatchLinkCounts> {
             let (stream, continuation) = AsyncStream.makeStream(of: WatchLinkCounts.self)
             let key = UUID()
-            let current = state.withLock { state in
+            // The current counts are given under the lock that records the subscriber, so no
+            // change can reach it first (finding 28).
+            state.withLock { state in
                 state.countWatchers[key] = continuation
-                return state.counts
+                continuation.yield(state.counts)
             }
-            continuation.yield(current)
             continuation.onTermination = { [weak self] _ in
                 self?.state.withLock { _ = $0.countWatchers.removeValue(forKey: key) }
             }

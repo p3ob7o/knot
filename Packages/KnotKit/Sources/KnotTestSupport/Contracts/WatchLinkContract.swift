@@ -111,6 +111,27 @@ public enum WatchLinkContract {
 
         try await nothingStrands(subject)
         try await publishesInOrder(subject)
+        try await subscribersJoinWhileSending(subject)
+    }
+
+    /// Subscribers that join while sends run see the counts current when they joined, then
+    /// each later count, in order: the waiting count never goes down for them (finding 28).
+    static func subscribersJoinWhileSending(_ subject: WatchLinkSubject) async throws {
+        let link = subject.link
+        let total = 32
+        try await JoiningSubscribers.check("The watch link's counts", rounds: 16) { _ in
+            guard let start = await counts(of: link) else { return 0 }
+            var files: [CaptureID: URL] = [:]
+            for _ in 0..<total {
+                let capture: CaptureID = Identifier(uuid: UUID())
+                files[capture] = try await subject.makeFile(capture)
+            }
+            let made = files
+            return try await JoiningSubscribers.round(
+                "the watch link's counts", subscribe: { link.counts() },
+                changes: made.map { capture, file in { try await link.send(manifest(capture), file: file) } },
+                last: {}, isLast: { $0.waiting == start.waiting + total })
+        }
     }
 
     /// Counts and acknowledgements are published in the order of the changes, each once

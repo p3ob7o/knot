@@ -173,6 +173,21 @@ public enum SyncEngineContract {
         await subject.deliverLateEvent()
         #expect(await first(of: engine) == restarted, "An event of the stopped run never reaches the new one.")
         await refuses(.syncQuotaExceeded, "Nothing was used up while off.") { try await engine.syncNow() }
+
+        try await subscribersJoinWhileSyncing(engine)
+    }
+
+    /// Subscribers that join while syncs run see the status current when they joined, then
+    /// each later status, in order: the end of what a subscriber there from the start sees
+    /// (finding 28). Each round ends with a stop, a status no sync gives.
+    static func subscribersJoinWhileSyncing(_ engine: any SyncEngine) async throws {
+        try await JoiningSubscribers.check("The sync engine's statuses", rounds: 16) { _ in
+            await engine.start()
+            return try await JoiningSubscribers.round(
+                "the sync engine's statuses", subscribe: { engine.statusUpdates() },
+                changes: Array(repeating: { try await engine.syncNow() }, count: 16),
+                last: { await engine.stop() }, isLast: { $0 == .off })
+        }
     }
 
     /// The first status a new subscriber gets: the current one.
