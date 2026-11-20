@@ -346,6 +346,25 @@ import Testing
             })
     }
 
+    /// Finding 44. `retryConversions()`, which the composition calls when the app comes forward,
+    /// ends the rows of discards the store refused: here the discard's end and the retry after
+    /// the call are both refused, and the hook ends the row at once.
+    @Test func comingForwardEndsARefusedDiscard() async throws {
+        let r = Rig()
+        let recording = try await r.beginRecording()
+        #expect(recording.path == .store)
+        await r.notes.failNextCaptureWrites(with: .storeBusy, .storeBusy)
+        let discarded = try await r.engine.discard(recording.captureID)
+        #expect(discarded.path == .inbox(KnotError.storeBusy.code))
+        #expect(
+            await eventually("the retry after the call to be refused") {
+                r.logs.logged("discard_end_not_taken", recording.captureID)
+            })
+        #expect(try await r.notes.capture(recording.captureID)?.outcome == .open)
+        await r.engine.retryConversions()
+        #expect(try await r.notes.capture(recording.captureID)?.outcome == .discardedEmpty)
+    }
+
     /// Finding 35, the re-check's N5. A typed start on another surface that reached no disk
     /// leaves the open capture going on (finding 8); once its retry reaches disk, rule 15 ends
     /// the open capture as a first start does, so one capture is open.

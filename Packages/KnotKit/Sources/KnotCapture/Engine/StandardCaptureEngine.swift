@@ -803,7 +803,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // No row yet: a late record is ended when it arrives (`discardLateRow`).
                 pendingDiscards.remove(id)
             default:
-                break
+                // The store did not take it this time: the next call, or the app coming forward,
+                // tries again.
+                log.capture(id, "discard_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
             }
         }
     }
