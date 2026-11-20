@@ -74,7 +74,7 @@ Each section puts first the points that block the earliest packages. Item IDs su
 
 ## For the owner
 
-29. **A production schema for a development container.** SP-4 asks what happens when a device moves from CloudKit's development environment to production, and PLAN.md §5 has that move rehearsed between two development containers before M7. Deploying the CloudKit production schema needs Paolo's explicit authorisation, and the plan does not say whether a spike or the rehearsal may deploy a development container's schema to production (`ceo-23`, `eng-097`). SP-4's brief states the authorisation rule and leaves the question to him. He decides before SP-4 starts.
+29. **A production schema for the rehearsal.** PLAN.md §5 has the move from CloudKit's development environment to production rehearsed between two development containers before M7. Deploying the CloudKit production schema needs Paolo's explicit authorisation. On 2026-11-20 he allowed SP-4 to deploy its schema to the production side of a throwaway container made only for the spike, and `docs/plan/SP-4.md` says so. His answer covers the spike alone. The plan does not say whether the rehearsal deploys anything to a production side (`ceo-23`, `eng-097`): as §5 words it, between two development containers, it does not. He decides when SP-4's report says what the rehearsal must show.
 
 30. **Distribution signing in WP-43's dry run.** Distribution signing needs Paolo's word (`eng-074`). The plan does not say whether the dry run that is WP-43's merge criterion signs for distribution (`eng-033`). He decides before WP-43 starts.
 

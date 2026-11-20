@@ -27,8 +27,9 @@ What the build Mac has today, for every first message:
 - The owner's recordings, when he has made them, are in the folder that `KNOT_LOCAL_FIXTURES` names. Nothing derived from them enters a commit, a pull request, a log or a test.
 - `KNOT_AGENT=1` is exported in every shell before a script runs.
 - A hook refuses `git add -A`, `git add -u` and a commit inside a compound command. A thread stages files by name, runs `git commit -F <file>` as a command of its own, and gives `gh pr create` its description with `--body-file`.
+- A thread records each commit in UTC, as `AGENTS.md` says: `TZ=UTC git commit -F <file>`. The hook lets that form through.
 - No hardware microphone, ever. A simulator's microphone is the Mac's own, so no recording path runs in a simulator.
-- Until the owner's team configuration is on the Mac, only local signing works.
+- The owner's team configuration is on the Mac since 2026-11-20, in a file outside the repository. A thread whose package must sign with the team gets the file's path in `KNOT_LOCAL_CONFIG`, and no other thread does: every other build signs locally. The team's ID is never printed, never logged and never written to a tracked file, a note or a pull request. A thread that has the file runs `scripts/verify.sh --only team-id` before each push.
 - Other threads build at the same time. A thread runs one heavy build at a time.
 - A note or a pull request describes the SDK and the simulators, never the owner's own settings: no locale or region of this Mac, no account name, no path under `/Users`. The repository is public.
 - The description of a pull request follows `PLAN.md` Appendix C.
@@ -67,7 +68,9 @@ One pull request at a time.
 6. Check that the tree on `main` is the tree that was tested. If `main` or the head moved in between, the result is void.
 7. Delete the branch. A branch whose pull request was squashed gets no further commits. If the thread goes straight on with the package's next pull request, it starts a new branch from `origin/main` in the same worktree. Otherwise remove the worktree.
 
-The gate is `scripts/verify.sh --gate`, and its depth comes from the diff (docs/architecture.md §18). `scripts/gate-steps.txt` lists every step and marks those that are still pending, each with what delivers it, and the orchestrator turns a line to required when that has arrived: the Mac UI step with WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode, the team-ID check with his signing configuration on the Mac, the soak with WP-06, the `.live` smoke tests with WP-22 and the two-process test with WP-34.
+The gate is `scripts/verify.sh --gate`, and its depth comes from the diff (docs/architecture.md §18). `scripts/gate-steps.txt` lists every step and marks those that are still pending, each with what delivers it, and the orchestrator turns a line to required when that has arrived: the Mac UI step with WP-01's third pull request, which waits for Paolo to enable Automation Mode and developer mode, the soak with WP-06, the `.live` smoke tests with WP-22 and the two-process test with WP-34.
+
+The team-ID check is required since 2026-11-20, when Paolo's signing configuration came to the Mac. It reads the file that `KNOT_LOCAL_CONFIG` names, so the orchestrator runs the gate with that variable set. Without the file the step is skipped. A gate whose line counts a skipped step has not passed, and its status is not posted as a success.
 
 A pull request that changes the gate, or a contract that others build on, is tried on the next pull request in the queue before it merges, by running its scripts with `--tree` on that candidate. On 2026-11-19 this found two faults in the tooling that its own gate could not show.
 
@@ -76,6 +79,12 @@ A pull request that changes the gate, or a contract that others build on, is tri
 - The gates G0 to G5 of `PLAN.md` §10, with the minutes each takes.
 - The list in `AGENTS.md`: moving a tag, distribution signing, notarising and uploading, deploying the CloudKit production schema, every operation on the milestone iCloud container, and deleting an archive branch.
 - Any cut of scope, and the points under "For the owner" at the end of `docs/plan/open-points.md`.
+
+What he has answered, each on 2026-11-20:
+
+- SP-4 may deploy its schema to the production side of a throwaway iCloud container made only for that spike (`docs/plan/SP-4.md`). His answer covers nothing else: no other deployment, and no other container.
+- The wave 0 recordings are put off. The orchestrator raises them again when a pull request waits at the gate for the local evaluation, and not before.
+- The branch of a merged pull request is deleted right after the merge, as step 7 of the merge queue says, without asking him. Spike branches, proof branches, archive branches and branches that are not this build's stay.
 
 ## Models and cost
 

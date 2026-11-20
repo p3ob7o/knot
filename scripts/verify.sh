@@ -205,8 +205,8 @@ step_format() {
 step_lint() { (cd "$KNOT_ROOT" && tool lint); }
 
 # The signing team's ID in no tracked file. Without the owner's local configuration on this
-# Mac there is no ID to look for: the step then exits 3 and counts as skipped, and the gate
-# lists it as pending in scripts/gate-steps.txt.
+# Mac there is no ID to look for: the step then exits 3 and counts as skipped, never as
+# passed. The orchestrator's gate runs with the configuration (docs/orchestrator.md).
 step_team_id() {
     local config="${KNOT_LOCAL_CONFIG:-}"
     [[ -n $config ]] || config="$KNOT_CONFIG/Local.xcconfig"

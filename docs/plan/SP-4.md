@@ -18,7 +18,7 @@ Test the sync design of `docs/architecture.md` §11 against CloudKit, and fix th
 
 | PR | What it holds | Starts after |
 |---|---|---|
-| Notes | The code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
+| Notes | The first stage of the code half on `spike/sync-shape`, and its short note | WP-01 PR 1; WP-04 |
 | 1 | The report, `docs/spikes/SP-4.md`, which holds the final CloudKit schema and ends with a decision | SP-4 notes |
 
 The code half starts beside WP-02 PR 1, with the proof steps of WP-12, WP-13, WP-14 and WP-18. It runs in two stages. Stage 1 needs only WP-01 PR 1 and WP-04: it works from the pinned SDK alone, with no container, and files a short note saying whether the draft port fits the real API's streaming, cancellation and errors, what it read and what is not verified yet. The note is `docs/notes/SP-4.md`, merged by a pull request that holds nothing else. Stage 2 runs the same code against the development iCloud container once the owner's signing and two signed-in devices or simulators are there, and the report follows it.
@@ -53,6 +53,10 @@ These wait for SP-4: WP-10 PR 2, for the sync columns; and WP-16, which starts a
   - What happens on a change of account with uploads pending?
   - What does a restored or replaced phone do to device identity?
   - Does an existing sync layer over GRDB and CKSyncEngine, such as SQLiteData, meet those rules, and at what dependency cost?
+- The move from the development environment to production needs a schema on the production side of some container, and what is deployed there can only grow. On 2026-11-20 the owner allowed it in a throwaway iCloud container made only for this spike, such as `iCloud.com.p3ob7o.knot.spike4`. Stage 2 tests the move there.
+  - The spike deploys nothing to the production side of the development container, and it never touches Knot's real container, `iCloud.com.p3ob7o.knot`, in either environment.
+  - If the deployment takes the CloudKit Console, the owner makes it there, in his sitting for stage 2.
+  - A CloudKit management token reaches every container of the team. The spike asks for one only through the orchestrator, who asks the owner.
 - Confirm CloudKit's record limit. `docs/architecture.md` §20 holds, read in the SDK and not measured, that a record stores at most 1 MB apart from its assets. The code half measures the limit in stage 2. Stage 1 could not reach CloudKit before its short note, so the note says so, and WP-02 PR 3 keeps the first values of `docs/architecture.md` §4, which leave about half of the read limit free. The report then confirms the limit, or a contract PR changes the sizes.
 - Fix the mechanism of account isolation, which WP-16 builds. A record counts as synced only for the account, the environment and the zone identity it was synced under, and the zone carries an identity written when it is made. So a record missing from the zone it was synced to is deleted locally, and a zone that is gone or new deletes nothing. A fetch that would delete more than a set share of the local notes pauses sync and asks.
 - `docs/architecture.md` §20 holds, read in the SDK and not measured, that CKSyncEngine's fetch options have a zone scope and no `desiredKeys`, so the engine fetches whole records with their assets. Stage 2 checks it against the container.
@@ -89,8 +93,8 @@ None.
 
 - If CKSyncEngine is harder than planned, sync lands late. Knot is fully usable on each device without sync. Sync has its own lane and its own gate.
 - No new dependency without the owner's approval. GRDB is the one third-party library (D30).
-- Deploying the CloudKit production schema needs Paolo's explicit authorisation.
-- The spike app uses the development identifiers: the bundle ID with a `.dev` suffix, its own app group and its own iCloud container. Only a milestone build opens the default store or the real iCloud container, so nothing before the M1 milestone build touches the retired app or its container.
+- Deploying the CloudKit production schema needs Paolo's explicit authorisation. He gave it on 2026-11-20 for one case: the production side of this spike's throwaway container. It holds for no other container.
+- The spike app uses the development identifiers: the bundle ID with a `.dev` suffix, its own app group and its own iCloud container. For the move to production it names the throwaway container as well, and no other. Only a milestone build opens the default store or the real iCloud container, so nothing before the M1 milestone build touches the retired app or its container.
 - The spike's code stays on `spike/sync-shape` and is never merged.
 - Read the declaration of each OS 26 or OS 27 API in the SDK before using it (`docs/architecture.md` §21), and name the declarations read in the report PR.
 
