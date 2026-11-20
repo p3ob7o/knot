@@ -784,6 +784,24 @@ else
 fi
 pkill -KILL -f "$dl/stub/ioreg" 2>/dev/null || true
 
+# An xcodebuild that does not answer is a dialog waiting for the owner, not a wrong Xcode:
+# knot_select_xcode fails as infra-xcode-silent, never as infra-xcode-mismatch, which would
+# send an agent to reinstall what only the owner can unblock. A stub that never answers
+# stands for xcodebuild, with a 1 s limit.
+xs="$scratch/xcode-silent"
+mkdir -p "$xs"
+printf '#!/bin/sh\nexec sleep 30\n' >"$xs/xcodebuild"
+chmod +x "$xs/xcodebuild"
+silent_status=0
+silent_out="$(env PATH="$xs:$PATH" KNOT_XCODE_ANSWER_LIMIT=1 bash -c 'source "$1"; knot_select_xcode' _ \
+    "$KNOT_SCRIPTS/lib/common.sh" 2>&1)" || silent_status=$?
+if [[ $silent_status != 0 && $silent_out == *"FAIL infra-xcode-silent"*"owner"* && $silent_out != *"infra-xcode-mismatch"* ]]; then
+    pass "an xcodebuild that does not answer fails as infra-xcode-silent, naming the owner"
+else
+    fail "a silent xcodebuild: status $silent_status: $silent_out"
+fi
+pkill -KILL -f "$xs/xcodebuild" 2>/dev/null || true
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
