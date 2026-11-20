@@ -10,7 +10,9 @@ import KnotCore
 /// capture is still open in this launch belongs to the engine and is left alone. An item left
 /// open by an earlier launch is a draft a crash cut short, and it is stored as finished
 /// (docs/product-spec.md §3, rule 12). Items found together go in the order their captures
-/// started. When the store does not answer, ingest stops, and the items wait for the next run.
+/// started, except that a capture comes after the capture it follows, and waits, kept, while
+/// that capture can still arrive (`InboxItems.placement`). When the store does not answer,
+/// ingest stops, and the items wait for the next run.
 public actor InboxIngest {
     /// What ingest did with one item.
     public enum ItemOutcome: Hashable, Sendable {
@@ -53,8 +55,9 @@ public actor InboxIngest {
         self.log = log
     }
 
-    /// Ingests every item in `Inbox/`, in the order their captures started. Stops at the
-    /// first item the store does not take because it is not open or is busy.
+    /// Ingests every item in `Inbox/`, in the order their captures started, each after the
+    /// capture it follows. Stops at the first item the store does not take because it is not
+    /// open or is busy.
     ///
     /// One run at a time: a call that comes while a run is in flight returns at once, with no
     /// outcomes, and the run in flight scans `Inbox/` again before it ends. So no item is placed
@@ -65,7 +68,7 @@ public actor InboxIngest {
             return [:]
         }
         inFlight = true
-        defer { inFlight = false }
+        defer { endRun() }
         return await scanWhileAsked()
     }
 
@@ -76,7 +79,7 @@ public actor InboxIngest {
             return .alreadyRunning
         }
         inFlight = true
-        defer { inFlight = false }
+        defer { endRun() }
         let outcome = await ingestItem(capture)
         if rescan { _ = await scanWhileAsked() }
         return outcome
@@ -84,6 +87,10 @@ public actor InboxIngest {
 
     private var inFlight = false
     private var rescan = false
+
+    private func endRun() {
+        inFlight = false
+    }
 
     /// Scans `Inbox/` until no call asked for another scan meanwhile, or the store stops
     /// answering.
@@ -106,21 +113,32 @@ public actor InboxIngest {
             log.failure(error, "inbox_not_listed")
             return ([:], true)
         }
-        var manifests: [(CaptureID, Date)] = []
+        var captures: [(id: CaptureID, startedAt: Date, follows: CaptureID?)] = []
         for id in found {
-            let started = (try? items.readManifest(id))?.startedAt ?? .distantPast
-            manifests.append((id, started))
+            let manifest = try? items.readManifest(id)
+            captures.append((id, manifest?.startedAt ?? .distantPast, manifest?.followsCaptureID))
         }
         var outcomes: [CaptureID: ItemOutcome] = [:]
-        for (id, _) in manifests.sorted(by: { ($0.1, $0.0) < ($1.1, $1.0) }) {
-            let outcome = await ingestItem(id)
+        var kept: [CaptureID: ErrorCode] = [:]
+        for (id, cyclic) in InboxItems.order(captures) {
+            let outcome = await ingestItem(id, cyclic: cyclic, kept: kept)
             outcomes[id] = outcome
-            if case .kept(let code) = outcome, Self.storeDidNotAnswer(code) { return (outcomes, true) }
+            switch outcome {
+            case .kept(let code):
+                if Self.storeDidNotAnswer(code) { return (outcomes, true) }
+                kept[id] = code
+            case .leftOpen, .alreadyRunning:
+                kept[id] = KnotError.segmentCaptureOpen.code
+            case .stored, .removedEmpty:
+                break
+            }
         }
         return (outcomes, false)
     }
 
-    private func ingestItem(_ capture: CaptureID) async -> ItemOutcome {
+    private func ingestItem(
+        _ capture: CaptureID, cyclic: Bool = false, kept: [CaptureID: ErrorCode] = [:]
+    ) async -> ItemOutcome {
         // An item already being ingested is not ingested twice at once.
         guard running.insert(capture).inserted else { return .alreadyRunning }
         defer { running.remove(capture) }
@@ -137,9 +155,12 @@ public actor InboxIngest {
         }
         if manifest.endedAt == nil, manifest.launchID == launchID { return .leftOpen }
         do throws(KnotError) {
+            let place = { () async throws(KnotError) -> FollowerPlacement in
+                try await self.items.placement(of: manifest, notes: self.notes, cyclic: cyclic, kept: kept)
+            }
             switch manifest.kind {
-            case .typed: return try await ingestTyped(manifest)
-            case .voice: return try await ingestRecording(manifest)
+            case .typed: return try await ingestTyped(manifest, place)
+            case .voice: return try await ingestRecording(manifest, place)
             default: return .kept(KnotError.inboxItemNewerVersion.code)
             }
         } catch {
@@ -148,7 +169,10 @@ public actor InboxIngest {
         }
     }
 
-    private func ingestTyped(_ manifest: CaptureManifest) async throws(KnotError) -> ItemOutcome {
+    /// Where the item's capture goes, asked once its content is known to be there.
+    private typealias Placing = () async throws(KnotError) -> FollowerPlacement
+
+    private func ingestTyped(_ manifest: CaptureManifest, _ place: Placing) async throws(KnotError) -> ItemOutcome {
         let id = manifest.captureID
         let payload = try items.readPayload(id, kind: .typed)
         let whole = payload.map { manifest.payloadSHA256 == nil || manifest.payloadSHA256 == InboxItems.sha256($0) }
@@ -172,7 +196,12 @@ public actor InboxIngest {
             // kind, so that it writes a failed segment that says so, and the file is kept
             // (docs/architecture.md §6, rule 2). The store's call fails with
             // `inbox_item_unreadable`, and a second ingest changes nothing.
-            _ = try await notes.ingest(try await newCapture(manifest, body: .none))
+            let placement: CapturePlacement
+            switch try await place() {
+            case .place(let asked): placement = asked
+            case .wait(let code): return waits(manifest, code)
+            }
+            _ = try await notes.ingest(try await newCapture(manifest, placement: placement, body: .none))
             return .kept(KnotError.inboxItemUnreadable.code)
         }
         if whole == false {
@@ -181,12 +210,18 @@ public actor InboxIngest {
             // the capture carries.
             log.capture(id, "inbox_item_torn")
         }
-        let result = try await notes.ingest(
-            try await newCapture(manifest, body: .text(text)))
+        let placement: CapturePlacement
+        switch try await place() {
+        case .place(let asked): placement = asked
+        case .wait(let code): return waits(manifest, code)
+        }
+        let result = try await notes.ingest(try await newCapture(manifest, placement: placement, body: .text(text)))
         return try finish(manifest, result)
     }
 
-    private func ingestRecording(_ manifest: CaptureManifest) async throws(KnotError) -> ItemOutcome {
+    private func ingestRecording(_ manifest: CaptureManifest, _ place: Placing) async throws(KnotError)
+        -> ItemOutcome
+    {
         let id = manifest.captureID
         let assetID = AssetID.ofCapture(id)
         var stored = try await assets.find(assetID, kind: .audio)
@@ -213,8 +248,13 @@ public actor InboxIngest {
         }
         let asset = Asset(
             id: assetID, segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount, sha256: stored.sha256)
+        let placement: CapturePlacement
+        switch try await place() {
+        case .place(let asked): placement = asked
+        case .wait(let code): return waits(manifest, code)
+        }
         let result = try await notes.ingest(
-            try await newCapture(manifest, body: .file(asset, duration: manifest.duration)))
+            try await newCapture(manifest, placement: placement, body: .file(asset, duration: manifest.duration)))
         let outcome = try finish(manifest, result)
         if case .stored = outcome {
             // The row points to the stored asset: the working file and its manifest can go.
@@ -227,7 +267,9 @@ public actor InboxIngest {
     /// The capture the item describes. A draft that an earlier launch left open ends at its
     /// last durable save: the later of the item's last save and the store's, or at its start
     /// when neither says (finding 40).
-    private func newCapture(_ manifest: CaptureManifest, body: CaptureBody) async throws(KnotError) -> NewCapture {
+    private func newCapture(_ manifest: CaptureManifest, placement: CapturePlacement, body: CaptureBody)
+        async throws(KnotError) -> NewCapture
+    {
         var endedAt = manifest.endedAt
         if endedAt == nil {
             let row = try await notes.capture(manifest.captureID)
@@ -235,10 +277,16 @@ public actor InboxIngest {
         }
         return NewCapture(
             id: manifest.captureID, kind: manifest.kind, origin: manifest.origin, launchID: manifest.launchID,
-            placement: try await manifest.placement(using: notes),
+            placement: placement,
             // Only a delivery from outside the app process is late (docs/architecture.md §6, rule 2).
             arrival: manifest.origin.surface == .watch ? .late : .live, startedAt: manifest.startedAt,
             endedAt: endedAt, body: body, revision: manifest.revision, shownNote: manifest.shownNoteID)
+    }
+
+    /// Keeps an item whose capture follows one that can still arrive: a later run places both.
+    private func waits(_ manifest: CaptureManifest, _ code: ErrorCode) -> ItemOutcome {
+        log.capture(manifest.captureID, "inbox_item_waits_for_followed_capture", .code(code))
+        return .kept(code)
     }
 
     /// Removes the item once the store holds its revision.

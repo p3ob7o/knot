@@ -23,6 +23,11 @@ public struct LaunchRecovery: Sendable {
         case workingFileRemoved
         /// Left as it was, for this reason: the next launch tries again.
         case kept(ErrorCode)
+        /// An orphaned recording that follows a capture which can still arrive: converted,
+        /// stored under its own asset ID, and handed to `Inbox/` as an item that names the
+        /// capture it follows, so that an ingest run places it after that capture. The code is
+        /// what keeps that capture (finding 46).
+        case movedToInbox(ErrorCode)
     }
 
     private let notes: any NoteStore
@@ -32,6 +37,7 @@ public struct LaunchRecovery: Sendable {
     private let launchID: LaunchID
     private let locations: StoreLocations
     private let layer: any FileLayer
+    private let items: InboxItems
     private let log: KnotLog
 
     public init(
@@ -45,6 +51,7 @@ public struct LaunchRecovery: Sendable {
         self.launchID = launchID
         self.locations = locations
         self.layer = layer
+        self.items = InboxItems(locations: locations, layer: layer)
         self.log = log
     }
 
@@ -54,25 +61,43 @@ public struct LaunchRecovery: Sendable {
     }
 
     /// Step 3, after ingest: ends every open row of an earlier launch, and stores each
-    /// recovered recording.
-    public func finishOpenCaptures(recovered: [RecordedAudio]) async throws(KnotError) -> [CaptureID: Outcome] {
+    /// recovered recording. A recording comes after the capture it follows, as in an ingest run
+    /// (finding 46), and `ingested`, what step 2 did with each item, says why an item it
+    /// follows was kept.
+    public func finishOpenCaptures(
+        recovered: [RecordedAudio], ingested: [CaptureID: InboxIngest.ItemOutcome] = [:]
+    ) async throws(KnotError) -> [CaptureID: Outcome] {
         var outcomes: [CaptureID: Outcome] = [:]
+        var kept: [CaptureID: ErrorCode] = [:]
+        for (id, outcome) in ingested {
+            if case .kept(let code) = outcome { kept[id] = code }
+        }
         var audio: [CaptureID: RecordedAudio] = [:]
         for recording in recovered { audio[recording.captureID] = recording }
-        var withoutRow: [RecordedAudio] = []
-        for recording in recovered.sorted(by: { $0.captureID < $1.captureID }) {
-            if let outcome = await finishRecording(recording) {
-                outcomes[recording.captureID] = outcome
+        let order = InboxItems.order(
+            recovered.map { recording in
+                let manifest = try? recordingManifest(recording.captureID)
+                return (recording.captureID, manifest?.startedAt ?? .distantPast, manifest?.followsCaptureID)
+            })
+        var withoutRow: [(RecordedAudio, cyclic: Bool)] = []
+        for (id, cyclic) in order {
+            guard let recording = audio[id] else { continue }
+            if let outcome = await finishRecording(recording, cyclic: cyclic, kept: kept) {
+                outcomes[id] = outcome
+                switch outcome {
+                case .kept(let code), .movedToInbox(let code): kept[id] = code
+                default: break
+                }
             } else {
-                withoutRow.append(recording)
+                withoutRow.append((recording, cyclic))
             }
         }
         for row in try await notes.openCaptures() where row.needsRecovery(currentLaunch: launchID) {
             guard audio[row.id] == nil else { continue }
             outcomes[row.id] = await finishWithoutFile(row)
         }
-        for recording in withoutRow {
-            outcomes[recording.captureID] = await finishWithoutRow(recording)
+        for (recording, cyclic) in withoutRow {
+            outcomes[recording.captureID] = await finishWithoutRow(recording, cyclic: cyclic, kept: kept)
         }
         return outcomes
     }
@@ -80,8 +105,8 @@ public struct LaunchRecovery: Sendable {
     /// Steps 1 to 3 in their order.
     public func run(ingest: InboxIngest) async throws(KnotError) -> [CaptureID: Outcome] {
         let recovered = try await recoverRecordings()
-        _ = await ingest.ingestAll()
-        return try await finishOpenCaptures(recovered: recovered)
+        let ingested = await ingest.ingestAll()
+        return try await finishOpenCaptures(recovered: recovered, ingested: ingested)
     }
 
     // MARK: Recordings
@@ -92,7 +117,9 @@ public struct LaunchRecovery: Sendable {
     /// manifest goes. Audio that will not convert ends its row as failed, and the working file
     /// and its manifest stay for the retry: the audio a person spoke is never thrown away.
     /// Returns `nil` for a recording whose row must be made after every other row has ended.
-    private func finishRecording(_ recording: RecordedAudio) async -> Outcome? {
+    private func finishRecording(_ recording: RecordedAudio, cyclic: Bool, kept: [CaptureID: ErrorCode]) async
+        -> Outcome?
+    {
         let id = recording.captureID
         do throws(KnotError) {
             let row = try await notes.capture(id)
@@ -140,10 +167,28 @@ public struct LaunchRecovery: Sendable {
                 guard let manifest = try recordingManifest(id) else {
                     return .kept(KnotError.inboxItemUnreadable.code)
                 }
+                let placement: CapturePlacement
+                switch try await items.placement(of: manifest, notes: notes, cyclic: cyclic, kept: kept) {
+                case .place(let asked):
+                    placement = asked
+                case .wait(let code):
+                    // The capture it follows can still arrive: the recording, stored, goes to
+                    // `Inbox/` as an item that names it, and an ingest run places both in order.
+                    var item = manifest
+                    item.endedAt = manifest.startedAt.addingTimeInterval(seconds(converted.duration))
+                    item.duration = converted.duration
+                    item.revision = recording.frames
+                    item.payloadByteCount = stored.byteCount
+                    item.payloadSHA256 = stored.sha256
+                    try items.writeRecording(item)
+                    try await recorder.removeWorkingFile(of: id)
+                    log.capture(id, "recording_handed_to_inbox", .code(code))
+                    return .movedToInbox(code)
+                }
                 let result = try await notes.ingest(
                     NewCapture(
                         id: id, kind: .voice, origin: manifest.origin, launchID: manifest.launchID,
-                        placement: try await manifest.placement(using: notes), startedAt: manifest.startedAt,
+                        placement: placement, startedAt: manifest.startedAt,
                         endedAt: manifest.startedAt.addingTimeInterval(seconds(converted.duration)), body: body,
                         revision: recording.frames, shownNote: manifest.shownNoteID))
                 outcome = result.receipt.outcome
@@ -176,14 +221,26 @@ public struct LaunchRecovery: Sendable {
     /// A recording that will not convert and whose row the store never took: its row is made
     /// from the recorder's manifest, open, and ended as failed. It runs once every other open
     /// row has ended, so that none of them holds rule 15 against it.
-    private func finishWithoutRow(_ recording: RecordedAudio) async -> Outcome {
+    private func finishWithoutRow(_ recording: RecordedAudio, cyclic: Bool, kept: [CaptureID: ErrorCode]) async
+        -> Outcome
+    {
         let id = recording.captureID
         do throws(KnotError) {
             guard let manifest = try recordingManifest(id) else { return .kept(KnotError.inboxItemUnreadable.code) }
+            let placement: CapturePlacement
+            switch try await items.placement(of: manifest, notes: notes, cyclic: cyclic, kept: kept) {
+            case .place(let asked):
+                placement = asked
+            case .wait(let code):
+                // Not converted, and the capture it follows can still arrive: the orphan stays
+                // as it is, with its working file, for the next launch.
+                log.capture(id, "recording_waits_for_followed_capture", .code(code))
+                return .kept(code)
+            }
             _ = try await notes.record(
                 NewCapture(
                     id: id, kind: .voice, origin: manifest.origin, launchID: manifest.launchID,
-                    placement: try await manifest.placement(using: notes), startedAt: manifest.startedAt,
+                    placement: placement, startedAt: manifest.startedAt,
                     body: .none, revision: 0,
                     shownNote: manifest.shownNoteID))
             guard let row = try await notes.capture(id) else { return .kept(KnotError.notFound.code) }

@@ -90,17 +90,82 @@ struct InboxItems: Sendable {
     }
 }
 
-extension CaptureManifest {
-    /// Where ingest and recovery place the capture. One that rule 13 or 15 started as it ended
-    /// another names that capture, and is the next segment of its note as the store has it now,
-    /// whatever the window says and whichever launch stored the first. Text from the command
-    /// line or MCP never ends a capture, so it is placed as it asked. A followed capture that
-    /// left no segment leaves the capture placed as it asked (finding 36).
-    func placement(using notes: any NoteStore) async throws(KnotError) -> CapturePlacement {
-        guard let follows = followsCaptureID, !origin.source.isTool,
-            let note = try await notes.segment(SegmentID(follows))?.noteID
-        else { return placement }
-        return .named(note)
+/// Where ingest and recovery put a capture: placed as it asks, or kept for now because the
+/// capture it follows can still arrive (finding 46).
+enum FollowerPlacement: Equatable, Sendable {
+    case place(CapturePlacement)
+    /// Kept with the code of what keeps the capture it follows; a later run places both.
+    case wait(ErrorCode)
+}
+
+extension InboxItems {
+    /// Where a capture goes (docs/product-spec.md §3, rules 13 and 15). One that rule 13 or 15
+    /// started as it ended another names that capture, and is the next segment of its note as
+    /// the store has it now, whatever the window says and whichever launch stored the first.
+    ///
+    /// While that capture can still arrive, the follower waits: it has no segment and no row
+    /// that ended without one, and its item is in `Inbox/` in a form this build ingests, or its
+    /// recording is an orphan that recovery handles. When it can never arrive, the follower is
+    /// placed as it asked, by the window: there is no item, orphan or segment of it, it ended
+    /// with no segment, or its item is one this build will never ingest. Text from the command
+    /// line or MCP never ends a capture, and a capture in a cycle of links cannot come after
+    /// the one it follows: both are placed as they asked.
+    ///
+    /// - Parameters:
+    ///   - cyclic: the capture's link leads back to itself through the items of the run.
+    ///   - kept: why this run kept the items it handled before, by capture.
+    func placement(
+        of manifest: CaptureManifest, notes: any NoteStore, cyclic: Bool = false, kept: [CaptureID: ErrorCode] = [:]
+    ) async throws(KnotError) -> FollowerPlacement {
+        guard let follows = manifest.followsCaptureID, follows != manifest.captureID,
+            !manifest.origin.source.isTool, !cyclic
+        else { return .place(manifest.placement) }
+        if let segment = try await notes.segment(SegmentID(follows)) { return .place(.named(segment.noteID)) }
+        if let row = try await notes.capture(follows), row.outcome != .open {
+            // Ended with no segment: discarded, or empty.
+            return .place(manifest.placement)
+        }
+        let waiting = FollowerPlacement.wait(kept[follows] ?? KnotError.segmentCaptureOpen.code)
+        if layer.entryKind(locations.inboxManifest(follows)) == .file {
+            guard let item = try? readManifest(follows), item.kind == .typed || item.kind == .voice else {
+                // An unreadable item, or one from a newer Knot: this build never ingests it.
+                return .place(manifest.placement)
+            }
+            return waiting
+        }
+        if layer.entryKind(locations.recordingManifest(follows)) == .file { return waiting }
+        return .place(manifest.placement)
+    }
+
+    /// The order a run handles captures in: by start, except that a capture comes after the
+    /// capture it follows when both are in the run, whatever the clock said. A capture whose
+    /// link leads back to itself is marked cyclic, and its link does not order it.
+    static func order(_ captures: [(id: CaptureID, startedAt: Date, follows: CaptureID?)]) -> [(
+        id: CaptureID, cyclic: Bool
+    )] {
+        var follows: [CaptureID: CaptureID] = [:]
+        for capture in captures { follows[capture.id] = capture.follows }
+        let present = Set(captures.map(\.id))
+        func isCyclic(_ id: CaptureID) -> Bool {
+            var seen: Set<CaptureID> = [id]
+            var next = follows[id] ?? nil
+            while let link = next, present.contains(link) {
+                if link == id { return true }
+                guard seen.insert(link).inserted else { return false }
+                next = follows[link] ?? nil
+            }
+            return false
+        }
+        var ordered: [(id: CaptureID, cyclic: Bool)] = []
+        var placed: Set<CaptureID> = []
+        func place(_ id: CaptureID) {
+            guard placed.insert(id).inserted else { return }
+            let cyclic = isCyclic(id)
+            if !cyclic, let link = follows[id] ?? nil, present.contains(link) { place(link) }
+            ordered.append((id, cyclic))
+        }
+        for capture in captures.sorted(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }) { place(capture.id) }
+        return ordered
     }
 }
 
