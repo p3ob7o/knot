@@ -94,6 +94,17 @@ public enum SyncEngineContract {
         #expect(await first(of: engine) == .off, "An event after the stop never arrives.")
         try await engine.syncNow()
         #expect(await first(of: engine) == .off, "A manual sync while off does nothing.")
+
+        // After a stop and a new start, an event of the stopped run is still dropped: that is
+        // what the run's generation is for (docs/notes/SP-4.md).
+        await engine.start()
+        let restarted = await first(of: engine)
+        guard case .idle = restarted else {
+            Issue.record("A restarted engine is idle, not \(String(describing: restarted)).")
+            return
+        }
+        await subject.deliverLateEvent()
+        #expect(await first(of: engine) == restarted, "An event of the stopped run never reaches the new one.")
     }
 
     /// The first status a new subscriber gets: the current one.
