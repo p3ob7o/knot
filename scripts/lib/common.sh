@@ -388,16 +388,22 @@ knot_swift_test_limited() {
 # with Fake, such as KnotLink.FakeLinkSystem, which is how a fake outside KnotFakes is named
 # (docs/architecture.md §17). The types are matched in the demangled symbols and strings,
 # because Swift abbreviates repeated words in a mangled name (FakeLinkSystem in KnotLink is
-# 04FakeB6System). A symbol's debug-map path, such as Sources/KnotFakes/, is none of these.
-# An internal type that an optimised, stripped build keeps no symbol for can still go
-# unseen here; the lint is what catches a fake whose guard was lost (fake-unguarded).
+# 04FakeB6System), in each form a fake's name takes there: KnotLink.FakeX and
+# KnotLink.Outer.FakeX; KnotLink.(FakeX in _…) for a private or fileprivate type; FakeX #1 in
+# KnotLink.f() for a local type; (extension in KnotLink):Swift.Array.FakeX for a type nested
+# in an extension of a type from elsewhere; and a mangled name kept as a string, such as
+# 8KnotLink15FakeFilePrivate…. A symbol's debug-map path, such as Sources/KnotFakes/, is none
+# of these. An optimised build can keep no symbol of a type at all, a private or local one
+# above all, or keep its bare name with no module, which this scan does not count; the lint
+# is what catches a fake whose guard was lost (fake-unguarded).
 #   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
     local file=$1 symbols strings found
     symbols="$(nm -a "$file" 2>/dev/null || true)"
     strings="$(strings -a "$file" 2>/dev/null || true)"
     found="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle |
-        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.Fake[A-Za-z0-9_]*' | sort -u || true)"
+        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' |
+        sort -u || true)"
     if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
         found="${found:+$found$'\n'}the module KnotFakes"
     fi

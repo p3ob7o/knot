@@ -473,22 +473,29 @@ else
     fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
 fi
 # The release scan finds a fake that lives outside KnotFakes, by its name: a type of a Knot
-# module named Fake…, matched demangled, since Swift abbreviates it in the mangled name. A
-# made-up KnotLink holds FakeLinkSystem under the guard; it is compiled once with
-# KNOT_FAKES and once without. The old scan, for the KnotFakes module only, missed it.
+# module named Fake…, matched demangled, since Swift abbreviates it in the mangled name, in
+# every form a fake's symbols take: public, nested, private and fileprivate, local, and
+# nested in an extension of a type from outside the project. A made-up KnotLink holds them
+# under the guard; it is compiled once with KNOT_FAKES and once without, unoptimised, which
+# keeps every symbol. The old scan, for the KnotFakes module only, missed them all.
 fk="$scratch/fakes"
 mkdir -p "$fk/Sources/KnotLink"
 cat >"$fk/Sources/KnotLink/Link.swift" <<'SWIFT'
 #if DEBUG || KNOT_FAKES
-    public struct FakeLinkSystem {
-        public init() {}
-        public func send() -> Int { 42 }
+    public struct FakeLinkSystem { public init() {}; public func send() -> Int { 42 } }
+    public enum Outer { public struct FakeNested { public init() {}; public func v() -> Int { 2 } } }
+    private struct FakePrivate { func v() -> Int { 3 } }
+    fileprivate final class FakeFilePrivate { func v() -> Int { 4 } }
+    extension Array { public struct FakeInExtension { public init() {}; public func v() -> Int { 5 } } }
+    public func useAll() -> Int {
+        struct FakeLocal { func v() -> Int { 7 } }
+        return FakePrivate().v() + FakeFilePrivate().v() + FakeLocal().v()
     }
 #endif
 
 public func linkValue() -> Int {
     #if DEBUG || KNOT_FAKES
-        return FakeLinkSystem().send()
+        return FakeLinkSystem().send() + Outer.FakeNested().v() + useAll() + [Int].FakeInExtension().v()
     #else
         return 0
     #endif
@@ -496,17 +503,21 @@ public func linkValue() -> Int {
 SWIFT
 knot_select_xcode
 built=0
-xcrun swiftc -emit-library -O -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
+xcrun swiftc -emit-library -Onone -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/with-fakes.dylib" >/dev/null 2>&1 && built=$((built + 1))
-xcrun swiftc -emit-library -O -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
+xcrun swiftc -emit-library -Onone -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/release.dylib" >/dev/null 2>&1 && built=$((built + 1))
 with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" || true)"
 release="$(knot_fakes_in "$fk/release.dylib" || true)"
 old_scan="$({ nm -a "$fk/with-fakes.dylib"; strings -a "$fk/with-fakes.dylib"; } 2>/dev/null | grep -c -e KnotFakes || true)"
-if [[ $built == 2 && $with_fakes == "KnotLink.FakeLinkSystem" && -z $release && $old_scan == 0 ]]; then
-    pass "the release scan finds a fake in another module by its name, and nothing in a build without it"
+missing=""
+for fake in FakeLinkSystem FakeNested FakePrivate FakeFilePrivate FakeLocal FakeInExtension; do
+    [[ $with_fakes == *"$fake"* ]] || missing="$missing $fake"
+done
+if [[ $built == 2 && -z $missing && -z $release && $old_scan == 0 ]]; then
+    pass "the release scan finds a fake in another module by its name, public, nested, private, local or in an extension"
 else
-    fail "the scan for fakes outside KnotFakes: built $built, with fakes '$with_fakes', release '$release', old scan $old_scan"
+    fail "the scan for fakes outside KnotFakes: built $built, missed:${missing:- none}, release '$release', old scan $old_scan"
 fi
 
 # The fixtures step speaks this tree's audio when it lacks it (knot_tool.py fixtures-audio
