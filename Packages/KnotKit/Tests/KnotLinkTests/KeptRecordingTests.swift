@@ -118,6 +118,34 @@ import Testing
         #expect(subject.log.lines("watch_recording_manifest_unreadable").map(\.fields.first) == [.capture(capture)])
     }
 
+    /// What is on the Watch is counted from the moment the link is up, before any conversion:
+    /// three recordings an earlier launch left show as waiting while recovery converts them.
+    @Test func recordingsLeftByAnEarlierLaunchAreCountedWhileRecoveryConvertsThem() async throws {
+        let harness = LinkHarness()
+        let inner = ScriptedRecorder(locations: harness.locations, layer: PosixFileLayer(), clock: harness.clock)
+        let gated = GatedRecorder(inner: inner)
+        var captures: [CaptureID] = []
+        for _ in 0..<3 {
+            let capture: CaptureID = harness.ids.make()
+            captures.append(capture)
+            try inner.leaveOrphan(capture, launch: harness.ids.make(), frames: 16_000)
+            gated.gate(capture)
+        }
+        let (link, _) = harness.launchWatch()
+        let coordinator = WatchCoordinator(
+            recorder: gated, link: link, ids: harness.ids, clock: harness.clock, launchID: harness.ids.make(),
+            device: harness.ids.make())
+        let left = captures
+        let recovering = Task { await coordinator.launch() }
+        await SuiteWait.until("the first conversion") { left.contains { gated.inFlight($0) == 1 } }
+        let during = await link.currentCounts()
+        gated.open()
+        await recovering.value
+        await harness.settle(link)
+        #expect(during == (waiting: 3, failed: 0), "Counted before any conversion.")
+        #expect(await link.currentCounts() == (waiting: 3, failed: 0))
+    }
+
     @Test func aRecoveredRecordingWithNoAudioIsEndedAndLogged() async throws {
         let orphan = Box<CaptureID?>(nil)
         let subject = makeSubject { inner in NoAudioRecorder(inner: inner, orphan: orphan) }

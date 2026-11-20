@@ -123,7 +123,13 @@ public actor WatchCoordinator {
     /// so the two never run side by side.
     public func launch() async {
         do {
-            for recording in try await recorder.recoverOrphans(currentLaunch: launchID) {
+            let recovered = try await recorder.recoverOrphans(currentLaunch: launchID)
+            // Counted from the moment the link is up, before any conversion: each is on the
+            // Watch and waits. Finishing it admits it, keeps it, or ends it, and recounts it.
+            for recording in recovered {
+                await link.hold(recording.captureID, failed: false)
+            }
+            for recording in recovered {
                 _ = await finish(recording)
             }
         } catch {
