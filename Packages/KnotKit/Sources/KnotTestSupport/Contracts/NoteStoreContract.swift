@@ -94,6 +94,7 @@ public enum NoteStoreContract {
         Check(name: "job-forward", run: aJobOnlyMovesForward),
         Check(name: "write-stamps", run: everyWriteReturnsStampedRevisions),
         Check(name: "stream-search", run: streamAndSearch),
+        Check(name: "failed-not-lowered", run: aFailedCaptureIsNotLowered),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
         Check(name: "continuation-moves", run: aContinuationMoves),
         Check(name: "grow-piece-of", run: grownPiecesNameTheirFirst),
@@ -1772,6 +1773,19 @@ public enum NoteStoreContract {
         _ = try await h.store.record(draft)
         #expect(try await h.store.checkpoint(early).applied, "The retry after the record applies.")
         #expect(try await h.text(SegmentID(draft.id)) == "first words")
+    }
+
+    /// Witness 54: a failed capture that holds revision 4 keeps its text and its revision when
+    /// revision 3 arrives.
+    public static func aFailedCaptureIsNotLowered(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let draft = h.typedDraft("newer", at: 0, revision: 4)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.end(
+            CaptureEnd(captureID: draft.id, endedAt: h.at(1), outcome: .failed(KnotError.diskFull.code), revision: 4))
+        _ = try await h.store.end(h.endTyped(draft.id, "old", at: 2, revision: 3))
+        #expect(try await h.text(SegmentID(draft.id)) == "newer", "The text stays.")
+        #expect(try await h.row(draft.id)?.revision == 4, "The revision stays.")
     }
 
     // MARK: Reading
