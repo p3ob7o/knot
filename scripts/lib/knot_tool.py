@@ -666,7 +666,7 @@ def cmd_team_id(team_config):
             match = re.search(r"^\s*DEVELOPMENT_TEAM\s*=\s*([A-Z0-9]{10})\s*$", f.read(), re.M)
             team = match.group(1) if match else None
     if not team:
-        print(f"team-id: no local configuration with a team ID at {team_config or 'KNOT_LOCAL_CONFIG'}, so the check did not run")
+        print(f"team-id: no local configuration with a team ID at {team_config or 'KNOT_TEAM_CONFIG or KNOT_LOCAL_CONFIG'}, so the check did not run")
         return 3
     found = lines(subprocess.run(["git", "grep", "-l", "-F", team], capture_output=True, text=True).stdout)
     for path in found:

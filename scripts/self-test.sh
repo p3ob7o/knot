@@ -6,8 +6,9 @@
 #
 # It checks that a slot is released when its holder is killed, that a failure prints the
 # agreed fields, and that the plan check catches a brief with a missing heading; then that
-# the gate's helper reads a brief's paths and the depth table as the plan states them. It
-# works in folders from mktemp, and changes nothing in the worktree.
+# the gate's helper reads a brief's paths and the depth table as the plan states them, what
+# the team-ID check answers, and that the gate refuses a local configuration. It works in
+# folders from mktemp, and changes nothing in the worktree.
 
 source "$(dirname "$0")/lib/common.sh"
 
@@ -240,6 +241,45 @@ if [[ -s $scratch/lint.out ]] && diff "$scratch/lint.out" "$scratch/lint-changed
     pass "the fixture's verdict does not move when the tree's manifests gain every reason"
 else
     fail "the fixture's verdict moved with the tree's manifests"
+fi
+
+# The team-ID check passes on a clean tree, finds an ID that a tracked file holds, and
+# exits 3, which counts as skipped, when there is no configuration to read. The ID here is
+# made up.
+team_repo="$scratch/team-repo"
+mkdir -p "$team_repo"
+git -C "$team_repo" init --quiet
+printf 'KNOT_SIGNING = team\nDEVELOPMENT_TEAM = SELFTEST01\n' >"$scratch/Team.xcconfig"
+printf 'nothing to find\n' >"$team_repo/clean.txt"
+git -C "$team_repo" add clean.txt
+team_id_status() {
+    local status=0
+    (cd "$team_repo" && python3 "$KNOT_SCRIPTS/lib/knot_tool.py" team-id --team-config "$1") >/dev/null 2>&1 || status=$?
+    echo "$status"
+}
+clean="$(team_id_status "$scratch/Team.xcconfig")"
+printf 'DEVELOPMENT_TEAM = SELFTEST01\n' >"$team_repo/leak.txt"
+git -C "$team_repo" add leak.txt
+leaked="$(team_id_status "$scratch/Team.xcconfig")"
+absent="$(team_id_status "$scratch/no-such.xcconfig")"
+if [[ $clean == 0 && $leaked == 1 && $absent == 3 ]]; then
+    pass "the team-ID check passes, finds a tracked ID, and is skipped without a configuration"
+else
+    fail "the team-ID check: clean $clean, a tracked ID $leaked, no configuration $absent"
+fi
+
+# The gate refuses a local configuration, which would give its builds settings that no
+# other run has, and a refused gate leaves no earlier run's status line behind. The gate
+# runs on a tree of its own here, so that it removes nothing in the worktree.
+gate_tree="$scratch/gate-tree"
+mkdir -p "$gate_tree/.build/logs"
+printf 'gate everything ok: an earlier run\n' >"$gate_tree/.build/logs/verify-status.txt"
+status=0
+output="$(KNOT_LOCAL_CONFIG="$scratch/Team.xcconfig" "$KNOT_SCRIPTS/verify.sh" --gate --package WP-00 --tree "$gate_tree" 2>&1)" || status=$?
+if [[ $status == 1 && $output == *"FAIL verify-gate-local-config"* && ! -e $gate_tree/.build/logs/verify-status.txt ]]; then
+    pass "the gate refuses KNOT_LOCAL_CONFIG, and leaves no earlier status line"
+else
+    fail "the gate with KNOT_LOCAL_CONFIG set: status $status, earlier line $(ls "$gate_tree/.build/logs"), and: $output"
 fi
 
 if ((FAILED)); then
