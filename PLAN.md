@@ -439,7 +439,7 @@ A PR is done when all of these hold:
 - No note text, transcript or audio appears in logs, test output or fixtures.
 - Any OS 26 or OS 27 API used is named in the PR with the declaration that was read (architecture §21).
 - Anything that could not be verified without hardware is listed, and has a row in a checklist.
-- Where it changes the cleanup instructions, the guard or the speech settings, it reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers.
+- Where it changes the cleanup instructions, the guard or the speech settings, it reruns the synthetic evaluation, `knot-eval --set synthetic`, and states the results before and after. For a PR that touches speech or cleanup, the orchestrator runs the local evaluation, on the owner's recordings, at the gate and records the numbers. Until the owner's recordings exist, such a pull request merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them.
 
 **The merge gate.** The merge gate is `scripts/verify.sh --gate` on the orchestrator's Mac. It builds with the release Xcode that the owner installs at G1. It picks its depth from the diff by a fixed table and refuses a partial run: `--skip mac-ui` exists for implementers, and the gate refuses it. The table, and the checks that every depth starts with, are in docs/architecture.md §18. The gate requires both on-device models on the Mac and fails on a skipped model test. In the iOS Simulator it uses the scripted transcriber, because the real one is not available there.
 
@@ -453,7 +453,7 @@ After G1 and SP-3, the gate has one development-signed step for a PR that touche
 
 **Availability.** The deployment target is 27.0. An API that first shipped in 27.1 or later is guarded or raises the stated minimum, and code must compile with the release Xcode installed at G1.
 
-**Evaluation.** The synthetic cleanup and speech results are committed with the fixtures. A contributor's PR reruns the synthetic evaluation, and a meaning-critical case that passed and now fails blocks the PR. The orchestrator runs the local evaluation, on the owner's recordings, at the gate for a PR that touches speech or cleanup, and records the numbers.
+**Evaluation.** The synthetic cleanup and speech results are committed with the fixtures. A contributor's PR reruns the synthetic evaluation, and a meaning-critical case that passed and now fails blocks the PR. The orchestrator runs the local evaluation, on the owner's recordings, at the gate for a PR that touches speech or cleanup, and records the numbers. Until the owner's recordings exist, such a pull request merges on the synthetic evaluation, the numbers on his recordings follow, and M2 does not close without them.
 
 **The nightly run.** The nightly run on `main` executes the package tests under Thread Sanitizer, and reports a model that changed with an update of the operating system. docs/architecture.md §18 says what else it runs.
 
@@ -478,7 +478,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G3 | After wave 1 | SP-5's rows on the Mac | 15 |
 | G3 | After wave 1 | Install the SP-3 build from TestFlight and run its check, on his other Mac, where no Knot Dev build has run. On the build Mac the TestFlight build would be a new signer of the development identifiers' containers, and its consent dialog would fail the check for a reason that has nothing to do with the app group | 15 |
 | G3 | After wave 1 | Read the five spike reports and confirm their decisions | 20 |
-| G3 | With SP-4 | Sign two devices into iCloud for the second stage of the sync spike, once his signing is set up | 10 |
+| G3 | With SP-4 | Sign two simulators into iCloud with his additional Apple ID, one that is not tied to his developer account, for the second stage of the sync spike, once his signing is set up | 10 |
 | G4 | Wave 0 | Record the read-aloud script and 10 spontaneous notes on two devices and move the files to the Mac. On 2026-11-20 he put this off | 30 |
 | G4 | Before the full design round | Read the guard's table and the ten cleanup pairs; choose full cleanup, punctuation only or off | 20 |
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
