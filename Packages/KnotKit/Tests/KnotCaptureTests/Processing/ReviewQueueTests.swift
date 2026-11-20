@@ -271,6 +271,59 @@ import Testing
         #expect(endB.deaths == 0)
         #expect(endB.state == .done)
     }
+
+    /// Finding 31 (the re-check's n25c). The time ends right after the cleanup was applied: the
+    /// clean job's `done` is saved outside the cancelled task, so the job is done and the
+    /// segment ready, and the drain says it yielded.
+    @Test func cleanJobsDoneIsSavedWhenTheTimeEndsAfterTheCleanup() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks, cancellable: true)
+        let runner = StraightThroughRunner()
+        hooks.afterCleanup.withLock { hook in hook = { runner.endTime() } }
+        let result = await SuiteWait.value("the drain") { await queue.drain(using: runner) { _ in } }
+        #expect(result == .yielded)
+        let segment = SegmentID(begun.captureID)
+        let clean = try #require(try await r.notes.jobs(for: segment).first { $0.kind == .clean })
+        #expect(clean.state == .done)
+        #expect(try await r.notes.segment(segment)?.state == .voice(.ready))
+    }
+
+    /// Finding 31 (the re-check's n25d). The store saves a job as running and then does not
+    /// answer the read that would say its revision: the step takes its way out, which reads the
+    /// job again, so the job is left queued with an attempt, never running, and its revision is
+    /// never guessed.
+    @Test func startWhoseReadFailsLeavesTheJobNotRunning() async throws {
+        let r = Rig()
+        r.transcriber.scriptUnscriptedFiles(pieces: ScriptedTranscriber.defaultScript)
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.end(begun.captureID)
+        let hooks = JobHooks()
+        let queue = Self.hookedQueue(r, hooks)
+        let first = Mutex(true)
+        hooks.afterSave.withLock { hook in
+            hook = { job in
+                if job.state == .running,
+                    first.withLock({ f in
+                        defer { f = false }
+                        return f
+                    })
+                {
+                    hooks.failJobReads(1)
+                }
+            }
+        }
+        #expect(
+            await SuiteWait.value("the drain") { await queue.drain(using: StraightThroughRunner()) { _ in } } == .idle)
+        let job = try #require(try await r.notes.jobs(for: SegmentID(begun.captureID)).first { $0.kind == .transcribe })
+        #expect(job.state == .queued)
+        #expect(job.attempts == 1)
+        #expect(job.deaths == 0)
+        #expect(job.lastErrorCode == KnotError.storeNotOpen.code)
+    }
 }
 
 /// A runner whose work meets a store that does not answer.

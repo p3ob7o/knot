@@ -238,7 +238,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private func transcribe(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
         defer { runningHere.remove(queued.id) }
-        var job = try await start(queued)
+        guard var job = try await start(queued, step: .transcribe) else { return }
         await moveSegment(segment, .startTranscribing)
         do throws(KnotError) {
             guard let read = try await notes.segment(segment), let assetID = read.assetID,
@@ -272,7 +272,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private func clean(_ queued: Job) async throws(KnotError) {
         let segment = queued.segmentID
         defer { runningHere.remove(queued.id) }
-        var job = try await start(queued)
+        guard var job = try await start(queued, step: .clean) else { return }
         await moveSegment(segment, .startCleaning)
         let applied: CleanupApplied
         do throws(KnotError) {
@@ -304,7 +304,10 @@ public actor StandardProcessingQueue: ProcessingQueue {
     // MARK: Jobs
 
     /// Marks a job running, and returns it as the store holds it now.
-    private func start(_ job: Job) async throws(KnotError) -> Job {
+    /// Marks a job running, and returns it as the store holds it now. When the store saved it
+    /// and will not say what it holds, the job is never given a guessed revision: the step
+    /// takes its way out, which reads the job again, and `start` returns `nil`.
+    private func start(_ job: Job, step: JobKind) async throws(KnotError) -> Job? {
         let running = try Self.reduce(job, .start)
         // This process's before the save, so that a `resume()` that runs as the save returns
         // does not take it for a death.
@@ -315,25 +318,38 @@ public actor StandardProcessingQueue: ProcessingQueue {
             runningHere.remove(job.id)
             throw error
         }
-        // Saved as running: from here every way out of the step leaves it not running. A read
-        // that fails takes the revision the save gave it.
-        var stored = running
-        stored.revision += 1
-        if let reread = try? await reread(running) { stored = reread }
+        // Saved as running: from here every way out of the step leaves it not running.
+        let stored: Job
+        do throws(KnotError) {
+            stored = try await reread(running)
+        } catch {
+            try await stepFailed(running, error, step: step, readRequired: true)
+            return nil
+        }
         broadcast.send(stored)
         return stored
     }
 
     /// A step that threw: a yield, a deferral, a final error or an attempt, each as
     /// `JobMachine` says, with the segment's state to match. A yield ends the drain.
-    private func stepFailed(_ job: Job, _ error: KnotError, step: JobKind) async throws(KnotError) {
+    /// - Parameter readRequired: `job` is not as the store last held it, so the job must be read
+    ///   again before anything is saved: a revision is never guessed.
+    private func stepFailed(_ job: Job, _ error: KnotError, step: JobKind, readRequired: Bool = false)
+        async throws(KnotError)
+    {
         // The step's way out is written outside the task around it, which a yield cancelled: a
         // job still marked running then means only that the process died (§4).
         let notes = self.notes
-        let current =
-            (try? await outsideCancellation { () async throws(KnotError) in
-                try await notes.jobs(for: job.segmentID).first { $0.id == job.id }
-            }) ?? job
+        let read = try? await outsideCancellation { () async throws(KnotError) in
+            try await notes.jobs(for: job.segmentID).first { $0.id == job.id }
+        }
+        if readRequired, read == nil {
+            log.failure(
+                error.with(.init(captureID: Self.capture(of: job.segmentID), segmentID: job.segmentID, jobID: job.id)),
+                "job_left_running")
+            throw error
+        }
+        let current = read ?? job
         let retryAt = error.isDeferral ? error.context.retryAt : clock.now().addingTimeInterval(backoff(current))
         let next = try Self.reduce(current, .stepFailed(error, retryAt: retryAt))
         try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(next) }
