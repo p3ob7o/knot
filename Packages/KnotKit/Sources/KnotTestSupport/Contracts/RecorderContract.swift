@@ -10,15 +10,18 @@ public struct RecorderSubject: Sendable {
     public let exists: @Sendable (URL) -> Bool
     /// A file's size in bytes, or `nil` when there is none, read without the recorder.
     public let size: @Sendable (URL) -> Int?
+    /// A file's bytes, or `nil` when there is none, read without the recorder.
+    public let read: @Sendable (URL) -> Data?
 
     public init(
         recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
-        size: @escaping @Sendable (URL) -> Int?
+        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?
     ) {
         self.recorder = recorder
         self.locations = locations
         self.exists = exists
         self.size = size
+        self.read = read
     }
 }
 
@@ -28,6 +31,7 @@ public struct RecorderSubject: Sendable {
 public enum RecorderContract {
     public static func run(_ make: @Sendable () async throws -> RecorderSubject) async throws {
         try await aRecordingStreamsStopsAndConverts(make)
+        try await theFirstManifestNamesTheCaptureItFollows(make)
         try await aStopIsFinalAndCannotBeCancelled(make)
         try await twoStopsAtOnceBothWaitForTheFile(make)
         try await aDiscardRemovesTheRecording(make)
@@ -117,6 +121,35 @@ public enum RecorderContract {
         #expect(!subject.exists(working) && !subject.exists(manifest), "Removing takes the working file and manifest.")
         try await recorder.removeWorkingFile(of: request.captureID)
         #expect(subject.exists(converted.file))
+    }
+
+    /// The manifest's first write records the request, read as the start returns and before any
+    /// sample is taken: the link to the capture the recording follows among it, and no link
+    /// when it follows nothing. A recorder that ignores the link fails here: a death just after
+    /// the start would leave a recording that ingest cannot place after the capture it follows.
+    public static func theFirstManifestNamesTheCaptureItFollows(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        var following = request()
+        let followed: CaptureID = Identifier(uuid: UUID())
+        following.followsCaptureID = followed
+        let session = try await recorder.start(following)
+        let bytes = subject.read(subject.locations.recordingManifest(following.captureID))
+        let manifest = try CaptureManifest.decode(try #require(bytes, "The manifest is written before the start returns."))
+        #expect(manifest.captureID == following.captureID && manifest.kind == .voice)
+        #expect(manifest.launchID == following.launchID && manifest.origin == following.origin)
+        #expect(manifest.placement == following.placement && manifest.shownNoteID == following.shownNote)
+        #expect(manifest.followsCaptureID == followed, "The manifest's first write names the capture it follows.")
+        _ = await SuiteWait.value("the discard") { await session.discard() }
+
+        let alone = request()
+        let other = try await recorder.start(alone)
+        let first = subject.read(subject.locations.recordingManifest(alone.captureID))
+        let plain = try CaptureManifest.decode(try #require(first, "The manifest is written before the start returns."))
+        #expect(plain.followsCaptureID == nil, "A recording that follows nothing names nothing.")
+        _ = await SuiteWait.value("the discard") { await other.discard() }
     }
 
     /// A stop called again returns the same result, and a stop whose caller is cancelled
