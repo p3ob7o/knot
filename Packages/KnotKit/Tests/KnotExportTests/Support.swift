@@ -21,10 +21,18 @@ let t0 = Date(timeIntervalSince1970: 1_795_000_000)
 let thisDevice: DeviceID = fixedID(0xd1)
 let otherDevice: DeviceID = fixedID(0xd2)
 
-/// The synthetic bytes of a stored recording and a stored drawing, from Fixtures/.
+/// The synthetic bytes of a stored recording and a stored drawing.
+///
+/// Export copies a recording's file as it is and never reads its audio, so the recording is
+/// bytes made here, not speech: nothing from `Fixtures/generated/`, which each Mac makes for
+/// itself and a fresh checkout does not have (Fixtures/README.md). Its length comes from its
+/// segment. The drawing and the image come from committed fixtures.
 enum FixtureBytes {
+    /// 4 KiB of a fixed pattern, behind the box header that opens an `.m4a` file. The same
+    /// bytes on every run.
     static func recording() throws -> Data {
-        try Data(contentsOf: FixtureFiles.url("generated/audio/short.wav"))
+        let header = Data([0x00, 0x00, 0x00, 0x18]) + Data("ftypM4A ".utf8)
+        return header + Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
     }
 
     static func drawing() throws -> Data {
