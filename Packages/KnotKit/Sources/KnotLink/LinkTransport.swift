@@ -173,11 +173,12 @@ public struct LinkContext: Hashable, Sendable {
         self.window = window
     }
 
-    /// True when a recording started at `date` would continue a note, as the Watch forecasts it.
+    /// True when a recording started at `date` would continue a note, as the Watch forecasts
+    /// it: by the append window's own rule, so that a gap made negative by two clocks slightly
+    /// apart forecasts what the iPhone will decide.
     public func continuesNote(at date: Date) -> Bool {
-        guard let ended = joinableCaptureEndedAt, !window.isOff else { return false }
-        let gap = date.timeIntervalSince(ended)
-        return gap >= 0 && gap < window.length
+        guard let ended = joinableCaptureEndedAt else { return false }
+        return window.contains(gap: date.timeIntervalSince(ended))
     }
 }
 

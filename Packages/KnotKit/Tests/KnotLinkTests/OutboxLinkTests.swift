@@ -328,6 +328,20 @@ import Testing
         #expect(await link.latestContext()?.continuesNote(at: ended) == false, "A note closed by New note gives none.")
     }
 
+    /// The forecast follows the append rule's own window: a gap negative by less than the
+    /// window, as when the two clocks are slightly apart, continues the note, as the iPhone
+    /// will decide (docs/product-spec.md §3).
+    @Test func theForecastFollowsTheWindowsOwnRule() {
+        let ended = Date(timeIntervalSince1970: 1_795_000_000)
+        let context = LinkContext(joinableCaptureEndedAt: ended, window: .default)
+        for gap: TimeInterval in [-299, -60, -1, 0, 1, 60, 299, -300, 300, -301, 301, 3_600] {
+            #expect(
+                context.continuesNote(at: ended.addingTimeInterval(gap)) == AppendWindow.default.contains(gap: gap),
+                "A gap of \(gap) seconds.")
+        }
+        #expect(!LinkContext(joinableCaptureEndedAt: ended, window: .off).continuesNote(at: ended))
+    }
+
     // MARK: Named
 
     /// docs/architecture.md §12, "Checksums", the Watch's half: a file that arrives damaged is
