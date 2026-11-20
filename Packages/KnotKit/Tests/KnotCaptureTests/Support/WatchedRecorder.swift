@@ -12,6 +12,9 @@ final class WatchedRecorder: Recorder, Sendable {
     let conversionDelay = Mutex<Duration>(.zero)
     /// While closed, every conversion waits at it.
     let conversionGate = Gate()
+    /// While set, every removal of a working file fails with `write_failed`, as a death just
+    /// before it would leave the file.
+    let failRemovals = Mutex(false)
     private let log = Mutex<[String]>([])
 
     init(_ base: ScriptedRecorder) { self.base = base }
@@ -40,6 +43,7 @@ final class WatchedRecorder: Recorder, Sendable {
     }
 
     func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        if failRemovals.withLock({ $0 }) { throw KnotError.writeFailed.about(capture: capture) }
         try await base.removeWorkingFile(of: capture)
     }
 }

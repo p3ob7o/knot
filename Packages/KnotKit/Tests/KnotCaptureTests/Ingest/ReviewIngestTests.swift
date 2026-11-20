@@ -283,6 +283,31 @@ import Testing
         #expect(r.inboxFiles().isEmpty)
     }
 
+    /// Finding 50. A recording stored on the store path whose working file was left beside the
+    /// stored asset, as a death between the store's end and the removal leaves it: the next
+    /// launch's recovery removes the working file and its manifest, and a second recovery finds
+    /// nothing.
+    @Test func orphanWhoseRowIsStoredLosesItsWorkingFile() async throws {
+        let r = Rig()
+        let recorder = WatchedRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
+        let begun = try await r.beginRecording(on: engine)
+        recorder.failRemovals.withLock { $0 = true }
+        _ = try await engine.end(begun.captureID)
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .stored)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(begun.captureID)) == .file)
+
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[begun.captureID] == .workingFileRemoved)
+        #expect(next.layer.entryKind(next.locations.recordingManifest(begun.captureID)) == nil)
+        #expect(next.layer.entryKind(next.locations.recordingAudio(begun.captureID, format: .caf)) == nil)
+        #expect(try await next.notes.capture(begun.captureID)?.outcome == .stored)
+        // Recovery run again finds nothing more to do with it.
+        let again = try await next.recovery.run(ingest: next.ingest)
+        #expect(again[begun.captureID] == nil)
+    }
+
     /// Finding 20, the review's R3. A recording whose conversion failed keeps its working file
     /// as the recording; the next launch's recovery finds it among the orphans, converts it
     /// again and stores it, and it goes on to transcription.
