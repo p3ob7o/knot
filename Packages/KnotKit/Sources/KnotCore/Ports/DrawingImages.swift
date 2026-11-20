@@ -19,7 +19,8 @@ public struct DrawingImage: Hashable, Sendable {
 /// `port_unavailable`: the ink segment view shows its placeholder with the recognised text,
 /// and export writes the drawing's stored data file under its ID.
 public protocol DrawingImages: Sendable {
-    /// The image of `drawing` at `scale` pixels per point. A drawing whose data cannot be
-    /// decoded fails with `drawing_unreadable`.
+    /// The image of `drawing` at `scale` pixels per point: a PNG that decodes at the size it
+    /// states, which follows the scale asked. A drawing whose data cannot be decoded fails with
+    /// `drawing_unreadable`.
     func image(of drawing: InkDrawingData, scale: Double) async throws(KnotError) -> DrawingImage
 }

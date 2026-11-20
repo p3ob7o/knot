@@ -5,8 +5,12 @@ import Testing
 /// What an `InkRecogniser` under test reads.
 public struct InkRecogniserSubject: Sendable {
     public let recogniser: any InkRecogniser
-    /// A drawing that holds words.
+    /// A drawing that holds words, and the words it holds.
     public let words: InkDrawingData
+    public let wordsHold: [String]
+    /// Another drawing, which holds other words.
+    public let other: InkDrawingData
+    public let otherHolds: [String]
     /// A drawing that holds no words.
     public let blank: InkDrawingData
     /// Data that is not a drawing.
@@ -20,12 +24,16 @@ public struct InkRecogniserSubject: Sendable {
     public let setInForeground: @Sendable (Bool) async -> Void
 
     public init(
-        recogniser: any InkRecogniser, words: InkDrawingData, blank: InkDrawingData, unreadable: InkDrawingData,
+        recogniser: any InkRecogniser, words: InkDrawingData, wordsHold: [String], other: InkDrawingData,
+        otherHolds: [String], blank: InkDrawingData, unreadable: InkDrawingData,
         language: Locale.Language, unsupportedLanguage: Locale.Language,
         setInForeground: @escaping @Sendable (Bool) async -> Void
     ) {
         self.recogniser = recogniser
         self.words = words
+        self.wordsHold = wordsHold
+        self.other = other
+        self.otherHolds = otherHolds
         self.blank = blank
         self.unreadable = unreadable
         self.language = language
@@ -53,6 +61,17 @@ public enum InkRecogniserContract {
         #expect(
             Locale.Language(identifier: read.provenance.language).languageCode == subject.language.languageCode,
             "The provenance names the language used.")
+
+        // Each drawing gives the words it holds, not some text: two drawings, two readings
+        // (finding 19).
+        let otherRead = try await recogniser.recognise(subject.other, language: subject.language)
+        for (text, holds) in [(read.text, subject.wordsHold), (otherRead.text, subject.otherHolds)] {
+            let found = Set(text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+            for word in holds {
+                #expect(found.contains(word.lowercased()), "The text \(text.debugDescription) holds \(word).")
+            }
+        }
+        #expect(read.text != otherRead.text, "Two drawings with other words give other texts.")
 
         let blank = try await recogniser.recognise(subject.blank, language: subject.language)
         #expect(blank.text.isEmpty, "A drawing with no words is ready with empty text, not an error.")

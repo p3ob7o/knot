@@ -66,9 +66,16 @@
             guard reads(language) else { throw KnotError.handwritingLanguageUnsupported }
             guard foreground else { throw KnotError.appNotInForeground }
             if Task.isCancelled { throw KnotError.cancelled }
-            if delay > .zero {
-                do { try await Task.sleep(for: delay) } catch { throw KnotError.cancelled }
+            // While it runs, a cancel yields, and the app leaving the foreground defers: a text
+            // that comes back after the app left is not returned (docs/notes/WP-18.md).
+            let deadline = ContinuousClock.now + delay
+            while ContinuousClock.now < deadline {
+                guard state.withLock({ $0.inForeground }) else { throw KnotError.appNotInForeground }
+                do { try await Task.sleep(for: min(.milliseconds(5), deadline - ContinuousClock.now)) } catch {
+                    throw KnotError.cancelled
+                }
             }
+            guard state.withLock({ $0.inForeground }) else { throw KnotError.appNotInForeground }
             if let failure { throw failure }
             return InkRecognition(
                 text: text,

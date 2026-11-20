@@ -14,11 +14,14 @@ import Testing
         try await InkRecogniserContract.run {
             let recogniser = ScriptedInkRecogniser()
             let words = try Self.fixtureDrawing()
+            let other = InkDrawingData(bytes: try Data(contentsOf: FixtureFiles.url("ink/list.json")))
             let blank = InkDrawingData(bytes: Data("blank canvas".utf8))
             recogniser.script(words, text: "a line of words")
+            recogniser.script(other, text: "milk eggs bread")
             recogniser.script(blank, text: "")
             return InkRecogniserSubject(
-                recogniser: recogniser, words: words, blank: blank,
+                recogniser: recogniser, words: words, wordsHold: ["line", "words"], other: other,
+                otherHolds: ["milk", "eggs", "bread"], blank: blank,
                 unreadable: InkDrawingData(bytes: Data("not a drawing".utf8)),
                 language: Locale.Language(identifier: "en-GB"), unsupportedLanguage: Locale.Language(identifier: "ja"),
                 setInForeground: { recogniser.setInForeground($0) })
@@ -76,10 +79,12 @@ import Testing
     @Test func aScriptedImageIsGivenForItsDrawing() async throws {
         let images = ScriptedDrawingImages()
         let drawing = InkDrawingData(bytes: Data("strokes".utf8))
-        let image = DrawingImage(png: ScriptedDrawingImages.placeholder.png, pixelWidth: 40, pixelHeight: 20)
+        let image = ScriptedDrawingImages.synthetic(scale: 3)
         images.script(drawing, image: image)
         #expect(try await images.image(of: drawing, scale: 2) == image)
-        #expect(try await images.image(of: InkDrawingData(bytes: Data("other".utf8)), scale: 1).pixelWidth == 1)
+        #expect(
+            try await images.image(of: InkDrawingData(bytes: Data("other".utf8)), scale: 1).pixelWidth
+                == ScriptedDrawingImages.pointSize.width)
         await #expect(throws: KnotError.drawingUnreadable) {
             try await images.image(of: InkDrawingData(bytes: Data()), scale: 1)
         }

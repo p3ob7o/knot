@@ -36,7 +36,8 @@ public struct InkRecognition: Hashable, Sendable {
 /// Its failures are cases of the taxonomy, in the classes the job knows (§4):
 /// - `drawing_unreadable`, final: the drawing's data cannot be decoded.
 /// - `handwriting_language_unsupported`, final: the language is not one it reads.
-/// - `app_not_in_foreground`, a deferral: recognition runs only while the app is in front.
+/// - `app_not_in_foreground`, a deferral: recognition runs only while the app is in front, and a
+///   recognition whose app leaves the foreground before it returns defers too.
 /// - `cancelled`, a yield: the calling task was cancelled. A text that came back from a call
 ///   that was cancelled is still good, and it is returned.
 /// - `recognition_failed`, an attempt: the app was in front and still got nothing it can trust.
