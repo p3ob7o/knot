@@ -216,21 +216,29 @@ public enum RecorderContract {
     /// A recording of an earlier launch that stopped and was never converted, or whose
     /// conversion failed, leaves a working file, and it is among that launch's orphans: a later
     /// launch's recovery returns it, read to its last complete frame, until `removeWorkingFile`
-    /// takes it. So a failed conversion is tried again at the next launch (finding 23).
+    /// takes it, in the same call as a recording of that launch that never ended. So a failed
+    /// conversion is tried again at the next launch (finding 23), and a recording that stopped
+    /// is never left uncounted in `Recording/`.
     public static func aStoppedRecordingThatWasNotConvertedIsAnOrphan(
         _ make: @Sendable () async throws -> RecorderSubject
     ) async throws {
         let subject = try await make()
         let recorder = subject.recorder
-        let earlier = request()
+        let launch: LaunchID = Identifier(uuid: UUID())
+        let earlier = request(launch)
         let session = try await recorder.start(earlier)
         let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        // Beside it, a recording of the same launch that never ended: the launch died with it.
+        let unended = request(launch)
+        _ = try await recorder.start(unended)
         let later: LaunchID = Identifier(uuid: UUID())
-        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
-            $0.captureID == earlier.captureID
-        }
+        let orphans = try await recorder.recoverOrphans(currentLaunch: later)
+        let found = orphans.first { $0.captureID == earlier.captureID }
         #expect(found != nil, "A stopped recording that was never converted is an orphan of its launch.")
         #expect(found?.workingFile == stopped.workingFile && found?.frames == stopped.frames, "Read to its end.")
+        let died = orphans.first { $0.captureID == unended.captureID }
+        #expect(died != nil, "A recording that never ended is an orphan of its launch, beside the stopped one.")
+        #expect(died?.ending == .recovered, "It is finished as recovered.")
         #expect(
             try await recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
             "It stays an orphan until its working file is removed.")
