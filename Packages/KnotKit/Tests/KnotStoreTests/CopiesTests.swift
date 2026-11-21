@@ -169,6 +169,55 @@ import Testing
             try StoreCopies.check(copy, against: StoreCopies.tableCounts(in: copy))
         }
     }
+
+    /// A restore cut short, by a crash or by a disk that stops answering, leaves a whole store
+    /// at the next open: the store as it was while the new one was not published, and the
+    /// restored one once it was. The place of the store is never empty to an open.
+    @Test(arguments: ["set aside", "published"])
+    func aRestoreCutShortLeavesAWholeStore(cutAfter step: String) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 87)
+        let copy = try made.database.makeDailyCopy()
+        // A note the copy does not hold, so that the current store and the restored one differ.
+        _ = try await made.notes.record(
+            made.captures.typed("A synthetic later line", from: 30, to: 31, placement: .newNote))
+        let current = try await noteCount(made.database)
+        let copied = try #require(try StoreCopies.tableCounts(in: copy)["note"])
+        #expect(current == copied + 1)
+        try made.database.close()
+        let locations = made.database.locations
+        let parent = locations.storeRoot.deletingLastPathComponent()
+        let dead = Switch(false)
+        // The disk stops answering at the first sync after the step: every sync and rename after
+        // it fails, those of the failed restore's own undo too, as after a crash.
+        let layer = HookedFileLayer(
+            refuseSync: { _ in
+                if !dead.isOn {
+                    let names = (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? []
+                    let setAside = names.contains { $0.hasPrefix("\(StoreLocations.rootFolderName)-before-restore-") }
+                    let reached =
+                        step == "set aside"
+                        ? setAside && !FileManager.default.fileExists(atPath: locations.storeRoot.path)
+                        : setAside && FileManager.default.fileExists(atPath: locations.database.path)
+                    if reached { dead.set(true) }
+                }
+                return dead.isOn
+            },
+            refuseRename: { _, _ in dead.isOn })
+        await expectFailure(.writeFailed) {
+            try StoreCopies.restore(copy, at: locations, clock: made.clock, fileLayer: layer)
+        }
+        #expect(dead.isOn, "The restore reached the step.")
+        let reopened = try openStore(in: root)
+        #expect(try await noteCount(reopened) == (step == "set aside" ? current : copied))
+        expectConsistent(reopened)
+        let left = try FileManager.default.contentsOfDirectory(atPath: parent.path).filter {
+            $0.hasPrefix("\(StoreLocations.rootFolderName)-restor")
+        }
+        #expect(left.isEmpty, "Nothing is left of the restore but the store set aside: \(left)")
+    }
 }
 
 extension StoreCopies {

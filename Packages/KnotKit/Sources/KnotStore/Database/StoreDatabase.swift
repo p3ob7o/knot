@@ -121,6 +121,15 @@ public final class StoreDatabase: Sendable {
         let files = locations.durableFiles(layer: fileLayer)
         let latest = migrations.last?.version ?? 0
         let path = locations.database.path
+        // A restore that was cut short is finished or undone before anything looks for the
+        // store, so that an open never makes an empty store over one set aside. Only the app
+        // settles it.
+        if RestoreJournal.isPending(at: locations) {
+            guard role == .app else { throw KnotError.storeNotOpen }
+            do { try RestoreJournal.settle(at: locations, layer: fileLayer) } catch {
+                throw StoreErrors.knotError(error)
+            }
+        }
         if !FileManager.default.fileExists(atPath: path) {
             guard role == .app else { throw KnotError.storeNotOpen }
             removeCreationLeftovers(in: locations)
