@@ -272,7 +272,8 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     /// Runs the old work after the current call has returned, once at a time.
     private func scheduleHousekeeping() {
-        guard !housekeepingScheduled, !pendingDiscards.isEmpty || !pendingFailures.isEmpty || !pendingConversions.isEmpty
+        guard !housekeepingScheduled,
+            !pendingDiscards.isEmpty || !pendingFailures.isEmpty || !pendingConversions.isEmpty
         else { return }
         housekeepingScheduled = true
         Task.detached { [weak self] in await self?.housekeeping() }

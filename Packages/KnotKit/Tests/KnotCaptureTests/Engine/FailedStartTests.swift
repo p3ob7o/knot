@@ -58,12 +58,14 @@ import Testing
         let other = try #require(try await Self.returned("the panel's start", panel)?.get())
         // The surface was told "first" is not saved: it keeps the text and starts again.
         let retried = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first"))
-        #expect(retried.captureID == firstID, "The surface's next start is the retry of the capture that reached no disk.")
+        #expect(
+            retried.captureID == firstID, "The surface's next start is the retry of the capture that reached no disk.")
         for id in Set([retried.captureID, other.captureID]) { _ = try? await r.engine.end(id) }
-        #expect(await eventually("Inbox/ to be empty") {
-            _ = await r.ingest.ingestAll()
-            return r.inboxFiles().isEmpty
-        })
+        #expect(
+            await eventually("Inbox/ to be empty") {
+                _ = await r.ingest.ingestAll()
+                return r.inboxFiles().isEmpty
+            })
         let stored = await Self.texts(r)
         #expect(stored == ["first", "other"], "Stored \(stored.count) segments.")
         #expect(stored.filter { $0 == "first" }.count == 1, "The unsaved text is stored once, not twice.")
@@ -95,10 +97,12 @@ import Testing
         let retried = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "p"))
         #expect(retried.captureID == p, "The panel's next start is the retry of its capture.")
         for id in [a.captureID, c.captureID, retried.captureID] { _ = try? await r.engine.end(id) }
-        #expect(await eventually("Inbox/ to be empty") {
-            _ = await r.ingest.ingestAll()
-            return r.inboxFiles().isEmpty
-        })
+        #expect(
+            await eventually("Inbox/ to be empty") {
+                _ = await r.ingest.ingestAll()
+                return r.inboxFiles().isEmpty
+            })
         let stored = await Self.texts(r)
         #expect(stored.filter { $0 == "p" }.count == 1, "The panel's text is stored once: \(stored.count) segments.")
-    }}
+    }
+}
