@@ -466,9 +466,15 @@ knot_make_audio() {
 # Prints the lines of a test log that report a test that did not run its body: skipped by a
 # trait ("Test x() skipped: …") or cancelled at run time ("Test x() was cancelled after …"),
 # each line once. The summary counts them as skipped, and the gate fails on any.
+# Only an event line counts: Swift Testing's glyph at the start of the line, two spaces,
+# "Test", the test's name (a function's, or a display name in quotes), and then the event.
+# A line a test prints, a recorded issue's text, or a passing test whose name holds
+# "skipped" is not one. XCTest's own form, "Test Case '…' skipped", counts too.
 #   knot_skipped_tests <log>
 knot_skipped_tests() {
-    grep -E 'Test .* (skipped|was cancelled after)' "$1" || true
+    LC_ALL=C grep -E \
+        -e '^[^ -~]+  Test ("[^"]*"|[^ "]+) (skipped|was cancelled after)' \
+        -e "^Test Case '[^']+' skipped" "$1" || true
 }
 
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,

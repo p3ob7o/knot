@@ -927,6 +927,18 @@ cat >"$sl/logs/skipped.log" <<'LOG'
 􀙟  Test disabledByATrait() skipped: "the speech model is not on this Mac"
 􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
 LOG
+# Lines that only look like a skip: a test's own printed line, a recorded issue's text, and
+# passing tests whose names hold "skipped" or "cancelled after". Each test passed, so the
+# gate passes and the summary counts nothing as skipped.
+cat >"$sl/logs/lookalike.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+recorder: Test session was cancelled after 2 retries, as the fake store asked
+􀢄  Test aRecordedIssue() recorded an issue at A.swift:3:5: Expectation failed: (status → "Test x was cancelled after 1 s") == "ok"
+􁁛  Test "A capture that was cancelled after the disk filled is kept" passed after 0.002 seconds.
+􁁛  Test "A clip skipped by the guard is still on disk" passed after 0.002 seconds.
+􁁛  Test skippedSegmentIsReported() passed after 0.001 seconds.
+􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
+LOG
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
     local status=0 run="$sl/run-$1-$2"
     mkdir -p "$run/slots"
@@ -938,10 +950,12 @@ skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
 gate_cancelled="$(skip_loop cancelled gate)"
 gate_skipped="$(skip_loop skipped gate)"
 quick_cancelled="$(skip_loop cancelled quick)"
-if [[ $gate_cancelled == "1 FAIL"* && $gate_skipped == "1 FAIL"* && $quick_cancelled == "0 ok"* ]]; then
-    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, and passes the quick tier"
+gate_lookalike="$(skip_loop lookalike gate)"
+if [[ $gate_cancelled == "1 FAIL"* && $gate_skipped == "1 FAIL"* && $quick_cancelled == "0 ok"* &&
+    $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" ]]; then
+    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and a line that only looks like one counts for nothing"
 else
-    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled'"
+    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike'"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
