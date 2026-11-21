@@ -141,16 +141,16 @@ import Testing
         #expect(stored.text == "call the plumber on Monday", "problem \(String(describing: model.problem))")
         // Nothing was written; the draft is kept, with what arrived.
         #expect(
-            model.editConflict
+            model.editConflict(for: .segment(segment))
                 == EditConflict(
                     target: .segment(segment), draft: "call the electrician", arrived: "call the plumber on Monday"))
-        #expect(model.editConflict?.draft(of: segment) == "call the electrician")
+        #expect(model.editConflict(for: .segment(segment))?.draft == "call the electrician")
         #expect(model.items.first?.text == "call the plumber on Monday")
 
         // Keep mine: the draft goes in over what arrived.
-        model.keepMyEdit()
+        model.keepMyEdit(.segment(segment))
         await settled(model)
-        #expect(model.editConflict == nil)
+        #expect(model.editConflicts.isEmpty)
         #expect(try await rig.environment.notes.segment(segment)?.text == "call the electrician")
     }
 
@@ -167,10 +167,10 @@ import Testing
         await model.refresh()
         model.editText(of: segment, to: "call the electrician")
         await settled(model)
-        #expect(model.editConflict != nil)
-        model.dropMyEdit()
+        #expect(!model.editConflicts.isEmpty)
+        model.dropMyEdit(.segment(segment))
         await settled(model)
-        #expect(model.editConflict == nil)
+        #expect(model.editConflicts.isEmpty)
         #expect(try await rig.environment.notes.segment(segment)?.text == "call the roofer")
     }
 
@@ -187,10 +187,10 @@ import Testing
         model.setTitle("Shopping")
         await settled(model)
         #expect(try await rig.environment.notes.note(note)?.note.title == "Saturday")
-        #expect(model.editConflict == EditConflict(target: .title, draft: "Shopping", arrived: "Saturday"))
-        model.keepMyEdit()
+        #expect(model.editConflict(for: .title) == EditConflict(target: .title, draft: "Shopping", arrived: "Saturday"))
+        model.keepMyEdit(.title)
         await settled(model)
-        #expect(model.editConflict == nil)
+        #expect(model.editConflicts.isEmpty)
         #expect(try await rig.environment.notes.note(note)?.note.title == "Shopping")
     }
 
@@ -204,7 +204,7 @@ import Testing
         model.beginEditing(segment)
         model.editText(of: segment, to: "call the electrician")
         await settled(model)
-        #expect(model.editConflict == nil)
+        #expect(model.editConflicts.isEmpty)
         #expect(model.problem == nil)
         #expect(try await rig.environment.notes.segment(segment)?.text == "call the electrician")
     }

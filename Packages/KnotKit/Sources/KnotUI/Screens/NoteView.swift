@@ -30,7 +30,8 @@
                     }
                     ForEach(model.items) { item in
                         SegmentView(
-                            item, text: model.editConflict?.draft(of: item.id) ?? model.displayedText(of: item),
+                            item,
+                            text: model.editConflict(for: .segment(item.id))?.draft ?? model.displayedText(of: item),
                             isShowingOriginal: model.showingOriginal.contains(item.id),
                             playback: playing == item.id ? player.state : .empty,
                             handlers: handlers(for: item))
@@ -95,17 +96,17 @@
                     .accessibilityLabel(Text("Dismiss", bundle: .module))
                 }
             }
-            if let conflict = model.editConflict {
-                // The person's draft stays in its field; they keep it or drop it. How this looks
-                // is the design round's.
+            // Each conflict keeps its own draft until the person decides it. How this looks is
+            // the design round's.
+            ForEach(Array(model.editConflicts.values), id: \.target) { conflict in
                 Banner(conflict.message, symbol: "arrow.triangle.2.circlepath", role: .failed) {
                     Button {
-                        model.keepMyEdit()
+                        model.keepMyEdit(conflict.target)
                     } label: {
                         Text("Keep mine", bundle: .module)
                     }
                     Button {
-                        model.dropMyEdit()
+                        model.dropMyEdit(conflict.target)
                     } label: {
                         Text("Keep the new text", bundle: .module)
                     }

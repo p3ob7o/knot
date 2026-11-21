@@ -105,7 +105,12 @@ public final class NoteViewModel {
     /// The typed capture the field is making, from its first keystroke to its end.
     public private(set) var typedCapture: CaptureID?
     /// An edit refused as stale, waiting for the person to keep it or drop it.
-    public private(set) var editConflict: EditConflict?
+    /// The edits refused as stale, each waiting for the person to keep it or drop it. A conflict
+    /// belongs to its segment, and a title's to its note: each keeps its own draft.
+    public private(set) var editConflicts: [EditConflict.Target: EditConflict] = [:]
+
+    /// The conflict of `target`, if it has one.
+    public func editConflict(for target: EditConflict.Target) -> EditConflict? { editConflicts[target] }
 
     /// A running recording blocks typing on every capture surface (rule 15).
     /// From the moment an end is asked until it answers, the field takes no typing either, so
@@ -488,7 +493,7 @@ public final class NoteViewModel {
     /// Replaces a segment's text with the person's edit. Edits beat cleaned and raw text. The edit
     /// carries the revision read when it began (`beginEditing`), so text that changed elsewhere
     /// meanwhile is never replaced unseen: the store refuses it, nothing is written, and
-    /// `editConflict` keeps the draft for the person to decide.
+    /// `editConflicts` keeps the draft for the person to decide.
     public func editText(of segment: SegmentID, to text: String) {
         enqueue { model in
             guard let record = model.record else { return }
@@ -508,12 +513,12 @@ public final class NoteViewModel {
         }
     }
 
-    /// Commits the kept draft over what arrived.
-    public func keepMyEdit() {
-        guard let conflict = editConflict else { return }
+    /// Commits the kept draft of `target` over what arrived.
+    public func keepMyEdit(_ target: EditConflict.Target) {
+        guard let conflict = editConflicts[target] else { return }
         enqueue { model in
-            guard model.editConflict == conflict, let record = model.record else { return }
-            model.editConflict = nil
+            guard model.editConflicts[target] == conflict, let record = model.record else { return }
+            model.editConflicts[target] = nil
             switch conflict.target {
             case .segment(let segment):
                 await model.replace(segment, with: conflict.draft ?? "", ifRevision: record.revision(of: segment))
@@ -523,9 +528,9 @@ public final class NoteViewModel {
         }
     }
 
-    /// Drops the draft: the text that arrived stays.
-    public func dropMyEdit() {
-        editConflict = nil
+    /// Drops the draft of `target`: the text that arrived stays.
+    public func dropMyEdit(_ target: EditConflict.Target) {
+        editConflicts[target] = nil
     }
 
     private func replace(_ segment: SegmentID, with text: String, ifRevision: StampedRevision?) async {
@@ -535,7 +540,7 @@ public final class NoteViewModel {
             _ = try await environment.notes.replaceText(replacement)
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
-            editConflict = EditConflict(
+            editConflicts[.segment(segment)] = EditConflict(
                 target: .segment(segment), draft: text,
                 arrived: record?.segments.first { $0.id == segment }?.text)
             return
@@ -552,7 +557,7 @@ public final class NoteViewModel {
             _ = try await environment.notes.setTitle(value, of: id, ifRevision: ifRevision)
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
-            editConflict = EditConflict(target: .title, draft: value, arrived: record?.note.title)
+            editConflicts[.title] = EditConflict(target: .title, draft: value, arrived: record?.note.title)
             return
         } catch {
             problem = .actionRefused(error.code)

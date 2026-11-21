@@ -64,6 +64,49 @@ import Testing
         #expect(model.fieldText == "kept and more")
     }
 
+    /// Finding 8. A conflict belongs to its segment: a second conflict on another segment keeps
+    /// the first, and its draft, until the person decides each.
+    @Test func aSecondConflictKeepsTheFirstDraft() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("first line"))
+        try await rig.type("second line")
+        let model = rig.open(note)
+        await model.refresh()
+        try #require(model.items.count == 2)
+        let a = model.items[0].id
+        let b = model.items[1].id
+        let notes = rig.environment.notes
+
+        model.beginEditing(a)
+        _ = try await notes.replaceText(
+            TextReplacement(segment: a, text: "first line, changed elsewhere", origin: .edited, writer: .commandLine))
+        await model.refresh()
+        model.editText(of: a, to: "my draft of the first")
+        await settled(model)
+        #expect(model.editConflict(for: .segment(a))?.draft == "my draft of the first")
+
+        model.beginEditing(b)
+        _ = try await notes.replaceText(
+            TextReplacement(segment: b, text: "second line, changed elsewhere", origin: .edited, writer: .mcp))
+        await model.refresh()
+        model.editText(of: b, to: "my draft of the second")
+        await settled(model)
+
+        #expect(model.editConflicts.count == 2)
+        #expect(model.editConflict(for: .segment(a))?.draft == "my draft of the first")
+        #expect(model.editConflict(for: .segment(b))?.draft == "my draft of the second")
+
+        // Each is decided on its own: keep the first, drop the second.
+        model.keepMyEdit(.segment(a))
+        await settled(model)
+        #expect(try await notes.segment(a)?.text == "my draft of the first")
+        #expect(model.editConflict(for: .segment(b))?.draft == "my draft of the second")
+        model.dropMyEdit(.segment(b))
+        #expect(model.editConflicts.isEmpty)
+        #expect(try await notes.segment(b)?.text == "second line, changed elsewhere")
+    }
+
     /// The re-check found this right: two changes that arrive before the commit leave the
     /// conflict holding the latest.
     @Test func twoChangesBeforeTheCommitHoldTheLatest() async throws {
@@ -82,11 +125,13 @@ import Testing
         model.editText(of: segment, to: "mine")
         await settled(model)
         #expect(try await notes.segment(segment)?.text == "v3")
-        #expect(model.editConflict == EditConflict(target: .segment(segment), draft: "mine", arrived: "v3"))
-        model.keepMyEdit()
+        #expect(
+            model.editConflict(for: .segment(segment))
+                == EditConflict(target: .segment(segment), draft: "mine", arrived: "v3"))
+        model.keepMyEdit(.segment(segment))
         await settled(model)
         #expect(try await notes.segment(segment)?.text == "mine")
-        #expect(model.editConflict == nil)
+        #expect(model.editConflicts.isEmpty)
     }
 
     /// The re-check found this right: a segment deleted elsewhere while the draft is open stays
