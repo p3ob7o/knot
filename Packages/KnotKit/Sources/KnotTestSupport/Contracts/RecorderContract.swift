@@ -12,16 +12,21 @@ public struct RecorderSubject: Sendable {
     public let size: @Sendable (URL) -> Int?
     /// A file's bytes, or `nil` when there is none, read without the recorder.
     public let read: @Sendable (URL) -> Data?
+    /// Makes a file one that the recorder cannot read, as one protected while the device is
+    /// locked, or readable again, without moving it: for the real recorder, its permissions.
+    public let setReadable: @Sendable (URL, Bool) -> Void
 
     public init(
         recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
-        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?
+        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?,
+        setReadable: @escaping @Sendable (URL, Bool) -> Void
     ) {
         self.recorder = recorder
         self.locations = locations
         self.exists = exists
         self.size = size
         self.read = read
+        self.setReadable = setReadable
     }
 }
 
@@ -37,6 +42,7 @@ public enum RecorderContract {
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
         try await aStoppedRecordingThatWasNotConvertedIsAnOrphan(make)
+        try await anOrphanThatCannotBeReadIsKept(make)
     }
 
     static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -250,6 +256,34 @@ public enum RecorderContract {
         #expect(
             try await !recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
             "Once its working file is removed, it is not.")
+    }
+
+    /// An orphan whose working file is on the drive and cannot be read is not returned and not
+    /// removed, and it is returned whole once it can be read again: it is never taken for a
+    /// recording with no audio (the review of the recorder's pull request 57).
+    public static func anOrphanThatCannotBeReadIsKept(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        let working = try #require(stopped.workingFile, "The stopped recording names its working file.")
+        let manifest = subject.locations.recordingManifest(earlier.captureID)
+        let later: LaunchID = Identifier(uuid: UUID())
+        subject.setReadable(working, false)
+        let whileLocked = try await recorder.recoverOrphans(currentLaunch: later)
+        #expect(
+            !whileLocked.contains { $0.captureID == earlier.captureID },
+            "A recording that cannot be read is not returned, and never as one with no audio.")
+        #expect(subject.exists(working) && subject.exists(manifest), "Nothing of it is removed.")
+        subject.setReadable(working, true)
+        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
+            $0.captureID == earlier.captureID
+        }
+        #expect(found?.workingFile == working && found?.frames == stopped.frames, "Whole, once it can be read.")
+        try await recorder.removeWorkingFile(of: earlier.captureID)
     }
 
     public static func recoveryNeverTouchesTheCurrentLaunch(_ make: @Sendable () async throws -> RecorderSubject)
