@@ -139,6 +139,8 @@ assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True           
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["scripts/gate-steps.txt"])[3] is True, "gate-steps.txt alone reaches the Mac UI tests"
+# The accessibility audit that every UI test calls, WP-21's (finding 35).
+assert k.classify(["Apps/UITestSupport/Audit.swift"])[3] is True, "Apps/UITestSupport/ reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[4] is False
 assert k.matches("scripts/verify.sh", "scripts/") and not k.matches("scriptsx/a", "scripts/")

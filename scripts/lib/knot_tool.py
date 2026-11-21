@@ -377,7 +377,7 @@ HOSTED = [
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
     "Packages/KnotKit/Sources/KnotUI/", "Packages/KnotKit/Sources/KnotApp/",
-    "scripts/", ".xcode-version",
+    "scripts/", ".xcode-version", "Apps/UITestSupport/",
 ]
 
 
