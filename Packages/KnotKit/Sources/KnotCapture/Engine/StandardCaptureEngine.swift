@@ -996,6 +996,11 @@ public actor StandardCaptureEngine: CaptureEngine {
             case .refused(let error) where error.code == KnotError.notFound.code:
                 // No row yet: a late record is ended when it arrives (`discardLateRow`).
                 pendingDiscards.remove(id)
+            case .refused(let error) where error.code == KnotError.captureIDConflict.code:
+                // The store will never take this end: its row ended otherwise, as rule 15 ends a late
+                // row before its file is known. Not tried again (a known issue of the store's rule).
+                pendingDiscards.remove(id)
+                log.failure(error.about(capture: id), "late_row_not_ended")
             default:
                 // The store did not take it this time: the next call, or the app coming forward,
                 // tries again.
