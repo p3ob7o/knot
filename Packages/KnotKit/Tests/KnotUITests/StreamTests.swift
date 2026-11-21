@@ -43,6 +43,22 @@ import Testing
         #expect(!model.hasFailed)
     }
 
+    @Test func aLongPreviewIsAShortExcerptThatTheRowShowsWhole() throws {
+        let note: NoteID = ids.make()
+        let words = Array(repeating: "synthetic", count: 40).joined(separator: " ")
+        let only = try Build.typed(
+            ids.make(), in: note, from: clock.now(), text: "Title line\nSecond line\n\(words)", origin: .device(device))
+        let preview = try #require(row(record([only], in: note)).preview)
+        #expect(preview.hasPrefix("Second line synthetic"))
+        #expect(preview.hasSuffix("…"))
+        #expect(preview.count <= StreamRowModel.previewLength + 1)
+        #expect(!preview.contains("\n"))
+        // A short one is shown as it is, its lines joined.
+        let short = try Build.typed(
+            ids.make(), in: note, from: clock.now(), text: "Title\nline two\nline three", origin: .device(device))
+        #expect(row(record([short], in: note)).preview == "line two line three")
+    }
+
     @Test func aTitleWinsOverTheFirstLine() throws {
         let note: NoteID = ids.make()
         let only = try Build.typed(ids.make(), in: note, from: clock.now(), text: "one line", origin: .device(device))
