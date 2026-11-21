@@ -18,9 +18,15 @@ public final class AssetRepository: AssetStore {
     /// The same placing, with a rename that never replaces a file another placement published.
     private let exclusive: StoreFiles
 
-    public init(locations: StoreLocations, layer: any FileLayer = PosixFileLayer()) {
+    /// The store whose rows say which files are named, which a removal checks first.
+    private let database: StoreDatabase?
+
+    /// - Parameter database: the store whose rows name the files, so that a removal leaves a file
+    ///   a row names. The store's own repository has it; one without it removes as asked.
+    public init(locations: StoreLocations, layer: any FileLayer = PosixFileLayer(), database: StoreDatabase? = nil) {
         self.locations = locations
         self.layer = layer
+        self.database = database
         self.files = locations.durableFiles(layer: layer)
         self.exclusive = locations.durableFiles(layer: ExclusiveRenameLayer(base: layer))
     }
@@ -86,10 +92,33 @@ public final class AssetRepository: AssetStore {
         guard stored.sha256 == sha256.lowercased() else { throw KnotError.checksumMismatch.with(.init(assetID: asset)) }
     }
 
+    /// Removes an asset's file, as the purge and "Remove recording" ask, never while a row names
+    /// it. The check and the removal are under the writer's lock, which every record of a capture
+    /// takes, so a row that comes to name the file meanwhile keeps it; and an ID a purge retired
+    /// is taken by no capture again.
     public func remove(_ asset: AssetID, kind: AssetKind) async throws(KnotError) {
         let url = try destination(asset, kind)
         guard layer.entryKind(url) != nil else { return }
-        try files.remove(url)
+        guard let database else { return try files.remove(url) }
+        let files = files
+        let id = asset.description
+        do {
+            try await database.pool.write { db in
+                let named =
+                    try Bool.fetchOne(
+                        db,
+                        sql: """
+                            SELECT EXISTS (SELECT 1 FROM asset WHERE id = ?)
+                                OR EXISTS (SELECT 1 FROM segment WHERE asset_id = ?)
+                            """, arguments: [id, id]) ?? false
+                guard !named else { return }
+                try files.remove(url)
+            }
+        } catch let error as KnotError {
+            throw error
+        } catch {
+            throw StoreErrors.knotError(error)
+        }
     }
 
     // MARK: Files

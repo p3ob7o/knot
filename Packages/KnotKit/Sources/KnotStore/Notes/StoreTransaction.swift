@@ -287,6 +287,19 @@ final class StoreTransaction {
             arguments: [id.description, segment.description]) ?? false
     }
 
+    /// Retires an asset ID whose row goes and whose file the caller removes: no capture takes it
+    /// again.
+    func retireAsset(_ id: AssetID) throws {
+        try db.execute(
+            sql: "INSERT INTO retired_asset (id, retired_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING",
+            arguments: [id.description, now().stored])
+    }
+
+    func isRetired(_ id: AssetID) throws -> Bool {
+        try Bool.fetchOne(
+            db, sql: "SELECT EXISTS (SELECT 1 FROM retired_asset WHERE id = ?)", arguments: [id.description]) ?? false
+    }
+
     func removeAsset(_ id: AssetID) throws {
         try db.execute(sql: "DELETE FROM asset WHERE id = ?", arguments: [id.description])
     }

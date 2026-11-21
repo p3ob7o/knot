@@ -27,7 +27,7 @@ public struct OpenedStore: Sendable {
     public init(database: StoreDatabase, settingsSuite: String) throws(KnotError) {
         self.database = database
         notes = NoteRepository(database: database)
-        assets = AssetRepository(locations: database.locations)
+        assets = AssetRepository(locations: database.locations, database: database)
         settings = try StoreSettings(database: database, suiteName: settingsSuite)
         fetcher = LocalAssetFetcher(notes: notes, assets: assets)
     }

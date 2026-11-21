@@ -160,4 +160,71 @@ import Testing
         #expect(try await made.assets.find(made.audio, kind: .ink) == nil)
         #expect(FileManager.default.fileExists(atPath: source.path))
     }
+
+    /// A second capture places the bytes of a recording under its asset ID before the purge takes
+    /// that recording, and records after the purge committed and before its files are removed.
+    /// An acknowledged recording never names a file the purge's removals take.
+    @Test func aCaptureRecordedBetweenAPurgeAndItsRemovalsKeepsItsFile() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 202)
+        _ = try await made.notes.delete(.note(made.recording.noteID))
+        made.clock.advance(by: 40 * 86_400)
+        let stored = try await made.assets.place(Data("synthetic recording bytes".utf8), as: made.audio, kind: .audio)
+        let purged = try await made.notes.purge(before: made.clock.now().addingTimeInterval(-31 * 86_400))
+        #expect(purged.assets.contains { $0.id == made.audio })
+        let id: CaptureID = made.captures.ids.make()
+        let start = made.clock.now()
+        let receipt: CaptureReceipt
+        do {
+            receipt = try await made.notes.record(
+                NewCapture(
+                    id: id, kind: .voice, origin: CaptureOrigin(source: .device(made.database.deviceID), surface: .app),
+                    launchID: made.captures.launch, placement: .newNote, startedAt: start,
+                    endedAt: start.addingTimeInterval(60),
+                    body: .file(
+                        Asset(
+                            id: made.audio, segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
+                            sha256: stored.sha256),
+                        duration: .seconds(60))))
+        } catch {
+            return  // A refusal acknowledges nothing.
+        }
+        for asset in purged.assets { try await made.assets.remove(asset.id, kind: asset.kind) }
+        #expect(try await made.notes.asset(made.audio)?.segmentID == receipt.segmentIDs.first)
+        #expect(
+            try await made.assets.find(made.audio, kind: .audio) != nil,
+            "The acknowledged recording's file is gone, and its row says it is on this device.")
+    }
+
+    /// An asset ID a purge retired is taken by no capture again, and the store's own repository
+    /// removes a file only while no row names it: a named file stays, and goes once nothing does.
+    @Test func noFileGoesWhileARowNamesIt() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 127)
+        let wired = AssetRepository(locations: made.database.locations, database: made.database)
+        try await wired.remove(made.audio, kind: .audio)
+        #expect(try await made.assets.find(made.audio, kind: .audio) != nil, "The recording names it.")
+        _ = try await made.notes.delete(.note(made.recording.noteID))
+        made.clock.advance(by: 40 * 86_400)
+        let purged = try await made.notes.purge(before: made.clock.now().addingTimeInterval(-31 * 86_400))
+        let file = try #require(purged.assets.first { $0.id == made.audio })
+        let id: CaptureID = made.captures.ids.make()
+        await expectFailure(.assetConflict, "A retired ID is taken by no capture.") {
+            try await made.notes.record(
+                NewCapture(
+                    id: id, kind: .voice, origin: CaptureOrigin(source: .device(made.database.deviceID), surface: .app),
+                    launchID: made.captures.launch, placement: .newNote, startedAt: made.clock.now(),
+                    endedAt: made.clock.now().addingTimeInterval(60),
+                    body: .file(
+                        Asset(
+                            id: file.id, segmentID: SegmentID(id), kind: .audio, byteCount: file.byteCount,
+                            sha256: file.sha256),
+                        duration: .seconds(60))))
+        }
+        try await wired.remove(made.audio, kind: .audio)
+        #expect(try await made.assets.find(made.audio, kind: .audio) == nil, "Named by nothing, it goes.")
+        expectConsistent(made.database)
+    }
 }

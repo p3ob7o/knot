@@ -305,6 +305,7 @@ extension StoreTransaction {
             } else {
                 assets.append(asset)
                 try removeAsset(asset.id)
+                try retireAsset(asset.id)
                 budget -= 1
             }
         }

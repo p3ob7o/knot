@@ -182,6 +182,14 @@ public enum StoreSchema {
         CREATE INDEX segment_history_segment ON segment_history (segment_id, kind, seq);
         CREATE INDEX segment_history_at ON segment_history (at);
 
+        -- An asset ID whose row a purge or a "Remove recording" removed, and whose file is on its
+        -- way out: no capture takes it again, so that no acknowledged capture names a file that
+        -- the removal after the purge takes.
+        CREATE TABLE retired_asset (
+            id TEXT PRIMARY KEY NOT NULL,
+            retired_at REAL NOT NULL
+        ) WITHOUT ROWID;
+
         -- A deletion that outlives the purge: an ID, its counter value and dates, no content.
         CREATE TABLE tombstone (
             id TEXT PRIMARY KEY NOT NULL,

@@ -435,6 +435,7 @@ public final class NoteRepository: NoteStore {
             segment.assetID = nil
             try tx.put(segment)
             try tx.removeAsset(assetID)
+            try tx.retireAsset(assetID)
             try tx.touch(segment.noteID, counter: tx.nextCounter(), at: tx.now())
             return .commit(asset)
         }

@@ -873,6 +873,8 @@ extension StoreTransaction {
         let conflict = KnotError.assetConflict.with(.init(captureID: CaptureID(segmentID), assetID: asset.id))
         if let held = try self.asset(asset.id), held.segmentID != segmentID { throw conflict }
         if try namesAsset(asset.id, besides: segmentID) { throw conflict }
+        // A retired ID's file is on its way out: no capture takes it again.
+        if try isRetired(asset.id) { throw conflict }
         var asset = asset
         asset.segmentID = segmentID
         try put(asset)
