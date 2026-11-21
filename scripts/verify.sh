@@ -173,6 +173,16 @@ products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
     -maximum-test-execution-time-allowance 300)
 
+# ended_by_signal <what> <status> <limit variable>: when an xcodebuild run ended by a signal
+# that the step's limit did not send, a status above 128 with no limit hit, it says so, with
+# the signal's number and name, and returns 0, so that the step fails on it at once and does
+# not judge the run as one with no tests. Something outside the step sent it.
+ended_by_signal() {
+    local what=$1 status=$2 limit=$3
+    ((status > 128 && KNOT_LIMIT_HIT == 0)) || return 1
+    echo "$what: xcodebuild ended by signal $((status - 128)) ($(kill -l $((status - 128)) 2>/dev/null || echo unknown)), which this step's limit ($limit) did not send: a process outside the step ended the run, so it says nothing of the tests."
+}
+
 # report_skips <what> <log>: the skipped or cancelled tests of a test log that is not the
 # step's own, as XCTest's and the hosted run's are (knot_skipped_tests, which reads XCTest's
 # "Test Case '…' skipped" too). It prints their lines once, as they are, so that the summary,
@@ -209,6 +219,7 @@ ui_tests() {
     shift
     knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
+    ! ended_by_signal "$what" "$status" KNOT_UI_TEST_LIMIT || return 1
     if ! knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"}; then
         # The reason is in the long log; the step's own log, which a failure shows, gives it.
         knot_xctest_failures "$log"
@@ -689,6 +700,7 @@ step_ios_hosted() {
     knot_run_limited "The hosted iOS tests" "$limit" xcb "$log" -scheme Knot-iOS -configuration Debug \
         -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
+    ! ended_by_signal "The hosted iOS tests" "$status" KNOT_HOSTED_TEST_LIMIT || return 1
     grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."

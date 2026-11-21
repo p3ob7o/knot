@@ -1446,7 +1446,8 @@ python3 -I - "$ul/scripts/verify.sh" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"')):
+for name, body in (("step_doctor", 'echo "doctor stand-in"'),
+                   ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"\n    if [[ -n ${KNOT_UI_SIGNAL:-} ]]; then sh -c \'kill -TERM $$\'; fi')):
     start = text.index(name + "() {")
     end = text.index("\n}\n", start) + 3
     text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
@@ -1528,6 +1529,29 @@ if [[ $ui_gate == "1 FAIL · tests 1 passed, 0 failed, 1 skipped" && $ui_quick =
     pass "a skipped XCTest case or hosted test is counted, and fails the Mac UI and hosted steps at the gate"
 else
     fail "skipped UI and hosted tests through verify's loop: Mac UI at the gate '$ui_gate', at the quick tier '$ui_quick'; hosted at the gate '$hosted_gate', at the quick tier '$hosted_quick'"
+fi
+
+# An xcodebuild ended by a signal that the step's limit did not send (finding 66): the step
+# says so, with the signal's number, and does not judge the run as one with no tests. A
+# stand-in xcb whose run dies by TERM, in the Mac UI step and in the hosted step.
+cat >"$ul/interrupted.log" <<'LOG'
+** BUILD INTERRUPTED **
+LOG
+signal_step() { # signal_step <step>: status, and the step's log
+    local status=0 run="$ul/signal-$1"
+    mkdir -p "$run/slots"
+    env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/interrupted.log" KNOT_UI_SIGNAL=1 KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$ul/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
+    echo "$status"
+    cat "$ul/tree/.build/logs/verify-$1.log" 2>/dev/null || true
+}
+signal_ui="$(signal_step mac-ui)"
+signal_hosted="$(signal_step ios-hosted)"
+if [[ ${signal_ui%%$'\n'*} == 1 && $signal_ui == *"ended by signal 15 (TERM)"*"did not send"* && $signal_ui != *"xctest: 0 passed"* &&
+    ${signal_hosted%%$'\n'*} == 1 && $signal_hosted == *"ended by signal 15 (TERM)"*"did not send"* && $signal_hosted != *"No hosted test ran"* ]]; then
+    pass "an xcodebuild ended by a signal from outside the step is named so, with its number, in the UI and hosted steps"
+else
+    fail "an xcodebuild ended by a signal from outside: the Mac UI step: $signal_ui; the hosted step: $signal_hosted"
 fi
 
 # sdk-path.sh finds a framework of the SDK, and one that the platform keeps outside it, as
