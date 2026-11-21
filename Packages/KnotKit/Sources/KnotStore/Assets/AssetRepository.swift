@@ -160,11 +160,13 @@ public final class LocalAssetFetcher: AssetFetcher {
             throw KnotError.syncUnknownItem.with(.init(assetID: asset.id))
         }
         try await assets.verify(asset.id, kind: asset.kind, sha256: asset.sha256)
+        progress(1)
+        // The successful return is the boundary: a fetch cancelled before it, in its last
+        // progress report too, changes nothing, and the row says where the file was.
+        if Task.isCancelled { throw KnotError.cancelled.with(.init(assetID: asset.id)) }
         var local = asset
         local.availability = .local
         if asset.availability != .local { try await notes.markAvailable(local) }
-        progress(1)
-        if Task.isCancelled { throw KnotError.cancelled.with(.init(assetID: asset.id)) }
         return local
     }
 }

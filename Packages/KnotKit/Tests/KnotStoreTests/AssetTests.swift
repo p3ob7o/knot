@@ -130,4 +130,20 @@ import Testing
         #expect(try await repository.place(Data([3]), as: written, kind: .audio).byteCount == 1)
         #expect(try await repository.move(source, as: moved, kind: .audio).byteCount == 1)
     }
+
+    /// A fetch cancelled in its last progress report changes nothing: the row still says the
+    /// file is not on this device.
+    @Test func aFetchCancelledAtItsEndKeepsTheRowAsItWas() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 91)
+        try await made.database.pool.write { db in
+            try db.execute(sql: "UPDATE asset SET availability = 'remote'")
+        }
+        let remote = try #require(try await made.notes.asset(made.audio))
+        let fetcher = LocalAssetFetcher(notes: made.notes, assets: made.assets)
+        let task = Task { try await fetcher.fetch(remote) { _ in withUnsafeCurrentTask { $0?.cancel() } } }
+        await expectFailure(.cancelled) { try await task.value }
+        #expect(try await made.notes.asset(made.audio)?.availability == .remote)
+    }
 }
