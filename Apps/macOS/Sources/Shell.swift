@@ -195,10 +195,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Opens the main window when it is not showing, through the item that SwiftUI gives a
-/// `Window` scene in the Window menu ("People open the window by selecting it in the Windows
-/// menu", SwiftUI's `Window`). AppKit has no call that presents a SwiftUI scene, and no view of
-/// the scene is alive to hold its `openWindow` action while the window is closed.
+/// Opens the main window when it is not showing, through its item in the Window menu
+/// (`OpenMainWindowButton`), which calls SwiftUI's `openWindow`. AppKit has no call that
+/// presents a SwiftUI scene, and no view of the scene is alive to hold its `openWindow` action
+/// while the window is closed.
 @MainActor
 enum MainWindowOpener {
     /// The main window's title, which is also its item in the Window menu.

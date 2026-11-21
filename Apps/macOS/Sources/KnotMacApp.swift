@@ -22,5 +22,25 @@ struct KnotMacApp: App {
         // the app's delegate opens the window then (`AppDelegate`).
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.presented)
+        .commands {
+            // SwiftUI lists no item for the app's one `Window` scene in the Window menu, so the
+            // shell adds it: Window ▸ Knot opens the main window, or brings it to the front.
+            // The app's delegate opens the window through this item too (`MainWindowOpener`).
+            CommandGroup(before: .windowList) {
+                OpenMainWindowButton()
+            }
+        }
+    }
+}
+
+/// The Window menu's item for the main window.
+struct OpenMainWindowButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(MainWindowOpener.title) {
+            openWindow(id: MainWindowOpener.sceneID)
+        }
+        .keyboardShortcut("0", modifiers: .command)
     }
 }
