@@ -501,9 +501,36 @@ def code_text():
     return found
 
 
+def named_test_pr(owner, description):
+    """The pull request that docs/plan/named-tests.txt gives a named test to, as in "2" or
+    "40a": from an owner field such as "WP-11 PR 2", or from a description that names its
+    owner's pull request, as "WP-11 PR 2 adds …" does. None when it gives it to the package."""
+    match = re.match(r"^((?:WP|SP)-\d+)\s+PR\s+(\w+)$", owner.strip())
+    if match:
+        return match.group(2)
+    match = re.search(r"\b" + re.escape(owner.strip()) + r"\s+PR\s+(\w+)\b", description)
+    return match.group(1) if match else None
+
+
+def named_test_required(owner, pr, merged):
+    """Whether a named test is required: one given to a pull request once that pull request
+    has merged, counted by the brief's rows in order; one given to the package once the
+    package's last pull request has merged."""
+    package = re.match(r"^((?:WP|SP)-\d+)", owner.strip()).group(1)
+    if pr is None:
+        return has_merged(package, merged)
+    rows = [row for row in plan_rows(package) if row not in NOTE_ROWS]
+    if pr not in rows:
+        return has_merged(package, merged)
+    others = sum(1 for p, note in merged if p == package and not note)
+    return others >= rows.index(pr) + 1
+
+
 def cmd_named_tests(source, package=None, branch=None):
-    """Every named test of a package that has merged must exist. The pull request under test
-    counts as merged, so a package's last pull request is held to its tests at its own gate."""
+    """Every named test must exist once what it is given to has merged: a test given to a
+    pull request (named_test_pr) once that pull request has, and any other once its package's
+    last pull request has. The pull request under test counts as merged, so it is held to its
+    own tests at its own gate."""
     merged = merged_prs(source)
     if package and package != "contract":
         if not branch:
@@ -515,15 +542,15 @@ def cmd_named_tests(source, package=None, branch=None):
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
-            owner, slug, _ = line.rstrip("\n").split("\t", 2)
-            if not has_merged(owner, merged):
+            owner, slug, description = line.rstrip("\n").split("\t", 2)
+            if not named_test_required(owner, named_test_pr(owner, description), merged):
                 continue
             required += 1
             if not any(slug in text for text in code.values()):
                 missing.append((owner, slug))
     for owner, slug in missing:
         print(f"named-tests: {slug}, which {owner} owns, is in no test, script or workflow, and {owner} has merged")
-    print(f"named-tests: {required} required because their package has merged"
+    print(f"named-tests: {required} required because their pull request or their package has merged"
           f"{' or merges with this pull request' if package else ''}, {len(missing)} missing")
     return 1 if missing else 0
 

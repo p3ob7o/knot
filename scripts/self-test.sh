@@ -166,6 +166,17 @@ assert k.core_api_exemption("WP-02", [("WP-02", False)] * 2), "WP-02's last pull
 assert k.core_api_exemption("WP-02", [("WP-02", False)] * 3) is None, "WP-02 with all three merged"
 assert k.core_api_exemption("WP-10", []) is None, "another package"
 assert k.core_api_exemption("contract", [("WP-02", False)] * 3), "a contract branch"
+# A named test given to a pull request is required once that pull request has merged
+# (finding 23): WP-11 plans three, and its last is held. One given to no pull request waits
+# for the package's last, as before.
+assert k.named_test_pr("WP-11", "WP-11 PR 2 adds one file of kill points to the soak") == "2"
+assert k.named_test_pr("WP-11 PR 1", "A late draft save") == "1"
+assert k.named_test_pr("WP-11", "A late draft save") is None
+one = [("WP-11", False)]
+assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("WP-11", "2", one)
+assert not k.named_test_required("WP-11", None, one)
+assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
+assert k.named_test_required("WP-11", None, one * 3)
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
