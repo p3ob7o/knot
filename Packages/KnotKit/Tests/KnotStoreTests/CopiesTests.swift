@@ -467,6 +467,30 @@ import Testing
         }
         expectConsistent(again)
     }
+
+    /// The copy before a migration is checked against every table the database has, read from the
+    /// database: a table a later version added is counted too, and a copy that lacks one of its
+    /// rows stops the migration.
+    @Test func theCopyCheckCountsEveryTableTheDatabaseHas() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        try openStore(in: root).close()
+        let v2 = StoreSchema.Migration(version: 2) {
+            try $0.execute(sql: "CREATE TABLE synthetic_extra (value TEXT); INSERT INTO synthetic_extra VALUES ('one')")
+        }
+        let v3 = StoreSchema.Migration(version: 3) { try $0.execute(sql: "CREATE TABLE synthetic_v3 (value TEXT)") }
+        let spoil = StoreHooks(copyWritten: { url in
+            guard url.lastPathComponent.contains("pre-migration-v2"), let queue = try? DatabaseQueue(path: url.path)
+            else { return }
+            try? queue.write { try $0.execute(sql: "DELETE FROM synthetic_extra") }
+            try? queue.close()
+        })
+        await expectFailure(.storeDamaged) {
+            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [v2, v3])
+        }
+        #expect(try version(of: StoreLocations.testing(root: root)) == 2, "No checked copy, no migration.")
+    }
 }
 
 extension StoreCopies {

@@ -72,16 +72,15 @@ public enum StoreCopies {
 
     // MARK: Copying
 
-    /// The number of rows of each table a copy is checked against.
-    static let countedTables = [
-        "store_meta", "note", "capture", "segment", "revision_floor", "asset", "job", "segment_history", "tombstone",
-        "setting", "counter", "change_log", "kept_file",
-    ]
-
+    /// The number of rows of every table the database has, read from the database itself, so
+    /// that a table a later version adds is counted too: what a copy is checked against.
     static func tableCounts(_ db: Database) throws -> [String: Int] {
         var counts: [String: Int] = [:]
-        for table in countedTables where try db.tableExists(table) {
-            counts[table] = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
+        let tables = try String.fetchAll(
+            db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        for table in tables {
+            let quoted = "\"" + table.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            counts[table] = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(quoted)") ?? 0
         }
         return counts
     }
