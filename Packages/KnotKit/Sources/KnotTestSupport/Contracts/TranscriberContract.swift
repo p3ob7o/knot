@@ -5,7 +5,7 @@ import Testing
 /// What a `Transcriber` under test reads.
 public struct TranscriberSubject: Sendable {
     public let transcriber: any Transcriber
-    /// A file with speech.
+    /// A file with speech, whose pauses are all shorter than `budget`.
     public let speech: URL
     /// A file whose run lasts long enough to be cancelled while it runs.
     public let long: URL
@@ -15,23 +15,27 @@ public struct TranscriberSubject: Sendable {
     public let longRunAtLeast: Duration
     /// A file of silence, or with no frames.
     public let silence: URL
+    /// A file of silence that lasts longer than `budget`, several times over: it must be read
+    /// in several runs, each of them within its budget.
+    public let longSilence: URL
     /// A path with no file.
     public let missing: URL
     /// A budget shorter than the first phrase of `speech`, so that every run must take a
-    /// phrase longer than its budget.
+    /// phrase longer than its budget, and longer than any pause in it.
     public let budget: Duration
     /// Audio for live text.
     public let liveChunks: [AudioChunk]
 
     public init(
-        transcriber: any Transcriber, speech: URL, long: URL, longRunAtLeast: Duration, silence: URL, missing: URL,
-        budget: Duration, liveChunks: [AudioChunk]
+        transcriber: any Transcriber, speech: URL, long: URL, longRunAtLeast: Duration, silence: URL,
+        longSilence: URL, missing: URL, budget: Duration, liveChunks: [AudioChunk]
     ) {
         self.transcriber = transcriber
         self.speech = speech
         self.long = long
         self.longRunAtLeast = longRunAtLeast
         self.silence = silence
+        self.longSilence = longSilence
         self.missing = missing
         self.budget = budget
         self.liveChunks = liveChunks
@@ -79,6 +83,24 @@ public enum TranscriberContract {
         // Silence is ready with empty text, not an error.
         let silent = try await transcriber.transcribe(file: subject.silence, from: .zero, budget: nil)
         #expect(silent.pieces.isEmpty && silent.resumeAt == nil)
+
+        // Silence is not a phrase: a run over silence longer than the budget reads no more than
+        // its budget, takes nothing and moves on, and the runs end at the end of the file.
+        offset = .zero
+        runs = 0
+        while runs < 1_000 {
+            let run = try await transcriber.transcribe(file: subject.longSilence, from: offset, budget: subject.budget)
+            runs += 1
+            #expect(run.startsAt == offset, "A run over silence says where it started.")
+            #expect(run.pieces.isEmpty, "A run over silence takes no piece.")
+            guard let next = run.resumeAt else { break }
+            #expect(next > offset, "A run over silence moves on.")
+            #expect(next - offset <= subject.budget, "Silence never makes a run read more than its budget.")
+            guard next > offset else { break }
+            offset = next
+        }
+        #expect(runs > 1, "Silence longer than the budget is read in more than one run.")
+        #expect(runs < 1_000, "The runs over silence end.")
         do {
             _ = try await transcriber.transcribe(file: subject.missing, from: .zero, budget: nil)
             Issue.record("A missing file must fail.")
