@@ -96,8 +96,18 @@ import Testing
                     list[1].mData!.assumingMemoryBound(to: Float.self)[frame] = right[frame]
                 }
             }
-            let mixed = try #require(Downmix.mono(AVReadOnlyAudioPCMBuffer(copying: buffer), into: mono))
-            #expect(mixed.format == mono && Levels.floats(of: mixed) == [0.375, 0, 0, 0.375])
+            let copy = AVReadOnlyAudioPCMBuffer(copying: buffer)
+            // What the copy's buffer list holds, for a failure on another system to say.
+            let layout = copy.withUnsafeAudioBufferList { list in
+                UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list)).map {
+                    "\($0.mNumberChannels) channels \($0.mDataByteSize) bytes"
+                }
+            }
+            let mixed = try #require(
+                Downmix.mono(copy, into: mono), "interleaved \(interleaved), buffers \(layout)")
+            #expect(
+                mixed.format == mono && Levels.floats(of: mixed) == [0.375, 0, 0, 0.375],
+                "interleaved \(interleaved), buffers \(layout), mixed \(Levels.floats(of: mixed))")
         }
         let other = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))

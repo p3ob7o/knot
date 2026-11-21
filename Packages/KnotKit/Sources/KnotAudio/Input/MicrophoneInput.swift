@@ -181,37 +181,53 @@ final class OpenMicrophone: OpenAudioInput {
 
 /// Mixes a tap's buffer down to one channel.
 enum Downmix {
-    /// `buffer` as one channel in `format`, or `nil` when its rate differs from the format's or
-    /// its samples are neither 32-bit floats nor 16-bit integers.
+    /// `buffer` as one channel in `format`, or `nil` when its rate differs from the format's,
+    /// its samples are neither 32-bit floats nor 16-bit integers, or its buffers do not hold
+    /// its channels and frames.
+    ///
+    /// Where each channel's samples are is read from the buffer list itself: one buffer per
+    /// channel, or buffers that each interleave some of them. Each buffer is checked to hold
+    /// every frame of its channels before it is read.
     static func mono(_ buffer: AVReadOnlyAudioPCMBuffer, into format: AVAudioFormat) -> AVReadOnlyAudioPCMBuffer? {
         let frames = buffer.frameLength
         let channels = Int(buffer.format.channelCount)
+        let commonFormat = buffer.format.commonFormat
+        let sampleSize: Int
+        switch commonFormat {
+        case .pcmFormatFloat32: sampleSize = MemoryLayout<Float>.size
+        case .pcmFormatInt16: sampleSize = MemoryLayout<Int16>.size
+        default: return nil
+        }
         guard buffer.format.sampleRate == format.sampleRate, channels > 0, frames > 0,
             let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
             let destination = mono.floatChannelData?[0]
         else { return nil }
         mono.frameLength = AVAudioFrameCount(frames)
-        let interleaved = buffer.format.isInterleaved
         let scale = 1 / Float(channels)
         let mixed: Bool = buffer.withUnsafeAudioBufferList { list in
             let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+            // Each channel: the data that holds it, how many channels that data interleaves,
+            // and the channel's place among them.
+            var sources: [(data: UnsafeMutableRawPointer, stride: Int, offset: Int)] = []
+            for audio in buffers {
+                let stride = Int(audio.mNumberChannels)
+                guard let data = audio.mData, stride > 0, Int(audio.mDataByteSize) >= frames * stride * sampleSize
+                else { return false }
+                for offset in 0..<stride { sources.append((data, stride, offset)) }
+            }
+            guard sources.count == channels else { return false }
             for frame in 0..<frames { destination[frame] = 0 }
-            for channel in 0..<channels {
-                let source = interleaved ? buffers.first : (channel < buffers.count ? buffers[channel] : nil)
-                guard let data = source?.mData else { return false }
-                let stride = interleaved ? channels : 1
-                let offset = interleaved ? channel : 0
-                switch buffer.format.commonFormat {
-                case .pcmFormatFloat32:
-                    let samples = data.assumingMemoryBound(to: Float.self)
-                    for frame in 0..<frames { destination[frame] += samples[frame * stride + offset] * scale }
-                case .pcmFormatInt16:
-                    let samples = data.assumingMemoryBound(to: Int16.self)
+            for source in sources {
+                if commonFormat == .pcmFormatFloat32 {
+                    let samples = source.data.assumingMemoryBound(to: Float.self)
                     for frame in 0..<frames {
-                        destination[frame] += Float(samples[frame * stride + offset]) / 32_768 * scale
+                        destination[frame] += samples[frame * source.stride + source.offset] * scale
                     }
-                default:
-                    return false
+                } else {
+                    let samples = source.data.assumingMemoryBound(to: Int16.self)
+                    for frame in 0..<frames {
+                        destination[frame] += Float(samples[frame * source.stride + source.offset]) / 32_768 * scale
+                    }
                 }
             }
             return true
