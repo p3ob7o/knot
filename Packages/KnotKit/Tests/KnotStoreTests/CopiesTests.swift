@@ -268,6 +268,40 @@ import Testing
             expectedFolders.subtracting(syncedFolders.all).isEmpty,
             "Folders not synced: \(expectedFolders.subtracting(syncedFolders.all))")
     }
+
+    /// A restore over a store whose database no longer reads never repeats a generation: the
+    /// store's folder records it beside the database. With nothing that records it, the restore
+    /// is refused rather than guessed.
+    @Test func aRestoreOverADamagedStoreNeverRepeatsAGeneration() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 89)
+        let locations = made.database.locations
+        let kept = folders.make("kept").appending(path: "kept.sqlite", directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: made.database.makeDailyCopy(), to: kept)
+        try made.database.close()
+        // Where there is no store, the restored one starts above the copy's generation.
+        let elsewhere = try StoreCopies.restore(kept, at: .testing(root: folders.make()), clock: made.clock)
+        #expect(elsewhere.generation == made.database.generation + 1)
+        let first = try StoreCopies.restore(kept, at: locations, clock: made.clock)
+        let restored = try openStore(in: root)
+        let cursor = try await NoteRepository(database: restored).cursor()
+        try restored.close()
+        try Data([1]).write(to: locations.database)
+        made.clock.advance(by: 60)
+        let second = try StoreCopies.restore(kept, at: locations, clock: made.clock)
+        #expect(second.generation > first.generation)
+        let again = try openStore(in: root)
+        await expectFailure(.cursorForeign) {
+            try await NoteRepository(database: again).changes(after: cursor, limit: 1)
+        }
+        try again.close()
+        try Data([1]).write(to: locations.database)
+        try? FileManager.default.removeItem(at: locations.storeRoot.appending(path: "generation"))
+        made.clock.advance(by: 60)
+        await expectFailure(.storeDamaged) { try StoreCopies.restore(kept, at: locations, clock: made.clock) }
+    }
 }
 
 extension StoreCopies {

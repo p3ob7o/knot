@@ -195,7 +195,7 @@ public enum StoreCopies {
         guard manager.fileExists(atPath: copy.path) else { throw KnotError.notFound }
         do {
             try RestoreJournal.settle(at: locations, layer: fileLayer)
-            let previousGeneration = try? generation(ofStoreAt: locations.database)
+            let previousGeneration = try currentGeneration(of: locations)
             let journal = RestoreJournal(stamp: Int64(clock.now().timeIntervalSince1970 * 1000))
             let aside = journal.aside(of: locations)
             let staging = journal.staging(of: locations)
@@ -210,7 +210,7 @@ public enum StoreCopies {
                 let queue = try DatabaseQueue(path: database.path, configuration: StoreDatabase.configuration())
                 let generation = try queue.write { db -> StoreGeneration in
                     guard let meta = try StoreMeta.fetch(db) else { throw KnotError.storeNotCreatedByKnot }
-                    let raised = max(meta.generation, previousGeneration ?? 0) + 1
+                    let raised = max(meta.generation, previousGeneration) + 1
                     try db.execute(sql: "UPDATE store_meta SET generation = ? WHERE singleton = 1", arguments: [raised])
                     return raised
                 }
@@ -220,6 +220,9 @@ public enum StoreCopies {
                 try queue.close()
                 removeJournals(of: database)
                 try fileLayer.syncFile(database)
+                try parentFiles.place(
+                    Data(String(generation).utf8),
+                    at: staging.appending(path: StoreDatabase.generationFileName, directoryHint: .notDirectory))
                 // The recordings and drawings, from the current store.
                 let assets = root.appending(path: "Assets", directoryHint: .isDirectory)
                 if manager.fileExists(atPath: assets.path) {
@@ -277,6 +280,19 @@ public enum StoreCopies {
         for url in folders.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
             try layer.syncFolder(url)
         }
+    }
+
+    /// The generation of the current store, never guessed: the higher of its database's and the
+    /// one its folder records, which a damaged database leaves readable. With no database there
+    /// is none before the copy's. A database whose generation neither gives is not restored
+    /// over, since a new store could repeat it.
+    static func currentGeneration(of locations: StoreLocations) throws -> StoreGeneration {
+        let present = FileManager.default.fileExists(atPath: locations.database.path)
+        let fromDatabase = present ? ((try? generation(ofStoreAt: locations.database)) ?? nil) : nil
+        let recorded = StoreDatabase.recordedGeneration(in: locations)
+        if let known = [fromDatabase, recorded].compactMap({ $0 }).max() { return known }
+        guard !present else { throw KnotError.storeDamaged }
+        return 0
     }
 
     /// The generation of the store at `database`, read without changing it.

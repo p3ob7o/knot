@@ -152,6 +152,9 @@ public final class StoreDatabase: Sendable {
             }
             try protectFiles(at: locations)
             if role == .app { removeCreationLeftovers(in: locations) }
+            // The store's folder records its generation, which a restore over a damaged
+            // database must pass. Only the app writes in the store's folder.
+            if role == .app { try recordGeneration(meta.generation, in: locations, files: files) }
             return StoreDatabase(
                 locations: locations, meta: meta, pool: pool, files: files, hooks: hooks, clock: clock, ids: ids)
         } catch {
@@ -292,6 +295,27 @@ public final class StoreDatabase: Sendable {
         }
         guard integer(at: 68) == StoreSchema.applicationID else { throw KnotError.storeNotCreatedByKnot }
         guard Int(integer(at: 60)) <= latest else { throw KnotError.storeNewerThanBuild }
+    }
+
+    /// The file in the store's folder that records the store's generation, beside the database,
+    /// so that a restore over a damaged database still knows the generation it must pass.
+    static let generationFileName = "generation"
+
+    static func recordedGeneration(in locations: StoreLocations) -> StoreGeneration? {
+        let url = locations.storeRoot.appending(path: generationFileName, directoryHint: .notDirectory)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return StoreGeneration(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Records the store's generation in its folder, once: a restore writes the next one with
+    /// the store it builds.
+    static func recordGeneration(_ generation: StoreGeneration, in locations: StoreLocations, files: StoreFiles)
+        throws(KnotError)
+    {
+        guard (recordedGeneration(in: locations) ?? -1) < generation else { return }
+        try files.place(
+            Data(String(generation).utf8),
+            at: locations.storeRoot.appending(path: generationFileName, directoryHint: .notDirectory))
     }
 
     static func userVersion(_ db: Database) throws -> Int {
