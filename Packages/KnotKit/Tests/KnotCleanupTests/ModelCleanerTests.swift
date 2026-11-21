@@ -340,6 +340,65 @@ func thrown(_ call: () async throws -> CleanupResult) async -> KnotError? {
     }
 }
 
+// MARK: - Finding 6: the text that reaches the store is the text the guard accepted
+
+@Suite struct TheJoinedBody {
+    /// Each piece is written as a numbered list. Joined by a space, a marker at a piece's start
+    /// would stand mid-line, where it reads as a word: the join starts a new line there, and the
+    /// joined body is checked against the whole raw text.
+    @Test func aMarkerAtAPieceStartStaysAMarkerInTheBody() async throws {
+        let model = ScriptedCleanupModel()
+        let raw = "eggs milk bread butter cheese jam tea coffee rice beans"
+        model.setAnswer { text, _ in
+            let words = text.split(whereSeparator: \.isWhitespace)
+            return .success(words.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))
+        }
+        let run = try await ModelCleaner(model: model, pieceTokens: 6).run(raw, stopAtRejection: false)
+        #expect(run.pieces.count >= 2)
+        guard case .cleaned(let body) = run.outcome else {
+            Issue.record("not cleaned: \(run.outcome)")
+            return
+        }
+        #expect(FidelityGuard.check(raw: raw, cleaned: body).isAccepted)
+        #expect(!body.contains(" 1. "), "no marker in the middle of a line")
+    }
+
+    @Test(arguments: ["- tea", "• tea", "1. tea", "2) tea"])
+    func aPieceThatOpensWithAMarkerStartsALine(_ second: String) {
+        let piece = CleanupChunker.Piece(text: "x", endsSentence: false)
+        let run = CleanupRun(
+            raw: "eggs tea",
+            pieces: [
+                .init(raw: piece, answer: "eggs", verdict: .accepted(removed: [])),
+                .init(raw: piece, answer: second, verdict: .accepted(removed: [])),
+            ], decline: nil, complete: true)
+        #expect(run.modelOutput == "eggs\n" + second)
+        let plain = CleanupRun(
+            raw: "eggs tea",
+            pieces: [
+                .init(raw: piece, answer: "eggs", verdict: .accepted(removed: [])),
+                .init(raw: piece, answer: "tea", verdict: .accepted(removed: [])),
+            ], decline: nil, complete: true)
+        #expect(plain.modelOutput == "eggs tea")
+    }
+
+    /// Pieces that each pass may still make a body that does not: the whole check decides.
+    @Test func theWholeBodyIsChecked() {
+        let first = CleanupChunker.Piece(text: "buy eggs ", endsSentence: false)
+        let second = CleanupChunker.Piece(text: "bread", endsSentence: true)
+        // Each answer was accepted against its own piece, but together they hold a word the raw
+        // text does not: the second piece's verdict is wrong, as a broken check could make it.
+        let run = CleanupRun(
+            raw: "buy eggs bread",
+            pieces: [
+                .init(raw: first, answer: "Buy eggs", verdict: .accepted(removed: [])),
+                .init(raw: second, answer: "white bread.", verdict: .accepted(removed: [])),
+            ], decline: nil, complete: true)
+        #expect(run.verdict == .rejected(.added))
+        #expect(run.outcome == .declined(.guardRejected) && run.finalText == "buy eggs bread")
+    }
+}
+
 /// A result the guard rejects never reaches the store: applied as the queue applies it, it
 /// leaves the raw transcript as the segment's text.
 @Test func aResultTheGuardRejectsNeverReachesTheStore() async throws {

@@ -146,7 +146,9 @@ public struct ModelCleaner: Cleaner {
                 done.append(CleanupRun.Piece(raw: piece, answer: answer, verdict: verdict))
                 if stopAtRejection, !verdict.isAccepted { break }
             }
-            return CleanupRun(raw: rawTranscript, pieces: done, decline: nil, complete: done.count == pieces.count)
+            return CleanupRun(
+                raw: rawTranscript, pieces: done, decline: nil, complete: done.count == pieces.count,
+                policy: mode.policy, limits: limits)
         } catch {
             throw error.knotError
         }
@@ -222,55 +224,75 @@ public struct CleanupRun: Sendable, Hashable {
         public var raw: CleanupChunker.Piece
         public var answer: String
         public var verdict: FidelityVerdict
+
+        public init(raw: CleanupChunker.Piece, answer: String, verdict: FidelityVerdict) {
+            self.raw = raw
+            self.answer = answer
+            self.verdict = verdict
+        }
     }
 
     /// The raw transcript.
-    public var raw: String
+    public let raw: String
     /// The pieces the model answered, in order.
-    public var pieces: [Piece]
+    public let pieces: [Piece]
     /// Why the model declined, when it did. A guard rejection is not a model decline: it is in
     /// the verdicts.
-    public var decline: ErrorDetail?
+    public let decline: ErrorDetail?
     /// True when every piece of the transcript was answered.
-    public var complete: Bool
+    public let complete: Bool
+    /// The model's answers, joined as the pieces were: a blank line where a piece ended a
+    /// sentence, a space where a long sentence was cut, and a line break before a piece that
+    /// opens with a list marker, so that the marker stays a marker.
+    public let modelOutput: String
+    /// The guard's verdict on the whole run, `nil` when the model declined. It is accepted only
+    /// when every piece was answered and accepted, and the joined answers, checked again
+    /// against the whole raw transcript, are accepted too: the text that reaches the store is
+    /// the text the guard accepted. The removed words' positions are in the whole transcript.
+    public let verdict: FidelityVerdict?
 
-    public init(raw: String, pieces: [Piece], decline: ErrorDetail?, complete: Bool = false) {
+    public init(
+        raw: String, pieces: [Piece], decline: ErrorDetail?, complete: Bool = false,
+        policy: FidelityGuard.Policy = .full, limits: FidelityGuard.Limits = .v1
+    ) {
         self.raw = raw
         self.pieces = pieces
         self.decline = decline
         self.complete = decline == nil && complete
-    }
-
-    /// The model's answers, joined as the pieces were: a blank line where a piece ended a
-    /// sentence, a space where a long sentence was cut.
-    public var modelOutput: String {
         var output = ""
         for (index, piece) in pieces.enumerated() {
-            if index > 0 { output += pieces[index - 1].raw.endsSentence ? "\n\n" : " " }
+            if index > 0 {
+                let previous = pieces[index - 1].raw.endsSentence
+                output += previous ? "\n\n" : Self.opensWithMarker(piece.answer) ? "\n" : " "
+            }
             output += piece.answer
         }
-        return output
+        modelOutput = output
+        verdict = Self.verdict(
+            raw: raw, pieces: pieces, decline: decline, complete: self.complete, output: output, policy: policy,
+            limits: limits)
     }
 
-    /// The guard's verdict on the whole run: accepted, with the removed words' positions in the
-    /// whole raw transcript, only when every piece was answered and accepted. `nil` when the
-    /// model declined.
-    public var verdict: FidelityVerdict? {
+    static func verdict(
+        raw: String, pieces: [Piece], decline: ErrorDetail?, complete: Bool, output: String,
+        policy: FidelityGuard.Policy, limits: FidelityGuard.Limits
+    ) -> FidelityVerdict? {
         guard decline == nil else { return nil }
-        var removed: [FidelityRemoval] = []
-        var offset = 0
-        for piece in pieces {
-            switch piece.verdict {
-            case .rejected: return piece.verdict
-            case .accepted(let more):
-                removed += more.map { FidelityRemoval(rawIndex: $0.rawIndex + offset, rule: $0.rule) }
-            }
-            offset += FidelityWords.words(in: piece.raw.text).count
-        }
-        return complete ? .accepted(removed: removed) : .rejected(.empty)
+        if let rejected = pieces.first(where: { !$0.verdict.isAccepted }) { return rejected.verdict }
+        guard complete else { return .rejected(.empty) }
+        return FidelityGuard.check(raw: raw, cleaned: output, policy: policy, limits: limits)
     }
 
-    /// What the port returns: the cleaned body only when the guard accepted every piece.
+    /// True when `answer` opens with a bullet or a numbered list marker.
+    static func opensWithMarker(_ answer: String) -> Bool {
+        let line = Substring(answer).drop { $0 == " " || $0 == "\t" }
+        if let first = line.first, "-•*–".contains(first), line.dropFirst().first?.isWhitespace == true {
+            return true
+        }
+        return FidelityWords.listMarker(line) != nil
+    }
+
+    /// What the port returns: the cleaned body only when the guard accepted it.
     public var outcome: CleanupResult.Outcome {
         if let decline { return .declined(decline) }
         guard verdict?.isAccepted == true else { return .declined(.guardRejected) }
