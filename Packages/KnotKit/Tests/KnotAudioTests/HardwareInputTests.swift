@@ -72,48 +72,96 @@ import Testing
         #expect(KnotAudioLive.wire(.unavailable).recorder is UnavailableRecorder)
     }
 
-    /// A tap's buffer of any channel count becomes one channel, the mean of its channels, in
-    /// the working file's format; another rate is refused.
+    /// A tap's buffer becomes one channel, the mean of its channels, in the working file's
+    /// format; another rate is refused. The engine delivers one buffer per channel.
     @Test func aTapBufferIsMixedDownToOneChannel() throws {
         let mono = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
-        for interleaved in [false, true] {
-            let stereo = try #require(
-                AVAudioFormat(
-                    commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: interleaved))
-            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 4))
-            buffer.frameLength = 4
-            let left: [Float] = [0.5, -0.5, 1, 0]
-            let right: [Float] = [0.25, 0.5, -1, 0.75]
-            let list = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-            for frame in 0..<4 {
-                if interleaved {
-                    let data = list[0].mData!.assumingMemoryBound(to: Float.self)
-                    data[frame * 2] = left[frame]
-                    data[frame * 2 + 1] = right[frame]
-                } else {
-                    list[0].mData!.assumingMemoryBound(to: Float.self)[frame] = left[frame]
-                    list[1].mData!.assumingMemoryBound(to: Float.self)[frame] = right[frame]
-                }
-            }
-            let copy = AVReadOnlyAudioPCMBuffer(copying: buffer)
-            // What the copy's buffer list holds, for a failure on another system to say.
-            let layout = copy.withUnsafeAudioBufferList { list in
-                UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list)).map {
-                    "\($0.mNumberChannels) channels \($0.mDataByteSize) bytes"
-                }
-            }
-            let mixed = try #require(
-                Downmix.mono(copy, into: mono), "interleaved \(interleaved), buffers \(layout)")
-            #expect(
-                mixed.format == mono && Levels.floats(of: mixed) == [0.375, 0, 0, 0.375],
-                "interleaved \(interleaved), buffers \(layout), mixed \(Levels.floats(of: mixed))")
+        let stereo = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 2, interleaved: false))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 4))
+        buffer.frameLength = 4
+        let channels = try #require(buffer.floatChannelData)
+        for (frame, (left, right)) in zip(Self.left, Self.right).enumerated() {
+            channels[0][frame] = left
+            channels[1][frame] = right
         }
+        let mixed = try #require(Downmix.mono(AVReadOnlyAudioPCMBuffer(copying: buffer), into: mono))
+        #expect(mixed.format == mono && Levels.floats(of: mixed) == Self.mean)
+
         let other = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))
         let elsewhere = try #require(AVAudioPCMBuffer(pcmFormat: other, frameCapacity: 4))
         elsewhere.frameLength = 4
         #expect(Downmix.mono(AVReadOnlyAudioPCMBuffer(copying: elsewhere), into: mono) == nil)
+    }
+
+    /// Every layout of a buffer list mixes to the same mean: one buffer per channel, one buffer
+    /// that interleaves both, in floats and in 16-bit integers. A list that does not hold its
+    /// channels, or holds fewer frames than asked, is refused and nothing is read.
+    ///
+    /// These lists are made by hand. On the hosted runner's macOS 27.0.1, an interleaved stereo
+    /// buffer written through `AVAudioPCMBuffer` and copied with
+    /// `AVReadOnlyAudioPCMBuffer(copying:)` mixed to [0.375, 0, 0.5, 0], where macOS 27.3 gives
+    /// the mean: not all the samples written reached the copy there.
+    @Test func everyLayoutMixesToTheMean() {
+        let interleaved = zip(Self.left, Self.right).flatMap { [$0, $1] }
+        #expect(Self.mix([interleaved], channelsPerBuffer: 2) == Self.mean)
+        #expect(Self.mix([Self.left, Self.right], channelsPerBuffer: 1) == Self.mean)
+        let integers = interleaved.map { Int16($0 * 16_384) }
+        #expect(Self.mix(integers: integers, channels: 2) == Self.mean.map { $0 / 2 })
+        #expect(Self.mix([interleaved], channelsPerBuffer: 2, channels: 3) == nil, "Two channels are not three.")
+        #expect(Self.mix([interleaved], channelsPerBuffer: 2, frames: 5) == nil, "Four frames are not five.")
+    }
+
+    static let left: [Float] = [0.5, -0.5, 1, 0]
+    static let right: [Float] = [0.25, 0.5, -1, 0.75]
+    static let mean: [Float] = [0.375, 0, 0, 0.375]
+
+    /// Mixes float buffers laid out as given, through a buffer list made by hand over memory
+    /// that lives for the whole call.
+    static func mix(_ buffers: [[Float]], channelsPerBuffer: Int, channels: Int = 2, frames: Int = 4) -> [Float]? {
+        let list = AudioBufferList.allocate(maximumBuffers: buffers.count)
+        let memory = buffers.map { samples -> UnsafeMutableBufferPointer<Float> in
+            let memory = UnsafeMutableBufferPointer<Float>.allocate(capacity: samples.count)
+            _ = memory.initialize(from: samples)
+            return memory
+        }
+        defer {
+            for samples in memory { samples.deallocate() }
+            free(list.unsafeMutablePointer)
+        }
+        for (index, samples) in memory.enumerated() {
+            list[index] = AudioBuffer(
+                mNumberChannels: UInt32(channelsPerBuffer),
+                mDataByteSize: UInt32(samples.count * MemoryLayout<Float>.size),
+                mData: UnsafeMutableRawPointer(samples.baseAddress))
+        }
+        var output = [Float](repeating: 9, count: frames)
+        let mixed = output.withUnsafeMutableBufferPointer { out in
+            Downmix.mix(
+                list.unsafePointer, frames: frames, channels: channels, commonFormat: .pcmFormatFloat32,
+                into: out.baseAddress!)
+        }
+        return mixed ? output : nil
+    }
+
+    /// Mixes one interleaved buffer of 16-bit integers through a buffer list made by hand.
+    static func mix(integers: [Int16], channels: Int) -> [Float]? {
+        var samples = integers
+        var output = [Float](repeating: 9, count: integers.count / channels)
+        let frames = output.count
+        return samples.withUnsafeMutableBytes { bytes -> [Float]? in
+            var list = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: UInt32(channels), mDataByteSize: UInt32(bytes.count), mData: bytes.baseAddress))
+            let mixed = output.withUnsafeMutableBufferPointer { out in
+                Downmix.mix(
+                    &list, frames: frames, channels: channels, commonFormat: .pcmFormatInt16, into: out.baseAddress!)
+            }
+            return mixed ? output : nil
+        }
     }
 
     /// The signs of a process, for the policy's table.

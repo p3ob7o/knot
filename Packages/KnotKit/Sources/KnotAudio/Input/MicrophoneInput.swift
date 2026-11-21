@@ -184,54 +184,62 @@ enum Downmix {
     /// `buffer` as one channel in `format`, or `nil` when its rate differs from the format's,
     /// its samples are neither 32-bit floats nor 16-bit integers, or its buffers do not hold
     /// its channels and frames.
-    ///
-    /// Where each channel's samples are is read from the buffer list itself: one buffer per
-    /// channel, or buffers that each interleave some of them. Each buffer is checked to hold
-    /// every frame of its channels before it is read.
     static func mono(_ buffer: AVReadOnlyAudioPCMBuffer, into format: AVAudioFormat) -> AVReadOnlyAudioPCMBuffer? {
         let frames = buffer.frameLength
         let channels = Int(buffer.format.channelCount)
         let commonFormat = buffer.format.commonFormat
-        let sampleSize: Int
-        switch commonFormat {
-        case .pcmFormatFloat32: sampleSize = MemoryLayout<Float>.size
-        case .pcmFormatInt16: sampleSize = MemoryLayout<Int16>.size
-        default: return nil
-        }
         guard buffer.format.sampleRate == format.sampleRate, channels > 0, frames > 0,
             let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
             let destination = mono.floatChannelData?[0]
         else { return nil }
         mono.frameLength = AVAudioFrameCount(frames)
-        let scale = 1 / Float(channels)
-        let mixed: Bool = buffer.withUnsafeAudioBufferList { list in
-            let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
-            // Each channel: the data that holds it, how many channels that data interleaves,
-            // and the channel's place among them.
-            var sources: [(data: UnsafeMutableRawPointer, stride: Int, offset: Int)] = []
-            for audio in buffers {
-                let stride = Int(audio.mNumberChannels)
-                guard let data = audio.mData, stride > 0, Int(audio.mDataByteSize) >= frames * stride * sampleSize
-                else { return false }
-                for offset in 0..<stride { sources.append((data, stride, offset)) }
-            }
-            guard sources.count == channels else { return false }
-            for frame in 0..<frames { destination[frame] = 0 }
-            for source in sources {
-                if commonFormat == .pcmFormatFloat32 {
-                    let samples = source.data.assumingMemoryBound(to: Float.self)
-                    for frame in 0..<frames {
-                        destination[frame] += samples[frame * source.stride + source.offset] * scale
-                    }
-                } else {
-                    let samples = source.data.assumingMemoryBound(to: Int16.self)
-                    for frame in 0..<frames {
-                        destination[frame] += Float(samples[frame * source.stride + source.offset]) / 32_768 * scale
-                    }
-                }
-            }
-            return true
+        let mixed = buffer.withUnsafeAudioBufferList { list in
+            mix(list, frames: frames, channels: channels, commonFormat: commonFormat, into: destination)
         }
         return mixed ? AVReadOnlyAudioPCMBuffer(copying: mono) : nil
+    }
+
+    /// Writes the mean of the `channels` channels that `list` holds, `frames` each, into
+    /// `destination`, from -1 to 1. False when the list does not hold them, or its samples are
+    /// neither 32-bit floats nor 16-bit integers, and then nothing is read.
+    ///
+    /// Where each channel's samples are is read from the list itself: one buffer per channel,
+    /// or buffers that each interleave some of them. Each buffer is checked to hold every frame
+    /// of its channels before it is read.
+    static func mix(
+        _ list: UnsafePointer<AudioBufferList>, frames: Int, channels: Int, commonFormat: AVAudioCommonFormat,
+        into destination: UnsafeMutablePointer<Float>
+    ) -> Bool {
+        let sampleSize: Int
+        switch commonFormat {
+        case .pcmFormatFloat32: sampleSize = MemoryLayout<Float>.size
+        case .pcmFormatInt16: sampleSize = MemoryLayout<Int16>.size
+        default: return false
+        }
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+        // Each channel: the data that holds it, how many channels that data interleaves, and
+        // the channel's place among them.
+        var sources: [(data: UnsafeMutableRawPointer, stride: Int, offset: Int)] = []
+        for audio in buffers {
+            let stride = Int(audio.mNumberChannels)
+            guard let data = audio.mData, stride > 0, Int(audio.mDataByteSize) >= frames * stride * sampleSize
+            else { return false }
+            for offset in 0..<stride { sources.append((data, stride, offset)) }
+        }
+        guard channels > 0, sources.count == channels else { return false }
+        let scale = 1 / Float(channels)
+        for frame in 0..<frames { destination[frame] = 0 }
+        for source in sources {
+            if commonFormat == .pcmFormatFloat32 {
+                let samples = source.data.assumingMemoryBound(to: Float.self)
+                for frame in 0..<frames { destination[frame] += samples[frame * source.stride + source.offset] * scale }
+            } else {
+                let samples = source.data.assumingMemoryBound(to: Int16.self)
+                for frame in 0..<frames {
+                    destination[frame] += Float(samples[frame * source.stride + source.offset]) / 32_768 * scale
+                }
+            }
+        }
+        return true
     }
 }
