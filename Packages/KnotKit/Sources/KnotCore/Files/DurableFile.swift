@@ -136,10 +136,9 @@ public struct DurableFile: Sendable {
             if layer.entryKind(folder) == nil { try layer.createFolder(folder) }
             // Checked after creating too, since another writer may have put something else
             // there first: each folder the store owns must be a folder, never a file and never
-            // a link that leads somewhere else. The root itself may be given through a link to
-            // its folder, so it is checked where it really is.
-            let checked = folder == root ? PathForm.folder(PathForm.real(root)) : folder
-            guard layer.entryKind(checked) == .folder else {
+            // a link that leads somewhere else. The root is checked as given: a root reached
+            // through a link above it is found, and a root whose own name is a link is refused.
+            guard layer.entryKind(folder) == .folder else {
                 throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
             }
             try layer.syncFolder(folder.deletingLastPathComponent())

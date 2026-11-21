@@ -51,21 +51,44 @@ import Testing
         #expect(Self.contents(plain.appending(path: "Inbox/a.json")) == Data("one".utf8))
     }
 
-    /// A root given through a symbolic link to its real folder, and paths written through the
-    /// real folder, and the other way round.
-    @Test func aRootGivenThroughALinkIsItsRealFolder() throws {
+    /// A root given as its real folder takes paths written through a symbolic link to it. A root
+    /// reached through a link above it, as `/var` and `/tmp` are, is the fault this fixes.
+    @Test func aRootTakesPathsWrittenThroughALinkToIt() throws {
         let (real, _) = try Self.newFolder()
         let (linkFolder, _) = try Self.newFolder()
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: linkFolder, withIntermediateDirectories: true)
         let link = linkFolder.appending(path: "store", directoryHint: .isDirectory)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
-        for (root, written) in [(link, real), (real, link)] {
-            let durable = DurableFile(layer: PosixFileLayer(), root: root)
-            let file = written.appending(path: "Assets/a.bin")
-            try durable.place(Data("\(root.path.count)".utf8), at: file)
-            #expect(Self.contents(real.appending(path: "Assets/a.bin")) == Data("\(root.path.count)".utf8))
+        let durable = DurableFile(layer: PosixFileLayer(), root: real)
+        try durable.place(Data("one".utf8), at: link.appending(path: "Assets/a.bin"))
+        #expect(Self.contents(real.appending(path: "Assets/a.bin")) == Data("one".utf8))
+    }
+
+    /// Finding 2 of the review of pull request 60: a root whose own name is a symbolic link is
+    /// refused with `ENOTDIR`, as on main, whether the link was there when the root was given or
+    /// took the root's name before the first save; nothing is written where it points.
+    @Test func aRootThatIsItselfALinkIsRefused() throws {
+        let (real, _) = try Self.newFolder()
+        let (linkFolder, _) = try Self.newFolder()
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: linkFolder, withIntermediateDirectories: true)
+        let link = linkFolder.appending(path: "store", directoryHint: .isDirectory)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let late = linkFolder.appending(path: "late", directoryHint: .isDirectory)
+        let lateDurable = DurableFile(layer: PosixFileLayer(), root: late)
+        try FileManager.default.createSymbolicLink(at: late, withDestinationURL: real)
+        for (durable, target) in [
+            (DurableFile(layer: PosixFileLayer(), root: link), link.appending(path: "Assets/a.bin")),
+            (DurableFile(layer: PosixFileLayer(), root: link), real.appending(path: "Assets/b.bin")),
+            (lateDurable, late.appending(path: "Inbox/c.json")),
+        ] {
+            #expect(
+                performing: { try durable.place(Data("x".utf8), at: target) },
+                throws: { error in (error as? KnotError)?.context.posixError == ENOTDIR })
         }
+        let written = try FileManager.default.contentsOfDirectory(atPath: real.path)
+        #expect(written.isEmpty, "Nothing is written where the link points: \(written)")
     }
 
     /// The check that keeps a write inside the root still holds: a folder beside the root, a
