@@ -58,9 +58,13 @@ final class LiveFolder: Sendable {
 }
 
 extension LiveComposition.Seams {
-    /// No speech framework and no model request: the scripted transcriber.
+    /// No speech framework and no model request: the scripted transcriber. The store has the
+    /// suites' whole limit to answer, so whether a capture takes the store path never rests on
+    /// how loaded the machine is: a store that is not open, or holds its write lock elsewhere,
+    /// refuses at once or answers `store_busy` after its own busy timeout.
     static var forTests: Self {
-        LiveComposition.Seams(transcriber: ScriptedTranscriber(), installSpeechModel: false)
+        LiveComposition.Seams(
+            transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false)
     }
 }
 
