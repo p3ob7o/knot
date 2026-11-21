@@ -26,7 +26,9 @@
     ///   copy of every frame and leaves no leftover.
     ///
     /// Every trial also reads the store itself: a working file with no manifest beside it fails
-    /// the trial, whatever recovery says.
+    /// the trial, whatever recovery says. And a trial passes only when its kill ended the
+    /// recording, by SIGKILL or a runner's 137, and its recovery exited with success: a child that
+    /// ended by itself, or a recovery that failed, fails the trial.
     ///
     /// Each step of a trial that waits on another process waits at most `--step-s` seconds
     /// (`Step`): the child's first line, its live line or its stage, the end of its runner and of
@@ -128,6 +130,7 @@
                 kill(pid, SIGKILL)
                 alive.removeAll { $0 == pid }
                 try waitForExit(recording.process, step: .exit, by: .now + limit)
+                result.childEnd = Ended(recording.process)
                 try read(lines, step: .drain, by: .now + limit) { line in
                     result.note(line)
                     return false
@@ -151,6 +154,7 @@
                     return false
                 }
                 try waitForExit(recovery.process, step: .recovery, by: deadline)
+                result.recoveryEnd = Ended(recovery.process)
                 alive.removeAll()
                 result.read(said.joined(separator: "\n"))
             } catch let reached as StepLimit {
@@ -211,6 +215,32 @@
         case recovery
     }
 
+    /// How a process of a trial ended: by a signal, or with a status.
+    struct Ended: Equatable {
+        let signal: Int32?
+        let status: Int32
+
+        init(_ process: Process) {
+            let uncaught = process.terminationReason == .uncaughtSignal
+            signal = uncaught ? process.terminationStatus : nil
+            status = uncaught ? 0 : process.terminationStatus
+        }
+
+        /// Killed with SIGKILL: itself, or the child of a runner that reports its child's death
+        /// as a shell does, with 128 and the signal, as `xcrun simctl spawn` does.
+        var byTheKill: Bool { signal == SIGKILL || (signal == nil && status == 128 + SIGKILL) }
+
+        /// Ended with status 0.
+        var succeeded: Bool { signal == nil && status == 0 }
+
+        /// `killed`, `signal-<n>` or `exit-<n>`, one word for the trial's line.
+        var word: String {
+            if byTheKill { return "killed" }
+            if let signal { return "signal-\(signal)" }
+            return "exit-\(status)"
+        }
+    }
+
     /// A step that reached its limit.
     struct StepLimit: Error {
         let step: Step
@@ -228,6 +258,9 @@
         var stalled = false
         /// The step that reached its limit, if one did.
         var limited: Step?
+        /// How the recording's process ended, and the recovery's.
+        var childEnd: Ended?
+        var recoveryEnd: Ended?
         /// The last durable count the child printed before it died.
         var printedDurable: Int64 = 0
         var taken: Int64 = 0
@@ -265,6 +298,14 @@
         }
 
         mutating func read(_ output: String) {
+            // A trial proves something only when its kill ended the recording and its recovery ran
+            // to success: a child that ended by itself, or a recovery that failed, fails it.
+            guard childEnd?.byTheKill == true else {
+                return fail("the recording was not ended by the kill: it ended \(childEnd?.word ?? "-")")
+            }
+            guard recoveryEnd?.succeeded == true else {
+                return fail("the recovery did not succeed: it ended \(recoveryEnd?.word ?? "-")")
+            }
             let lines = output.split(separator: "\n").map(String.init)
             guard let count = lines.last(where: { $0.hasPrefix("orphans ") }).flatMap({ Int($0.dropFirst(8)) })
             else {
@@ -361,6 +402,7 @@
                 + "printedDurable \(printedDurable) lone \(lone) orphans \(orphans) frames \(frames) "
                 + "match \(matching) ending \(ending) manifest \(manifest) converted \(convertedFrames) "
                 + "leftover \(leftover) lossMs \(lossMs.map { String(format: "%.1f", $0) } ?? "-") "
+                + "child \(childEnd?.word ?? "-") recovery \(recoveryEnd?.word ?? "-") "
                 + (passed ? "ok" : "FAIL \(failure ?? "")")
         }
     }

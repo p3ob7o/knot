@@ -107,6 +107,52 @@ import Testing
         #expect(trial.contains(" early ") && trial.contains(" taken 0 ") && trial.hasSuffix(" ok"), "\(run.output)")
     }
 
+    /// A trial passes only when its kill ended the recording and its recovery succeeded. The
+    /// stand-in child runs the crash host itself, but for one thing: in `ends-by-itself` the early
+    /// trial's child exits with status 47 at once, killed by nobody, while a process it leaves
+    /// says it has stopped at its stage; in `recovery-fails` the recovery runs and then exits with
+    /// 47. Each fails its trial, whatever was printed, and with nothing wrong the trial passes,
+    /// its child killed and its recovery a success. After finding 28.
+    @Test(arguments: ["ends-by-itself", "recovery-fails", "nothing-wrong"])
+    func aTrialPassesOnlyWhenItsKillAndRecoveryDid(fault: String) async throws {
+        let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
+        let folder = try ScratchFolder()
+        let body: String
+        var arguments = ["--trials", "1", "--min-ms", "300", "--max-ms", "300"]
+        switch fault {
+        case "ends-by-itself":
+            body = """
+                if [ "$1" = record ]; then
+                    ( sleep 0.2; echo "stalled x start" ) &
+                    echo "pid $$"
+                    exit 47
+                fi
+                exec '\(host.path)' "$@"
+                """
+            arguments += ["--early-every", "1"]
+        case "recovery-fails":
+            body =
+                "if [ \"$1\" = recover ]; then '\(host.path)' \"$@\" || exit $?; exit 47; fi\nexec '\(host.path)' \"$@\""
+        default:
+            body = "exec '\(host.path)' \"$@\""
+        }
+        let child = try script(folder.file("child"), body)
+        let run = try await HostRun.run(
+            host, ["kill-test", "--dir", folder.file("run").path, "--child", child.path] + arguments)
+        let trial = run.output.split(separator: "\n").map(String.init).first { $0.hasPrefix("trial ") } ?? ""
+        switch fault {
+        case "ends-by-itself":
+            #expect(run.status == 1 && trial.contains(" child exit-47 "), "\(run.output)")
+            #expect(trial.hasSuffix(" FAIL the recording was not ended by the kill: it ended exit-47"), "\(trial)")
+        case "recovery-fails":
+            #expect(run.status == 1 && trial.contains(" recovery exit-47 "), "\(run.output)")
+            #expect(trial.hasSuffix(" FAIL the recovery did not succeed: it ended exit-47"), "\(trial)")
+        default:
+            #expect(run.status == 0, "\(run.output)")
+            #expect(trial.contains(" child killed recovery exit-0 ") && trial.hasSuffix(" ok"), "\(trial)")
+        }
+    }
+
     /// Every line of the kill test about a trial names the trial's capture after its first word:
     /// the capture whose files the trial's store holds. After finding 26.
     @Test func everyTrialLineNamesItsCapture() async throws {
