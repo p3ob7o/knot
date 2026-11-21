@@ -7,7 +7,7 @@ Step-by-step lists for the owner, for everything that only real hardware can sho
 | [G4-read-aloud.md](G4-read-aloud.md) | Wave 0, gate G4 | 15 |
 | [G4-spontaneous-notes.md](G4-spontaneous-notes.md) | Wave 0, gate G4 | 15 |
 | [M1.md](M1.md) | M1 · Skeleton on four devices, two sittings | 15 |
-| [M2.md](M2.md) | M2 · iPhone voice and text, two sittings | 40 |
+| [M2.md](M2.md) | M2 · iPhone voice and text, two sittings | 50 |
 | [M3.md](M3.md) | M3 · Watch voice, two sittings | 30 |
 | [M4.md](M4.md) | M4 · Mac and sync, three sittings | 45 |
 | [M5.md](M5.md) | M5 · iPad Pencil, one sitting | 20 |
