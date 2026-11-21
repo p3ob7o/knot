@@ -75,7 +75,7 @@ while IFS=$'\t' read -r what udid simulator state; do
     fi
     [[ $state == Shutdown ]] || knot_sim_call "$simctl_limit" shutdown "$simulator" xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
     why="$(knot_sim_call "$simctl_limit" delete "$simulator" xcrun simctl delete "$udid" 2>&1 >/dev/null)" ||
-        knot_fail "infra-simulator-delete" "simctl could not delete $simulator ($udid). $why" \
+        knot_fail "infra-simulator-delete" "simctl could not delete $simulator ($udid). $(knot_home_text "$why")" \
             "Quit Simulator.app, then rerun scripts/worktree-remove.sh on $SHOWN." "safe" "the simulators listed before it"
     echo "worktree-remove: deleted the simulator $simulator"
 done < <(printf '%s\n' "$devices" | python3 -I -c '

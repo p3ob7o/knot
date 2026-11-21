@@ -498,6 +498,21 @@ knot_home_path() {
     printf '%s\n' "$path"
 }
 
+# Prints a piece of text, such as a tool's own error message, with every path under the
+# home folder in it, as given or resolved, written as knot_home_path writes one.
+#   knot_home_text <text>
+knot_home_text() {
+    local text=$1 home under="the home folder's " itself="the home folder"
+    # The resolved form first: it can be the longer, as /private/var is beside /var. The
+    # replacements are variables, since bash 3.2 keeps a backslash in a quoted one.
+    for home in "$(cd "$HOME" 2>/dev/null && pwd -P)" "$HOME"; do
+        [[ -n $home ]] || continue
+        text="${text//"$home"\//$under}"
+        text="${text//"$home"/$itself}"
+    done
+    printf '%s\n' "$text"
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

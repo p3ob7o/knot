@@ -1051,9 +1051,16 @@ git -C "$wr/repo" worktree add -q "$wr/home/wt" -b self-test-wt
 wr_tree="$(cd "$wr/home/wt" && pwd -P)"
 wr_id="wt-$(printf '%s' "$wr_tree" | shasum -a 256 | cut -c1-6)"
 mkdir -p "$wr/home/Library/Containers/com.p3ob7o.knot.dev/Data/Library/Application Support/Knot/$wr_id"
-printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] && printf %s\nexit 0\n' "$wr" \
+printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] && printf %s\n' "$wr" \
     "'{\"devices\":{\"r\":[{\"name\":\"$wr_id-iphone\",\"udid\":\"U1\",\"state\":\"Shutdown\"}]}}\\n'" >"$wr/stub/xcrun"
+# With KNOT_WR_FAIL set, the delete fails as simctl does, with a message that names a path
+# under the home folder.
+printf '[ -n "$KNOT_WR_FAIL" ] && [ "$1 $2" = "simctl delete" ] && { echo "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=513): NSFilePath=$HOME/Library/Developer/CoreSimulator/Devices/U1" >&2; exit 1; }\nexit 0\n' >>"$wr/stub/xcrun"
 chmod +x "$wr/stub/xcrun"
+# A delete that fails prints simctl's message with no home folder in it either.
+wr_fail_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 KNOT_WR_FAIL=1 \
+    scripts/worktree-remove.sh "$wr_tree" >"$wr/fail.out" 2>&1) || wr_fail_status=$?
 wr_status=0
 (cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 \
     scripts/worktree-remove.sh "$wr_tree" >"$wr/out" 2>&1) || wr_status=$?
@@ -1062,10 +1069,12 @@ if [[ $wr_status == 0 && "$(cat "$wr/out")" != *"$wr_home"* && "$(cat "$wr/out")
     "$(cat "$wr/out")" != *"~/"* &&
     "$(cat "$wr/out")" == *"the home folder's Library/Group Containers/"* &&
     "$(cat "$wr/out")" == *"removed the development store the home folder's Library/Containers/"* &&
-    "$(cat "$wr/out")" == *"deleted the simulator $wr_id-iphone"* && ! -d $wr_tree ]]; then
-    pass "worktree-remove.sh removes the worktree, its simulator and its store, and prints no path with the home folder in it"
+    "$(cat "$wr/out")" == *"deleted the simulator $wr_id-iphone"* && ! -d $wr_tree &&
+    $wr_fail_status != 0 && "$(cat "$wr/fail.out")" == *"FAIL infra-simulator-delete"*"NSFilePath=the home folder's Library/"* &&
+    "$(cat "$wr/fail.out")" != *"$wr_home"* && "$(cat "$wr/fail.out")" != *"$wr/home"* ]]; then
+    pass "worktree-remove.sh removes the worktree, its simulator and its store, and prints no path with the home folder in it, simctl's message included"
 else
-    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out")"
+    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out"); a failed delete, status $wr_fail_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/fail.out")"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
