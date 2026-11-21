@@ -34,6 +34,7 @@ enum Conversion {
         }
         // A leftover of a conversion that died is replaced: AVAudioFile writes a new file.
         try? store.remove(staging)
+        let made: Made
         do {
             try encode(source, frames: frames, into: staging)
             // Verified: the copy announces as many frames as the working file, at its rate.
@@ -41,6 +42,7 @@ enum Conversion {
             guard copy.length == frames, copy.fileFormat.sampleRate == rate, copy.fileFormat.channelCount == 1 else {
                 throw KnotError.conversionFailed
             }
+            made = Made(frames: copy.length, sampleRate: copy.fileFormat.sampleRate)
         } catch let error as KnotError {
             try? store.remove(staging)
             throw error
@@ -54,7 +56,7 @@ enum Conversion {
             try? store.remove(staging)
             throw KnotError.conversionFailed.with(error.context)
         }
-        return Made(frames: frames, sampleRate: rate)
+        return made
     }
 
     /// Reads every frame of `source`, never past its length, and writes it to an AAC file at `url`.

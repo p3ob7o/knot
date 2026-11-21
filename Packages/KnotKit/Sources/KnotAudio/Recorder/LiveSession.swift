@@ -144,8 +144,11 @@ final class LiveSession: RecordingSession {
                     try file.write(from: part)
                 } catch {
                     state.full = true
-                    log.failure(AudioFileError.knotError(error).about(capture: captureID), "recording_write_failed")
-                    return .writeFailed
+                    let failure = AudioFileError.knotError(error).about(capture: captureID)
+                    log.failure(failure, "recording_write_failed")
+                    // A full volume often fails a write with -40, which says nothing of space:
+                    // WP-12's second pull request tells it by the volume's free space.
+                    return failure.code == KnotError.diskFull.code ? .diskFull : .writeFailed
                 }
                 state.written += taken
                 // Told while the lock is held, so that nothing is told after the ending.
@@ -182,7 +185,7 @@ final class LiveSession: RecordingSession {
         } catch {
             log.failure(error.about(capture: captureID), "recording_sync_failed")
             writer.withLock { $0.full = true }
-            end(.writeFailed)
+            end(error.code == KnotError.diskFull.code ? .diskFull : .writeFailed)
             return
         }
         // Every frame counted here was written before the sync began.
@@ -202,7 +205,8 @@ final class LiveSession: RecordingSession {
     private func end(_ reason: RecordingEnding) -> Task<RecordedAudio, Never> {
         ending.withLock { ending in
             if let ending { return ending }
-            let task = Task.detached { [self] in await finish(reason) }
+            // At the priority of a person waiting for the "saved" cue.
+            let task = Task.detached(priority: .userInitiated) { [self] in await finish(reason) }
             ending = task
             return task
         }

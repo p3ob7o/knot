@@ -63,7 +63,7 @@ public final class LiveRecorder: Recorder {
 
     public func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         // In a task of its own: a start runs to live or to an error whatever its caller does.
-        let begun = await Task.detached { [self] in await begin(request) }.value
+        let begun = await Task.detached(priority: Task.currentPriority) { [self] in await begin(request) }.value
         return try begun.get()
     }
 
