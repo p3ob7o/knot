@@ -119,7 +119,7 @@ extension RecordScreenTests {
 /// (docs/architecture.md §8). Press, wait over a second, press, and "Saved" is on the screen.
 /// The screen of that launch says what the composition wired, and the test reads it before the
 /// first press and after "Saved", so that it fails when another recorder, link or store is
-/// composed.
+/// composed (named test `live-smoke-record-saved-watch`).
 final class RealCompositionSmokeTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
