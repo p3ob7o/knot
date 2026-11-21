@@ -139,6 +139,8 @@ assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True           
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["scripts/gate-steps.txt"])[3] is True, "gate-steps.txt alone reaches the Mac UI tests"
+# The accessibility audit that every UI test calls, WP-21's (finding 35).
+assert k.classify(["Apps/UITestSupport/Audit.swift"])[3] is True, "Apps/UITestSupport/ reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[4] is False
 assert k.matches("scripts/verify.sh", "scripts/") and not k.matches("scriptsx/a", "scripts/")
@@ -166,6 +168,17 @@ assert k.core_api_exemption("WP-02", [("WP-02", False)] * 2), "WP-02's last pull
 assert k.core_api_exemption("WP-02", [("WP-02", False)] * 3) is None, "WP-02 with all three merged"
 assert k.core_api_exemption("WP-10", []) is None, "another package"
 assert k.core_api_exemption("contract", [("WP-02", False)] * 3), "a contract branch"
+# A named test given to a pull request is required once that pull request has merged
+# (finding 23): WP-11 plans three, and its last is held. One given to no pull request waits
+# for the package's last, as before.
+assert k.named_test_pr("WP-11", "WP-11 PR 2 adds one file of kill points to the soak") == "2"
+assert k.named_test_pr("WP-11 PR 1", "A late draft save") == "1"
+assert k.named_test_pr("WP-11", "A late draft save") is None
+one = [("WP-11", False)]
+assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("WP-11", "2", one)
+assert not k.named_test_required("WP-11", None, one)
+assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
+assert k.named_test_required("WP-11", None, one * 3)
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
@@ -387,7 +400,9 @@ fi
 # Every start the scripts wait for has a limit, shaped like its call site: a run of hosted
 # tests (knot_run_limited), a simctl call (knot_sim_call) and the Mac app's start
 # (knot_start_app). For each, a stub that hangs ends at a short limit with its message, a
-# stub that passes is not slowed, and a status other than zero still fails.
+# stub that passes is not slowed, and a status other than zero still fails. The timings
+# allow 10 s, room for a loaded Mac: a missing limit shows as 15 s or more, since the
+# stubs hang for 30 and a probe has 15.
 lim="$scratch/limits"
 mkdir -p "$lim"
 printf '#!/bin/sh\nsleep 30\n' >"$lim/hangs"
@@ -409,8 +424,8 @@ timed() {
 timed hosted_hang knot_run_limited "The hosted iOS tests" 1 "$lim/hangs"
 timed hosted_pass knot_run_limited "The hosted iOS tests" 30 "$lim/passes"
 timed hosted_fail knot_run_limited "The hosted iOS tests" 30 "$lim/fails"
-if [[ $hosted_hang_status == 124 && "$(cat "$lim/hosted_hang.out")" == *"system dialog"* && $hosted_hang_seconds -lt 6 &&
-    $hosted_pass_status == 0 && $hosted_pass_seconds -lt 2 && $hosted_fail_status == 65 ]]; then
+if [[ $hosted_hang_status == 124 && "$(cat "$lim/hosted_hang.out")" == *"system dialog"* && $hosted_hang_seconds -lt 10 &&
+    $hosted_pass_status == 0 && $hosted_pass_seconds -lt 10 && $hosted_fail_status == 65 ]]; then
     pass "a run of hosted tests ends at its limit naming a dialog, is not slowed when it passes, and keeps its status"
 else
     fail "hosted tests: hang $hosted_hang_status in ${hosted_hang_seconds}s, pass $hosted_pass_status in ${hosted_pass_seconds}s, fail $hosted_fail_status: $(cat "$lim/hosted_hang.out")"
@@ -418,8 +433,8 @@ fi
 timed sim_hang knot_sim_call 1 launch set-iphone "$lim/hangs"
 timed sim_pass knot_sim_call 30 launch set-iphone "$lim/passes"
 timed sim_fail knot_sim_call 30 launch set-iphone "$lim/fails"
-if [[ $sim_hang_status == 1 && "$(cat "$lim/sim_hang.out")" == *"set-iphone did not end within 1s"* && $sim_hang_seconds -lt 6 &&
-    $sim_pass_status == 0 && $sim_pass_seconds -lt 2 &&
+if [[ $sim_hang_status == 1 && "$(cat "$lim/sim_hang.out")" == *"set-iphone did not end within 1s"* && $sim_hang_seconds -lt 10 &&
+    $sim_pass_status == 0 && $sim_pass_seconds -lt 10 &&
     $sim_fail_status == 1 && "$(cat "$lim/sim_fail.out")" == *"set-iphone failed with status 65"* ]]; then
     pass "a simctl call ends at its limit naming the simulator, is not slowed when it passes, and fails on its status"
 else
@@ -430,8 +445,8 @@ hang_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_pass knot_start_app 30 "$lim/hangs" "$lim/a-window"
 pass_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_fail knot_start_app 30 "$lim/quits" "$lim/no-window"
-if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 8 &&
-    -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 4 && -z $pass_left &&
+if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 10 &&
+    -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 10 && -z $pass_left &&
     $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* ]]; then
     pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, and leaves nothing running"
 else
@@ -442,9 +457,10 @@ pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 # The app's start says why it failed: a probe that cannot run is no system dialog, and what
 # the app writes to standard error reaches the step's log.
 printf '#!/bin/sh\necho "the probe cannot run" >&2\nexit 1\n' >"$lim/broken-probe"
-printf '#!/bin/sh\necho "the app says something" >&2\nsleep 30\n' >"$lim/talks"
-# A window comes after the app has started, so this probe sees it after half a second.
-printf '#!/bin/sh\nsleep 0.5\necho "$1 layer 0 320x240"\n' >"$lim/a-later-window"
+printf '#!/bin/sh\necho "the app says something" >&2\ntouch "%s/talked"\nsleep 30\n' "$lim" >"$lim/talks"
+# The window comes once the app has written its line: the probe waits for the app's sign,
+# so the case cannot race.
+printf '#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do\n    [ -e "%s/talked" ] && break\n    sleep 0.25\ndone\necho "$1 layer 0 320x240"\n' "$lim" >"$lim/a-later-window"
 chmod +x "$lim/broken-probe" "$lim/talks" "$lim/a-later-window"
 timed app_probe knot_start_app 2 "$lim/hangs" "$lim/broken-probe"
 timed app_talks knot_start_app 30 "$lim/talks" "$lim/a-later-window"
@@ -458,6 +474,36 @@ fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 pkill -KILL -f "$lim/talks" 2>/dev/null || true
 
+# The app's standard error reaches the caller through a file, printed after the start: a
+# process the app starts that leaves its family keeps the app's standard error, and must not
+# hold the caller's pipe. Here it holds it for 20 s; the start, piped, ends in a few.
+# The app's child has left once the app touches its sign; the probe waits for the sign.
+printf '#!/bin/sh\n( sleep 20 >&2 & )\ntouch "%s/left"\nsleep 30\n' "$lim" >"$lim/leaves"
+printf '#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do\n    [ -e "%s/left" ] && break\n    sleep 0.25\ndone\necho "$1 layer 0 320x240"\n' "$lim" >"$lim/after-it-left"
+chmod +x "$lim/leaves" "$lim/after-it-left"
+piped_started=$(knot_now)
+{ knot_start_app 30 "$lim/leaves" "$lim/after-it-left" 2>&1 | cat >/dev/null; } || true
+piped_seconds=$(($(knot_now) - piped_started))
+if ((piped_seconds < 8)); then
+    pass "the app's standard error reaches the caller through a file, so a child that leaves holds no pipe"
+else
+    fail "the app's start, piped, waited ${piped_seconds}s for a child the app left behind"
+fi
+pkill -KILL -f "$lim/leaves" 2>/dev/null || true
+
+# The app's start keeps to its own limit, whatever the probe does: a probe that never
+# answers is cut at the time left, not after its own 15 seconds.
+printf '#!/bin/sh\nsleep 30\n' >"$lim/silent-probe"
+chmod +x "$lim/silent-probe"
+timed app_silent knot_start_app 2 "$lim/hangs" "$lim/silent-probe"
+if [[ $app_silent_status == 1 && $app_silent_seconds -lt 10 && "$(cat "$lim/app_silent.out")" == *"did not answer"* ]]; then
+    pass "the app's start keeps to its limit when the probe does not answer"
+else
+    fail "the app's start with a probe that never answers: status $app_silent_status after ${app_silent_seconds}s (limit 2s): $(cat "$lim/app_silent.out")"
+fi
+pkill -KILL -f "$lim/hangs" 2>/dev/null || true
+pkill -KILL -f "$lim/silent-probe" 2>/dev/null || true
+
 # A step that runs the package's tests has an outer limit (knot_swift_test_limited): a test
 # that hangs ends at it, and the failure names the step and says nothing of a dialog; a run
 # that passes is not slowed; a failing run keeps its status.
@@ -467,28 +513,35 @@ timed swift_pass knot_swift_test_limited package-test "$lim/passes"
 timed swift_fail knot_swift_test_limited package-test "$lim/fails"
 swift_message="$(cat "$lim/swift_hang.out")"
 if [[ $swift_hang_status == 124 && $swift_message == *"The step package-test did not end"* && $swift_message != *dialog* &&
-    $swift_hang_seconds -lt 6 && $swift_pass_status == 0 && $swift_pass_seconds -lt 2 && $swift_fail_status == 65 ]]; then
+    $swift_hang_seconds -lt 10 && $swift_pass_status == 0 && $swift_pass_seconds -lt 10 && $swift_fail_status == 65 ]]; then
     pass "a step of package tests ends at its limit naming the step, is not slowed when it passes, and keeps its status"
 else
     fail "package tests under their limit: hang $swift_hang_status in ${swift_hang_seconds}s, pass $swift_pass_status, fail $swift_fail_status: $swift_message"
 fi
 # The release scan finds a fake that lives outside KnotFakes, by its name: a type of a Knot
-# module named Fake…, matched demangled, since Swift abbreviates it in the mangled name. A
-# made-up KnotLink holds FakeLinkSystem under the guard; it is compiled once with
-# KNOT_FAKES and once without. The old scan, for the KnotFakes module only, missed it.
+# module named Fake…, matched demangled, since Swift abbreviates it in the mangled name, in
+# every form a fake's symbols take: public, nested, private and fileprivate, local, and
+# nested in an extension of a type from outside the project. A made-up KnotLink holds them
+# under the guard; it is compiled once with KNOT_FAKES and once without, unoptimised, which
+# keeps every symbol. The old scan, for the KnotFakes module only, missed them all.
 fk="$scratch/fakes"
 mkdir -p "$fk/Sources/KnotLink"
 cat >"$fk/Sources/KnotLink/Link.swift" <<'SWIFT'
 #if DEBUG || KNOT_FAKES
-    public struct FakeLinkSystem {
-        public init() {}
-        public func send() -> Int { 42 }
+    public struct FakeLinkSystem { public init() {}; public func send() -> Int { 42 } }
+    public enum Outer { public struct FakeNested { public init() {}; public func v() -> Int { 2 } } }
+    private struct FakePrivate { func v() -> Int { 3 } }
+    fileprivate final class FakeFilePrivate { func v() -> Int { 4 } }
+    extension Array { public struct FakeInExtension { public init() {}; public func v() -> Int { 5 } } }
+    public func useAll() -> Int {
+        struct FakeLocal { func v() -> Int { 7 } }
+        return FakePrivate().v() + FakeFilePrivate().v() + FakeLocal().v()
     }
 #endif
 
 public func linkValue() -> Int {
     #if DEBUG || KNOT_FAKES
-        return FakeLinkSystem().send()
+        return FakeLinkSystem().send() + Outer.FakeNested().v() + useAll() + [Int].FakeInExtension().v()
     #else
         return 0
     #endif
@@ -496,17 +549,22 @@ public func linkValue() -> Int {
 SWIFT
 knot_select_xcode
 built=0
-xcrun swiftc -emit-library -O -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
+xcrun swiftc -emit-library -Onone -module-name KnotLink -D KNOT_FAKES "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/with-fakes.dylib" >/dev/null 2>&1 && built=$((built + 1))
-xcrun swiftc -emit-library -O -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
+xcrun swiftc -emit-library -Onone -module-name KnotLink "$fk/Sources/KnotLink/Link.swift" \
     -o "$fk/release.dylib" >/dev/null 2>&1 && built=$((built + 1))
 with_fakes="$(knot_fakes_in "$fk/with-fakes.dylib" || true)"
 release="$(knot_fakes_in "$fk/release.dylib" || true)"
 old_scan="$({ nm -a "$fk/with-fakes.dylib"; strings -a "$fk/with-fakes.dylib"; } 2>/dev/null | grep -c -e KnotFakes || true)"
-if [[ $built == 2 && $with_fakes == "KnotLink.FakeLinkSystem" && -z $release && $old_scan == 0 ]]; then
-    pass "the release scan finds a fake in another module by its name, and nothing in a build without it"
+missing=""
+for fake in "KnotLink.FakeLinkSystem" "KnotLink.Outer.FakeNested" "KnotLink.(FakePrivate" "KnotLink.(FakeFilePrivate" \
+    "FakeLocal #1 in KnotLink" "(extension in KnotLink):Swift.Array.FakeInExtension"; do
+    [[ $with_fakes == *"$fake"* ]] || missing="$missing [$fake]"
+done
+if [[ $built == 2 && -z $missing && -z $release && $old_scan == 0 ]]; then
+    pass "the release scan finds a fake in another module by its name, public, nested, private, local or in an extension"
 else
-    fail "the scan for fakes outside KnotFakes: built $built, with fakes '$with_fakes', release '$release', old scan $old_scan"
+    fail "the scan for fakes outside KnotFakes: built $built, missed:${missing:- none}, release '$release', old scan $old_scan"
 fi
 
 # The fixtures step speaks this tree's audio when it lacks it (knot_tool.py fixtures-audio
@@ -516,9 +574,9 @@ fi
 # complete, stamped set is left as it is. The fixtures here are made up.
 fa="$scratch/fixtures-audio/Fixtures"
 mkdir -p "$fa/generated/audio"
-committed_manifest() { # committed_manifest <text checksum> <voice> <rate>
+committed_manifest() { # committed_manifest <text checksum> <voice> <rate> [<clip a's own voice>]
     printf '{"generatorVersion": 2, "speechRate": %s, "voices": [{"name": "%s"}], "generatedAudio": "generated/manifest.json", "audio": [{"file": "generated/audio/a.wav", "referenceSha256": "%s", "voice": "%s", "about": "one"}, {"file": "generated/audio/b.wav", "referenceSha256": "0", "voice": "%s"}]}\n' \
-        "$3" "$2" "$1" "$2" "$2" >"$fa/manifest.json"
+        "$3" "$2" "$1" "${4:-$2}" "$2" >"$fa/manifest.json"
 }
 audio_state() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" >/dev/null 2>&1 && echo present || echo missing; }
 stamp() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" fixtures-audio --fixtures "$fa" --write-stamp >/dev/null 2>&1; }
@@ -541,39 +599,98 @@ committed_manifest aaa Reed 200
 states="$states $(audio_state)"
 committed_manifest aaa Reed 175
 states="$states $(audio_state)"
+committed_manifest aaa Reed 175 Flo
+states="$states $(audio_state)"
+committed_manifest aaa Reed 175
 write_local 1
 states="$states $(audio_state)"
 write_local 2
 printf 'changed\n' >"$fa/generated/audio/b.wav"
 states="$states $(audio_state)"
-if [[ $states == "missing missing present missing missing missing present missing missing" ]]; then
-    pass "the fixtures step finds this tree's audio missing, unstamped, stale by text, voice or rate, of another version or changed"
+if [[ $states == "missing missing present missing missing missing present missing missing missing" ]]; then
+    pass "the fixtures step finds this tree's audio missing, unstamped, stale by text, voice, a clip's voice or rate, of another version or changed"
 else
-    fail "the local audio's state, with none, unstamped, stamped, a new text, voice and rate, the same again, another version and a changed clip: $states"
+    fail "the local audio's state, with none, unstamped, stamped, a new text, voice and rate, the same again, a clip's own voice, another version and a changed clip: $states"
+fi
+
+# The stamp is written only after the audio is spoken: a generator that fails leaves none,
+# so the next run speaks again. A scratch tree holds the committed manifest and a generator
+# that fails; the fixtures step's own path runs on it.
+st="$scratch/stamp-tree"
+mkdir -p "$st/Fixtures/tools"
+cp "$KNOT_ROOT/Fixtures/manifest.json" "$st/Fixtures/"
+cp "$KNOT_ROOT/.xcode-version" "$st/"
+printf '#!/bin/sh\necho "the voices are missing" >&2\nexit 2\n' >"$st/Fixtures/tools/generate.sh"
+chmod +x "$st/Fixtures/tools/generate.sh"
+stamp_status=0
+env -u KNOT_TREE KNOT_TREE="$st" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio >"$scratch/stamp-tree.out" 2>&1 || stamp_status=$?
+if [[ $stamp_status != 0 && ! -e $st/Fixtures/generated/verify-stamp.txt ]]; then
+    pass "the audio's stamp is written only after the audio is spoken: a generator that fails leaves none"
+else
+    fail "the fixtures step with a generator that fails: status $stamp_status, stamp $(ls "$st/Fixtures/generated" 2>&1 | tr '\n' ' ')"
 fi
 
 # A limit is wall-clock time, not a count of polls: with each poll's sleep slowed to 0.3 s,
-# as a loaded Mac slows it, a 2-second limit still ends near 2 seconds. A limit under a
+# as a loaded Mac slows it, a 6-second limit still ends near 6 seconds. A limit under a
 # minute is stated in seconds.
-timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 2 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+precise_now() { python3 -I -c 'import time; print("%.2f" % time.time())'; }
+slow_started="$(precise_now)"
+timed slow_polls bash -c 'source "$1"; sleep() { /bin/sleep 0.3; }; knot_limit 6 "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
+slow_elapsed="$(python3 -I -c 'import sys; print("%.1f" % (float(sys.argv[2]) - float(sys.argv[1])))' "$slow_started" "$(precise_now)")"
 timed short_limit env KNOT_SWIFT_TEST_LIMIT=1 bash -c 'source "$1"; knot_swift_test_limited package-test "$2"' _ \
     "$KNOT_SCRIPTS/lib/common.sh" "$lim/hangs"
-if [[ $slow_polls_status == 124 && $slow_polls_seconds -le 4 && "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
-    pass "a limit is wall-clock time, however slow each poll, and a short one is stated in seconds"
+# It ends neither late nor early: at least the limit, as the timer measures it, and within
+# twice it. The limit is 6 s, so that a timer at half the limit, 3 s, and a count of the slowed
+# polls, 18 s, stay far from the bounds however loaded the Mac.
+if [[ $slow_polls_status == 124 && "${slow_elapsed%.*}${slow_elapsed#*.}" -ge 55 && "${slow_elapsed%.*}" -le 12 &&
+    "$(cat "$lim/short_limit.out")" == *"within 1s"* ]]; then
+    pass "a limit is wall-clock time, neither early nor late however slow each poll, and a short one is stated in seconds"
 else
-    fail "a 2 s limit with slow polls ended after ${slow_polls_seconds}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
+    fail "a 6 s limit with slow polls ended after ${slow_elapsed}s, status $slow_polls_status; message: $(cat "$lim/short_limit.out")"
 fi
 pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
+# The wiring check reads the shell: it finds every unbounded call of its fixture,
+# scripts/lint-cases/Unbounded.sh, in its many spellings, and passes every bounded one.
+if unbounded_verdict="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/lint-cases/Unbounded.sh" \
+    "$KNOT_SCRIPTS/lint-cases/Unbounded-lib.sh" <<'PY'
+import os, re, subprocess, sys
+fixtures = sys.argv[2:]
+want = {}
+for fixture in fixtures:
+    lines = open(fixture).read().splitlines()
+    for n, line in enumerate(lines):
+        m = re.search(r"#\s*expect:\s*(\w+)", line)
+        if m:
+            want[(fixture, n + 2)] = m.group(1)
+out = subprocess.run([sys.executable, "-I", "-B", sys.argv[1] + "/knot_tool.py", "unbounded-calls"] + fixtures,
+                     capture_output=True, text=True).stdout
+found = {(m.group(1), int(m.group(2))) for m in re.finditer(r"^([^:\n]+):(\d+):", out, re.M)}
+missed = sorted(f"{os.path.basename(f)}:{n}" for (f, n), w in want.items() if w == "unbounded" and (f, n) not in found)
+wrong = sorted(f"{os.path.basename(f)}:{n}" for (f, n), w in want.items() if w == "nothing" and (f, n) in found)
+unbounded = sum(1 for w in want.values() if w == "unbounded")
+print(f"found {unbounded - len(missed)} of {unbounded} unbounded calls, flagged {len(wrong)} bounded ones;"
+      f" missed lines {missed}, wrongly flagged {wrong}")
+sys.exit(1 if missed or wrong else 0)
+PY
+)"; then
+    pass "the wiring check reads the shell: $unbounded_verdict"
+else
+    fail "the wiring check on its fixture: $unbounded_verdict"
+fi
+
 # Every start in the scripts is wired through a limit (knot_tool.py unbounded-calls): no call
-# of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh or nightly.sh is
+# of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh, nightly.sh, doctor.sh,
+# which starts every run, lib/common.sh or bootstrap.sh is
 # made without a limit helper. A copy of verify.sh with the hosted run's limit taken off,
 # and one with a wrapper called bare, fail.
 wiring="$scratch/wiring"
 mkdir -p "$wiring"
 wiring_check() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" unbounded-calls "$@" >"$wiring/out" 2>&1; }
 real=0
-wiring_check "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/sim.sh" "$KNOT_SCRIPTS/nightly.sh" || real=$?
+wiring_check "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/sim.sh" "$KNOT_SCRIPTS/nightly.sh" "$KNOT_SCRIPTS/doctor.sh" \
+    "$KNOT_SCRIPTS/lib/common.sh" "$KNOT_SCRIPTS/bootstrap.sh" || real=$?
+real_out="$(cat "$wiring/out")"
 sed 's/knot_run_limited "The hosted iOS tests" "\$limit" xcb/xcb/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/hosted.sh"
 sed 's/knot_swift_test_limited package-test package_tests/package_tests/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/wrapper.sh"
 hosted=0
@@ -582,11 +699,196 @@ hosted_out="$(cat "$wiring/out")"
 wrapper=0
 wiring_check "$wiring/wrapper.sh" || wrapper=$?
 wrapper_out="$(cat "$wiring/out")"
-if [[ $real == 0 && $hosted == 1 && $hosted_out == *"no limit"*"Knot-iOS-Tests"* && $wrapper == 1 && $wrapper_out == *"package_tests"*"no limit"* ]] &&
+if [[ $real == 0 && $hosted == 1 && $hosted_out == *"no limit: xcb"*"Knot-iOS"* && $wrapper == 1 && $wrapper_out == *"package_tests"*"no limit"* ]] &&
     ! cmp -s "$wiring/hosted.sh" "$KNOT_SCRIPTS/verify.sh" && ! cmp -s "$wiring/wrapper.sh" "$KNOT_SCRIPTS/verify.sh"; then
     pass "every swift test, simctl, xcodebuild and xcb call in the scripts goes through a limit, and a bare one is found"
 else
-    fail "the wiring of the limits: real $real, hosted mutant $hosted, wrapper mutant $wrapper: $hosted_out / $wrapper_out"
+    fail "the wiring of the limits: real $real, hosted mutant $hosted, wrapper mutant $wrapper: $real_out / $hosted_out / $wrapper_out"
+fi
+
+# The screen's lock state, as knot_console_state reads it: locked, unlocked, and unknown for a
+# listing without the key or a read that does not answer within its limit; and the message
+# that fails the Mac UI step on a locked screen names the owner. A stub on PATH stands for
+# ioreg.
+lockdir="$scratch/console"
+mkdir -p "$lockdir/locked" "$lockdir/unlocked" "$lockdir/none" "$lockdir/silent"
+for state in locked unlocked; do
+    value=$([[ $state == locked ]] && echo true || echo false)
+    printf '#!/bin/sh\ncat <<PLIST\n<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>IOConsoleLocked</key><%s/><key>IOConsoleUsers</key><array/></dict></plist>\nPLIST\n' \
+        "$value" >"$lockdir/$state/ioreg"
+done
+printf '#!/bin/sh\necho "<plist version=\\"1.0\\"><dict></dict></plist>"\n' >"$lockdir/none/ioreg"
+printf '#!/bin/sh\nsleep 30\n' >"$lockdir/silent/ioreg"
+chmod +x "$lockdir"/*/ioreg
+console() { # console <stub>: the state read
+    env PATH="$lockdir/$1:$PATH" KNOT_CONSOLE_READ_LIMIT=2 bash -c 'source "$1"; knot_console_state' _ "$KNOT_SCRIPTS/lib/common.sh" 2>/dev/null
+}
+started=$(knot_now)
+states="$(console locked) $(console unlocked) $(console none) $(console silent)"
+locked_message="$(bash -c 'source "$1"; knot_mac_ui_locked' _ "$KNOT_SCRIPTS/lib/common.sh" 2>&1 || true)"
+if [[ $states == "locked unlocked unknown unknown" && $locked_message == *"locked"*"owner"*"unlock"* &&
+    $(($(knot_now) - started)) -lt 12 ]]; then
+    pass "the screen's lock state reads locked, unlocked or unknown, the silent read within its limit, and the message names the owner"
+else
+    fail "the screen's lock state: $states, message: $locked_message"
+fi
+pkill -KILL -f "$lockdir/silent/ioreg" 2>/dev/null || true
+
+# The lock check's wiring, through verify.sh's own step loop. A copy of scripts/ in which
+# only the doctor and the Mac UI step are stand-ins runs `--only mac-ui` on a scratch tree,
+# with its build slots in a scratch folder, and a stub ioreg that counts its reads. A locked
+# screen fails the step at once, takes no slot and runs no test; an unlocked one runs it; a
+# read that does not answer runs it too, and never passes it unrun; a screen that reads
+# locked and then unlocked still fails; a run without the Mac UI step reads nothing.
+wl="$scratch/lock-loop"
+mkdir -p "$wl/tree" "$wl/slots" "$wl/stubs"
+cp -R "$KNOT_SCRIPTS" "$wl/scripts"
+cp "$KNOT_ROOT/.xcode-version" "$wl/tree/"
+python3 -I - "$wl/scripts/verify.sh" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("step_mac_ui", 'echo "mac-ui stand-in ran" >>"$KNOT_LOCK_LOOP/ran"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body.replace("$KNOT_LOCK_LOOP/", "$KNOT_LOCK_LOOP_RUN/") + "\n}\n" + text[end:]
+open(path, "w").write(text)
+PY
+lock_stub() { # lock_stub <name> <first answer> [<later answer>]: an ioreg that counts its reads
+    mkdir -p "$wl/stubs/$1"
+    printf '#!/bin/sh\necho x >>"$KNOT_LOCK_LOOP_RUN/reads"\nn=$(wc -l <"$KNOT_LOCK_LOOP_RUN/reads" | tr -d " ")\nanswer=%s\n[ "$n" -gt 1 ] && answer=%s\n[ "$answer" = silent ] && exec sleep 30\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><%%s/></dict></plist>\\n" "$answer"\n' \
+        "$2" "${3:-$2}" >"$wl/stubs/$1/ioreg"
+    chmod +x "$wl/stubs/$1/ioreg"
+}
+lock_stub locked true
+lock_stub unlocked false
+lock_stub silent silent
+lock_stub flips true false
+lock_loop() { # lock_loop <stub> <step>: status, reads, whether the stand-in ran, whether a slot was taken
+    local status=0 run="$wl/run-$1-$2"
+    mkdir -p "$run/slots"
+    env PATH="$wl/stubs/$1:$PATH" KNOT_LOCK_LOOP_RUN="$run" KNOT_TREE="$wl/tree" KNOT_SLOT_DIR="$run/slots" \
+        KNOT_CONSOLE_READ_LIMIT=2 "$wl/scripts/verify.sh" --only "$2" >"$wl/out-$1-$2" 2>&1 || status=$?
+    echo "$status $( [[ -f $run/reads ]] && wc -l <"$run/reads" | tr -d ' ' || echo 0) $( [[ -f $run/ran ]] && echo ran || echo not-run) $(ls "$run/slots" | grep -c holder || true)"
+}
+locked_run="$(lock_loop locked mac-ui)"
+unlocked_run="$(lock_loop unlocked mac-ui)"
+silent_run="$(lock_loop silent mac-ui)"
+flips_run="$(lock_loop flips mac-ui)"
+plan_run="$(lock_loop locked doctor)"
+if [[ ${locked_run%% *} != 0 && $locked_run == *" 1 not-run 0" && "$(cat "$wl/out-locked-mac-ui")" == *"locked"*"owner"* &&
+    $unlocked_run == "0 1 ran "* && $silent_run == "0 1 ran "* && ${flips_run%% *} != 0 && $flips_run == *"not-run"* &&
+    $plan_run == "0 0 not-run 0" ]]; then
+    pass "through verify's loop, a locked screen fails the Mac UI step unrun and slotless, and no step passes unrun"
+else
+    fail "the lock check through verify's loop (status, reads, stand-in, slots): locked '$locked_run', unlocked '$unlocked_run', silent '$silent_run', locked then unlocked '$flips_run', a run without the step '$plan_run'"
+fi
+
+# The doctor reads the screen's lock only in a run that has the Mac UI step, and says what it
+# read as a note: with a stub ioreg that counts its reads and never answers, a doctor without
+# --mac-ui reads nothing, and one with it reads once, within its limit, and notes it.
+dl="$scratch/doctor-lock"
+mkdir -p "$dl/stub"
+printf '#!/bin/sh\necho x >>"%s/reads"\nexec sleep 30\n' "$dl" >"$dl/stub/ioreg"
+chmod +x "$dl/stub/ioreg"
+env PATH="$dl/stub:$PATH" KNOT_CONSOLE_READ_LIMIT=2 "$KNOT_SCRIPTS/doctor.sh" >"$dl/plain.out" 2>&1 || true
+plain_reads=$( [[ -f $dl/reads ]] && wc -l <"$dl/reads" | tr -d ' ' || echo 0)
+env PATH="$dl/stub:$PATH" KNOT_CONSOLE_READ_LIMIT=2 "$KNOT_SCRIPTS/doctor.sh" --mac-ui >"$dl/mac-ui.out" 2>&1 || true
+all_reads=$( [[ -f $dl/reads ]] && wc -l <"$dl/reads" | tr -d ' ' || echo 0)
+if [[ $plain_reads == 0 && $all_reads == 1 && "$(cat "$dl/mac-ui.out")" == *"note  screen"*"could not"* ]]; then
+    pass "the doctor reads the screen's lock only for a run with the Mac UI step, and notes what it read"
+else
+    fail "the doctor and the lock: reads without --mac-ui $plain_reads, in all $all_reads; $(grep -e screen "$dl/mac-ui.out" || echo 'no screen line')"
+fi
+pkill -KILL -f "$dl/stub/ioreg" 2>/dev/null || true
+
+# An xcodebuild that does not answer is a dialog waiting for the owner, not a wrong Xcode:
+# knot_select_xcode fails as infra-xcode-silent, never as infra-xcode-mismatch, which would
+# send an agent to reinstall what only the owner can unblock. A stub that never answers
+# stands for xcodebuild, with a 1 s limit.
+xs="$scratch/xcode-silent"
+mkdir -p "$xs"
+printf '#!/bin/sh\nexec sleep 30\n' >"$xs/xcodebuild"
+chmod +x "$xs/xcodebuild"
+silent_status=0
+silent_out="$(env PATH="$xs:$PATH" KNOT_XCODE_ANSWER_LIMIT=1 bash -c 'source "$1"; knot_select_xcode' _ \
+    "$KNOT_SCRIPTS/lib/common.sh" 2>&1)" || silent_status=$?
+if [[ $silent_status != 0 && $silent_out == *"FAIL infra-xcode-silent"*"owner"* && $silent_out != *"infra-xcode-mismatch"* ]]; then
+    pass "an xcodebuild that does not answer fails as infra-xcode-silent, naming the owner"
+else
+    fail "a silent xcodebuild: status $silent_status: $silent_out"
+fi
+pkill -KILL -f "$xs/xcodebuild" 2>/dev/null || true
+
+# This tree's audio is made in one place, knot_make_audio, under its lock, for the fixtures
+# step and for bootstrap alike: on a scratch tree with a stub generator that writes the
+# committed manifest's clips, the first call speaks and stamps, and a second speaks nothing.
+# And bootstrap.sh makes the audio only through it, never by calling the generator itself,
+# which writes no stamp.
+ma="$scratch/make-audio"
+mkdir -p "$ma/Fixtures/tools"
+cp "$KNOT_ROOT/Fixtures/manifest.json" "$ma/Fixtures/"
+cp "$KNOT_ROOT/.xcode-version" "$ma/"
+cat >"$ma/Fixtures/tools/generate.sh" <<'STUB'
+#!/bin/sh
+echo spoke >>"$(dirname "$0")/../../spoken"
+exec python3 -I - "$(dirname "$0")/.." <<'PY'
+import hashlib, json, os, sys
+fixtures = sys.argv[1]
+committed = json.load(open(os.path.join(fixtures, "manifest.json")))
+entries = []
+for clip in committed["audio"]:
+    path = os.path.join(fixtures, clip["file"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(clip["file"].encode())
+    entries.append({"file": clip["file"], "sha256": hashlib.sha256(clip["file"].encode()).hexdigest()})
+json.dump({"generatorVersion": committed["generatorVersion"], "audio": entries},
+          open(os.path.join(fixtures, "generated", "manifest.json"), "w"))
+PY
+STUB
+chmod +x "$ma/Fixtures/tools/generate.sh"
+make_audio() { env -u KNOT_TREE KNOT_TREE="$ma" bash -c 'source "$1"; knot_make_audio' _ "$KNOT_SCRIPTS/lib/common.sh" >/dev/null 2>&1; }
+spoken() { if [[ -f $ma/spoken ]]; then wc -l <"$ma/spoken" | tr -d ' '; else echo 0; fi; }
+make_audio || true
+first="$( [[ -f $ma/Fixtures/generated/verify-stamp.txt ]] && echo stamped || echo unstamped) $(spoken)"
+make_audio || true
+second="$(spoken)"
+bootstrap_ok=0
+grep -e 'knot_make_audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null &&
+    ! grep -e 'generate\.sh --audio' -e 'generate.sh" --audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null && bootstrap_ok=1
+if [[ $first == "stamped 1" && $second == 1 && $bootstrap_ok == 1 ]]; then
+    pass "the audio is made in one place, stamped and spoken once, and bootstrap.sh makes it there"
+else
+    fail "making the audio: first call '$first', spoken after the second '$second', bootstrap through knot_make_audio: $bootstrap_ok"
+fi
+
+# The hosted nightly run makes this tree's audio before the package tests under Thread
+# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio.
+nightly="$KNOT_ROOT/.github/workflows/nightly.yml"
+fixtures_line=$(grep -n -e 'verify.sh --only fixtures' "$nightly" | head -n 1 | cut -d: -f1 || true)
+tsan_line=$(grep -n -e 'verify.sh --only tsan' "$nightly" | head -n 1 | cut -d: -f1 || true)
+if [[ -n $fixtures_line && -n $tsan_line ]] && ((fixtures_line < tsan_line)); then
+    pass "the hosted nightly run makes the audio before the package tests under Thread Sanitizer"
+else
+    fail "the hosted nightly run: the fixtures step at line '${fixtures_line:-none}', tsan at '${tsan_line:-none}'"
+fi
+
+# A test cancelled at run time counts as one skipped, as a test skipped by its trait does:
+# the summary counts both and the gate fails on both (knot_skipped_tests). The lines are
+# Swift Testing's, as the pinned Xcode prints them; a cancellation whose comment holds the
+# word "Skipped" counts once.
+sk="$scratch/skips.log"
+cat >"$sk" <<'LOG'
+􀟈  Test cancelledAtRunTime() started.
+􀙟  Test disabledByARunTimeTrait() skipped: "the speech model is on this Mac"
+􀙟  Test cancelledAtRunTime() was cancelled after 0.001 seconds: "Skipped: the speech model is not on this Mac."
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+LOG
+skip_lines="$(bash -c 'source "$1"; knot_skipped_tests "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$sk" 2>&1 || true)"
+if [[ "$(grep -c . <<<"$skip_lines")" == 2 && $skip_lines == *disabledByARunTimeTrait*cancelledAtRunTime* ]]; then
+    pass "a cancelled test counts as skipped, as a skipped one does, each once"
+else
+    fail "the skipped and cancelled tests found: $skip_lines"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
