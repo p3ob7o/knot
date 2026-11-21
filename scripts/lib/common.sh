@@ -463,6 +463,14 @@ knot_make_audio() {
     return "$status"
 }
 
+# Prints the lines of a test log that report a test that did not run its body: skipped by a
+# trait ("Test x() skipped: …") or cancelled at run time ("Test x() was cancelled after …"),
+# each line once. The summary counts them as skipped, and the gate fails on any.
+#   knot_skipped_tests <log>
+knot_skipped_tests() {
+    grep -E 'Test .* (skipped|was cancelled after)' "$1" || true
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

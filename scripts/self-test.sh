@@ -873,6 +873,24 @@ else
     fail "the hosted nightly run: the fixtures step at line '${fixtures_line:-none}', tsan at '${tsan_line:-none}'"
 fi
 
+# A test cancelled at run time counts as one skipped, as a test skipped by its trait does:
+# the summary counts both and the gate fails on both (knot_skipped_tests). The lines are
+# Swift Testing's, as the pinned Xcode prints them; a cancellation whose comment holds the
+# word "Skipped" counts once.
+sk="$scratch/skips.log"
+cat >"$sk" <<'LOG'
+􀟈  Test cancelledAtRunTime() started.
+􀙟  Test disabledByARunTimeTrait() skipped: "the speech model is on this Mac"
+􀙟  Test cancelledAtRunTime() was cancelled after 0.001 seconds: "Skipped: the speech model is not on this Mac."
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+LOG
+skip_lines="$(bash -c 'source "$1"; knot_skipped_tests "$2"' _ "$KNOT_SCRIPTS/lib/common.sh" "$sk" 2>&1 || true)"
+if [[ "$(grep -c . <<<"$skip_lines")" == 2 && $skip_lines == *disabledByARunTimeTrait*cancelledAtRunTime* ]]; then
+    pass "a cancelled test counts as skipped, as a skipped one does, each once"
+else
+    fail "the skipped and cancelled tests found: $skip_lines"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

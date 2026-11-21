@@ -415,11 +415,11 @@ step_package_test() {
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
         return 1
     fi
-    # The gate requires the on-device models, so a test skipped because a model is missing
-    # fails it (docs/architecture.md §17).
-    if [[ $TIER == gate ]] && grep -E 'Test .* skipped' "$output" >/dev/null; then
-        echo "The gate requires every test to run. Skipped:"
-        grep -E 'Test .* skipped' "$output"
+    # The gate requires the on-device models, so a test skipped because a model is missing,
+    # or cancelled at run time, fails it (docs/architecture.md §17).
+    if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        echo "The gate requires every test to run. Skipped or cancelled:"
+        knot_skipped_tests "$output"
         return 1
     fi
 }
@@ -921,7 +921,7 @@ count_tests() {
         TESTS_PASSED=$((TESTS_PASSED + n))
     done
     TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
-    TESTS_SKIPPED=$((TESTS_SKIPPED + $(grep -c -E 'Test .* skipped' "$log" || true)))
+    TESTS_SKIPPED=$((TESTS_SKIPPED + $(knot_skipped_tests "$log" | grep -c . || true)))
     # XCTest cases, such as UI tests, from knot_xctest_result's lines.
     for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
         TESTS_PASSED=$((TESTS_PASSED + n))
