@@ -166,7 +166,33 @@ import KnotCore
                 default: self = .unknown
                 }
             default:
-                self = .unknown
+                self = Self.olderGenerationError(error) ?? .unknown
+            }
+        }
+
+        /// The error of OS 26, `LanguageModelSession.GenerationError`, which the OS 27 SDK still
+        /// declares, deprecated. Naming a deprecated type is a warning, which is an error here, so
+        /// it is known by its type's name and its case's label, which hold no text. Its rate
+        /// limit is a deferral like the new one's, never a counted attempt.
+        static func olderGenerationError(_ error: any Error) -> CleanupModelFailure? {
+            guard String(reflecting: type(of: error)) == "FoundationModels.LanguageModelSession.GenerationError"
+            else { return nil }
+            return olderGenerationCase(Mirror(reflecting: error).children.first?.label)
+        }
+
+        /// The failure for a case of the older error, by its label.
+        static func olderGenerationCase(_ label: String?) -> CleanupModelFailure {
+            switch label {
+            case "rateLimited": .rateLimited(retryAt: nil)
+            case "assetsUnavailable": .notReady
+            case "exceededContextWindowSize": .declined(.textTooLongForModel)
+            case "guardrailViolation": .declined(.guardrailViolation)
+            case "refusal": .declined(.cleanupRefused)
+            case "unsupportedGuide": .declined(.unsupportedRequest)
+            case "unsupportedLanguageOrLocale": .declined(.unsupportedLanguage)
+            case "decodingFailure": .declined(.cleanupMalformed)
+            case "concurrentRequests": .busy
+            default: .unknown
             }
         }
     }

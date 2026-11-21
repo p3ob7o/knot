@@ -143,3 +143,32 @@ import Testing
         #expect(wired.cleaner is ModelCleaner)
     }
 #endif
+
+#if canImport(FoundationModels) && !os(watchOS)
+    /// The OS 26 error, which the OS 27 SDK still declares, deprecated, is read by its case's
+    /// label: its rate limit is a deferral, never a counted attempt.
+    @Test(arguments: [
+        ("rateLimited", CleanupModelFailure.rateLimited(retryAt: nil)),
+        ("assetsUnavailable", .notReady),
+        ("exceededContextWindowSize", .declined(.textTooLongForModel)),
+        ("guardrailViolation", .declined(.guardrailViolation)),
+        ("refusal", .declined(.cleanupRefused)),
+        ("unsupportedGuide", .declined(.unsupportedRequest)),
+        ("unsupportedLanguageOrLocale", .declined(.unsupportedLanguage)),
+        ("decodingFailure", .declined(.cleanupMalformed)),
+        ("concurrentRequests", .busy),
+        ("somethingNew", .unknown),
+    ])
+    func eachCaseOfTheOlderErrorMapsLikeTheNewOne(_ label: String, _ failure: CleanupModelFailure) {
+        #expect(CleanupModelFailure.olderGenerationCase(label) == failure)
+    }
+
+    /// The label is the case's name, as Mirror reads it from an error with a payload, and an
+    /// error of another type is not taken for the older one.
+    @Test func theOlderErrorIsKnownByItsTypeAndItsLabel() {
+        let new = LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: "x"))
+        #expect(Mirror(reflecting: new).children.first?.label == "rateLimited")
+        #expect(CleanupModelFailure.olderGenerationError(new) == nil)
+        #expect(CleanupModelFailure.olderGenerationError(CocoaError(.fileReadUnknown)) == nil)
+    }
+#endif
