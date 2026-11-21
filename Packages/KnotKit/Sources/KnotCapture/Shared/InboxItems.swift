@@ -208,9 +208,12 @@ final class ItemLock: Sendable {
     private static let locks = Mutex<[String: ItemLock]>([:])
 
     /// The lock of the `Inbox/` at `inbox`, as `layer` reaches it: a layer that is an object is
-    /// told apart by its identity, as a test's file layer in memory is from another test's.
+    /// told apart by its identity, as a test's file layer in memory is from another test's. The
+    /// path is the key as written: every caller takes it from one `StoreLocations`, and a form
+    /// the system rewrites, such as `/private` that `standardizedFileURL` drops once the folder
+    /// exists, would give one `Inbox/` two locks (finding 76).
     static func of(inbox: URL, layer: any FileLayer) -> ItemLock {
-        var key = inbox.standardizedFileURL.path
+        var key = inbox.path
         if type(of: layer as Any) is AnyClass { key += "|\(ObjectIdentifier(layer as AnyObject).hashValue)" }
         return locks.withLock { locks in
             if let lock = locks[key] { return lock }

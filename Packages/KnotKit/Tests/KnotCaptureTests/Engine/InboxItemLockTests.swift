@@ -103,3 +103,24 @@ final class CountingFileLayer: FileLayer {
     func entryKind(_ url: URL) -> FileEntryKind? { base.entryKind(url) }
     func contents(of folder: URL) throws(KnotError) -> [String] { try base.contents(of: folder) }
 }
+
+/// Finding 76: the item lock of one `Inbox/` is one lock, whatever happened to the folder. A path
+/// in its `/private` form reads as another path through `standardizedFileURL` once the folder
+/// exists, so an engine made before `Inbox/` exists and an ingest made after would hold two locks.
+/// Every caller takes its paths from one `StoreLocations`, so the key is the path as written.
+@Suite struct InboxItemLockKeyTests {
+    @Test func oneInboxHasOneLockBeforeAndAfterItsFolderExists() throws {
+        // The temporary folder in its `/private` form, as an app group's container is handed over.
+        let plain = NSTemporaryDirectory()
+        try #require(plain.hasPrefix("/var/") || plain.hasPrefix("/tmp/"), "The test needs a folder below /private.")
+        let temporary = URL(fileURLWithPath: "/private" + plain, isDirectory: true)
+        let root = temporary.appending(path: "knot-item-lock-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inbox = root.appending(path: "Inbox", directoryHint: .isDirectory)
+        let layer = PosixFileLayer()
+        let before = ItemLock.of(inbox: inbox, layer: layer)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        let after = ItemLock.of(inbox: inbox, layer: layer)
+        #expect(before === after)
+    }
+}
