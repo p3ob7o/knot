@@ -72,7 +72,8 @@ enum AccessibilityAudit {
     /// group inside it and left this one faulted. Its children are audited, and every other issue
     /// fails as before, on the Mac too.
     static let windowContent = StructuralExclusion(
-        reason: "The window's content as SwiftUI hosts it on the Mac, whose children are audited."
+        reason: "The window's content as SwiftUI hosts it on the Mac, whose children are audited.",
+        type: .sufficientElementDescription
     ) { element in
         element.kind == .group && element.identifier.isEmpty && element.label.isEmpty
             && element.parentKind == .window && element.parentFrame.map { $0.isClose(to: element.frame) } == true
@@ -86,7 +87,8 @@ enum AccessibilityAudit {
     /// clean and revisits it.
     static let splitViewColumn = StructuralExclusion(
         reason: "A column that NavigationSplitView hosts on the Mac, which the app does not name and whose "
-            + "children are audited."
+            + "children are audited.",
+        type: .sufficientElementDescription
     ) { element in
         element.kind == .group && element.identifier.isEmpty && element.label.isEmpty
             && element.ancestry.last == .splitGroup
@@ -391,6 +393,30 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
             // The rule itself, whatever the platform.
             XCTAssertTrue(AccessibilityAudit.splitViewColumn.applies(column))
         }
+    }
+
+    /// The issue types that exist on every platform, besides a missing description.
+    let otherTypes: [XCUIAccessibilityAuditType] = [.contrast, .hitRegion, .elementDetection]
+
+    func testAColumnWithAnotherIssueStillFails() {
+        let column = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        for type in otherTypes {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: column), "\(type.rawValue)")
+        }
+        #if os(macOS)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: column))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.action, on: column))
+        #endif
+    }
+
+    func testTheWindowContentWithAnotherIssueStillFails() {
+        for type in otherTypes {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: hostedContent()), "\(type.rawValue)")
+        }
+        #if os(macOS)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: hostedContent()))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.action, on: hostedContent()))
+        #endif
     }
 
     func testAGroupWithNoDescriptionOutsideASplitGroupStillFails() {
