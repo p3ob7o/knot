@@ -271,27 +271,33 @@ import Testing
         #expect(r.inboxFiles().isEmpty)
     }
 
-    /// The re-check's D8: the window of request 4. The app dies after the recorder wrote the
-    /// following recording's manifest and before the engine marked it, on the `Inbox/` path:
-    /// the typed capture's item is still open, and the recording's manifest names nothing.
-    /// Nothing is lost or made twice; with the window on, the window keeps the two together, and
-    /// with it off they are two notes. This changes with the contract pull request that puts
-    /// the link on `RecordingRequest`.
-    @Test(arguments: [true, false]) func deathBeforeTheMarkIsPlacedByTheWindow(windowOn: Bool) async throws {
+    /// The re-check's D8, changed with the contract that puts the link on `RecordingRequest`.
+    /// The app dies right after the recorder's start, on the `Inbox/` path: the typed capture's
+    /// item is still open, and the recording's manifest is as the recorder first wrote it,
+    /// which names the typed capture. Recovery places the recording in that capture's note,
+    /// whatever the window says. Nothing is lost or made twice.
+    @Test(arguments: [true, false]) func deathRightAfterTheStartKeepsTheHandoff(windowOn: Bool) async throws {
         let r = Rig(engineIngests: false)
         if !windowOn { await r.notes.setWindow(.off) }
+        let recorder = WatchedRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
         await r.notes.failNextCaptureWrites(with: .storeBusy)
-        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        let a = try await engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
         let openItem = try r.layer.read(r.locations.inboxManifest(a.captureID))
+        // The recording's manifest as the recorder first wrote it, read as its start returns.
+        let firstWritten = Mutex<Data?>(nil)
+        let layer = r.layer
+        let locations = r.locations
+        recorder.afterStart.withLock { hook in
+            hook = { capture in firstWritten.withLock { $0 = try? layer.read(locations.recordingManifest(capture)) } }
+        }
         r.clock.advance(by: 1)
-        let b = try await r.beginRecording()
-        // Back to the files as the death left them: the typed item not yet ended, the
-        // recording's manifest not yet marked.
+        let b = try await r.beginRecording(on: engine)
+        // Back to the files as the death right after the start left them: the typed item not
+        // yet ended, the recording's manifest as first written.
         let files = r.locations.durableFiles(layer: r.layer)
         try files.place(openItem, at: r.locations.inboxManifest(a.captureID))
-        var unmarked = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(b.captureID)))
-        unmarked.followsCaptureID = nil
-        try files.place(try unmarked.encoded(), at: r.locations.recordingManifest(b.captureID))
+        try files.place(try #require(firstWritten.withLock { $0 }), at: r.locations.recordingManifest(b.captureID))
         r.clock.advance(by: 5)
         let next = r.relaunch()
         let outcomes = try await next.recovery.run(ingest: next.ingest)
@@ -301,7 +307,7 @@ import Testing
         #expect(try await r.notes.openCaptures().isEmpty)
         #expect(r.inboxFiles().isEmpty)
         #expect(r.layer.entryKind(r.locations.recordingManifest(b.captureID)) == nil)
-        #expect((try await Self.note(r, a.captureID) == Self.note(r, b.captureID)) == windowOn)
+        #expect(try await Self.note(r, a.captureID) == Self.note(r, b.captureID))
         // Recovery again changes nothing.
         let again = try await next.recovery.run(ingest: next.ingest)
         #expect(again.isEmpty)

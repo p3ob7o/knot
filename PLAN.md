@@ -88,7 +88,7 @@ Out of v1: see product spec §15. `TODOS.md` at the repo root holds the seventee
 
 If the build has to shrink, at the keep-gate sitting or at a later milestone sitting, scope leaves in this order, and only on the owner's word. No agent cuts scope.
 
-1. iPad Pencil: WP-35, the rest of WP-18, the Sketch control and intent, and M5. The iPad then keeps the iPhone's layout, which it has had since M1, and has no canvas, no side-by-side layout, no hardware-keyboard shortcuts and no menu bar. Ink stays a kind the store knows, so a later version can add it without a migration.
+1. iPad Pencil: WP-35; the rest of WP-18, and beside it the third PR of WP-11, which runs drawings through the engine; the Sketch control and intent; and M5. The iPad then keeps the iPhone's layout, which it has had since M1, and has no canvas, no side-by-side layout, no hardware-keyboard shortcuts and no menu bar. Ink stays a kind the store knows, so a later version can add it without a migration.
 2. System surfaces beyond the first of each kind: the Watch complication families beyond one, the Smart Stack widget, and the Home Screen and Lock Screen widgets of the iPhone. The Action Button, the controls and one complication stay.
 
 A part that is cut is not started. The orchestrator writes each cut to `TODOS.md` with what would bring it back, and updates the briefs in `docs/plan/` and the checklists in one PR. If M5 is cut, every condition that names M5 names M4: the deployment of the CloudKit production schema, which then also needs a recording made on one device to play on the other, and the start of WP-43. Anything beyond these two steps is a new decision of the owner's.
@@ -120,10 +120,10 @@ A milestone build is made from `main` in a fresh worktree by the thread of the o
 | Milestone | Owning package | Also needs |
 |---|---|---|
 | M1 | WP-22 PR 1 | WP-05; WP-06; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
-| M2 | WP-30 PR 2 | WP-11; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
+| M2 | WP-30 PR 2 | WP-11 PR 2; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
 | M3 | WP-32 PR 2 | WP-17 PR 2; WP-19 PR 3; SP-2 |
 | M4 | WP-33 PR 2 | WP-16; WP-34 PR 3; SP-3; SP-4; SP-5 |
-| M5 | WP-35 | WP-18; WP-16; WP-19 PR 4; WP-31 PR 2 |
+| M5 | WP-35 | WP-18; WP-11 PR 3; WP-16; WP-19 PR 4; WP-31 PR 2 |
 | M6 | WP-40 | WP-40a; WP-40b; WP-40c; WP-40d; WP-41; WP-42; WP-32 PR 3; WP-31 PR 2 if M5 is cut |
 | M7 | WP-43 | WP-44; M6; WP-40a; WP-40b; WP-40c; WP-40d; WP-41; WP-42 |
 <!-- milestone-needs:end -->
@@ -164,7 +164,7 @@ Wave 0 is reset and foundations, wave 1 spikes, wave 2 modules, wave 3 integrati
 
 WP-05, the capture tracer, starts after the second PR of WP-02 and comes before wave 2. WP-06, the soak harness, starts after WP-05 and the first PR of WP-10. The proof steps of WP-12, WP-13, WP-14 and WP-18, and the code half of each spike, start beside the first PR of WP-02 (§7).
 
-With five threads at a time, wave 2 starts in this order, which follows D16: WP-10, WP-21, WP-12, WP-11, WP-13, then WP-14, WP-15, WP-19, WP-18, WP-20. All of WP-20 may run earlier, beside WP-05. In WP-18, everything after the proof step waits for the keep-gate ruling.
+With five threads at a time, wave 2 starts in this order, which follows D16: WP-10, WP-21, WP-12, WP-11, WP-13, then WP-14, WP-15, WP-19, WP-18, WP-20. All of WP-20 may run earlier, beside WP-05. In WP-18, everything after the proof step waits for the keep-gate ruling, and so does the third PR of WP-11.
 
 The longest chain to M2 is WP-00, the first PR of WP-01, the first two of WP-02 with the proof steps beside them, WP-05, the first PR of WP-10, the modules, the second PR of WP-22 and the second of WP-30. A second chain runs through the third PR of WP-02, which waits for the short notes of the spikes and not for their reports, and the second PRs of WP-21 and WP-30. A third also gates M2: the first PR of WP-01, SP-1 with the owner's confirmation, then the second PRs of WP-15 and WP-19, then the first PR of WP-31. A fourth is the design direction, which the second PR of WP-30 waits for. No chain to M2 waits for the report of SP-2, SP-3 or SP-4. M2 needs the second PR of WP-22, although the second PRs of WP-30 and WP-33 do not wait for it.
 
@@ -204,7 +204,9 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | SP-5 | 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
-| WP-11 | 1 | The whole package | WP-05 |
+| WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
+| WP-11 | 2 | The engine's kill points in the soak | WP-11 PR 1; WP-06 |
+| WP-11 | 3 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
@@ -227,7 +229,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 1 | A skeleton that does not depend on the design direction: the theme layer, the view models with their tests, and the components | WP-05 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
-| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11; WP-12 PR 2; WP-13; WP-14 |
+| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
@@ -240,7 +242,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-34 | 1 | `status`, `add`, `list`, the error contract and the access switch | WP-05 |
 | WP-34 | 2 | The other commands | WP-10 PR 2; WP-20 |
 | WP-34 | 3 | The MCP server, and the embedding of the tool in the Mac app | WP-34 PR 2; SP-3 for the embedding |
-| WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-21 PR 2; WP-30 PR 2 |
+| WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-11 PR 3; WP-21 PR 2; WP-30 PR 2 |
 | WP-40 | 1 | The theme: the tokens translated from the handoff, and `DESIGN.md` | the ruling; the accepted handoff |
 | WP-40 | 40a | The iPhone's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-30 PR 2 |
 | WP-40 | 40b | The iPad's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-35 |
@@ -265,10 +267,11 @@ These rules sit beside the table:
 
 ### The hold until the ruling
 
-Until the keep-gate ruling, nothing that the cut order names is built, and wave 4 does not start. That holds back WP-35; everything in WP-18 after its proof step; the Sketch control of WP-31 and the OpenSketch intent of WP-19; the Home Screen and Lock Screen widgets of WP-31; WP-32's complication families beyond the first and its Smart Stack widget; and WP-40, WP-41, WP-42 and WP-43.
+Until the keep-gate ruling, nothing that the cut order names is built, and wave 4 does not start. That holds back WP-35; everything in WP-18 after its proof step; the third PR of WP-11, which runs drawings through the engine; the Sketch control of WP-31 and the OpenSketch intent of WP-19; the Home Screen and Lock Screen widgets of WP-31; WP-32's complication families beyond the first and its Smart Stack widget; and WP-40, WP-41, WP-42 and WP-43.
 
-The hold names PRs, so that no milestone waits for a held part. Each held part of WP-19, WP-31 and WP-32 is that package's last PR:
+The hold names PRs, so that no milestone waits for a held part. Each held part of WP-11, WP-19, WP-31 and WP-32 is that package's last PR:
 
+- WP-11 ships in three PRs. The first runs typed and voice captures through the engine, and the second adds its kill points to the soak. The third, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
 - WP-19's fourth PR is the OpenSketch intent.
 - WP-31 ships in two PRs. The first has the controls, the Live Activity and the Action Button tip. The second, held, has the Sketch control and the Home Screen and Lock Screen widgets.
 - WP-32 ships in three PRs. Its third, held, has the complication families beyond the first and the Smart Stack widget.

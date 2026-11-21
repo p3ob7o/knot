@@ -44,7 +44,7 @@ func recorderSubject(writeDelay: Duration? = nil) throws -> RecorderSubject {
     let (recorder, layer) = try scriptedRecorder(writeDelay: writeDelay)
     return RecorderSubject(
         recorder: recorder, locations: recorder.locations, exists: { layer.exists($0) },
-        size: { (try? layer.read($0))?.count })
+        size: { (try? layer.read($0))?.count }, read: { try? layer.read($0) })
 }
 
 func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {

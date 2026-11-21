@@ -84,7 +84,32 @@ public protocol NoteStore: Sendable {
     /// such as a file whose digest is not 64 hex digits, or that has no end, is written as a failed
     /// segment that says so (an open row it meets fails the same way), and the call fails with
     /// `inbox_item_unreadable`: the file is kept. Ingested again, it changes nothing.
+    ///
+    /// A kept item's row, which `recordKeptItem(_:)` wrote, is a failed row: the item, readable
+    /// by then, is stored through the failed-row path in the note its failed segment is in,
+    /// whatever its own times and placement say, and the files `keptFiles(of:)` named are
+    /// cleared in the same transaction, since the caller then removes them.
     func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult
+
+    /// Writes an item of `Inbox/` that this build cannot read, or that a newer Knot wrote, as
+    /// a failed capture, in one transaction (docs/architecture.md §6, rule 2): a row failed
+    /// with the item's reason, and one segment of kind `SegmentKind.keptInboxItem` in the state
+    /// `SegmentState.keptInboxItem(_:)`, which carries the reason, in a new note dated
+    /// `foundAt`. The time an item was found is not a capture's start: the kept segment does not
+    /// count for the append window, so a later capture is placed as if its note were not there,
+    /// and it carries no arrival mark. It records the names of the files the caller names, which `keptFiles(of:)`
+    /// resolves against the store's own `Inbox/`; the store never looks in `Inbox/` itself, and
+    /// nothing it does removes them.
+    ///
+    /// The same capture again changes nothing but that record, which takes the files the call
+    /// names now, and returns the first receipt. Refused with `capture_invalid` for a reason
+    /// that is not one of `KeptInboxItem.reasons`, no file, or a name that
+    /// `KeptInboxItem.isFileName(_:of:)` does not accept; with `capture_id_conflict` when the store holds a capture
+    /// of that ID that is not a kept item. Nothing is written then.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`: a store written against that pull request still conforms.
+    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt
 
     /// Saves the text of a typed capture. Saves are ordered by revision: a checkpoint never
     /// lowers the stored revision, so one that arrives late, from a slow save or from
@@ -128,6 +153,15 @@ public protocol NoteStore: Sendable {
 
     /// A segment with its stamped revision.
     func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead?
+
+    /// The files `Inbox/` keeps for a capture, as its latest `recordKeptItem(_:)` named them,
+    /// each name resolved against the store's own `Inbox/`, until `ingest` stores the item:
+    /// empty for any other capture. A screen offers them from this read, to open or share each
+    /// one, without touching storage.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`.
+    func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile]
 
     func asset(_ id: AssetID) async throws(KnotError) -> Asset?
 
@@ -263,6 +297,16 @@ extension NoteStore {
     public func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
         -> SegmentRead
     { throw KnotError.portUnavailable.with(.init(segmentID: segment)) }
+
+    /// The default of an operation added after the second pull request: not there yet.
+    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+        throw KnotError.portUnavailable.about(capture: item.captureID)
+    }
+
+    /// The default of an operation added after the second pull request: not there yet.
+    public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
+        throw KnotError.portUnavailable.about(capture: capture)
+    }
 }
 
 // MARK: - Capturing

@@ -1,8 +1,9 @@
 import Foundation
 
 /// How many of the Watch's captures wait for their iPhone, and how many failed. Counted from the
-/// outbox and its acknowledgements, never from the session's queue, which empties on a finished
-/// transfer whether or not the iPhone app has the file (docs/architecture.md §12).
+/// outbox and its acknowledgements, and what has not reached the outbox, never from the
+/// session's queue, which empties on a finished transfer whether or not the iPhone app has the
+/// file (docs/architecture.md §12).
 public struct WatchLinkCounts: Hashable, Sendable {
     public var waiting: Int
     public var failed: Int

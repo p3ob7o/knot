@@ -39,10 +39,12 @@ public struct CaptureManifest: Hashable, Sendable {
     /// The payload's SHA-256 in lower-case hexadecimal, which the phone checks a watch file
     /// against before it acknowledges it.
     public var payloadSHA256: String?
-    /// The capture whose end this capture's start caused on this device, under rules 13 and 15
-    /// of docs/product-spec.md §3. Ingest places this capture as the next segment of that
-    /// capture's note, whatever the window says and across a relaunch, and never guesses the
-    /// pair from two times that meet. Text from the command line or MCP never carries it.
+    /// The capture this capture follows on this device under rules 13 and 15 of
+    /// docs/product-spec.md §3, as the engine named it when it wrote the manifest: in a
+    /// recorder's first write, the capture the engine named as the recording started, which
+    /// the engine's later items may correct. Ingest places this capture as the next segment of
+    /// that capture's note, whatever the window says and across a relaunch, and never guesses
+    /// the pair from two times that meet. Text from the command line or MCP never carries it.
     /// Absent from the bytes when nil.
     public var followsCaptureID: CaptureID?
     /// When the payload this manifest describes was last saved durably. Ingest ends a draft
