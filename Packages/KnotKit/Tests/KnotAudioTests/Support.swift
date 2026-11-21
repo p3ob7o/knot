@@ -25,6 +25,13 @@ final class TemporaryFolders: Sendable {
     }
 }
 
+/// A count that one task sets and another reads.
+final class Tally: Sendable {
+    private let state = Mutex<Int64>(0)
+    var value: Int64 { state.withLock { $0 } }
+    func set(_ value: Int64) { state.withLock { $0 = value } }
+}
+
 /// One test's folder, removed when the test ends.
 struct ScratchFolder: ~Copyable {
     let url: URL

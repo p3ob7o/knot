@@ -176,6 +176,28 @@ import Testing
         _ = await session.stop()
     }
 
+    /// A recording live in this process for another launch, which only a test makes, is ended
+    /// by recovery as that launch's death would end it: its input stops, its frames no longer
+    /// change, and its stop answers with the recovery's ending and the frames recovery returned.
+    @Test func recoveryEndsALiveRecordingOfAnotherLaunch() async throws {
+        let folder = try ScratchFolder()
+        let delivered = Tally()
+        let input = InjectedAudio(
+            sampleRate: 16_000, framesPerBuffer: 1_600, pace: .every(.milliseconds(2)), delivered: { delivered.set($0) }
+        )
+        let recorder = recorder(folder.locations, input: input)
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        await durable(atLeast: 1_600, of: session)
+        let orphans = try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        let orphan = try #require(orphans.first { $0.captureID == earlier.captureID })
+        let afterRecovery = delivered.value
+        let audio = await session.stop()
+        #expect(audio.ending == .recovered, "Recovery did not end it: \(audio)")
+        #expect(audio.frames == orphan.frames && orphan.frames > 0, "\(audio.frames) after \(orphan.frames)")
+        #expect(delivered.value == afterRecovery, "Its input went on after recovery.")
+    }
+
     /// No `Recording/` folder yet: nothing to recover.
     @Test func anEmptyStoreHasNoOrphans() async throws {
         let folder = try ScratchFolder()
