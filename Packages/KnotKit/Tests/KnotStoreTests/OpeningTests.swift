@@ -555,6 +555,45 @@ import Testing
         for url in leftovers { #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
         #expect(FileManager.default.fileExists(atPath: live.path))
     }
+
+    /// Two opens of a store one version behind. The slower has read the version and stops just
+    /// before it takes the migration's exclusion, while the faster migrates. The slower then reads
+    /// the version again under the exclusion and opens the migrated store: the migration runs
+    /// once, and the copy kept from before it is of the version it replaced.
+    @Test func twoOpensOfAnOlderStoreMigrateItOnce() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let locations = StoreLocations.testing(root: root)
+        try openStore(in: root).close()
+        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
+        let migrations = StoreSchema.migrations + [v2]
+        let gate = Gate()
+        let hooks = StoreHooks(statements: { sql in
+            if sql.uppercased().hasPrefix("BEGIN EXCLUSIVE") { gate.stop() }
+        })
+        let slower = Task.detached { () throws -> StoreDatabase in
+            try StoreDatabase.open(locations: locations, role: .app, migrations: migrations, hooks: hooks)
+        }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        let first = try openStore(in: root, migrations: migrations)
+        gate.release()
+        switch await slower.result {
+        case .success(let opened):
+            #expect(opened.storeID == first.storeID)
+            try opened.close()
+        case .failure(let error):
+            Issue.record("The slower open failed instead of opening the migrated store: \(error)")
+        }
+        try first.close()
+        #expect(try version(of: locations) == 2)
+        let copy = StoreCopies.preMigrationCopy(locations, from: 1)
+        let queue = try DatabaseQueue(path: copy.path, configuration: StoreDatabase.configuration(readonly: true))
+        let copied = try await queue.read { db in try StoreDatabase.userVersion(db) }
+        try queue.close()
+        #expect(copied == 1, "The copy kept from before the migration from version 1 is of version \(copied)")
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.

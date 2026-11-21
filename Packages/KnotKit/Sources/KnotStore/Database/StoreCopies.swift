@@ -41,32 +41,50 @@ public enum StoreCopies {
 
     // MARK: Migrating
 
-    /// Migrates an older store one version at a time: before each migration a checked copy,
-    /// which is required, then the migration and its version in one transaction. The newest
-    /// pre-migration copy is kept until the following migration. A failure leaves the store at
-    /// the last version it reached whole.
+    /// Migrates an older store one version at a time, each under one exclusion: the writer's
+    /// exclusive transaction, which holds against every other opener, in this process or
+    /// another. Under it the version is read again, and a migration whose version is there
+    /// already does nothing. Otherwise a checked copy of the store as it is, which is required,
+    /// then the migration and its version. The copy is made and checked under the same exclusion,
+    /// so it is of the version the migration replaces, and a copy already there for that version
+    /// is kept, never replaced. The newest pre-migration copy is kept until the following
+    /// migration. A failure leaves the store at the last version it reached whole.
     static func migrate(
         pool: DatabasePool, from version: Int, migrations: [StoreSchema.Migration], locations: StoreLocations,
-        files: StoreFiles, clock: any WallClock, hooks: StoreHooks
+        files: StoreFiles, publishing: StoreFiles, clock: any WallClock, hooks: StoreHooks
     ) throws {
-        var current = version
         for migration in migrations where migration.version > version {
-            let copy = preMigrationCopy(locations, from: current)
-            try makeCopy(of: pool, to: copy, files: files, hooks: hooks, killPoint: .insidePreMigrationCopy)
-            try pool.barrierWriteWithoutTransaction { db in
+            let kept = try pool.barrierWriteWithoutTransaction { db -> URL? in
+                var copy: URL?
                 try db.inTransaction(.exclusive) {
+                    let current = try StoreDatabase.userVersion(db)
+                    guard current < migration.version else { return .commit }
+                    let made = preMigrationCopy(locations, from: current)
+                    // SQLite's backup cannot read through the connection that holds the write
+                    // lock, so a reader of its own copies the store: the lock keeps every other
+                    // writer out, so the reader sees what the migration will change.
+                    let source = try DatabaseQueue(
+                        path: locations.database.path, configuration: StoreDatabase.configuration(readonly: true))
+                    defer { try? source.close() }
+                    try source.read { reader in
+                        try makeCopy(
+                            of: reader, to: made, files: files, publishing: publishing, hooks: hooks,
+                            killPoint: .insidePreMigrationCopy)
+                    }
                     try migration.apply(db)
                     try db.execute(sql: "PRAGMA user_version = \(migration.version)")
                     hooks.reach(.insideMigration)
+                    copy = made
                     return .commit
                 }
                 _ = try? db.checkpoint(.truncate)
+                return copy
             }
+            guard let kept else { continue }
             for older in copies(locations, prefix: "pre-migration-")
-            where older.lastPathComponent != copy.lastPathComponent {
+            where older.lastPathComponent != kept.lastPathComponent {
                 try files.remove(older)
             }
-            current = migration.version
         }
     }
 
@@ -85,13 +103,24 @@ public enum StoreCopies {
         return counts
     }
 
-    /// Writes a checked copy of the database to `destination`. With `publishing`, a copy that
-    /// another writer published there first is kept and this one dropped; without it, a copy
-    /// there is replaced, as a migration's retry replaces the copy its killed attempt made. The
-    /// partial file of a copy is never another copy's to remove: the app removes what a crash
-    /// left when it opens the store.
+    /// Writes a checked copy of the database to `destination`, in one read transaction. With
+    /// `publishing`, a copy that another writer published there first is kept and this one
+    /// dropped; without it, a copy there is replaced. The partial file of a copy is never
+    /// another's to remove: the app removes what a dead writer left when it opens the store.
     static func makeCopy(
         of reader: any DatabaseReader, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        hooks: StoreHooks, killPoint: StoreKillPoint? = nil
+    ) throws {
+        try reader.read { db in
+            try makeCopy(
+                of: db, to: destination, files: files, publishing: publishing, hooks: hooks, killPoint: killPoint)
+        }
+    }
+
+    /// Writes a checked copy of the database as `db` sees it, in its transaction, to
+    /// `destination`, as `makeCopy(of:to:files:publishing:hooks:killPoint:)` does.
+    static func makeCopy(
+        of db: Database, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
         hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         let folder = destination.deletingLastPathComponent()
@@ -100,23 +129,20 @@ public enum StoreCopies {
         let partial = PartialFiles.make(for: destination.lastPathComponent, in: folder)
         defer { PartialFiles.finished(partial) }
         do {
-            let counts = try reader.read { db -> [String: Int] in
-                let counts = try tableCounts(db)
-                let copy = try DatabaseQueue(path: partial.path)
-                // A kill test stops the process inside the copy, so it copies a page at a time.
-                let stepped = killPoint != nil && hooks.reached != nil
-                var reachedKillPoint = false
-                try copy.writeWithoutTransaction { copyDB in
-                    try db.backup(to: copyDB, pagesPerStep: stepped ? 1 : -1) { progress in
-                        if let killPoint, !reachedKillPoint, progress.completedPageCount > 0 {
-                            reachedKillPoint = true
-                            hooks.reach(killPoint)
-                        }
+            let counts = try tableCounts(db)
+            let copy = try DatabaseQueue(path: partial.path)
+            // A kill test stops the process inside the copy, so it copies a page at a time.
+            let stepped = killPoint != nil && hooks.reached != nil
+            var reachedKillPoint = false
+            try copy.writeWithoutTransaction { copyDB in
+                try db.backup(to: copyDB, pagesPerStep: stepped ? 1 : -1) { progress in
+                    if let killPoint, !reachedKillPoint, progress.completedPageCount > 0 {
+                        reachedKillPoint = true
+                        hooks.reach(killPoint)
                     }
                 }
-                try copy.close()
-                return counts
             }
+            try copy.close()
             // A copy is a plain file, which opens read-only with no journal beside it. The
             // backup carried the store's WAL flag into the copy's header, which only a new
             // connection sees, so a new one turns it off.

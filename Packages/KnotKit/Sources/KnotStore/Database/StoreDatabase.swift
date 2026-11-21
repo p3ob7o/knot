@@ -160,7 +160,8 @@ public final class StoreDatabase: Sendable {
                 guard role == .app else { throw KnotError.storeOlderThanTool }
                 try StoreCopies.migrate(
                     pool: pool, from: found.version, migrations: migrations, locations: locations, files: files,
-                    clock: clock, hooks: hooks)
+                    publishing: locations.durableFiles(layer: ExclusiveRenameLayer(base: fileLayer)), clock: clock,
+                    hooks: hooks)
             }
             try protectFiles(at: locations)
             if role == .app {
