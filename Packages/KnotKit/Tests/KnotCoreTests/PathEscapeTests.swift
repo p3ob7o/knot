@@ -80,9 +80,10 @@ import Testing
             ("KnotStore/Leak", { (url: URL) throws(KnotError) in try files.removePartials(in: url) }),
             ("KnotStore/A/Last", { (url: URL) throws(KnotError) in try files.removePartials(in: url) }),
         ] {
-            #expect("\(text)", performing: { try act(tree.path(text)) }, throws: { error in
-                (error as? KnotError)?.context.posixError == ENOTDIR
-            })
+            #expect(
+                "\(text)",
+                performing: { try act(tree.path(text)) },
+                throws: { error in (error as? KnotError)?.context.posixError == ENOTDIR })
         }
         #expect(FileManager.default.fileExists(atPath: tree.path("outside/v1").path), "v1, outside, is not removed.")
         #expect(FileManager.default.fileExists(atPath: tree.path("outside/.p.partial").path))
