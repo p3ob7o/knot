@@ -186,12 +186,15 @@ extension StoreTransaction {
         var more: Bool
     }
 
-    /// One batch of the purge: notes deleted before `date`, or left empty and unchanged since
-    /// then, with all their segments; then segments deleted before it; then history older than
-    /// it. Each removed note and segment leaves a tombstone with its counter value, and the
-    /// asset rows of what goes are returned for the caller to remove their files.
+    /// One batch of the purge, of at most `limit` rows: notes deleted before `date`, or left
+    /// empty and unchanged since then, each with its segments, a note's segments spread over as
+    /// many batches as they need and the note itself after the last of them; then segments
+    /// deleted before it; then history older than it. Each removed note and segment leaves a
+    /// tombstone with its counter value, and the asset rows of what goes are returned for the
+    /// caller to remove their files. `more` says that the next batch may find more.
     func purgeBatch(before date: Date, limit: Int) throws -> PurgeBatch {
         var removed = 0
+        var budget = max(limit, 1)
         var assets: [Asset] = []
         let purgedAt = now()
         let cutoff = date.stored
@@ -199,8 +202,8 @@ extension StoreTransaction {
         // and unchanged since then.
         var notes = try Row.fetchAll(
             db, sql: "SELECT id, revision, deleted_at FROM note WHERE deleted_at < ? LIMIT ?",
-            arguments: [cutoff, limit])
-        if notes.count < limit {
+            arguments: [cutoff, budget])
+        if notes.count < budget {
             let deleted = Set(notes.map { $0["id"] as String })
             notes += try Row.fetchAll(
                 db,
@@ -208,11 +211,24 @@ extension StoreTransaction {
                     SELECT id, revision, deleted_at FROM note WHERE updated_at < ?
                         AND NOT EXISTS (SELECT 1 FROM segment WHERE segment.note_id = note.id AND segment.deleted_at IS NULL)
                     LIMIT ?
-                    """, arguments: [cutoff, limit]
-            ).filter { !deleted.contains($0["id"] as String) }.prefix(limit - notes.count)
+                    """, arguments: [cutoff, budget]
+            ).filter { !deleted.contains($0["id"] as String) }.prefix(budget - notes.count)
         }
         for row in notes {
+            guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
             let id: NoteID = try Stored.id(row["id"] as String)
+            let segments = try Row.fetchAll(
+                db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE note_id = ? LIMIT ?",
+                arguments: [id.description, budget])
+            for segment in segments {
+                assets += try drop(try SegmentRows.decode(segment), at: purgedAt)
+                removed += 1
+                budget -= 1
+            }
+            // The note goes once its last segment has, in this batch or the next.
+            guard budget > 0, try !hasSegment(id) else {
+                return PurgeBatch(removed: removed, assets: assets, more: true)
+            }
             try db.execute(
                 sql: """
                     INSERT INTO tombstone (id, kind, counter, deleted_at, purged_at) VALUES (?, 'note', ?, ?, ?)
@@ -220,25 +236,30 @@ extension StoreTransaction {
                         purged_at = excluded.purged_at
                     """,
                 arguments: [id.description, row["revision"] as Int64, row["deleted_at"] as Double?, purgedAt.stored])
-            for segment in try segments(inNote: id) {
-                assets += try drop(segment, at: purgedAt)
-                removed += 1
-            }
             try removeNote(id)
             removed += 1
+            budget -= 1
         }
-        if notes.count < limit {
-            let segments = try Row.fetchAll(
-                db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE deleted_at < ? LIMIT ?",
-                arguments: [cutoff, limit - notes.count])
-            for row in segments { assets += try drop(try SegmentRows.decode(row), at: purgedAt) }
-            removed += segments.count
-            if notes.count + segments.count < limit {
-                try db.execute(sql: "DELETE FROM segment_history WHERE at < ?", arguments: [cutoff])
-                return PurgeBatch(removed: removed, assets: assets, more: false)
-            }
+        guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
+        let segments = try Row.fetchAll(
+            db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE deleted_at < ? LIMIT ?",
+            arguments: [cutoff, budget])
+        for row in segments {
+            assets += try drop(try SegmentRows.decode(row), at: purgedAt)
+            removed += 1
+            budget -= 1
         }
-        return PurgeBatch(removed: removed, assets: assets, more: true)
+        guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
+        try db.execute(
+            sql: "DELETE FROM segment_history WHERE seq IN (SELECT seq FROM segment_history WHERE at < ? LIMIT ?)",
+            arguments: [cutoff, budget])
+        budget -= db.changesCount
+        return PurgeBatch(removed: removed, assets: assets, more: budget <= 0)
+    }
+
+    private func hasSegment(_ note: NoteID) throws -> Bool {
+        try Bool.fetchOne(
+            db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE note_id = ?)", arguments: [note.description]) ?? false
     }
 
     /// Removes a segment with its jobs, its history and its asset row, leaving a tombstone. A
