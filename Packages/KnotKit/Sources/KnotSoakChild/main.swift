@@ -38,6 +38,8 @@ import Foundation
             return
         }
         guard command == "run" else { Say.fail("unknown command") }
+        let watch = ParentWatch.start()
+        defer { watch.cancel() }
         let values = arguments()
         guard let root = values["root"], let seed = values["seed"].flatMap(UInt64.init),
             let launch = values["launch"].flatMap(Int.init), let from = values["from"].flatMap(Int.init),

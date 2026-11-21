@@ -194,33 +194,12 @@
             }
             if let fault = configuration.fault { arguments += ["--fault", fault] }
             let child = try SoakChildProcess(arguments: arguments)
-            let ending: Launch.Ending
-            switch point?.trigger {
-            case .child?:
-                await child.wait(for: "stop at its kill point or end") { lines in
-                    lines.contains { $0.hasPrefix("stopped ") }
-                }
-                if child.lines.contains(where: { $0.hasPrefix("stopped ") }) {
-                    await child.kill()
-                    ending = .killedAtPoint
-                } else {
-                    await child.waitForExit()
-                    ending = child.exitStatus == 0 ? .quit : .failed
-                }
-            case .anywhere?:
-                await child.wait(for: "acknowledge \(passes) saves or end") { lines in
-                    lines.lazy.filter { $0.hasPrefix("ack ") }.count >= passes
-                }
-                if child.isRunning {
-                    await child.kill()
-                    ending = .killedAnywhere
-                } else {
-                    await child.waitForExit()
-                    ending = child.exitStatus == 0 ? .quit : .failed
-                }
-            case nil:
-                await child.waitForExit()
-                ending = child.exitStatus == 0 ? .quit : .failed
+            var ending = await drive(child, point: point, passes: passes)
+            // Whatever happened, no child outlives its launch: one that is still running, because
+            // a wait ran out, is killed by its own process ID.
+            if child.isRunning {
+                await child.kill()
+                ending = .failed
             }
             if ending == .failed {
                 // The child's own error, which names a code: no text.
@@ -229,6 +208,36 @@
             }
             witness.absorb(child.lines, launch: number)
             return Launch(number: number, range: range, killPoint: point, passes: passes, ending: ending)
+        }
+    }
+
+    extension CaptureLedgerSoak {
+        /// Waits for the launch to reach its kill point or its end, and kills it at its point.
+        fileprivate func drive(_ child: SoakChildProcess, point: SoakKillPoint?, passes: Int) async
+            -> Launch.Ending
+        {
+            switch point?.trigger {
+            case .child?:
+                await child.wait(for: "stop at its kill point or end") { lines in
+                    lines.contains { $0.hasPrefix("stopped ") }
+                }
+                if child.lines.contains(where: { $0.hasPrefix("stopped ") }) {
+                    await child.kill()
+                    return .killedAtPoint
+                }
+            case .anywhere?:
+                await child.wait(for: "acknowledge \(passes) saves or end") { lines in
+                    lines.lazy.filter { $0.hasPrefix("ack ") }.count >= passes
+                }
+                if child.isRunning {
+                    await child.kill()
+                    return .killedAnywhere
+                }
+            case nil:
+                break
+            }
+            await child.waitForExit()
+            return child.exitStatus == 0 ? .quit : .failed
         }
     }
 

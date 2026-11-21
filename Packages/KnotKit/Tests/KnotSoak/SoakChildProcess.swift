@@ -56,6 +56,14 @@
             self.process = Mutex(process)
         }
 
+        /// A child that its test dropped, as when the test ended on an error, is killed by its own
+        /// process ID: no child outlives its test.
+        deinit {
+            process.withLock { process in
+                if process.isRunning { _ = Darwin.kill(processID, SIGKILL) }
+            }
+        }
+
         /// The whole lines the child printed so far.
         var lines: [String] {
             let text = collected.output.withLock { String(decoding: $0, as: UTF8.self) }

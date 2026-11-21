@@ -35,6 +35,10 @@
         private let count: Int
         private let passed = Mutex(0)
 
+        /// How long a stopped child waits to be killed before it ends by itself: longer than any
+        /// wait of its parent (`SuiteWait.limit`, ten minutes).
+        static let stopLimit: TimeInterval = 15 * 60
+
         init(point: String?, after count: Int) {
             self.point = point == "none" ? nil : point
             self.count = max(1, count)
@@ -53,20 +57,41 @@
         func pass(_ name: String) {
             guard isTheStop(name) else { return }
             Say.line("stopped \(name)")
-            // The process ends here, by its parent's SIGKILL.
-            while true { sleep(60) }
+            // The process ends here, by its parent's SIGKILL, or by itself when its parent has gone
+            // (`ParentWatch`) or after `stopLimit`.
+            let until = Date().addingTimeInterval(Self.stopLimit)
+            while Date() < until { sleep(1) }
+            Say.fail("waited \(Int(Self.stopLimit)) s at \(name) and no parent killed it")
         }
 
         /// Passes one of the script's own steps, which wait without holding a thread.
         func step(_ name: String) async {
             guard isTheStop("step:\(name)") else { return }
             Say.line("stopped step:\(name)")
-            while true { try? await Task.sleep(for: .seconds(60)) }
+            let until = Date().addingTimeInterval(Self.stopLimit)
+            while Date() < until { try? await Task.sleep(for: .seconds(1)) }
+            Say.fail("waited \(Int(Self.stopLimit)) s at step:\(name) and no parent killed it")
         }
 
         /// The store's seams, which pass each `StoreKillPoint` the store reaches.
         var storeHooks: StoreHooks {
             StoreHooks(reached: { [self] point in pass("store:\(point.rawValue)") })
+        }
+    }
+
+    /// Ends the child when its parent goes: a child whose parent died, or that a parent started
+    /// and dropped, must not live on. The parent's exit reaches the child as a kernel event.
+    enum ParentWatch {
+        /// Starts the watch. The caller keeps what it returns for as long as the child runs.
+        static func start() -> any DispatchSourceProcess {
+            let parent = getppid()
+            guard parent > 1 else { Say.fail("started with no parent") }
+            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .global())
+            watch.setEventHandler { Say.fail("its parent ended") }
+            watch.resume()
+            // The parent may have ended before the watch began.
+            if getppid() != parent { Say.fail("its parent ended") }
+            return watch
         }
     }
 
