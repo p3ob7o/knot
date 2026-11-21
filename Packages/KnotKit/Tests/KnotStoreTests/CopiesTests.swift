@@ -297,10 +297,6 @@ import Testing
             try await NoteRepository(database: again).changes(after: cursor, limit: 1)
         }
         try again.close()
-        try Data([1]).write(to: locations.database)
-        try? FileManager.default.removeItem(at: locations.storeRoot.appending(path: "generation"))
-        made.clock.advance(by: 60)
-        await expectFailure(.storeDamaged) { try StoreCopies.restore(kept, at: locations, clock: made.clock) }
     }
 
     /// A restored recording whose file is gone reads as missing, never as on this device.
@@ -425,6 +421,51 @@ import Testing
         }
         #expect(try version(of: locations) == 1, "No checked copy, no migration.")
         #expect(StoreCopies.copies(locations, prefix: "pre-migration-").isEmpty)
+    }
+
+    /// A restore is never refused for want of a generation, and the store it makes cannot be read
+    /// as an earlier one: it has a store ID of its own, so that every cursor and every stamped
+    /// revision kept from before belongs to another store. With a database that does not read and
+    /// no record of its generation, and with no store at all, the same.
+    @Test func aRestoredStoreIsAStoreOfItsOwn() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 120)
+        let locations = made.database.locations
+        let kept = folders.make("kept").appending(path: "kept.sqlite", directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: made.database.makeDailyCopy(), to: kept)
+        // What a person's tools kept from the store after the copy was made.
+        _ = try await made.notes.record(made.captures.typed("A synthetic later line", from: 30, to: 31))
+        let cursor = try await made.notes.cursor()
+        let revision = try #require(try await made.notes.segment(made.typed.segmentIDs[0])).revision
+        try made.database.close()
+        // The database no longer reads, and nothing records its generation.
+        try Data([1]).write(to: locations.database)
+        try? FileManager.default.removeItem(at: locations.storeRoot.appending(path: "generation"))
+        _ = try StoreCopies.restore(kept, at: locations, clock: made.clock)
+        let restored = try openStore(in: root)
+        #expect(restored.storeID != made.database.storeID, "A store of its own.")
+        let notes = NoteRepository(database: restored)
+        await expectFailure(.cursorForeign) { try await notes.changes(after: cursor, limit: 1) }
+        await expectFailure(.revisionForeign) {
+            try await notes.replaceText(
+                TextReplacement(
+                    segment: made.typed.segmentIDs[0], text: "Synthetic", origin: .edited, writer: .commandLine,
+                    ifRevision: revision))
+        }
+        let restoredCursor = try await notes.cursor()
+        try restored.close()
+        // With no store at all and no record, the same copy restored again is another store again.
+        try FileManager.default.removeItem(at: locations.storeRoot)
+        made.clock.advance(by: 60)
+        _ = try StoreCopies.restore(kept, at: locations, clock: made.clock)
+        let again = try openStore(in: root)
+        #expect(again.storeID != restored.storeID && again.storeID != made.database.storeID)
+        await expectFailure(.cursorForeign) {
+            try await NoteRepository(database: again).changes(after: restoredCursor, limit: 1)
+        }
+        expectConsistent(again)
     }
 }
 

@@ -178,7 +178,9 @@ public enum StoreCopies {
     public struct RestoreReport: Hashable, Sendable {
         /// Where the store that was replaced now is, whole, with its files.
         public var setAside: URL
-        /// The generation of the restored store, higher than any before it.
+        /// The restored store's own ID, which no store had before it.
+        public var storeID: StoreID
+        /// The generation of the restored store, above every one the store is known to have had.
         public var generation: StoreGeneration
         /// The recordings and drawings whose rows the copy holds and whose files are gone, such
         /// as one purged after the copy was made. They show as missing, never as a broken player.
@@ -197,18 +199,23 @@ public enum StoreCopies {
     /// from before the first step to after the last, and the next open, or the next restore,
     /// finishes a restore it finds published and undoes any other (`RestoreJournal`).
     ///
-    /// The new store has a generation above both stores', so a cursor or a revision kept from
-    /// before the restore is refused as foreign.
+    /// The new store is a store of its own: it takes a new store ID, so that every cursor and
+    /// every stamped revision kept from before the restore, of the store it replaces or of any
+    /// store the copy was restored as before, belongs to another store and is refused as
+    /// foreign (`cursor_foreign`, `revision_foreign`). A restore is never refused for want of
+    /// the generation it replaces: its generation is above every one the store is known to have
+    /// had, and its store ID is what makes it new.
     public static func restore(
         _ copy: URL, at locations: StoreLocations, clock: any WallClock = SystemWallClock(),
-        fileLayer: any FileLayer = PosixFileLayer()
+        ids: any IDGenerator = SystemIDGenerator(), fileLayer: any FileLayer = PosixFileLayer()
     ) throws(KnotError) -> RestoreReport {
         let manager = FileManager.default
         let root = locations.storeRoot
         guard manager.fileExists(atPath: copy.path) else { throw KnotError.notFound }
         do {
             try RestoreJournal.settle(at: locations, layer: fileLayer)
-            let previousGeneration = try currentGeneration(of: locations)
+            let previousGeneration = knownGeneration(of: locations)
+            let storeID: StoreID = ids.make()
             let journal = RestoreJournal(stamp: Int64(clock.now().timeIntervalSince1970 * 1000))
             let aside = journal.aside(of: locations)
             let staging = journal.staging(of: locations)
@@ -228,7 +235,9 @@ public enum StoreCopies {
                 let (generation, missing) = try queue.write { db -> (StoreGeneration, [AssetID]) in
                     guard let meta = try StoreMeta.fetch(db) else { throw KnotError.storeNotCreatedByKnot }
                     let raised = max(meta.generation, previousGeneration) + 1
-                    try db.execute(sql: "UPDATE store_meta SET generation = ? WHERE singleton = 1", arguments: [raised])
+                    try db.execute(
+                        sql: "UPDATE store_meta SET store_id = ?, generation = ? WHERE singleton = 1",
+                        arguments: [storeID.description, raised])
                     // A file the copy names that is gone, as one purged after the copy was made,
                     // shows as missing: its row says it is not on this device.
                     var missing: [AssetID] = []
@@ -270,7 +279,7 @@ public enum StoreCopies {
                 guard try ExclusiveRename.move(staging, to: root) else { throw KnotError.writeFailed }
                 try fileLayer.syncFolder(root.deletingLastPathComponent())
                 try RestoreJournal.remove(at: locations, layer: fileLayer)
-                return RestoreReport(setAside: aside, generation: generation, missingAssets: missing)
+                return RestoreReport(setAside: aside, storeID: storeID, generation: generation, missingAssets: missing)
             } catch {
                 // What can be undone now is; what cannot, the next open undoes.
                 try? RestoreJournal.settle(at: locations, layer: fileLayer)
@@ -299,17 +308,13 @@ public enum StoreCopies {
         }
     }
 
-    /// The generation of the current store, never guessed: the higher of its database's and the
-    /// one its folder records, which a damaged database leaves readable. With no database there
-    /// is none before the copy's. A database whose generation neither gives is not restored
-    /// over, since a new store could repeat it.
-    static func currentGeneration(of locations: StoreLocations) throws -> StoreGeneration {
-        let present = FileManager.default.fileExists(atPath: locations.database.path)
-        let fromDatabase = present ? ((try? generation(ofStoreAt: locations.database)) ?? nil) : nil
+    /// The highest generation the store is known to have had: its database's, and the one its
+    /// folder records, which a damaged database leaves readable. When neither tells, 0: the new
+    /// store's own ID keeps it apart from every store before it, so nothing is guessed.
+    static func knownGeneration(of locations: StoreLocations) -> StoreGeneration {
+        let fromDatabase = (try? generation(ofStoreAt: locations.database)) ?? nil
         let recorded = StoreDatabase.recordedGeneration(in: locations)
-        if let known = [fromDatabase, recorded].compactMap({ $0 }).max() { return known }
-        guard !present else { throw KnotError.storeDamaged }
-        return 0
+        return [fromDatabase, recorded].compactMap { $0 }.max() ?? 0
     }
 
     /// The generation of the store at `database`, read without changing it.
