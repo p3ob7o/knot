@@ -137,7 +137,7 @@
         /// Every working file of an earlier launch that `removeWorkingFile` has not removed: a
         /// recording that died while it ran, finished as recovered, and one that stopped and was
         /// never converted, or whose conversion failed, as it ended (finding 23). One whose
-        /// manifest or working file cannot be read through the layer is left out until it can.
+        /// working file cannot be read through the layer is left out until it can.
         public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
             // A session of an earlier launch that never ended is finished as recovered, which
             // keeps its working file among the others. It is finished outside the lock, because
@@ -152,16 +152,16 @@
                 state.workingFiles.values.filter { $0.launch != currentLaunch }.map(\.audio)
                     .sorted { $0.captureID < $1.captureID }
             }
-            // A recording whose manifest or working file is there and cannot be read is left
-            // where it is, and returned once it can be read: never as one with no audio.
+            // A working file that is there and cannot be read is left where it is, and returned
+            // once it can be read: never as one with no audio. A manifest that cannot be read
+            // hides nothing.
             return orphans.filter { canRead($0) }
         }
 
-        /// Whether the recording's manifest and working file, those that are on the drive, can
-        /// be read now.
+        /// Whether the recording's working file, if it is on the drive, can be read now.
         private func canRead(_ audio: RecordedAudio) -> Bool {
-            let files = [manifestURL(audio.captureID)] + (audio.workingFile.map { [$0] } ?? [])
-            return files.allSatisfy { url in layer.entryKind(url) == nil || (try? layer.read(url)) != nil }
+            guard let working = audio.workingFile, layer.entryKind(working) != nil else { return true }
+            return (try? layer.read(working)) != nil
         }
 
         public func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {

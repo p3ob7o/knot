@@ -37,13 +37,17 @@ public protocol Recorder: Sendable {
     /// is tried again at the next launch. An orphan is returned again on each call until its
     /// working file is removed.
     ///
-    /// A recording whose manifest or working file is on the drive and cannot be read, such as
-    /// files protected while the device is locked or that this process may not open, is left
-    /// where it is and is not returned; nothing of it is removed. It is returned at a later
-    /// call, once it can be read. An orphan is returned as holding no audio, with no frame or
-    /// no working file, only in three cases: its working file is missing; the file is shorter
-    /// than its header; the file was read and holds no frame. A recording that is there and
-    /// cannot be read is never one of them.
+    /// The orphan is the working file. One that can be read is returned with its frames; its
+    /// ending comes from the manifest when the manifest can be read, and is `recovered` when it
+    /// cannot. A manifest that cannot be read does not hide its recording, and it is left where
+    /// it is, for the caller to deal with. A working file that is on the drive and cannot be
+    /// read, such as one protected while the device is locked or that this process may not
+    /// open, is not returned, and nothing of the recording is touched: it is returned at a later
+    /// call, once it can be read. A manifest with no working file is a recording with no audio.
+    /// An orphan is returned as holding no audio, with no frame or no working file, only in
+    /// three cases: its working file is missing; the file is shorter than its header; the file
+    /// was read and holds no frame. A working file that is there and cannot be read is never
+    /// one of them.
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio]
 
     /// Converts a stopped recording's working file to the stored format, AAC mono in `.m4a`,
