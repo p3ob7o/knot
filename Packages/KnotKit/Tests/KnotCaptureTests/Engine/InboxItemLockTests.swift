@@ -129,4 +129,26 @@ final class CountingFileLayer: FileLayer {
         let after = ItemLock.of(inbox: inbox, layer: layer)
         #expect(before === after)
     }
+
+    /// Finding 79, the re-check's witness. One `Inbox/`, reached as `/private/var/…` by one caller
+    /// and `/var/…` by another, before its folder exists and after: one item lock.
+    @Test func oneInboxOneLockWithAndWithoutPrivate() throws {
+        let plain = NSTemporaryDirectory()
+        try #require(plain.hasPrefix("/var/"), "The test needs a folder below /private/var.")
+        let name = "knot-item-lock-\(UUID().uuidString)"
+        let withPrivate = URL(fileURLWithPath: "/private" + plain, isDirectory: true)
+            .appending(path: name, directoryHint: .isDirectory).appending(path: "Inbox", directoryHint: .isDirectory)
+        let without = URL(fileURLWithPath: plain, isDirectory: true)
+            .appending(path: name, directoryHint: .isDirectory).appending(path: "Inbox", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: withPrivate.deletingLastPathComponent()) }
+        let layer = PosixFileLayer()
+        let beforeA = ItemLock.of(inbox: withPrivate, layer: layer)
+        let beforeB = ItemLock.of(inbox: without, layer: layer)
+        try FileManager.default.createDirectory(at: withPrivate, withIntermediateDirectories: true)
+        let afterA = ItemLock.of(inbox: withPrivate, layer: layer)
+        let afterB = ItemLock.of(inbox: without, layer: layer)
+        #expect(beforeA === afterA)
+        #expect(beforeB === afterB)
+        #expect(beforeA === beforeB, "One Inbox/, with /private and without, has one lock.")
+    }
 }

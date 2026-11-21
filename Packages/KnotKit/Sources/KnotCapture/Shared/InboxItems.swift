@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import KnotCore
 import Synchronization
@@ -209,11 +210,10 @@ final class ItemLock: Sendable {
 
     /// The lock of the `Inbox/` at `inbox`, as `layer` reaches it: a layer that is an object is
     /// told apart by its identity, as a test's file layer in memory is from another test's. The
-    /// path is the key as written: every caller takes it from one `StoreLocations`, and a form
-    /// the system rewrites, such as `/private` that `standardizedFileURL` drops once the folder
-    /// exists, would give one `Inbox/` two locks (finding 76).
+    /// key is the folder's real path, the same before the folder exists and after, with
+    /// `/private` and without (findings 76 and 79).
     static func of(inbox: URL, layer: any FileLayer) -> ItemLock {
-        var key = inbox.path
+        var key = realPath(inbox)
         if type(of: layer as Any) is AnyClass { key += "|\(ObjectIdentifier(layer as AnyObject).hashValue)" }
         return locks.withLock { locks in
             if let lock = locks[key] { return lock }
@@ -221,5 +221,32 @@ final class ItemLock: Sendable {
             locks[key] = lock
             return lock
         }
+    }
+
+    /// The real path of what `url` names: `.` and `..` worked out from the text, the deepest part
+    /// that exists resolved as the system resolves it, through every symbolic link, and the rest
+    /// as written. KnotCore's `PathForm` does the same, for the files code; it is internal there.
+    static func realPath(_ url: URL) -> String {
+        func lexical(_ path: String) -> [String] {
+            var parts: [String] = []
+            for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+                switch component {
+                case ".": continue
+                case "..": if !parts.isEmpty { parts.removeLast() }
+                default: parts.append(String(component))
+                }
+            }
+            return parts
+        }
+        let parts = lexical(url.path)
+        var count = parts.count
+        while count > 0 {
+            if let resolved = Darwin.realpath("/" + parts.prefix(count).joined(separator: "/"), nil) {
+                defer { free(resolved) }
+                return "/" + (lexical(String(cString: resolved)) + parts.dropFirst(count)).joined(separator: "/")
+            }
+            count -= 1
+        }
+        return "/" + parts.joined(separator: "/")
     }
 }
