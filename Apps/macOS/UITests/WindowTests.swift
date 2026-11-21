@@ -2,12 +2,14 @@ import AppKit
 import CoreGraphics
 import XCTest
 
-/// The main window is there at every launch, whatever was closed before, and it comes back
-/// when the running app is opened again with no window.
+/// The main window is on screen at launch whatever window state an earlier quit left, with its
+/// capture field and its stream.
 ///
-/// This test is about the saved window state, so it is the one UI test that does not launch
-/// with that state ignored: it sets the state up itself, by closing the window. It ends with
-/// the window open, so it leaves no state that a later test depends on.
+/// This is the one UI test that does not launch with the saved window state ignored: the state
+/// is what it is about. It only reads (the orchestrator's ruling on WP-33 PR 1): no Mac UI test
+/// types or clicks, because a synthesized event can land in another app on the build Mac.
+/// Closing the window, opening the running app again and quitting are the owner's rows at the
+/// M1 sitting.
 ///
 /// A closed window stays in the accessibility tree with its contents, so whether the window is
 /// on screen is read from the window server, as `scripts/lib/windows.swift` reads it: the
@@ -18,34 +20,17 @@ final class KnotMacWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testTheMainWindowComesBackAfterItWasClosed() async throws {
+    func testTheMainWindowIsThereAtLaunchWhateverWasSaved() {
         let app = XCUIApplication()
-        let field = app.descendants(matching: .any)["Capture field"]
-
-        // Whatever an earlier build left, the launch shows the window.
         app.launch()
-        XCTAssertTrue(field.waitForExistence(timeout: 30))
-        waitForWindowOnScreen(true, "The window is there at launch.")
-
-        // Closing the window leaves the app running with no window. The system may bring
-        // another app forward then, so the app runs in the background or in front.
-        closeTheWindow(of: app)
-        XCTAssertNotEqual(app.state, .notRunning, "The app stays when its window closes.")
-
-        // Opening the running app again, as the Dock or the Finder does, shows the window.
-        try await openAgain()
-        waitForWindowOnScreen(true, "Opening the app again shows the window.")
-
-        // Close the window and quit with ⌘Q: the next launch shows the window again.
-        closeTheWindow(of: app)
-        bringToFront(app)
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 30), "The app quit.")
-        app.launch()
-        XCTAssertTrue(field.waitForExistence(timeout: 30))
-        waitForWindowOnScreen(true, "The window is there at the next launch.")
-        // No accessibility audit here: this is not a smoke test, and the launch test audits
-        // the same window.
+        XCTAssertTrue(
+            app.descendants(matching: .any)["Capture field"].waitForExistence(timeout: 30),
+            "The window holds the capture field.")
+        XCTAssertTrue(
+            app.descendants(matching: .any)["Sidebar"].waitForExistence(timeout: 30),
+            "The window holds the stream.")
+        waitForWindowOnScreen("The window is on screen at launch.")
+        app.terminate()
     }
 
     /// The app under test: the one this test bundle was built beside, never another worktree's
@@ -70,41 +55,11 @@ final class KnotMacWindowTests: XCTestCase {
         }.count
     }
 
-    /// Waits until the app has a window on screen, or has none.
-    private func waitForWindowOnScreen(_ shown: Bool, _ message: String) {
-        let predicate = NSPredicate { [self] _, _ in (windowsOnScreen() > 0) == shown }
+    /// Waits until the app has a window on screen.
+    private func waitForWindowOnScreen(_ message: String) {
+        let predicate = NSPredicate { [self] _, _ in windowsOnScreen() > 0 }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: nil)
         let result = XCTWaiter().wait(for: [expectation], timeout: 30)
         XCTAssertEqual(result, .completed, message)
-    }
-
-    /// Brings the app to the front and waits until it is there. Another thread's launch step
-    /// can start a build with the same bundle ID, and a newly started app comes to the front:
-    /// a key would then reach that app.
-    @MainActor
-    private func bringToFront(_ app: XCUIApplication) {
-        app.activate()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30), "The app is in front.")
-    }
-
-    /// Closes the main window with ⌘W, and waits until the window is off screen. The test
-    /// uses keys, not the menu bar: synthesized clicks on the menu bar did not open its menus on
-    /// the build Mac.
-    @MainActor
-    private func closeTheWindow(of app: XCUIApplication) {
-        bringToFront(app)
-        app.typeKey("w", modifierFlags: .command)
-        waitForWindowOnScreen(false, "The window closed.")
-    }
-
-    /// Opens the app under test again through Launch Services, which sends a running app the
-    /// reopen event that a click on its Dock icon sends.
-    @MainActor
-    private func openAgain() async throws {
-        let url = appURL
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "The app under test was found.")
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
     }
 }

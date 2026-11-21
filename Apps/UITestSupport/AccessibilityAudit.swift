@@ -109,6 +109,32 @@ enum AccessibilityAudit {
         static let structuralExclusions: [StructuralExclusion] = []
     #endif
 
+    /// An issue that names no element: the audit raised it for an element it could not resolve,
+    /// so no exclusion by name or by structure can judge it. Only an issue of the type named
+    /// here is skipped; every other issue that names no element still fails.
+    struct ElementlessExclusion: Sendable {
+        /// The audit type it covers.
+        let type: XCUIAccessibilityAuditType
+        /// Why it is excluded.
+        let reason: String
+    }
+
+    #if os(macOS)
+        /// On the Mac, a "Parent/Child mismatch" that names no element. WP-33's audit of the Mac
+        /// skeleton's split-view window raised it, with `issue.element` nil, and the app's tree
+        /// was the same before and after the audit: the system raises it for an element it does
+        /// not resolve. WP-41 makes the audit of the whole app clean. The audit type exists on
+        /// macOS only (`XCUIAccessibilityAuditTypes.h`).
+        static let unresolvedParentChild = ElementlessExclusion(
+            type: .parentChild,
+            reason: "A Parent/Child mismatch the system raises on the Mac for an element it does not resolve. "
+                + "The tree is the same before and after the audit. WP-41 makes the whole app's audit clean.")
+
+        static let elementlessExclusions: [ElementlessExclusion] = [unresolvedParentChild]
+    #else
+        static let elementlessExclusions: [ElementlessExclusion] = []
+    #endif
+
     /// The exclusions that name no element or give no reason. An empty identifier would match
     /// every element that has none, so such an entry never applies, and the audit fails on it.
     static func malformed(_ list: [Exclusion]) -> [Exclusion] {
@@ -118,12 +144,16 @@ enum AccessibilityAudit {
     }
 
     /// True when an issue of `type` on `element` is excluded: by one of `listed` that names its
-    /// element and gives its reason, or by one of `structural`.
+    /// element and gives its reason, or by one of `structural`. An issue that names no element
+    /// is excluded only by one of `elementless` of exactly its type.
     static func isExcluded(
         _ type: XCUIAccessibilityAuditType, on element: Element?, listed: [Exclusion] = exclusions,
-        structural: [StructuralExclusion] = structuralExclusions
+        structural: [StructuralExclusion] = structuralExclusions,
+        elementless: [ElementlessExclusion] = elementlessExclusions
     ) -> Bool {
-        guard let element else { return false }
+        guard let element else {
+            return elementless.contains { $0.type == type && !$0.reason.allSatisfy(\.isWhitespace) }
+        }
         let bad = malformed(listed)
         let byName = listed.contains { exclusion in
             !bad.contains { $0.identifier == exclusion.identifier && $0.reason == exclusion.reason }
@@ -268,6 +298,41 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
     func hostedContent() -> AccessibilityAudit.Element {
         AccessibilityAudit.Element(
             kind: .group, identifier: "", label: "", frame: windowFrame, parentKind: .window, parentFrame: windowFrame)
+    }
+
+    #if os(macOS)
+        func testAParentChildMismatchWithNoElementIsExcludedOnTheMac() {
+            XCTAssertTrue(AccessibilityAudit.isExcluded(.parentChild, on: nil))
+            XCTAssertTrue(
+                AccessibilityAudit.isExcluded(
+                    .parentChild, on: nil, elementless: [AccessibilityAudit.unresolvedParentChild]))
+            // With no elementless exclusion, it fails.
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: nil, elementless: []))
+            // One without a reason never applies.
+            let unexplained = AccessibilityAudit.ElementlessExclusion(type: .parentChild, reason: " ")
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: nil, elementless: [unexplained]))
+        }
+
+        func testAParentChildMismatchOnANamedElementStillFails() {
+            let button = AccessibilityAudit.Element(
+                kind: .button, identifier: "some.button", label: "Some",
+                frame: CGRect(x: 900, y: 500, width: 44, height: 44), parentKind: nil, parentFrame: nil)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: button))
+        }
+    #endif
+
+    func testEveryOtherIssueWithNoElementStillFails() {
+        var types: [XCUIAccessibilityAuditType] = [
+            .contrast, .elementDetection, .hitRegion, .sufficientElementDescription,
+        ]
+        #if os(macOS)
+            types.append(.action)
+        #else
+            types += [.dynamicType, .textClipped, .trait]
+        #endif
+        for type in types {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: nil), "\(type.rawValue)")
+        }
     }
 
     func testTheWindowContentIsExcludedOnTheMacOnly() {

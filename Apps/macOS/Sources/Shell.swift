@@ -86,6 +86,27 @@ final class Shell {
         await composition.runLaunchSequence()
     }
 
+    #if DEBUG
+        /// The launch argument that gives a debug build one line to enter, for the Mac UI tests,
+        /// which never type or click (the orchestrator's ruling on WP-33 PR 1: on the build Mac
+        /// a synthesized event can land in another app). A release build honours no such
+        /// argument: this code is not in it.
+        static let enterLineArgument = "-KnotEnterLine"
+
+        @ObservationIgnored private var enteredLaunchLine = false
+
+        /// Enters the line that `-KnotEnterLine <text>` gives into the capture surface's model,
+        /// as a person's keystrokes would reach it, and ends the capture, once per launch.
+        func enterLaunchLine(arguments: [String] = ProcessInfo.processInfo.arguments) {
+            guard !enteredLaunchLine, let index = arguments.firstIndex(of: Self.enterLineArgument),
+                arguments.indices.contains(index + 1)
+            else { return }
+            enteredLaunchLine = true
+            capture.fieldChanged(arguments[index + 1])
+            capture.endCapture()
+        }
+    #endif
+
     /// Every model whose field can hold a typed capture now.
     private var surfaces: [NoteViewModel] {
         [capture] + (openNote.map { [$0] } ?? [])

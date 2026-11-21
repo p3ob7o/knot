@@ -48,7 +48,12 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willMiniaturizeNotification)) { _ in
             shell.leave()
         }
-        .task { await shell.runLaunchSequence() }
+        .task {
+            await shell.runLaunchSequence()
+            #if DEBUG
+                shell.enterLaunchLine()
+            #endif
+        }
     }
 }
 
