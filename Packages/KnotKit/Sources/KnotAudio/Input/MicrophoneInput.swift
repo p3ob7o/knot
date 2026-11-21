@@ -298,6 +298,10 @@ final class OpenMicrophone: OpenAudioInput {
         var deliver: (@Sendable (AudioDelivery) -> Void)?
         /// How many times the engine was started again after a configuration change.
         var restarts = 0
+        /// A configuration change that came while the start ran, carried out once it has ended.
+        var restartPending = false
+        /// How many configuration changes came while the start ran, for a test.
+        var changesDuringTheStart = 0
         /// Watch for the engine's configuration changes and for the session's events.
         var watchers: [Task<Void, Never>] = []
         /// Stops asked for while the start or a restart runs, waiting for it.
@@ -332,6 +336,9 @@ final class OpenMicrophone: OpenAudioInput {
     /// How many times the engine started again after a configuration change, for a test.
     var restarts: Int { state.withLock { $0.restarts } }
 
+    /// How many configuration changes came while the start ran, for a test.
+    var changesDuringTheStart: Int { state.withLock { $0.changesDuringTheStart } }
+
     func start(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void) throws(KnotError) {
         // A stop that came first leaves nothing to start.
         let proceed = state.withLock { state in
@@ -347,8 +354,9 @@ final class OpenMicrophone: OpenAudioInput {
         }
         var failure: KnotError?
         do throws(KnotError) {
-            try attach(format: format, deliver: deliver)
+            // Watched before the tap goes in, so that no change of the engine's goes unseen.
             watch(deliver)
+            try attach(format: format, deliver: deliver)
             // A stop asked for meanwhile: the engine is not started, and the microphone never opens.
             if !state.withLock({ $0.stopped }) {
                 try engine.start()
@@ -417,11 +425,20 @@ final class OpenMicrophone: OpenAudioInput {
     /// put back in the new format, carried into the file's rate. A stop asked for meanwhile waits
     /// for it, as for a start. An engine that cannot start again ends the recording as
     /// `input_lost`, with everything written kept. On the input's own queue.
+    ///
+    /// A change that comes while the start runs, as headphones that connect at the press, is
+    /// noted, and the restart runs once the start has ended: the engine that stopped itself never
+    /// stays stopped under a recording that goes on.
     private func restart() {
         let taken = state.withLock { state -> (AVAudioFormat, @Sendable (AudioDelivery) -> Void)? in
-            guard !state.stopped, !state.starting, !state.closed, let format = state.format,
-                let deliver = state.deliver
-            else { return nil }
+            guard !state.stopped, !state.closed, let format = state.format, let deliver = state.deliver else {
+                return nil
+            }
+            guard !state.starting else {
+                state.restartPending = true
+                state.changesDuringTheStart += 1
+                return nil
+            }
             state.starting = true
             return (format, deliver)
         }
@@ -448,16 +465,20 @@ final class OpenMicrophone: OpenAudioInput {
 
     /// Ends a start or a restart. A stop asked for while it ran, or a failure, takes away what it
     /// put there. The start is over only then: a stop asked for meanwhile waits for that too, and
-    /// the stops that waited for it go on.
+    /// the stops that waited for it go on. A configuration change that came meanwhile is carried
+    /// out now, on the input's queue, unless the input is stopping.
     private func endStart(undo: Bool) {
         if undo { tearDown() }
-        let waiting = state.withLock { state in
+        let (waiting, restartNow) = state.withLock { state in
             state.starting = false
             state.suspended -= state.waiting.count
+            let restartNow = state.restartPending && !undo && !state.stopped && !state.closed
+            state.restartPending = false
             defer { state.waiting = [] }
-            return state.waiting
+            return (state.waiting, restartNow)
         }
         for stop in waiting { stop.resume() }
+        if restartNow { changeQueue.async { [self] in restart() } }
     }
 
     func stop() async {

@@ -171,6 +171,35 @@ import Testing
         #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
     }
 
+    /// A configuration change that comes while the start runs, as headphones that connect at the
+    /// press, is carried out once the start has ended: the engine, which stopped itself, starts
+    /// again on a fresh tap (finding 1 of the review). The hook holds the start on a thread of
+    /// Dispatch's until the input has noted the change, so the order rests on no time.
+    @Test func aChangeDuringTheStartIsCarriedOut() async throws {
+        let (opened, engine, _) = try await HardwareInputTests.openStandIn()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let fired = Mutex(false)
+        engine.whenAt(.starting) { engine in
+            let first = fired.withLock { fired in
+                defer { fired = true }
+                return !fired
+            }
+            guard first else { return }
+            engine.changeConfiguration()
+            HardwareInputTests.waitUntil(limit: .seconds(10)) { opened.changesDuringTheStart == 1 }
+        }
+        let endings = Mutex<[String]>([])
+        try await HardwareInputTests.startOffThePool(opened, format: format) { delivery in
+            if case .ended(let why) = delivery { endings.withLock { $0.append(why.rawValue) } }
+        }
+        #expect(
+            await SuiteWait.until("the restart", limit: .seconds(10)) { opened.restarts == 1 },
+            "No restart after a change during the start: \(engine.calls), endings \(endings.withLock { $0 })")
+        #expect(engine.calls == ["installTap", "start", "stop", "removeTap", "installTap", "start"], "\(engine.calls)")
+        #expect(endings.withLock { $0 }.isEmpty)
+        await opened.stop()
+    }
+
     /// The carrier converts a tap's rate into the file's at every pair of rates the hardware
     /// gives: a second of a 1 kHz tone comes out as a second at the file's rate, less what the
     /// converter holds, and still at 1 kHz.
