@@ -72,13 +72,18 @@ import Testing
         _ = try await next.recovery.run(ingest: next.ingest)
         #expect(try await r.notes.openCaptures().isEmpty)
         #expect(r.inboxFiles().isEmpty)
-        for (capture, text) in acknowledged.withLock({ $0 }) {
-            let stored = try await r.notes.segment(SegmentID(capture))?.segment.text
-            #expect(stored?.hasPrefix(text) == true, "\(kill): \(capture) lost text it acknowledged.")
+        // What the seam's name says is on the drive, exactly: every text a call answered, and the
+        // text of the call that stopped at the seam, which was durable before it stopped.
+        var expected = acknowledged.withLock { $0 }
+        switch kill.point {
+        case .afterStart: expected[killed] = "one"
+        case .afterSave, .afterTypedEnd: expected[killed] = "one two"
+        case .beforeEndingFollowed: expected[killed] = "three"
+        default: break
         }
-        if kill.point == .afterStart {
-            // The start reached disk and never answered: its first text is kept too.
-            #expect(try await r.notes.segment(SegmentID(killed))?.segment.text == "one")
+        for (capture, text) in expected {
+            let stored = try await r.notes.segment(SegmentID(capture))?.segment.text
+            #expect(stored == text, "\(kill): \(capture) holds \(stored?.count ?? -1) characters, not \(text.count).")
         }
         killSwitch.release()
         _ = await SuiteWait.value("the dead launch's calls") { try? await surface.value }
