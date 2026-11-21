@@ -191,4 +191,25 @@ import Testing
         #expect(seen.contains { $0.step == .clean })
         #expect(seen.allSatisfy { (0...1).contains($0.fraction) })
     }
+
+    /// A recording that is silent for longer than the run's budget, and then speaks: each run
+    /// over the silence takes nothing and moves on by its budget, the queue saves it and goes
+    /// on, and the job ends with the words after the silence.
+    @Test func aJobGoesOnPastASilenceLongerThanTheBudget() async throws {
+        let rig = Rig(runBudget: .seconds(60))
+        rig.transcriber.scriptUnscriptedFiles(pieces: [
+            TranscriptPiece(text: "pick up", range: .seconds(150) ..< .seconds(151)),
+            TranscriptPiece(text: " the bike", range: .seconds(151) ..< .seconds(152)),
+        ])
+        let segment = try await storedRecording(rig, scripted: false)
+        #expect(await rig.drain() == .idle)
+        #expect(
+            rig.transcriber.runCount == 3,
+            "Two runs of 60 s over the silence, each with nothing, and a third that reaches the words.")
+        let job = try #require(try await jobs(rig, segment, .transcribe).first)
+        #expect(job.state == .done && job.resumeAt == nil && job.attempts == 0)
+        let read = try #require(try await rig.notes.segment(segment))
+        #expect(read.rawTranscript == "pick up the bike", "The words after the silence.")
+        #expect(read.state == .voice(.ready))
+    }
 }
