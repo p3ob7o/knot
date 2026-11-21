@@ -309,6 +309,7 @@
             }
             guard !inputs.isEmpty else { return [] }
             if Task.isCancelled { throw KnotError.cancelled }
+            await hooks.afterLastCheck()
 
             let analyzer = SpeechAnalyzer(modules: [module])
             let collector = Task { () throws -> [TranscriptPiece] in
@@ -328,12 +329,16 @@
                 // Cancelling the calling task does not stop the analyzer: only
                 // `cancelAndFinishNow()` does, and `analyzeSequence` then returns normally.
                 let finished = try await withTaskCancellationHandler {
+                    await hooks.beforeAnalyzing(analyzer)
                     let end = try await analyzer.analyzeSequence(stream)
                     guard !Task.isCancelled, let end else { return false }
                     try await analyzer.finalizeAndFinish(through: end)
                     return true
                 } onCancel: {
-                    Task { await analyzer.cancelAndFinishNow() }
+                    Task {
+                        await hooks.beforeCancellingAnalyzer()
+                        await analyzer.cancelAndFinishNow()
+                    }
                 }
                 guard finished, !Task.isCancelled else {
                     // Cancelled, or no audio reached the analyzer. Its results may never end
@@ -460,6 +465,13 @@
         /// After a run has analysed a window of the file: the window's range in the file's time,
         /// and the phrases the engine finalised in it.
         var windowAnalysed: @Sendable (Range<Duration>, [TranscriptPiece]) -> Void = { _, _ in }
+        /// After a run's last check for cancellation before the analyzer, in the run's task.
+        var afterLastCheck: @Sendable () async -> Void = {}
+        /// Inside the cancellation handler, just before the analyzer is given its audio, in the
+        /// run's task.
+        var beforeAnalyzing: @Sendable (SpeechAnalyzer) async -> Void = { _ in }
+        /// In the task that a cancel starts, just before it stops the analyzer.
+        var beforeCancellingAnalyzer: @Sendable () async -> Void = {}
     }
 
     extension KnotError {

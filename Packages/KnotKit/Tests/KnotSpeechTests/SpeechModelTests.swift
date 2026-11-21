@@ -306,6 +306,52 @@ import Testing
                 took < .seconds(1) + load, "A cancelled run came back after \(took), with \(load) of load.")
         }
 
+        /// Where a cancel lands in the gap between a run's last check and the analyzer's start.
+        enum Gap: String, CaseIterable, Sendable {
+            /// Before the cancellation handler is in place.
+            case beforeTheHandler
+            /// In the handler, and the analyzer is stopped before it is given its audio.
+            case analyzerStoppedFirst
+            /// In the handler, and the analyzer is given its audio before the cancel stops it.
+            case analyzerStartedFirst
+        }
+
+        @Test(arguments: Gap.allCases)
+        func aCancelBetweenTheLastCheckAndTheAnalyzerYields(_ gap: Gap) async throws {
+            let long = try SpeechClips.url(SpeechClips.long)
+            let windows = Mutex(0)
+            let cancelInRun: @Sendable () -> Void = { withUnsafeCurrentTask { $0?.cancel() } }
+            var hooks = SpeechRunHooks(windowAnalysed: { _, _ in windows.withLock { $0 += 1 } })
+            switch gap {
+            case .beforeTheHandler:
+                hooks.afterLastCheck = { cancelInRun() }
+            case .analyzerStoppedFirst:
+                hooks.beforeAnalyzing = { analyzer in
+                    cancelInRun()
+                    await analyzer.cancelAndFinishNow()
+                }
+            case .analyzerStartedFirst:
+                hooks.beforeAnalyzing = { _ in cancelInRun() }
+                hooks.beforeCancellingAnalyzer = { try? await Task.sleep(for: .milliseconds(50)) }
+            }
+            let transcriber = SpeechClips.transcriber(hooks: hooks)
+            let run = Task { try await transcriber.transcribe(file: long, from: .zero, budget: .seconds(60)) }
+            let result = await SuiteWait.value("the run cancelled in the gap to return") { await run.result }
+            switch result {
+            case .failure(let error as KnotError)?:
+                #expect(error.code == KnotError.cancelled.code, "A cancel in the gap is the yield, not \(error.code).")
+            case .success?:
+                Issue.record("A run cancelled before its analyzer started went on to the end of its window.")
+            default:
+                Issue.record("A run cancelled in the gap throws only KnotError.")
+            }
+            #expect(windows.withLock { $0 } == 0, "A run cancelled in the gap analyses nothing more.")
+            // And the transcriber still works.
+            let next = try await SpeechClips.transcriber().transcribe(
+                file: try SpeechClips.url(SpeechClips.clean), from: .zero, budget: nil)
+            #expect(!next.pieces.isEmpty)
+        }
+
         @Test func liveTextIsVolatileThenFinal() async throws {
             let chunks = try SpeechClips.chunks(of: try SpeechClips.url(SpeechClips.clean))
             // Paced at four times real time, as a recorder hands over its buffers.
