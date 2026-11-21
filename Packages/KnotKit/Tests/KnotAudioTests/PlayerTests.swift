@@ -46,6 +46,19 @@ import Testing
         #expect(wired.recordingState.read() == .idle)
     }
 
+    /// The one policy decides where the player's audio goes (finding 4 of the review): in a
+    /// process whose hardware input `HardwareInputPolicy` refuses, a test's as this one, a
+    /// simulator's or an agent's, the player renders offline and plays nothing aloud; elsewhere it
+    /// plays on the device.
+    @Test func thePolicyChoosesThePlayersOutput() {
+        #expect(HardwareInputPolicy.refusalForThisProcess() != nil, "A test process is refused.")
+        #expect(LiveAudioPlayer().output == .offline, "The live entry point's player in a test.")
+        for refusal in [HardwareInputPolicy.Refusal.simulator, .test, .agent] {
+            #expect(LiveAudioPlayer(refusal: refusal).output == .offline, "\(refusal)")
+        }
+        #expect(LiveAudioPlayer(refusal: nil).output == .device)
+    }
+
     /// A play while this process records is refused, and the recording wins (the orchestrator's
     /// ruling on this pull request): nothing renders, the player's state does not change, and the
     /// recording runs on to its own end with every frame. One log line says so, with the asset

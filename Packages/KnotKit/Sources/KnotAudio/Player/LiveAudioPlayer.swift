@@ -13,9 +13,16 @@ import Synchronization
 /// audio's thread or inside a stop, only hands its end to that queue.
 ///
 /// On iOS and watchOS a play makes the audio session ready for playback; what a device plays,
-/// through its speaker or headphones, is checked at the owner's sittings. Under test the engine
-/// renders offline, by `AVAudioEngine`'s manual rendering, so that nothing plays aloud and the
-/// test moves the audio on itself.
+/// through its speaker or headphones, is checked at the owner's sittings.
+///
+/// In a process whose hardware input `HardwareInputPolicy` refuses, a test's, a simulator's or
+/// an agent's, the engine renders offline, by `AVAudioEngine`'s manual rendering: nothing plays
+/// aloud, and only a test moves the audio on. A play there reports playing at its position and
+/// stays there until a pause or a seek, since nothing renders it: it never ends by itself.
+///
+/// The recording wins (`AudioActivity`): a recording that starts stops a player that plays,
+/// which reports that it paused where it stood, and a play while this process records is refused,
+/// changing nothing, with one log line.
 public final class LiveAudioPlayer: AudioPlayer {
     /// Where the audio goes.
     enum Output: Sendable {
@@ -25,7 +32,7 @@ public final class LiveAudioPlayer: AudioPlayer {
         case offline
     }
 
-    private let output: Output
+    let output: Output
     private let log: KnotLog
     private let activity: AudioActivity
     private let id = UUID()
@@ -52,8 +59,16 @@ public final class LiveAudioPlayer: AudioPlayer {
         var asset: AssetID?
     }
 
+    /// The player of the live entry point: offline in a process whose hardware input the policy
+    /// refuses, and giving way to this process's recordings.
     public convenience init() {
-        self.init(output: .device)
+        self.init(refusal: HardwareInputPolicy.refusalForThisProcess(), activity: .process)
+    }
+
+    /// Offline when `refusal` says this process may not open a hardware input, the device's
+    /// otherwise: the one policy decides, `HardwareInputPolicy`.
+    convenience init(refusal: HardwareInputPolicy.Refusal?, activity: AudioActivity = AudioActivity()) {
+        self.init(output: refusal == nil ? .device : .offline, activity: activity)
     }
 
     /// With an activity of its own unless one is given, as a test gives the one its recorder's
