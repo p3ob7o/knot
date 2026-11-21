@@ -87,7 +87,8 @@
             "a seed fixes the script, each launch's kill point, its passes and its budget, and which writes the "
             + "store refuses or holds past the engine's deadline; it does not fix the order of the engine's work in "
             + "the background beside the script, which can move a pass of a store or log point, and so a launch's "
-            + "end and the launches after it"
+            + "end and the launches after it; nor where an anywhere kill lands, a seeded delay after its "
+            + "acknowledgement, in whatever the child is doing then"
 
         /// One launch of the child and how it ended.
         struct Launch: Sendable, CustomStringConvertible {
@@ -95,6 +96,8 @@
             let range: Range<Int>
             let killPoint: SoakKillPoint?
             let passes: Int
+            /// How long after its acknowledgement an `anywhere` kill landed, in milliseconds.
+            let delay: Int
             enum Ending: String, Sendable {
                 /// The child stopped at its kill point and was killed there.
                 case killedAtPoint = "killed"
@@ -110,7 +113,9 @@
             var wasKilled: Bool { ending == .killedAtPoint || ending == .killedAnywhere }
 
             var description: String {
-                let point = killPoint.map { "\($0) #\(passes)" } ?? "no kill point"
+                let point =
+                    killPoint.map { "\($0) #\(passes)" + ($0.trigger == .anywhere ? " +\(delay) ms" : "") }
+                    ?? "no kill point"
                 return "launch \(number) [\(range.lowerBound)..<\(range.upperBound)] \(point): \(ending.rawValue)"
             }
         }
@@ -241,10 +246,13 @@
                 let number = launches.count + 1
                 let point = configuration.killPoints.randomElement(using: &random)
                 let passes = point.map { Int.random(in: $0.passes, using: &random) } ?? 0
+                // An `anywhere` kill lands this long after its acknowledgement, so that moments with
+                // no named stop are reached by chance.
+                let delay = point?.trigger == .anywhere ? Int.random(in: 0...40, using: &random) : 0
                 let budget = Int.random(in: configuration.launchBudget, using: &random)
                 let range = next..<min(total, next + budget)
                 let (launch, launchProblems) = try await runLaunch(
-                    number, range: range, point: point, passes: passes, in: folder,
+                    number, range: range, point: point, passes: passes, delay: delay, in: folder,
                     previousWasKilled: launches.last?.wasKilled ?? false, witness: &witness)
                 launches.append(launch)
                 problems += launchProblems
@@ -259,7 +267,7 @@
             // The last launch recovers what the one before it left, and runs no capture.
             if problems.allSatisfy({ $0.code == Self.timeBoxCode }) {
                 let (last, lastProblems) = try await runLaunch(
-                    launches.count + 1, range: next..<next, point: nil, passes: 0, in: folder,
+                    launches.count + 1, range: next..<next, point: nil, passes: 0, delay: 0, in: folder,
                     previousWasKilled: launches.last?.wasKilled ?? false, witness: &witness)
                 launches.append(last)
                 problems += lastProblems
@@ -285,7 +293,7 @@
 
         /// Starts one launch, kills it where its point says, and takes in what it printed.
         private func runLaunch(
-            _ number: Int, range: Range<Int>, point: SoakKillPoint?, passes: Int, in folder: URL,
+            _ number: Int, range: Range<Int>, point: SoakKillPoint?, passes: Int, delay: Int, in folder: URL,
             previousWasKilled: Bool, witness: inout SoakWitness
         ) async throws -> (Launch, [SoakWitness.Problem]) {
             var arguments = [
@@ -298,7 +306,7 @@
             }
             if let fault = configuration.fault { arguments += ["--fault", fault] }
             let child = try SoakChildProcess(arguments: arguments)
-            var ending = await drive(child, point: point, passes: passes)
+            var ending = await drive(child, point: point, passes: passes, delay: delay)
             // Whatever happened, no child outlives its launch: one that is still running, because
             // a wait ran out, is killed by its own process ID.
             if child.isRunning {
@@ -319,13 +327,16 @@
                 }
             let problems = witness.absorb(
                 child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled)
-            return (Launch(number: number, range: range, killPoint: point, passes: passes, ending: ending), problems)
+            return (
+                Launch(number: number, range: range, killPoint: point, passes: passes, delay: delay, ending: ending),
+                problems
+            )
         }
     }
 
     extension CaptureLedgerSoak {
         /// Waits for the launch to reach its kill point or its end, and kills it at its point.
-        fileprivate func drive(_ child: SoakChildProcess, point: SoakKillPoint?, passes: Int) async
+        fileprivate func drive(_ child: SoakChildProcess, point: SoakKillPoint?, passes: Int, delay: Int) async
             -> Launch.Ending
         {
             switch point?.trigger {
@@ -341,6 +352,7 @@
                 await child.wait(for: "acknowledge \(passes) saves or end") { lines in
                     lines.lazy.filter { $0.hasPrefix("ack ") }.count >= passes
                 }
+                try? await Task.sleep(for: .milliseconds(delay))
                 if child.isRunning {
                     await child.kill()
                     return .killedAnywhere
