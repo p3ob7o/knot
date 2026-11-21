@@ -192,18 +192,22 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
 @Suite struct ScriptedTranscriberTests {
     static let speech = URL(fileURLWithPath: "/fixtures/speech.wav")
     static let silence = URL(fileURLWithPath: "/fixtures/silence.wav")
+    static let longSilence = URL(fileURLWithPath: "/fixtures/long-silence.wav")
     static let long = URL(fileURLWithPath: "/fixtures/long.m4a")
     static let missing = URL(fileURLWithPath: "/fixtures/missing.wav")
 
     static func scripted() -> ScriptedTranscriber {
         let transcriber = ScriptedTranscriber()
         let words = ["pick", "up", "the", "blue", "bike", "from", "the", "shop"]
+        // Words of a second, with pauses shorter than the contract's budget between them.
         transcriber.script(
             speech,
             pieces: words.enumerated().map { index, word in
-                TranscriptPiece(text: word, range: .seconds(index * 2) ..< .seconds(index * 2 + 1))
+                TranscriptPiece(
+                    text: word, range: .milliseconds(index * 1_200) ..< .milliseconds(index * 1_200 + 1_000))
             })
         transcriber.script(silence, pieces: [])
+        transcriber.script(longSilence, pieces: [], lasting: .seconds(40))
         transcriber.scriptMissing(missing)
         transcriber.scriptLive(words: ["pick", "up", "the"])
         return transcriber
@@ -216,7 +220,7 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
             transcriber.setRunDelay(.seconds(600), for: Self.long)
             return TranscriberSubject(
                 transcriber: transcriber, speech: Self.speech, long: Self.long, longRunAtLeast: .seconds(600),
-                silence: Self.silence,
+                silence: Self.silence, longSilence: Self.longSilence,
                 missing: Self.missing, budget: .milliseconds(500),
                 liveChunks: Array(repeating: AudioChunk(samples: [0, 0.1], sampleRate: 16_000), count: 4))
         }
