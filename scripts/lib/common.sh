@@ -466,15 +466,17 @@ knot_make_audio() {
 # Prints the lines of a test log that report a test that did not run its body: skipped by a
 # trait ("Test x() skipped: …") or cancelled at run time ("Test x() was cancelled after …"),
 # each line once. The summary counts them as skipped, and the gate fails on any.
-# Only an event line counts: Swift Testing's glyph at the start of the line, two spaces,
-# "Test", the test's name (a function's, or a display name in quotes), and then the event.
-# A line a test prints, a recorded issue's text, or a passing test whose name holds
-# "skipped" is not one. XCTest's own form, "Test Case '…' skipped", counts too.
+# Only an event line counts, by its two ends: at its start Swift Testing's glyph, which is
+# no ASCII character, two spaces and "Test "; at its end "skipped", "skipped." or
+# `skipped: "…"`, or "was cancelled after <n> seconds" with the same endings. Whatever lies
+# between is the name, quotes and all, as in `Test "He said "hi"" skipped`. A line a test
+# prints, one that starts with a tab among them, and a passing test whose name holds
+# "skipped" are not one. XCTest's own form, "Test Case '…' skipped", counts too.
 #   knot_skipped_tests <log>
 knot_skipped_tests() {
     LC_ALL=C grep -E \
-        -e '^[^ -~]+  Test ("[^"]*"|[^ "]+) (skipped|was cancelled after)' \
-        -e "^Test Case '[^']+' skipped" "$1" || true
+        -e '^[^[:cntrl:][:print:]]+  Test .+ (skipped|was cancelled after [0-9.]+ seconds)(\.|: ".*")?$' \
+        -e "^Test [Cc]ase '[^']+' skipped" "$1" || true
 }
 
 # Prints a path for a line that may end in the journal, with no home folder in it: a path

@@ -975,6 +975,15 @@ recorder: Test session was cancelled after 2 retries, as the fake store asked
 􁁛  Test "A capture that was cancelled after the disk filled is kept" passed after 0.002 seconds.
 􁁛  Test "A clip skipped by the guard is still on disk" passed after 0.002 seconds.
 􁁛  Test skippedSegmentIsReported() passed after 0.001 seconds.
+	  Test printedByATest() skipped: "a line the test printed, after a tab"
+􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
+LOG
+# Skipped tests as the pinned Xcode prints them, from the review of pull request 63: a
+# display name that holds quotes, and a skip with no comment, which ends with a period.
+cat >"$sl/logs/quoted.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test "He said "hi"" skipped: "quoted display"
+􀙟  Test plainDisabled() skipped.
 􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
 LOG
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
@@ -989,13 +998,15 @@ gate_cancelled="$(skip_loop cancelled gate)"
 gate_skipped="$(skip_loop skipped gate)"
 quick_cancelled="$(skip_loop cancelled quick)"
 gate_lookalike="$(skip_loop lookalike gate)"
+gate_quoted="$(skip_loop quoted gate)"
 if [[ $gate_cancelled == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
     $gate_skipped == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
     $quick_cancelled == "0 ok · tests 2 passed, 0 failed, 1 skipped" &&
-    $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" ]]; then
+    $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" &&
+    $gate_quoted == "1 FAIL · tests 3 passed, 0 failed, 2 skipped" ]]; then
     pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and counts once; a line that only looks like one counts for nothing"
 else
-    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike'"
+    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike', quoted names and a bare skip at the gate '$gate_quoted'"
 fi
 
 # worktree-remove.sh prints no path with the home folder in it, since its lines end in the
