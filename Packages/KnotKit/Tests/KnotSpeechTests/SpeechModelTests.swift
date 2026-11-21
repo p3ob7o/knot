@@ -163,6 +163,17 @@ import Testing
             }
         }
 
+        /// How long a cancel takes to be seen by a task that does nothing but wait: what this
+        /// machine's load adds to any cancel at this moment.
+        static func cancelDelay() async -> Duration {
+            let idle = Task { try? await Task.sleep(for: SuiteWait.limit) }
+            try? await Task.sleep(for: .milliseconds(20))
+            let cancelled = ContinuousClock.now
+            idle.cancel()
+            await idle.value
+            return ContinuousClock.now - cancelled
+        }
+
         /// How long an uncancelled run of `url` takes on this Mac now.
         static func timedRun(_ url: URL) async throws -> (TranscriptionRun, Duration) {
             let started = ContinuousClock.now
@@ -273,6 +284,7 @@ import Testing
             let long = try SpeechClips.url(SpeechClips.long)
             let (_, uncancelled) = try await SpeechClips.timedRun(long)
             let transcriber = SpeechClips.transcriber()
+            let before = await SpeechClips.cancelDelay()
             let run = Task { try await transcriber.transcribe(file: long, from: .zero, budget: nil) }
             // Long enough for the file to be read and the analyzer to be running.
             try await Task.sleep(for: uncancelled / 4)
@@ -280,11 +292,18 @@ import Testing
             run.cancel()
             let result = await SuiteWait.value("the cancelled run to return") { await run.result }
             let took = ContinuousClock.now - cancelled
+            let after = await SpeechClips.cancelDelay()
             switch result {
             case .failure(let error as KnotError)?: #expect(error.code == KnotError.cancelled.code)
             default: Issue.record("A cancelled run throws the yield, and nothing else.")
             }
+            // The engine stops, and does not finish the file.
             #expect(took < uncancelled / 4, "The engine stops when the run is cancelled, not when it is done.")
+            // Within a second, beside what this machine's load adds to any cancel now.
+            let load = max(before, after)
+            print("speech: a cancelled run came back after \(took), load \(load), uncancelled run \(uncancelled)")
+            #expect(
+                took < .seconds(1) + load, "A cancelled run came back after \(took), with \(load) of load.")
         }
 
         @Test func liveTextIsVolatileThenFinal() async throws {
