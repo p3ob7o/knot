@@ -213,6 +213,14 @@ public struct DiagnosticsExporter: Sendable {
 
     // MARK: Counts and timings
 
+    /// The daily counters this build writes (docs/architecture.md §7 and §19). A name the
+    /// store's table holds that is not one of them, as a newer Knot may write, is not written.
+    static let knownCounters: Set<String> = [
+        "captures_typed", "captures_voice", "captures_ink", "captures_unknown", "captures_failed", "jobs_failed",
+        "new_note", "moves",
+        "returns",
+    ]
+
     static func lastWeek(of counts: [String: [String: Int]], now: Date) -> [String: [String: Int]] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .gmt
@@ -222,7 +230,11 @@ public struct DiagnosticsExporter: Sendable {
             guard let year = parts.year, let month = parts.month, let date = parts.day else { return nil }
             return String(format: "%04d-%02d-%02d", year, month, date)
         }
-        return counts.filter { days.contains($0.key) }
+        var week: [String: [String: Int]] = [:]
+        for (day, named) in counts where days.contains(day) {
+            week[day] = named.filter { knownCounters.contains($0.key) }
+        }
+        return week
     }
 
     static func summaries(_ durations: [MeasuredMoment: [Duration]]) -> [String: DiagnosticsFile.TimingSummary] {
