@@ -254,6 +254,49 @@ import Testing
         expectConsistent(reopened)
     }
 
+    /// A restore cut short with its build whole, before the swap or after it, whose next open
+    /// cannot read the database that says where the build is: the open refuses, changes nothing
+    /// and leaves the journal. Once that database reads again, the next open finishes the
+    /// restore: the restored store in the store's place, the waiting item in it, and the store
+    /// it replaced set aside in its place.
+    @Test(arguments: ["before the swap", "after the swap"])
+    func aRestoreThatCannotTellWhereItsBuildIsWaits(cut: String) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 129)
+        let copy = try made.database.makeDailyCopy()
+        try made.database.close()
+        let locations = made.database.locations
+        let waiting = locations.inbox.appending(path: "synthetic.json", directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(at: locations.inbox, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: waiting)
+        var journal = RestoreJournal(stamp: 2, storeID: made.captures.ids.make(), phase: .building)
+        try journal.write(at: locations, layer: PosixFileLayer())
+        let staging = journal.staging(of: locations)
+        _ = try StoreCopies.build(
+            copy, in: staging, for: locations, journal: journal, above: 0, layer: PosixFileLayer())
+        journal.phase = .built
+        try journal.write(at: locations, layer: PosixFileLayer())
+        if cut == "after the swap" { try RestoreJournal.publish(staging, at: locations, layer: PosixFileLayer()) }
+        // The build's database: in the store's place after the swap, beside it before.
+        let build = (cut == "after the swap" ? locations.storeRoot : staging)
+            .appending(path: locations.database.lastPathComponent, directoryHint: .notDirectory)
+        #expect(chmod(build.path, 0) == 0)
+        #expect(throws: KnotError.self, "The open refuses.") { try openStore(in: root) }
+        #expect(RestoreJournal.isPending(at: locations), "The journal stays.")
+        #expect(FileManager.default.fileExists(atPath: staging.path), "Nothing was moved.")
+        #expect(chmod(build.path, 0o644) == 0)
+        let reopened = try openStore(in: root)
+        #expect(reopened.storeID == journal.storeID, "The restored store.")
+        #expect(FileManager.default.fileExists(atPath: waiting.path), "The waiting item is in the restored store.")
+        #expect(FileManager.default.fileExists(atPath: journal.aside(of: locations).path), "The store it replaced.")
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(!RestoreJournal.isPending(at: locations))
+        expectConsistent(reopened)
+        try reopened.close()
+    }
+
     /// A restore puts every file and folder of the new store on the drive before it publishes
     /// it: the database, each recording and drawing, and each of their folders.
     @Test func aRestoreSyncsTheNewStoreBeforeItPublishesIt() async throws {

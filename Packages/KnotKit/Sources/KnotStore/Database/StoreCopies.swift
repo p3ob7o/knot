@@ -438,16 +438,35 @@ struct RestoreJournal: Codable, Hashable, Sendable {
         try layer.syncFolder(root.deletingLastPathComponent())
     }
 
-    /// The store ID of the database in `folder`, read without changing it, or `nil`.
-    static func storeID(in folder: URL, locations: StoreLocations) -> StoreID? {
+    /// The store ID of the database in `folder`, read without changing it. `nil` when there is
+    /// no database there, or one that holds no store ID: neither is a restore's store. A
+    /// database that is there and cannot be read, busy or failing, throws the error that stopped
+    /// the reading, because it may be the store a restore is looking for.
+    static func storeID(in folder: URL, locations: StoreLocations) throws -> StoreID? {
         let database = folder.appending(path: locations.database.lastPathComponent, directoryHint: .notDirectory)
-        guard FileManager.default.fileExists(atPath: database.path),
-            let queue = try? DatabaseQueue(
-                path: database.path, configuration: StoreDatabase.configuration(readonly: true))
-        else { return nil }
+        guard FileManager.default.fileExists(atPath: database.path) else { return nil }
+        let queue = try DatabaseQueue(path: database.path, configuration: StoreDatabase.configuration(readonly: true))
         defer { try? queue.close() }
-        return (try? queue.read { db in try StoreMeta.fetch(db)?.storeID }) ?? nil
+        return try queue.read { db in try StoreMeta.fetch(db)?.storeID }
     }
+
+    /// Where this restore's store is, read from the store IDs of the store's place and of the
+    /// build's folder: the first that holds it says. When neither does and one of them could not
+    /// be read, nobody can tell, and the error that stopped the reading is thrown.
+    private func whereBuilt(at locations: StoreLocations) throws -> Built {
+        var failure: (any Error)?
+        for (folder, place) in [(locations.storeRoot, Built.published), (staging(of: locations), .beside)] {
+            do {
+                if try Self.storeID(in: folder, locations: locations) == storeID { return place }
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure { throw failure }
+        return .nowhere
+    }
+
+    private enum Built { case published, beside, nowhere }
 
     /// After the publish: what the published store replaced, now in the build's folder, keeps in
     /// the store's place what is not the store itself, the folders a capture waits in and
@@ -494,30 +513,37 @@ struct RestoreJournal: Codable, Hashable, Sendable {
     /// removed, and nothing of it is published; a complete build is published, unless the restore
     /// that made it failed (`finishing` false), when it is removed; a published one is finished.
     /// A folder whose database is not the build's is never removed.
+    ///
+    /// The journal goes only once the restore is settled. A complete build is found by its store
+    /// ID, in the store's place or beside it. When neither holds it and a database could not be
+    /// read, busy or failing, nothing changes, the journal stays, and the error that stopped the
+    /// reading is thrown: the open refuses, and the next one tries again. Either database alone
+    /// is enough to tell, so a store too damaged to read, the one a restore replaces, never
+    /// holds the restore back.
     static func settle(at locations: StoreLocations, layer: any FileLayer, finishing: Bool = true) throws {
         let manager = FileManager.default
         let file = url(of: locations)
         guard manager.fileExists(atPath: file.path) else { return }
         var journal = try JSONDecoder().decode(RestoreJournal.self, from: Data(contentsOf: file))
         let staging = journal.staging(of: locations)
-        let isBuild = { storeID(in: staging, locations: locations) == journal.storeID }
-        let isPublished = { storeID(in: locations.storeRoot, locations: locations) == journal.storeID }
         switch journal.phase {
         case .building:
-            // Never complete: what was built goes. Nothing of it was published.
-            if manager.fileExists(atPath: staging.path), !isPublished() { try manager.removeItem(at: staging) }
+            // Never complete, and never published: the journal says built before the build takes
+            // the store's place. What was built goes.
+            if manager.fileExists(atPath: staging.path) { try manager.removeItem(at: staging) }
         case .built:
-            if isPublished() {
+            switch try journal.whereBuilt(at: locations) {
+            case .published:
                 _ = try journal.finish(at: locations, layer: layer)
-            } else if isBuild() {
-                if finishing {
-                    try publish(staging, at: locations, layer: layer)
-                    journal.phase = .published
-                    try journal.write(at: locations, layer: layer)
-                    _ = try journal.finish(at: locations, layer: layer)
-                } else {
-                    try manager.removeItem(at: staging)
-                }
+            case .beside where finishing:
+                try publish(staging, at: locations, layer: layer)
+                journal.phase = .published
+                try journal.write(at: locations, layer: layer)
+                _ = try journal.finish(at: locations, layer: layer)
+            case .beside:
+                try manager.removeItem(at: staging)
+            case .nowhere:
+                break
             }
         case .published:
             _ = try journal.finish(at: locations, layer: layer)
