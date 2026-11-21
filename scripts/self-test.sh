@@ -178,9 +178,14 @@ assert k.named_test_pr("WP-11", "A late draft save") is None
 one = [("WP-11", False)]
 assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("WP-11", "2", one)
 assert not k.named_test_required("WP-11", None, one)
-assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
-planned = len([row for row in k.plan_rows("WP-11") if row not in k.NOTE_ROWS])
-assert planned >= 3, k.plan_rows("WP-11")
+# Where the brief puts its pull request "2" among its rows is read from the brief too: a row
+# for a pull request beside the planned ones may stand before it.
+rows = [row for row in k.plan_rows("WP-11") if row not in k.NOTE_ROWS]
+second = rows.index("2") + 1
+planned = len(rows)
+assert planned >= 3 and second < planned, rows
+assert not k.named_test_required("WP-11", "2", one * (second - 1))
+assert k.named_test_required("WP-11", "2", one * second) and not k.named_test_required("WP-11", None, one * second)
 assert not k.named_test_required("WP-11", None, one * (planned - 1))
 assert k.named_test_required("WP-11", None, one * planned)
 # A path that no brief owns falls to WP-00 (blocker 2).

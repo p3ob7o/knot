@@ -59,9 +59,11 @@ import Testing
             hold.release()
             #expect(await eventually("the late save to answer") { r.logs.logged("store_answered_late", id) })
         }
+        // Ingest stores the item's text, then removes the item: wait for both.
         #expect(
-            await eventually("the newest text to be stored") {
+            await eventually("the newest text to be stored, and its item removed") {
                 (try? await r.notes.segment(SegmentID(id)))?.segment.text == "buy milk and eggs"
+                    && r.inboxFiles().isEmpty
             })
         let row = try #require(try await r.notes.capture(id))
         #expect(row.revision == 3)

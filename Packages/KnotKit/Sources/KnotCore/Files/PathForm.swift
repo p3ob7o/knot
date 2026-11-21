@@ -20,7 +20,10 @@ import Foundation
 /// written in another case than its root is refused while the root does not exist and placed
 /// once it does. Every caller takes its paths from one `StoreLocations`, so none meets it, and
 /// making both answers the same would need a rule about volumes that fold case.
-enum PathForm {
+///
+/// Outside KnotCore, `real(_:)` is the one part to use: the key by which code that must treat
+/// one folder as one thing, such as a lock per folder, compares paths.
+public enum PathForm {
     /// `url`'s path as components below `/`, with `.` and `..` worked out from the text alone.
     static func lexical(_ url: URL) -> [String] {
         var parts: [String] = []
@@ -37,8 +40,9 @@ enum PathForm {
     /// The real path of what `url` names, as components below `/`: its deepest part that
     /// exists, resolved as the system resolves it, then the rest as written. The same folder
     /// gives the same components whether it is written with `/private` or without, through a
-    /// symbolic link or not, and whether it exists yet or not.
-    static func real(_ url: URL) -> [String] {
+    /// symbolic link or not, and whether it exists yet or not. `.` and `..` are worked out from
+    /// the text first. It reads the file system each time, and changes nothing on it.
+    public static func real(_ url: URL) -> [String] {
         real(lexical(url))
     }
 

@@ -8,6 +8,8 @@
 	<string>$(KNOT_APP_GROUP)</string>
 	<key>KnotFlavour</key>
 	<string>$(KNOT_FLAVOUR)</string>
+	<key>KnotSigning</key>
+	<string>$(KNOT_SIGNING)</string>
 	<key>KnotMilestoneLevel</key>
 	<string>$(KNOT_MILESTONE_LEVEL)</string>
 	<key>KnotWorktree</key>
