@@ -50,12 +50,17 @@ public struct StoreHooks: Sendable {
     /// Called with each statement the store's connections run, as SQL with no values bound,
     /// for the test that shows every query's plan.
     public var statements: (@Sendable (String) -> Void)?
+    /// Called with a copy's file once it is written and before it is checked, for the test
+    /// that spoils one to show that a copy that fails its check never counts.
+    public var copyWritten: (@Sendable (URL) -> Void)?
 
     public init(
-        reached: (@Sendable (StoreKillPoint) -> Void)? = nil, statements: (@Sendable (String) -> Void)? = nil
+        reached: (@Sendable (StoreKillPoint) -> Void)? = nil, statements: (@Sendable (String) -> Void)? = nil,
+        copyWritten: (@Sendable (URL) -> Void)? = nil
     ) {
         self.reached = reached
         self.statements = statements
+        self.copyWritten = copyWritten
     }
 
     func reach(_ point: StoreKillPoint) {

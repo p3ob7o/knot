@@ -390,6 +390,42 @@ import Testing
                 mapped.next == expected.next && mapped.retry == expected.retry && mapped.written == expected.written)
         }
     }
+
+    /// A copy that fails its check never counts: the check runs on the file written, before it
+    /// is published, and a spoiled one leaves no copy, daily or before a migration, and no
+    /// migration runs without one.
+    @Test func aCopyThatFailsItsCheckIsNeverPublished() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 100)
+        try made.database.close()
+        let locations = made.database.locations
+        // The copy holds one row fewer than the store held when it was made.
+        let spoil = StoreHooks(copyWritten: { url in
+            guard let queue = try? DatabaseQueue(path: url.path) else { return }
+            try? queue.write { db in
+                try db.execute(
+                    sql: """
+                        DELETE FROM change_log WHERE (record_type, record_id) IN
+                            (SELECT record_type, record_id FROM change_log LIMIT 1)
+                        """)
+            }
+            try? queue.close()
+        })
+        let database = try openStore(in: root, clock: made.clock, hooks: spoil)
+        await expectFailure(.storeDamaged) { try database.makeDailyCopy() }
+        #expect(StoreCopies.copies(locations, prefix: "daily-").isEmpty, "No copy counts.")
+        let left = try FileManager.default.contentsOfDirectory(atPath: StoreCopies.folder(locations).path)
+        #expect(left.isEmpty, "Nothing is left of it: \(left)")
+        try database.close()
+        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
+        await expectFailure(.storeDamaged) {
+            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [v2])
+        }
+        #expect(try version(of: locations) == 1, "No checked copy, no migration.")
+        #expect(StoreCopies.copies(locations, prefix: "pre-migration-").isEmpty)
+    }
 }
 
 extension StoreCopies {

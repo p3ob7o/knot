@@ -124,6 +124,7 @@ public enum StoreCopies {
             let plain = try DatabaseQueue(path: partial.path)
             try plain.writeWithoutTransaction { db in try db.execute(sql: "PRAGMA journal_mode = DELETE") }
             try plain.close()
+            hooks.copyWritten?(partial)
             try check(partial, against: counts)
             removeJournals(of: partial)
             if let publishing {
