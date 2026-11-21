@@ -89,4 +89,19 @@ import Testing
         #expect(try await r.notes.capture(a.captureID)?.outcome == .failed(code))
         #expect(r.layer.exists(r.locations.recordingManifest(a.captureID)), "The recording's files are kept.")
     }
+
+    // MARK: 69
+
+    /// Finding 69. The store holds a higher revision of the capture than the end carries; the end
+    /// is not applied, rightly, and the state answers the revision the store returned (settled
+    /// point 5), not the end's own.
+    @Test func staleEndAnswersTheStoredRevision() async throws {
+        let r = Rig()
+        let a = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "old"))
+        let external = try await r.notes.checkpoint(
+            CaptureCheckpoint(captureID: a.captureID, text: "new", revision: 9))
+        let end = try await r.engine.end(a.captureID)
+        #expect(end.durableRevision == external.storedRevision)
+        #expect(try await r.notes.segment(SegmentID(a.captureID))?.segment.text == "new")
+    }
 }

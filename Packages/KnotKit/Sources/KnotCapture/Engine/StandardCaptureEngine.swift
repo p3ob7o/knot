@@ -492,6 +492,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         if case .store = entry.path {
             let saved: Bool
+            /// The revision the store returned for what it holds, when the store says it.
+            var stored: Int64?
             if let ending {
                 let end = CaptureEnd(
                     captureID: id, endedAt: ending, outcome: .stored(.text(entry.text)), revision: entry.revision)
@@ -500,6 +502,16 @@ public actor StandardCaptureEngine: CaptureEngine {
                     entries[id]?.outcome = receipt.outcome
                     entries[id]?.noteID = receipt.noteID
                     saved = true
+                    // A stale end ends the capture with the content the store holds, at its own
+                    // revision: the state answers the revision the store returns, never the end's
+                    // (settled point 5). A read the store does not answer in time leaves the last
+                    // revision known.
+                    let row = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
+                    if case .answered(let read?) = row {
+                        stored = read.revision
+                    } else {
+                        stored = entries[id]?.durableRevision
+                    }
                 } else {
                     fallBack(id, answer)
                     saved = false
@@ -527,8 +539,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 }
             }
             if saved {
-                let revision = entries[id]?.revision ?? entry.revision
+                let revision = stored ?? entries[id]?.revision ?? entry.revision
                 entries[id]?.durableRevision = revision
+                if let stored, stored > entries[id]?.revision ?? 0 { entries[id]?.revision = stored }
                 if ending != nil { log.capture(id, "capture_ended", .flag("store_path", true)) }
                 return
             }
