@@ -20,7 +20,7 @@ final class KnotMacLaunchTests: XCTestCase {
 
         let field = app.descendants(matching: .any)["Capture field"]
         XCTAssertTrue(field.waitForExistence(timeout: 30), "The capture surface is on screen at launch.")
-        try app.auditAccessibility()
+        try audit(app)
 
         // No click: the field has the keyboard's focus when the surface appears
         // (docs/product-spec.md §4.1), so the keystrokes reach it as they are.
@@ -32,6 +32,15 @@ final class KnotMacLaunchTests: XCTestCase {
         // the line: the field holds it as its value, under the label "Capture field".
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", line)).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "The stream shows the typed line.")
+        try audit(app)
+    }
+
+    /// Runs the accessibility audit on the app in front. Another thread's launch step can start
+    /// a build with the same bundle ID, and a newly started app comes to the front.
+    @MainActor
+    private func audit(_ app: XCUIApplication) throws {
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30), "The app is in front.")
         try app.auditAccessibility()
     }
 }

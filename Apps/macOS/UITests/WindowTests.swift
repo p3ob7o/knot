@@ -39,6 +39,7 @@ final class KnotMacWindowTests: XCTestCase {
         // Close the window and quit, through the app menu's Quit item, which works whichever
         // app is in front: the next launch shows the window again.
         closeTheWindow(of: app)
+        bringToFront(app)
         app.menuItems["terminate:"].click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 30), "The app quit.")
         app.launch()
@@ -78,11 +79,21 @@ final class KnotMacWindowTests: XCTestCase {
         XCTAssertEqual(result, .completed, message)
     }
 
+    /// Brings the app to the front and waits until it is there. Another thread's launch step
+    /// can start a build with the same bundle ID, and a newly started app comes to the front:
+    /// a click on the menu bar would then reach that app's menu.
+    @MainActor
+    private func bringToFront(_ app: XCUIApplication) {
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30), "The app is in front.")
+    }
+
     /// Closes the main window with the Window menu's Close item, which brings the app forward
     /// and closes its key window, and waits until the window is off screen. A click on the
     /// title bar's close button did not always close it while another app was in front.
     @MainActor
     private func closeTheWindow(of app: XCUIApplication) {
+        bringToFront(app)
         app.menuItems["performClose:"].click()
         waitForWindowOnScreen(false, "The window closed.")
     }
