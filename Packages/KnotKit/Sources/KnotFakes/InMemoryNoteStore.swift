@@ -383,7 +383,7 @@
 
         public func note(_ id: NoteID) throws(KnotError) -> NoteRecord? { record(id, in: state) }
 
-        public func keptFiles(of capture: CaptureID) throws(KnotError) -> [KeptFile] {
+        public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
             (state.keptFiles[capture] ?? []).map { KeptFile(name: $0, in: inbox) }
         }
 
@@ -776,7 +776,7 @@
                 textReplaced: textReplaced, titleSet: titleSet)
         }
 
-        public func applyRecognition(_ recognition: InkRecognition, to segmentID: SegmentID) throws(KnotError)
+        public func applyRecognition(_ recognition: InkRecognition, to segmentID: SegmentID) async throws(KnotError)
             -> SegmentRead
         {
             guard var segment = state.segments[segmentID] else {
