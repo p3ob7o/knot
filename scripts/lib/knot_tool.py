@@ -931,7 +931,15 @@ OTHER_PARTS = ("soak",)
 # Words that may stand before the command word of a simple command.
 RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
                   "time", "case", "esac", "in", "function", "select", "for"}
-PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs"}
+PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs",
+                "coproc"}
+# The options of a prefix that take the next word as their value.
+PREFIX_VALUE_OPTIONS = ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-a")
+# A parameter expansion with a default, as in "${XCODEBUILD:-xcodebuild}": the default is the
+# word when the variable is unset, so the check reads it.
+DEFAULT_EXPANSION = re.compile(r"^\$\{([A-Za-z_]\w*):?[-=]([^}]*)\}(.*)$")
+# An assignment by a default, as in : "${XC:=xcodebuild}".
+DEFAULT_ASSIGNMENT = re.compile(r"\$\{([A-Za-z_]\w*):?=([\w./ -]+)\}")
 # Words whose command only looks a name up, and starts nothing.
 LOOKUP_WORDS = {"type", "hash", "which", "whence"}
 FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\))?|([A-Za-z_][\w-]*)\s*\(\))\s*\{(.*)$")
@@ -1117,13 +1125,24 @@ def command_words(words, scalars, arrays):
             return []
         if re.match(r"^[A-Za-z_]\w*(\[[^]]*\])?\+?=", word) or word in RESERVED_WORDS:
             k += 1
+            if word == "time":
+                # time's own options, as in `time -p`.
+                while k < len(words) and words[k].startswith("-"):
+                    k += 1
             continue
         if os.path.basename(word) in PREFIX_WORDS:
             if word == "command" and k + 1 < len(words) and words[k + 1] in ("-v", "-V"):
                 return []
             k += 1
+            if word == "coproc" and k + 1 < len(words) and re.match(r"^[A-Za-z_]\w*$", words[k]) and words[k + 1] == "{":
+                # `coproc NAME { …; }`: the name is the coprocess's, not a command.
+                k += 1
+                continue
             while k < len(words) and (words[k].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[k])):
-                k += 1 + (words[k] in ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-S"))
+                if os.path.basename(word) == "env" and words[k] in ("-S", "--split-string") and k + 1 < len(words):
+                    # env -S splits its next word into the command and its arguments.
+                    return command_words(shell_words(words[k + 1]) + words[k + 2:], scalars, arrays)
+                k += 1 + (words[k] in PREFIX_VALUE_OPTIONS)
             continue
         if word in LOOKUP_WORDS:
             return []
@@ -1131,10 +1150,14 @@ def command_words(words, scalars, arrays):
     rest = words[k:]
     if rest:
         variable = re.match(r"^\$\{?([A-Za-z_]\w*)(\[[@*]\])?\}?$", rest[0])
+        default = DEFAULT_EXPANSION.match(rest[0])
         if variable and variable.group(1) in arrays:
             rest = arrays[variable.group(1)] + rest[1:]
         elif variable and variable.group(1) in scalars:
             rest = scalars[variable.group(1)].split() + rest[1:]
+        elif default:
+            held = scalars.get(default.group(1))
+            rest = (held.split() if held else (default.group(2) + default.group(3)).split()) + rest[1:]
     return rest
 
 
@@ -1170,10 +1193,12 @@ def cmd_unbounded_calls(files):
     such as xcb's own xcodebuild, carries `# limit: <wrapper>`, where <wrapper> is the function
     that holds the line; then every call of the wrapper must be bounded in its turn. The file
     is read as shell: its simple commands, split outside quotes; what command substitutions,
-    eval and bash -c hold; and a command word held in a variable or array of the same file.
+    eval, bash -c, env -S, a trap's action and find's -exec hold; and a command word held in a
+    variable or array of the same file, or given as a default, as in ${XCODEBUILD:-xcodebuild}.
     What it cannot see: a command word built at run time, such as one read from a file or put
-    together from pieces; an alias; a script that a call runs; and a function named in a
-    variable that is assigned in another file. The steps other packages own (OTHER_PARTS) are
+    together from pieces; an alias; a command that another runs from its arguments, such as
+    script; a script that a call runs; and a function named in a variable that is assigned in
+    another file. The steps other packages own (OTHER_PARTS) are
     listed and left to them."""
     findings, wrappers, calls = set(), {}, []
     for path in files:
@@ -1222,22 +1247,42 @@ def cmd_unbounded_calls(files):
                 arrays[assign.group(1)] = shell_words(assign.group(2))
                 continue
             for word in shell_words(segment):
-                assign = re.match(r"^([A-Za-z_]\w*)=([\w./-]+)$", word)
+                assign = re.match(r"^([A-Za-z_]\w*)=([\w./ -]+)$", word)
                 if assign:
                     scalars[assign.group(1)] = assign.group(2)
+                for assign in DEFAULT_ASSIGNMENT.finditer(word):
+                    scalars.setdefault(assign.group(1), assign.group(2))
 
-        def commands(segment):
-            """The commands a simple command runs: itself, and what eval or bash -c holds."""
-            words = command_words(shell_words(segment), scalars, arrays)
+        def commands(segment, words=None):
+            """The commands a simple command runs: itself, and what eval, bash -c, a trap's
+            action and find's -exec hold."""
+            if words is None:
+                words = shell_words(segment)
+            words = command_words(words, scalars, arrays)
             yield words
-            if words[:1] == ["eval"]:
-                for inner in shell_segments(" ".join(words[1:])):
-                    yield from commands(inner[2])
-            if words and os.path.basename(words[0]) in ("bash", "sh", "zsh") and "-c" in words:
+            name = os.path.basename(words[0]) if words else ""
+            held = []
+            if name == "eval":
+                held.append(" ".join(words[1:]))
+            if name in ("bash", "sh", "zsh") and "-c" in words:
                 at = words.index("-c")
                 if at + 1 < len(words):
-                    for inner in shell_segments(words[at + 1]):
-                        yield from commands(inner[2])
+                    held.append(words[at + 1])
+            if name == "trap":
+                action = [w for w in words[1:] if w != "--"]
+                if action and not action[0].startswith("-"):
+                    held.append(action[0])
+            for text in held:
+                for inner in shell_segments(text):
+                    yield from commands(inner[2])
+            if name == "find":
+                at = 1
+                while at < len(words):
+                    if words[at] in ("-exec", "-execdir", "-ok", "-okdir"):
+                        end = next((e for e in range(at + 1, len(words)) if words[e] in (";", "+")), len(words))
+                        yield from commands("", words[at + 1:end])
+                        at = end
+                    at += 1
 
         for first, last, segment in segments:
             part = next((name for name, span in zip(OTHER_PARTS, others) if span and span[0] <= first <= span[1]), None)
