@@ -893,10 +893,12 @@ else
 fi
 
 # The hosted nightly run makes this tree's audio before the package tests under Thread
-# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio.
+# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio. Only a
+# step's own `run:` line counts, so a step that is commented out is none.
 nightly="$KNOT_ROOT/.github/workflows/nightly.yml"
-fixtures_line=$(grep -n -e 'verify.sh --only fixtures' "$nightly" | head -n 1 | cut -d: -f1 || true)
-tsan_line=$(grep -n -e 'verify.sh --only tsan' "$nightly" | head -n 1 | cut -d: -f1 || true)
+nightly_step() { grep -n -E "^ *(- )?run: +scripts/verify\.sh --only $1 *\$" "$nightly" | head -n 1 | cut -d: -f1 || true; }
+fixtures_line=$(nightly_step fixtures)
+tsan_line=$(nightly_step tsan)
 if [[ -n $fixtures_line && -n $tsan_line ]] && ((fixtures_line < tsan_line)); then
     pass "the hosted nightly run makes the audio before the package tests under Thread Sanitizer"
 else
