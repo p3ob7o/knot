@@ -1,7 +1,9 @@
 import Foundation
+import GRDB
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 @testable import KnotStore
@@ -10,17 +12,50 @@ import Testing
 /// the in-memory `NoteStore` and to the real one, which share a clock's moments, a sequence of
 /// IDs, a device and a window, and every result is compared: values whole, failures by code. A
 /// capture's content hash is keyed with each store's own secret, so only its presence is.
+///
+/// After every operation it also compares what the operation told the rest of the app: each
+/// store signals the cursor it reached, and the real store's `change_log` holds a row for each
+/// record whose synced fields the in-memory store shows changed, and for no other, none for a
+/// draft or a recording in progress. The real store is closed and opened again now and then.
 @Suite struct DifferentialTests {
     @Test("seeded-differential-in-memory-against-real", .tags(.named), arguments: Array(UInt64(1)...16))
     func seededDifferentialInMemoryAgainstReal(seed: UInt64) async throws {
         let folders = TemporaryFolders()
         defer { folders.removeAll() }
         let driver = try await Driver(seed: seed, root: folders.make())
-        for step in 0..<90 {
+        for step in 0..<Driver.steps {
             await driver.step(step)
+            await driver.compareSignals()
+            await driver.compareChangeLog()
         }
-        expectConsistent(driver.database)
+        await driver.finish()
+        expectConsistent(await driver.database)
+        await driver.stop()
     }
+}
+
+/// The cursor of a store's latest change signal.
+private final class LatestSignal: Sendable {
+    private let latest = Mutex<StoreCursor?>(nil)
+    private let following = Mutex<Task<Void, Never>?>(nil)
+
+    var value: StoreCursor? { latest.withLock { $0 } }
+
+    /// Follows `store`'s signals from now on, in place of any store followed before.
+    func follow(_ store: any NoteStore) {
+        let stream = store.changeSignals()
+        let task = Task { [self] in
+            for await cursor in stream { self.set(cursor) }
+        }
+        following.withLock { previous in
+            previous?.cancel()
+            previous = task
+        }
+    }
+
+    func stop() { following.withLock { $0?.cancel() } }
+
+    private func set(_ cursor: StoreCursor) { latest.withLock { $0 = cursor } }
 }
 
 /// One operation's answer, comparable across the two stores.
@@ -30,17 +65,41 @@ private enum Answer<Value: Equatable>: Equatable {
 }
 
 private actor Driver {
+    /// How many operations a seed runs.
+    static let steps = 120
+
     let fake: InMemoryNoteStore
-    let real: NoteRepository
-    let database: StoreDatabase
+    var real: NoteRepository
+    var database: StoreDatabase
+    let locations: StoreLocations
+    let realIDs: SeededIDGenerator
     let fakeClock: FakeClock
     let realClock: FakeClock
     let seed: UInt64
     var random: SplitMix
     let device: DeviceID
-    let launch: LaunchID
+    /// The launches of the app so far, the current one last.
+    var launches: [LaunchID]
+    var launch: LaunchID { launches[launches.count - 1] }
     let makeIDs: SeededIDGenerator
     var now: Date
+
+    /// What each store signalled, and the cursor each was at after the last operation.
+    let fakeSignals = LatestSignal()
+    let realSignals = LatestSignal()
+    var cursorsSeen: (fake: StoreCursor?, real: StoreCursor?) = (nil, nil)
+
+    /// The synced fields of each record the in-memory store shows, a note once it has held a
+    /// segment that is not in progress, a segment once it is not; the notes that have; the rows
+    /// `change_log` should hold; and every record the driver has seen, in any state.
+    var synced: [String: String] = [:]
+    var sendable: Set<NoteID> = []
+    var expectedLog: Set<String> = []
+    var seen: Set<String> = []
+    /// Whether the burst that fills a purge batch has run.
+    var burst = false
+    /// The operations since the last comparison, which a mismatch names.
+    var operations: [String] = []
 
     /// What the driver made, to aim later operations at.
     var captures: [(id: CaptureID, kind: SegmentKind, revision: Int64)] = []
@@ -59,17 +118,23 @@ private actor Driver {
         let driverClock = FakeClock(now)
         makeIDs = SeededIDGenerator(seed: seed &+ 10_000, clock: driverClock)
         device = makeIDs.make()
-        launch = makeIDs.make()
+        launches = [makeIDs.make()]
         let window = try AppendWindow(minutes: [0, 1, 5, 5, 10][Int(seed % 5)])
         fake = InMemoryNoteStore(
             clock: fakeClock, ids: SeededIDGenerator(seed: seed, clock: fakeClock), deviceID: device, window: window,
             generation: 2)
+        locations = .testing(root: root)
+        realIDs = SeededIDGenerator(seed: seed, clock: realClock)
         database = try StoreDatabase.open(
-            locations: .testing(root: root), role: .app, clock: realClock,
-            ids: SeededIDGenerator(seed: seed, clock: realClock),
+            locations: locations, role: .app, clock: realClock, ids: realIDs,
             creation: StoreCreation(deviceID: device, generation: 2))
         real = NoteRepository(database: database)
         try await setWindow(window, in: database)
+        try await database.pool.write { db in try db.execute(sql: "DELETE FROM change_log") }
+        fakeSignals.follow(fake)
+        realSignals.follow(real)
+        // Each store's cursor before any operation, which no signal carries.
+        cursorsSeen = (try await fake.cursor(), try await real.cursor())
     }
 
     func pick<T>(_ items: [T]) -> T? {
@@ -89,6 +154,7 @@ private actor Driver {
         _ name: String, sourceLocation: SourceLocation = #_sourceLocation,
         _ operation: @escaping @Sendable (any NoteStore) async throws -> Value
     ) async -> Value? {
+        operations.append(name)
         let fake = fake
         let real = real
         let fakeResult = await answer { try await operation(fake) }
@@ -110,9 +176,42 @@ private actor Driver {
 
     // MARK: Captures
 
+    /// Words in several scripts and normal forms: ASCII, Cyrillic, Greek, Japanese, decomposed
+    /// and composed accents, Turkish and German case, a ligature and full-width forms.
+    static let vocabularies: [[String]] = [
+        ["apple", "dock", "night", "garden", "zebra", "stamps", "roof", "vet", "tea", "o'clock"],
+        ["привет", "мир", "дом", "Кот", "большой"],
+        ["γειά", "κόσμε", "ΚΌΣΜΕ", "μεγάλε", "σου"],
+        ["東京都", "世界", "こんにちは", "テスト", "ﾃｽﾄ"],
+        ["école", "e\u{301}cole", "café", "cafe\u{301}", "Ångström"],
+        ["İstanbul", "ıslak", "IĞDIR", "Straße", "STRASSE", "ﬁnance", "１２３", "ＡＢＣ"],
+    ]
+
+    /// Text for a capture, a save or an edit: mostly a few words of one vocabulary, now and then
+    /// past the size limit of a segment.
     func text() -> String {
-        let words = ["apple", "dock", "night", "garden", "zebra", "stamps", "roof", "vet", "tea", "o'clock"]
+        if chance(2) {
+            let word = (pick(Self.vocabularies[0]) ?? "tea") + " "
+            return String(repeating: word, count: Limits.segmentTextBytes / word.utf8.count + random.next(in: 1...400))
+        }
+        let words = chance(60) ? Self.vocabularies[0] : (pick(Self.vocabularies) ?? Self.vocabularies[0])
         return (0..<random.next(in: 0...4)).map { _ in pick(words) ?? "" }.joined(separator: " ")
+    }
+
+    /// A search: words, a prefix or a middle of one, in another case or normal form.
+    func query() -> String {
+        let words = (pick(Self.vocabularies) ?? Self.vocabularies[0])
+        let several = (0..<random.next(in: 1...2)).map { _ in pick(words) ?? "" }.joined(separator: " ")
+        guard chance(70), let word = pick(words), !word.isEmpty else { return several }
+        let characters = Array(word)
+        switch random.next(in: 0...3) {
+        case 0: return String(characters.prefix(random.next(in: 1...characters.count)))
+        case 1:
+            let start = random.next(in: 0...(characters.count - 1))
+            return String(characters[start..<random.next(in: (start + 1)...characters.count)])
+        case 2: return word.uppercased()
+        default: return word.decomposedStringWithCanonicalMapping
+        }
     }
 
     func placement() -> CapturePlacement {
@@ -140,14 +239,18 @@ private actor Driver {
 
     func step(_ number: Int) async {
         advance(seconds: Double(random.next(in: 0...400)))
-        switch random.next(in: 0...31) {
+        if number == Self.steps / 2 { return await fillAPurgeBatch() }
+        // The app launches again now and then.
+        if chance(4) { launches.append(makeIDs.make()) }
+        switch random.next(in: 0...35) {
         case 0, 1, 2:
-            // A finished typed capture from this device.
-            let start = now.addingTimeInterval(-Double(random.next(in: 0...60)))
+            // A finished typed capture from this device, now and then a late one.
+            let late = chance(15)
+            let start = now.addingTimeInterval(-Double(late ? random.next(in: 300...7_200) : random.next(in: 0...60)))
             let capture = NewCapture(
                 id: makeIDs.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: surface()),
-                launchID: launch, placement: placement(), startedAt: start, endedAt: now, body: .text(text()),
-                revision: 1)
+                launchID: launch, placement: late ? .window : placement(), arrival: late ? .late : .live,
+                startedAt: start, endedAt: late ? start.addingTimeInterval(20) : now, body: .text(text()), revision: 1)
             remember(await both("record typed") { try await $0.record(capture) }, kind: .typed, revision: 1)
         case 3:
             let capture = NewCapture(
@@ -157,11 +260,11 @@ private actor Driver {
             )
             remember(await both("record tool") { try await $0.record(capture) }, kind: .typed, revision: 1)
         case 4, 5:
-            // An open typed capture.
+            // An open typed capture, now and then one an earlier launch left.
             let capture = NewCapture(
                 id: makeIDs.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: surface()),
-                launchID: launch, placement: placement(), startedAt: now, body: .text(text()), revision: 1,
-                shownNote: chance(30) ? pick(notes) : nil)
+                launchID: chance(15) ? (pick(launches) ?? launch) : launch, placement: placement(), startedAt: now,
+                body: .text(text()), revision: 1, shownNote: chance(30) ? pick(notes) : nil)
             remember(await both("record draft") { try await $0.record(capture) }, kind: .typed, revision: 1)
         case 6:
             let kind: SegmentKind = chance(50) ? .voice : .ink
@@ -191,9 +294,12 @@ private actor Driver {
             default: outcome = chance(50) ? .stored(.none) : .stored(.file(asset(.ink, for: target.id), duration: nil))
             }
             let end = CaptureEnd(captureID: target.id, endedAt: now, outcome: outcome, revision: revision)
-            _ = await both("end") { try await $0.end(end) }
+            // An end that finds its capture's note gone gives it a new one, which the driver
+            // follows.
+            remember(await both("end") { try await $0.end(end) }, kind: target.kind, revision: revision)
             bump(target.id, to: revision)
         case 11, 12:
+            if chance(40) { return await ingestAFile() }
             // An inbox item: a typed capture made while the store did not answer, or a repeat.
             let existing = chance(50) ? pick(captures.filter { $0.kind == .typed }) : nil
             let id = existing?.id ?? makeIDs.make()
@@ -320,9 +426,198 @@ private actor Driver {
                 revision: Int64(random.next(in: 0...2)))
             let result = await both("ingest kept item") { try await $0.ingest(item) }
             remember(result?.receipt, kind: item.kind, revision: item.revision)
+        case 29:
+            // A recognition of a drawing, which a person's edit outranks.
+            guard let target = pick(captures.filter { $0.kind == .ink }) else { return }
+            let recognition = InkRecognition(
+                text: text(), provenance: RecognitionProvenance(engineVersion: 3, language: "en-GB", osBuild: "b"))
+            let segment = SegmentID(target.id)
+            _ = await both("recognise") { try await $0.applyRecognition(recognition, to: segment) }
+        case 30:
+            // A segment's state set by the queue or the app.
+            guard let segment = await aSegment() else { return }
+            let states: [SegmentState] = [
+                .typed(.ready), .voice(.transcribing), .voice(.transcribed), .voice(.cleaning), .voice(.ready),
+                .voice(.failed(.transcribe, "transcription_failed")), .ink(.recognising), .ink(.ready),
+                .ink(.failed("recognition_failed")),
+            ]
+            let state = pick(states) ?? .typed(.ready)
+            _ = await both("set state") { try await $0.setState(state, of: segment) }
+        case 31:
+            // The app quits and opens the store again.
+            guard chance(50) else { return await reads() }
+            await reopen()
         default:
             await reads()
         }
+    }
+
+    /// An inbox item with a file: a recording or a drawing, new or the same again with the same
+    /// file or another, and now and then one that cannot be read.
+    func ingestAFile() async {
+        let voice = chance(60)
+        let kind: SegmentKind = voice ? .voice : .ink
+        let existing = chance(40) ? pick(captures.filter { $0.kind == kind }) : nil
+        let id = existing?.id ?? makeIDs.make()
+        var file = asset(voice ? .audio : .ink, for: id)
+        let unreadable = chance(15)
+        if unreadable { file.sha256 = "not hex" }
+        let item = NewCapture(
+            id: id, kind: kind, origin: CaptureOrigin(source: .device(device), surface: voice ? .watch : .app),
+            launchID: launch, placement: placement(), arrival: chance(50) ? .late : .live,
+            startedAt: now.addingTimeInterval(-120),
+            endedAt: unreadable && chance(50) ? nil : now.addingTimeInterval(-60),
+            body: .file(file, duration: voice ? .seconds(60) : nil), revision: 0)
+        let result = await both("ingest \(kind)") { try await $0.ingest(item) }
+        remember(result?.receipt, kind: kind, revision: 0)
+        if result == nil, existing == nil, (try? await fake.capture(id)) != nil {
+            captures.append((id, kind, 0))
+        }
+    }
+
+    /// More typed captures in one note than a purge batch holds, the note then deleted, so that
+    /// the purge at the end must take more than one batch for it.
+    func fillAPurgeBatch() async {
+        guard !burst else { return }
+        burst = true
+        var note: NoteID?
+        for index in 0..<(NoteRepository.purgeBatch + 5) {
+            advance(seconds: 1)
+            let capture = NewCapture(
+                id: makeIDs.make(), kind: .typed, origin: CaptureOrigin(source: .device(device), surface: .app),
+                launchID: launch, placement: note.map(CapturePlacement.named) ?? .newNote, startedAt: now,
+                endedAt: now, body: .text("burst \(index)"), revision: 1)
+            let receipt = await both("burst") { try await $0.record(capture) }
+            note = note ?? receipt?.noteID
+            remember(receipt, kind: .typed, revision: 1)
+        }
+        guard let note else { return }
+        _ = await both("delete the burst") { try await $0.delete(.note(note)) }
+    }
+
+    /// The end of a run: everything deleted is old enough to purge, and the purge runs.
+    func finish() async {
+        advance(seconds: 40 * 86_400)
+        let date = now.addingTimeInterval(-31 * 86_400)
+        _ = await both("purge at the end") { try await $0.purge(before: date) }
+        await compareSignals()
+        await compareChangeLog()
+        await reads()
+    }
+
+    /// Closes the real store and opens it again, as a new launch of the app does.
+    func reopen() async {
+        do {
+            try database.close()
+            database = try StoreDatabase.open(locations: locations, role: .app, clock: realClock, ids: realIDs)
+            real = NoteRepository(database: database)
+            realSignals.follow(real)
+        } catch {
+            Issue.record("The real store did not open again, seed \(seed): \(error)")
+        }
+    }
+
+    func stop() {
+        fakeSignals.stop()
+        realSignals.stop()
+    }
+
+    // MARK: What an operation tells the rest of the app
+
+    /// Each store signalled the cursor it reached, whenever its cursor moved.
+    func compareSignals() async {
+        let fakeCursor = try? await fake.cursor()
+        let realCursor = try? await real.cursor()
+        #expect(fakeCursor == realCursor, "The cursors, seed \(seed)")
+        let fakeSignals = fakeSignals
+        let realSignals = realSignals
+        if let fakeCursor, fakeCursor != cursorsSeen.fake {
+            await SuiteWait.until("the in-memory store's signal of its cursor, seed \(seed)", limit: .seconds(30)) {
+                fakeSignals.value == fakeCursor
+            }
+        }
+        if let realCursor, realCursor != cursorsSeen.real {
+            await SuiteWait.until("the real store's signal of its cursor, seed \(seed)", limit: .seconds(30)) {
+                realSignals.value == realCursor
+            }
+        }
+        cursorsSeen = (fakeCursor, realCursor)
+    }
+
+    /// The real store's `change_log` holds a row for each record whose synced fields changed,
+    /// as the in-memory store shows them, and for no other record the driver has seen.
+    func compareChangeLog() async {
+        var current: [String: String] = [:]
+        for note in notes {
+            guard let record = try? await fake.note(note) else { continue }
+            seen.insert("note \(note)")
+            if record.segments.contains(where: { !Self.inProgress($0.state) }) { sendable.insert(note) }
+            if sendable.contains(note) { current["note \(note)"] = Self.syncedFields(of: record.note) }
+            for segment in record.segments {
+                seen.insert("segment \(segment.id)")
+                if !Self.inProgress(segment.state) { current["segment \(segment.id)"] = Self.syncedFields(of: segment) }
+            }
+        }
+        for (record, fields) in current where synced[record] != fields { expectedLog.insert(record) }
+        for record in synced.keys where current[record] == nil { expectedLog.insert(record) }
+        synced = current
+        let rows: [String]
+        do {
+            rows = try await database.pool.read { db in
+                try Row.fetchAll(db, sql: "SELECT record_type, record_id FROM change_log").map {
+                    "\($0["record_type"] as String) \($0["record_id"] as String)"
+                }
+            }
+        } catch {
+            Issue.record("change_log did not read, seed \(seed): \(error)")
+            return
+        }
+        let logged = Set(rows).intersection(seen)
+        let expected = expectedLog.intersection(seen)
+        if logged != expected {
+            Issue.record(
+                """
+                change_log, seed \(seed), after \(operations): missing \(expected.subtracting(logged).sorted()), \
+                not changed \(logged.subtracting(expected).sorted())
+                """)
+        }
+        operations = []
+        // Sync sends what is logged and removes its rows, so that each operation's rows are its
+        // own: a change that a record's earlier row would hide is seen.
+        do {
+            try await database.pool.write { db in try db.execute(sql: "DELETE FROM change_log") }
+        } catch {
+            Issue.record("change_log did not clear, seed \(seed): \(error)")
+        }
+        expectedLog = []
+    }
+
+    static func inProgress(_ state: SegmentState) -> Bool {
+        state == .typed(.draft) || state == .voice(.recording) || state == .ink(.drawing)
+    }
+
+    /// A note's fields as sync sends them: all but the time it was last touched and the
+    /// store's revision.
+    static func syncedFields(of note: Note) -> String {
+        var note = note
+        note.updatedAt = .distantPast
+        note.revision = 0
+        return encoded(note)
+    }
+
+    /// A segment's fields as sync sends them: all but its arrival mark, which is local, and the
+    /// store's revision.
+    static func syncedFields(of segment: Segment) -> String {
+        var segment = segment
+        segment.arrivedAt = nil
+        segment.revision = 0
+        return encoded(segment)
+    }
+
+    static func encoded(_ value: some Encodable) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "\(value)"
     }
 
     /// A segment of a note the driver made, from the in-memory store's view.
@@ -343,8 +638,8 @@ private actor Driver {
         if let page = await both("stream", { try await $0.stream(after: position, limit: 3) }), let next = page.next {
             positions.append(next)
         }
-        let query = text()
-        _ = await both("search") { try await $0.search(query, limit: 5) }
+        let searched = query()
+        _ = await both("search") { try await $0.search(searched, limit: 5) }
         let cursor = pick(cursors) ?? nil
         if let page = await both("changes", { try await $0.changes(after: cursor, limit: 2) }) {
             cursors.append(page.cursor)

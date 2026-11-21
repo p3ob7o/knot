@@ -284,4 +284,32 @@ import Testing
             await log.step("search") { try await store.search("third", limit: 5) }
         }
     }
+
+    /// Rule 14 counts deleted captures, through the real store's own query: when the most
+    /// recent capture is deleted and its note holds no live segment, a new note starts, even
+    /// with an older live capture inside the window.
+    @Test func aMostRecentDeletedCaptureStartsANewNote() async throws {
+        try await BothStores.run(seed: 541) { stage, log in
+            let store = stage.store
+            let old = stage.typed("old synthetic line", from: -200, to: -199.5)
+            await log.step("old") { try await store.record(old) }
+            let oldNote = try await stage.note(of: old.id)
+            let a = stage.typed("line a", from: 0, to: 0.5)
+            await log.step("a") { try await store.record(a) }
+            let b = stage.typed("line b", from: 1, to: 1.5, placement: .named(oldNote))
+            await log.step("b") { try await store.record(b) }
+            await log.step("delete b") { try await store.delete(.segment(SegmentID(b.id))) }
+            await log.step("delete old") { try await store.delete(.segment(SegmentID(old.id))) }
+            stage.clock.set(stage.at(2))
+            let request = AppendRequest(startedAt: stage.at(2), source: .device(stage.device))
+            let predicted = try await store.predictPlacement(request, kind: .typed, surface: .app)
+            await log.step("predict") { String(describing: predicted) }
+            #expect(predicted == .newNote(.latestNoteDeleted), "Predicted, \(type(of: store))")
+            let c = stage.typed("line c", from: 2, to: 2.5)
+            let receipt = try await store.record(c)
+            await log.step("c") { receipt }
+            #expect(receipt.reason == .latestNoteDeleted, "Recorded, \(type(of: store))")
+            #expect(receipt.noteID != (try await stage.note(of: a.id)), "C does not join A's note.")
+        }
+    }
 }
