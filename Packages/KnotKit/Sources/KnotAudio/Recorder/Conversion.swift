@@ -20,7 +20,19 @@ enum Conversion {
 
     /// Converts `working` into `staging`, checks the copy against it, and moves the copy to
     /// `destination` through `store`, which syncs it and its folder. The working file is only read.
+    ///
+    /// A working file that cannot be opened now is `conversion_failed`, which is tried again with
+    /// the file kept. Only one that opens and is not audio is `audio_unreadable`, which is final.
     static func run(from working: URL, to staging: URL, destination: URL, store: StoreFiles) throws(KnotError) -> Made {
+        switch WorkingFileReader.inspect(working) {
+        case .read: break
+        case .missing:
+            throw KnotError.conversionFailed.with(ErrorContext(posixError: ENOENT))
+        case .unreadable(.cannotOpen(let number)):
+            throw KnotError.conversionFailed.with(ErrorContext(posixError: number))
+        case .shorterThanItsHeader, .unreadable(.notAudio):
+            throw KnotError.audioUnreadable
+        }
         let source: AVAudioFile
         do {
             source = try AVAudioFile(forReading: working, commonFormat: .pcmFormatFloat32, interleaved: false)

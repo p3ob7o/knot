@@ -62,6 +62,24 @@ import Testing
         #expect(!exists(folder.locations.convertedRecording(request.captureID)))
     }
 
+    /// A working file that cannot be opened now is `conversion_failed`, which is tried again,
+    /// never `audio_unreadable`, which is final: once it can be opened, it converts whole.
+    @Test func aWorkingFileThatCannotBeOpenedNowIsTriedAgain() async throws {
+        let folder = try ScratchFolder()
+        let recorder = recorder(folder.locations, input: FloatInput(frames: 16_000))
+        let audio = await (try await recorder.start(request())).stop()
+        let working = try #require(audio.workingFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: working.path)
+        let error = await #expect(throws: KnotError.self) { try await recorder.convert(audio) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: working.path)
+        #expect(
+            error?.code == KnotError.conversionFailed.code && error?.context.posixError == EACCES,
+            "\(String(describing: error))")
+        #expect(!exists(folder.locations.convertedRecording(audio.captureID)))
+        let copy = try await recorder.convert(audio)
+        #expect(copy.duration == .seconds(1))
+    }
+
     /// What a conversion that died left beside the copy is replaced, and removing the working
     /// file takes it too, but never the converted copy.
     @Test func aDeadConversionsLeftoverGoes() async throws {
