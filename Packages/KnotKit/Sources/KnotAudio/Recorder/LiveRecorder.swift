@@ -39,9 +39,14 @@ public final class LiveRecorder: Recorder {
         public var fullBelowBytes: Int64
         /// How long the live cue plays, so that it is not recorded: the audio that arrives in that
         /// time after the start, counted in the input's frames, goes nowhere, not into the file,
-        /// the live audio, the levels or the peaks. Zero by default; the shells set it from what
-        /// the design fixes. It is held to `longestLiveCueGap`, so that a wrong setting never
-        /// eats the start of a sentence.
+        /// the live audio, the levels or the peaks. It is held to `longestLiveCueGap`, so that a
+        /// wrong setting never eats the start of a sentence.
+        ///
+        /// It stays zero in the composition, and nothing may set it above zero until the order of
+        /// "live" against the gap is settled with what the owner finds of the cue in the file at
+        /// the M2 sitting (finding 3 of the second pull request's review). Today the state and the
+        /// live cue say live while a gap above zero still drops audio, and the gap counts from the
+        /// input's first frames, not from when the cue plays.
         public var liveCueGap: Duration
 
         /// How often the recording state's heartbeat is written while a recording is starting,
