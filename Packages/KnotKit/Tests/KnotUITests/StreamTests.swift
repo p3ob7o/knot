@@ -235,7 +235,7 @@ import Testing
     // MARK: Search
 
     @Test func searchFiltersTheStreamAsThePersonTypes() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         try await rig.type("the roof leaks")
         try await rig.type("buy stamps", placement: .newNote)
