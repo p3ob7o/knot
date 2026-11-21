@@ -270,6 +270,12 @@ struct SoakWitness {
             }
             return (problems, false)
         case .stored:
+            // A capture of only spaces and line breaks ends discarded as empty, on the store's
+            // path and on `Inbox/`'s, whatever was acknowledged of it.
+            if planned.blank {
+                problem("blank_capture_kept")
+                return (problems, true)
+            }
             if latest?.state == .discarded {
                 problem("acknowledged_discard_stored")
                 return (problems, true)
