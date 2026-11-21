@@ -193,7 +193,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-05 | 1 | The thinnest real engine and queue, one end-to-end test and the preview environment | WP-02 PR 2 |
 | WP-06 | 1 | The soak harness, covering typed captures first | WP-05; WP-10 PR 1 |
 | WP-06 | 06a | The soak's step in `scripts/verify.sh`, split out of the first PR | WP-06 PR 1 |
-| WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1 |
+| WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1; WP-12 PR 2 |
 | SP-1 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | SP-1 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 | SP-2 | Notes | The code half on `spike/watch-delivery`, and its short note | WP-01 PR 1; WP-04 |
@@ -209,12 +209,13 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
 | WP-11 | 11a | The engine's tests made steady: tests that failed now and then on loaded runs wait for what they read, and one outcome of the random interleavings is a stated limit | WP-11 PR 1 |
-| WP-11 | 2 | A follower placed by the capture it follows, the engine as the one applier of a press, live words and levels, a stored recording's peaks, and the moments with no kill seam | WP-11 PR 1; the contract pull request that gives `NewCapture` the capture it follows |
+| WP-11 | 2 | The engine as the one applier of a press, live words and levels, a stored recording's peaks, KnotCapture's copy of the real-path code replaced by KnotCore's, the moments with no kill seam, and the two tests of `FollowerPlacementTests` restated as limits | WP-11 PR 1; the contract pull request that gives `CaptureEngine` its `live` and `press` |
 | WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
+| WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
 | WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
@@ -279,7 +280,7 @@ Until the keep-gate ruling, nothing that the cut order names is built, and wave 
 
 The hold names PRs, so that no milestone waits for a held part. Each held part of WP-11, WP-19, WP-31 and WP-32 is that package's last PR:
 
-- WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second places a follower by the capture it follows, makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks and gives the engine its missing kill seams. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
+- WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks, takes KnotCore's real-path code for KnotCapture's copy, gives the engine its missing kill seams and restates the follower's two tests as limits. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
 - WP-19's fourth PR is the OpenSketch intent.
 - WP-31 ships in two PRs. The first has the controls, the Live Activity and the Action Button tip. The second, held, has the Sketch control and the Home Screen and Lock Screen widgets.
 - WP-32 ships in three PRs. Its third, held, has the complication families beyond the first and the Smart Stack widget.
