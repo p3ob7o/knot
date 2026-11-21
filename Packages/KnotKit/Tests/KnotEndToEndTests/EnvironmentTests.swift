@@ -46,7 +46,7 @@ struct EnvironmentTests {
         let always: Set<EnvironmentPort> = [.watchLink]
         let ink: Set<EnvironmentPort> = [.inkRecogniser, .drawingImages]
         let beforeM2: Set<EnvironmentPort> = [
-            .cleaner, .player, .recordingState, .freeSpace, .installIdentity, .lifecycle, .recordingActivity,
+            .player, .recordingState, .freeSpace, .installIdentity, .lifecycle, .recordingActivity,
         ]
         let iOS: [MilestoneLevel: Set<EnvironmentPort>] = [
             .m1: always.union(ink).union(beforeM2).union([.notifier, .sync, .surfaces, .cues]),

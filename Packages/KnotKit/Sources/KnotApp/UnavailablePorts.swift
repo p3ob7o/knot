@@ -57,8 +57,8 @@ public enum UnavailablePorts {
     /// clock and the IDs are KnotCore's own and never unavailable.
     public static func allowed(at level: MilestoneLevel, on platform: StoreLocations.Platform) -> Set<EnvironmentPort> {
         let neededFrom: [(EnvironmentPort, MilestoneLevel)] = [
-            // WP-14: cleanup, which M2 needs.
-            (.cleaner, .m2),
+            // The cleaner is not here: WP-14's cleanup merged ahead of M2, and `.live` fills it in
+            // every build.
             // WP-12's second pull request: playback, the recording state and the free space.
             (.player, .m2), (.recordingState, .m2), (.freeSpace, .m2),
             // WP-10's second pull request: the install ID and the notice between processes,
