@@ -169,6 +169,11 @@ public final class LiveRecorder: Recorder {
     /// The manifest keeps that a recording ended, not why, so a recording that ended by itself
     /// comes back as `stopped` too.
     ///
+    /// A recording comes back with no audio only when its working file is not there, ends
+    /// before its header does, or holds no frame. A working file that is there and cannot be
+    /// read now is not returned and stays where it is, with a log line: it comes back at a later
+    /// call, once it can be read.
+    ///
     /// A manifest of `currentLaunch` is never touched. A recording of this process that belongs
     /// to another launch, which only a test makes, is ended first as that launch's death would
     /// end it. A manifest that cannot be read is left where it is.
@@ -199,12 +204,23 @@ public final class LiveRecorder: Recorder {
             guard manifest.captureID == id, manifest.kind == .voice, manifest.launchID != currentLaunch else {
                 continue
             }
-            let contents = WorkingFileReader.contents(of: files.workingFile)
-            found.append(
-                RecordedAudio(
-                    captureID: id, frames: contents?.frames ?? 0, sampleRate: contents?.sampleRate ?? 0,
-                    ending: manifest.endedAt == nil ? .recovered : .stopped,
-                    workingFile: contents == nil ? nil : files.workingFile))
+            let ending: RecordingEnding = manifest.endedAt == nil ? .recovered : .stopped
+            switch WorkingFileReader.inspect(files.workingFile) {
+            case .read(let contents):
+                found.append(
+                    RecordedAudio(
+                        captureID: id, frames: contents.frames, sampleRate: contents.sampleRate, ending: ending,
+                        workingFile: files.workingFile))
+            case .missing, .shorterThanItsHeader:
+                // No audio: the recording comes back with none, so that its capture ends and its
+                // manifest goes.
+                found.append(
+                    RecordedAudio(captureID: id, frames: 0, sampleRate: 0, ending: ending, workingFile: nil))
+            case .unreadable(let why):
+                // No verdict on the audio: the file stays where it is, and comes back at a later
+                // call, once it can be read.
+                log.capture(id, "recording_working_file_unreadable", why.logField, level: .error)
+            }
         }
         return found.sorted { $0.captureID < $1.captureID }
     }

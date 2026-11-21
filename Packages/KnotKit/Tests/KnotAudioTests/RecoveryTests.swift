@@ -58,7 +58,11 @@ import Testing
         let working = folder.locations.recordingAudio(request.captureID, format: .caf)
         switch left {
         case .none: break
-        case .cutInsideItsHeader: try Data(repeating: 0x63, count: 20).write(to: working)
+        case .cutInsideItsHeader:
+            // The first 20 bytes of a real working file: its file header and part of a chunk's.
+            let whole = folder.url.appendingPathComponent("whole.caf")
+            _ = try writeWorkingFile(at: whole, frames: 1_600)
+            try Data(try Data(contentsOf: whole).prefix(20)).write(to: working)
         case .headerOnly: _ = try writeWorkingFile(at: working, frames: 0, close: false)
         }
         let orphans = try await recorder(folder.locations, input: injected())
@@ -103,6 +107,39 @@ import Testing
         let orphans = try await recorder(folder.locations, input: injected())
             .recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
         #expect(orphans.map(\.captureID) == requests.map(\.captureID).sorted())
+    }
+
+    /// A working file that is there and cannot be read now is no verdict on its audio: it is not
+    /// returned, it and its manifest stay, and it comes back whole once it can be read.
+    @Test func aWorkingFileThatCannotBeReadIsLeftAlone() async throws {
+        let folder = try ScratchFolder()
+        let earlier = recorder(folder.locations, input: FloatInput(frames: 16_000))
+        let request = request()
+        let stopped = await (try await earlier.start(request)).stop()
+        let working = try #require(stopped.workingFile)
+        let later = recorder(folder.locations, input: injected())
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: working.path)
+        let whileLocked = try await later.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: working.path)
+        #expect(!whileLocked.contains { $0.captureID == request.captureID }, "\(whileLocked)")
+        #expect(exists(working) && exists(folder.locations.recordingManifest(request.captureID)))
+        let afterwards = try await later.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(afterwards == [stopped], "Once it can be read, it comes back as it ended: \(afterwards)")
+    }
+
+    /// A working file that opens and is not audio is left alone too, and the others come back.
+    @Test func aWorkingFileThatIsNotAudioIsLeftAlone() async throws {
+        let folder = try ScratchFolder()
+        let damaged = request()
+        let readable = request()
+        try writeManifest(folder.locations, damaged)
+        try writeManifest(folder.locations, readable)
+        let working = folder.locations.recordingAudio(damaged.captureID, format: .caf)
+        try Data(repeating: 0x2A, count: 8_192).write(to: working)
+        let orphans = try await recorder(folder.locations, input: injected())
+            .recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(orphans.map(\.captureID) == [readable.captureID])
+        #expect(exists(working) && exists(folder.locations.recordingManifest(damaged.captureID)))
     }
 
     /// No `Recording/` folder yet: nothing to recover.

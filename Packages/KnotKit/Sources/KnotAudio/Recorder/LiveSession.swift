@@ -48,6 +48,8 @@ final class LiveSession: RecordingSession {
         var written: Int64 = 0
         /// Frames the last sync made durable, which `.durable` has reported.
         var durable: Int64 = 0
+        /// The length the session last read back from the file, after a sync.
+        var lastRead: Int64 = 0
         /// The most frames the recording may hold: its limit.
         let limit: Int64
         /// True once the file takes no more audio: it is closed, at its limit, or a write failed.
@@ -188,8 +190,11 @@ final class LiveSession: RecordingSession {
             end(error.code == KnotError.diskFull.code ? .diskFull : .writeFailed)
             return
         }
-        // Every frame counted here was written before the sync began.
+        // Every frame counted here was written before the sync began. The length the file holds
+        // is read back too, for a stop that cannot read it.
+        let read = WorkingFileReader.framesBySize(files.workingFile)
         let raised = writer.withLock { state in
+            if let read { state.lastRead = read }
             guard written > state.durable else { return false }
             state.durable = written
             return true
@@ -229,10 +234,10 @@ final class LiveSession: RecordingSession {
     /// Closes the file, syncs it and reads it back; for a discard, removes it and its manifest.
     /// On the session's queue, after every sync.
     private func settle(_ reason: RecordingEnding) -> RecordedAudio {
-        let file = writer.withLock { state in
+        let (file, written) = writer.withLock { state in
             state.full = true
             defer { state.file = nil }
-            return state.file
+            return (state.file, state.written)
         }
         // Closing writes the data chunk's size into the header.
         file?.close()
@@ -252,19 +257,45 @@ final class LiveSession: RecordingSession {
             synced = false
             if ending == .stopped { ending = .writeFailed }
         }
-        // The length is read from the file, never counted from what was written.
-        let frames = WorkingFileReader.contents(of: files.workingFile)?.frames ?? 0
+        // The length is read from the file, never counted from what was written. Only a file
+        // that is not there, or one that was read, says how much audio the recording holds: a
+        // file that is there and cannot be read back is named, with the last length the session
+        // read, and the recording could not be saved further.
+        var frames: Int64 = 0
+        var workingFile: URL? = files.workingFile
+        var readBack = false
+        switch WorkingFileReader.inspect(files.workingFile) {
+        case .read(let contents) where contents.frames > 0 || written == 0:
+            frames = contents.frames
+            readBack = true
+        case .missing:
+            workingFile = nil
+            if written > 0 { ending = Self.failed(ending, .writeFailed) }
+        default:
+            frames = writer.withLock { $0.lastRead }
+            ending = Self.failed(ending, .writeFailed)
+            log.capture(captureID, "recording_not_read_back", .number("frames", Int(frames)), level: .error)
+        }
         let raised = writer.withLock { state in
-            guard synced, frames > state.durable else { return false }
+            guard synced, readBack, frames > state.durable else { return false }
             state.durable = frames
             return true
         }
         if raised { eventSink.yield(.durable(frames: frames)) }
         let audio = RecordedAudio(
-            captureID: captureID, frames: frames, sampleRate: sampleRate, ending: ending,
-            workingFile: files.workingFile)
+            captureID: captureID, frames: frames, sampleRate: sampleRate, ending: ending, workingFile: workingFile)
         if ending != .recovered { markEnded(audio) }
         return audio
+    }
+
+    /// The ending after a failure while the recording was settled: the failure, over an
+    /// ending that says the recording was saved whole. A failure already told stays, and so does
+    /// a recovery's ending.
+    static func failed(_ ending: RecordingEnding, _ failure: RecordingEnding) -> RecordingEnding {
+        switch ending {
+        case .stopped, .limitReached, .interrupted, .inputLost: failure
+        case .diskFull, .writeFailed, .recovered, .discarded: ending
+        }
     }
 
     /// Writes the manifest again with the recording's end and length, so that recovery tells a

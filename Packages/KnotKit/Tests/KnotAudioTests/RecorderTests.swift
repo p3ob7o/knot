@@ -195,6 +195,24 @@ import Testing
         #expect(WorkingFileReader.samples(of: try #require(audio.workingFile)) == synthetic(16_000))
     }
 
+    /// A stop that cannot read its file back says the recording could not be saved further, and
+    /// names the file, with the last length the session read from it: it never answers that the
+    /// recording holds nothing.
+    @Test func aStopThatCannotReadItsFileBackNamesIt() async throws {
+        let folder = try ScratchFolder()
+        let recorder = recorder(folder.locations, input: FloatInput(frames: 16_000))
+        let request = request()
+        let session = try await recorder.start(request)
+        // The sync after the last write reads the length back; nothing is written after it.
+        await durable(atLeast: 16_000, of: session)
+        let working = folder.locations.recordingAudio(request.captureID, format: .caf)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: working.path)
+        let audio = await session.stop()
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: working.path)
+        #expect(audio.ending == .writeFailed && audio.workingFile == working && audio.frames == 16_000, "\(audio)")
+        #expect(WorkingFileReader.samples(of: working) == synthetic(16_000), "The file is kept whole.")
+    }
+
     /// A discard removes the recording's files and ends its events with one `.ended`, discarded.
     @Test func aDiscardLeavesNoFileAndEndsTheEvents() async throws {
         let folder = try ScratchFolder()
