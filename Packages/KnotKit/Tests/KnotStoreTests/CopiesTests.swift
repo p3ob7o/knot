@@ -302,6 +302,22 @@ import Testing
         made.clock.advance(by: 60)
         await expectFailure(.storeDamaged) { try StoreCopies.restore(kept, at: locations, clock: made.clock) }
     }
+
+    /// A restored recording whose file is gone reads as missing, never as on this device.
+    @Test func aRestoredRecordingWithNoFileIsNotLocal() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 90)
+        let copy = try made.database.makeDailyCopy()
+        try await made.assets.remove(made.audio, kind: .audio)
+        try made.database.close()
+        let report = try StoreCopies.restore(copy, at: made.database.locations)
+        #expect(report.missingAssets == [made.audio])
+        let opened = try openStore(in: root)
+        #expect(try await NoteRepository(database: opened).asset(made.audio)?.availability == .remote)
+        expectConsistent(opened)
+    }
 }
 
 extension StoreCopies {

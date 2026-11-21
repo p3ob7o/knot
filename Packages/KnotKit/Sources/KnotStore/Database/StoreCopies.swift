@@ -207,15 +207,31 @@ public enum StoreCopies {
                 let database = staging.appending(
                     path: locations.database.lastPathComponent, directoryHint: .notDirectory)
                 try manager.copyItem(at: copy, to: database)
+                // The recordings and drawings, from the current store.
+                let stagedAssets = staging.appending(path: "Assets", directoryHint: .isDirectory)
+                let assets = root.appending(path: "Assets", directoryHint: .isDirectory)
+                if manager.fileExists(atPath: assets.path) { try manager.copyItem(at: assets, to: stagedAssets) }
                 let queue = try DatabaseQueue(path: database.path, configuration: StoreDatabase.configuration())
-                let generation = try queue.write { db -> StoreGeneration in
+                let (generation, missing) = try queue.write { db -> (StoreGeneration, [AssetID]) in
                     guard let meta = try StoreMeta.fetch(db) else { throw KnotError.storeNotCreatedByKnot }
                     let raised = max(meta.generation, previousGeneration) + 1
                     try db.execute(sql: "UPDATE store_meta SET generation = ? WHERE singleton = 1", arguments: [raised])
-                    return raised
-                }
-                let assetRows = try queue.read { db in
-                    try Row.fetchAll(db, sql: "SELECT id, kind FROM asset WHERE availability = 'local'")
+                    // A file the copy names that is gone, as one purged after the copy was made,
+                    // shows as missing: its row says it is not on this device.
+                    var missing: [AssetID] = []
+                    for row in try Row.fetchAll(db, sql: "SELECT id, kind FROM asset WHERE availability = 'local'") {
+                        guard let id = AssetID(row["id"] as String) else { continue }
+                        let kind = AssetKind(rawValue: row["kind"])
+                        guard !kind.isUnknown else { continue }
+                        let file = stagedAssets.appending(path: id.folderName, directoryHint: .isDirectory)
+                            .appending(path: "\(id).\(kind.fileExtension)", directoryHint: .notDirectory)
+                        if !manager.fileExists(atPath: file.path) { missing.append(id) }
+                    }
+                    for id in missing {
+                        try db.execute(
+                            sql: "UPDATE asset SET availability = 'remote' WHERE id = ?", arguments: [id.description])
+                    }
+                    return (raised, missing.sorted())
                 }
                 try queue.close()
                 removeJournals(of: database)
@@ -223,11 +239,6 @@ public enum StoreCopies {
                 try parentFiles.place(
                     Data(String(generation).utf8),
                     at: staging.appending(path: StoreDatabase.generationFileName, directoryHint: .notDirectory))
-                // The recordings and drawings, from the current store.
-                let assets = root.appending(path: "Assets", directoryHint: .isDirectory)
-                if manager.fileExists(atPath: assets.path) {
-                    try manager.copyItem(at: assets, to: staging.appending(path: "Assets", directoryHint: .isDirectory))
-                }
                 // The current store, set aside whole, and the folders a capture may wait in.
                 if manager.fileExists(atPath: root.path) {
                     try fileLayer.rename(root, to: aside)
@@ -246,14 +257,7 @@ public enum StoreCopies {
                 guard try ExclusiveRename.move(staging, to: root) else { throw KnotError.writeFailed }
                 try fileLayer.syncFolder(root.deletingLastPathComponent())
                 try RestoreJournal.remove(at: locations, layer: fileLayer)
-                var missing: [AssetID] = []
-                for row in assetRows {
-                    guard let id = AssetID(row["id"] as String) else { continue }
-                    let kind = AssetKind(rawValue: row["kind"])
-                    guard !kind.isUnknown else { continue }
-                    if !manager.fileExists(atPath: locations.asset(id, kind: kind).path) { missing.append(id) }
-                }
-                return RestoreReport(setAside: aside, generation: generation, missingAssets: missing.sorted())
+                return RestoreReport(setAside: aside, generation: generation, missingAssets: missing)
             } catch {
                 // What can be undone now is; what cannot, the next open undoes.
                 try? RestoreJournal.settle(at: locations, layer: fileLayer)
