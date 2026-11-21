@@ -308,32 +308,36 @@ import Testing
         #expect(again[begun.captureID] == nil)
     }
 
-    /// The review of pull request 57: a recording that is on the drive and that the recorder
-    /// cannot read at one launch is kept, and the next launch stores it. On main the first
-    /// launch ended its row as empty, and the second removed its files.
-    @Test func aRecordingThatCannotBeReadIsKeptForTheNextLaunch() async throws {
+    /// The review of pull request 57: a recording whose working file is on the drive and cannot
+    /// be read at one launch is never taken for one with no audio. Its row ends failed, its files
+    /// stay, and the store path stays open to the next capture; the next launch, which can read
+    /// it, stores it. On main the first launch ended its row as empty, and the next removed its
+    /// files.
+    @Test func aRecordingThatCannotBeReadEndsFailedAndIsStoredLater() async throws {
         let r = Rig()
         let begun = try await r.beginRecording()
         #expect(begun.path == .store)
-        // The process dies mid-recording; at the next launch the recorder cannot read the files.
+        let working = r.locations.recordingAudio(begun.captureID, format: .caf)
+        let manifest = r.locations.recordingManifest(begun.captureID)
+        // The process dies mid-recording; at the next launch the working file cannot be read.
+        r.layer.setReadable(working, false)
         let second = r.relaunch()
-        let locked = WatchedRecorder(second.recorder)
-        locked.unreadable.withLock { $0 = [begun.captureID] }
-        let recovery = LaunchRecovery(
-            notes: second.notes, assets: second.assets, recorder: locked, queue: second.queue,
-            launchID: second.launchID, locations: second.locations, layer: second.layer,
-            log: KnotLog(.capture, sink: second.logs))
-        let first = try await recovery.run(ingest: second.ingest)
-        #expect(first[begun.captureID] == .kept(KnotError.deviceLocked.code), "Kept, for the next launch.")
-        #expect(try await r.notes.capture(begun.captureID)?.outcome == .open, "Its row is left open.")
-        #expect(r.layer.entryKind(r.locations.recordingManifest(begun.captureID)) == .file)
-        #expect(r.layer.entryKind(r.locations.recordingAudio(begun.captureID, format: .caf)) == .file)
-        // The next launch can read them.
+        let first = try await second.recovery.run(ingest: second.ingest)
+        let failed = CaptureOutcome.failed(KnotError.conversionFailed.code)
+        #expect(first[begun.captureID] == .ended(failed), "It ends failed, as a failed conversion does.")
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == failed)
+        #expect(r.layer.entryKind(manifest) == .file && r.layer.entryKind(working) == .file, "Both files stay.")
+        let typed = try await second.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "later"))
+        #expect(typed.path == .store, "A typed capture on the device goes the store path.")
+        _ = try await second.engine.end(typed.captureID)
+        // The next launch can read it.
+        r.layer.setReadable(working, true)
         let third = second.relaunch()
         let outcomes = try await third.recovery.run(ingest: third.ingest)
         #expect(outcomes[begun.captureID] == .ended(.stored), "Stored at the next launch.")
         #expect(try await r.notes.capture(begun.captureID)?.outcome == .stored)
         #expect(try await r.notes.jobs(for: SegmentID(begun.captureID)).map(\.kind) == [.transcribe])
+        #expect(r.layer.entryKind(manifest) == nil && r.layer.entryKind(working) == nil, "Its files go.")
         #expect(try await third.recovery.run(ingest: third.ingest).isEmpty, "Then nothing is left.")
     }
 

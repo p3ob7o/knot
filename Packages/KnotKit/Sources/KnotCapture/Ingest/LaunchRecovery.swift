@@ -255,15 +255,6 @@ public struct LaunchRecovery: Sendable {
     // MARK: Rows without a file
 
     private func finishWithoutFile(_ row: Capture) async -> Outcome {
-        if row.kind == .voice, !nothingOfTheRecordingIsOnTheDrive(row.id) {
-            // The recorder returned no recording, and something of it is on the drive, or the
-            // folder cannot be looked into: it could not be read now, as when its files are
-            // protected while the device is locked. It is kept, its row open and its files
-            // where they are, and the next launch tries again. It is never taken for a
-            // recording with no audio.
-            log.capture(row.id, "recording_kept_unread", .code(KnotError.deviceLocked.code))
-            return .kept(KnotError.deviceLocked.code)
-        }
         let end: CaptureEnd
         switch row.kind {
         case .typed, .ink:
@@ -273,9 +264,23 @@ public struct LaunchRecovery: Sendable {
                 captureID: row.id, endedAt: row.lastSavedAt ?? row.startedAt, outcome: .stored(.none),
                 revision: row.revision)
         default:
-            // A recording of which nothing is on the drive: no audio reached it.
-            end = CaptureEnd(
-                captureID: row.id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision)
+            if workingFileMayBeOnTheDrive(row.id) {
+                // The recorder returned no recording, and its working file is on the drive, or
+                // the folder cannot be looked into: it could not be read now, as when it is
+                // protected while the device is locked. The row ends failed, as a conversion
+                // that failed leaves it, and the files stay: the recorder returns the orphan at
+                // a later launch, once it can be read, and `finishRecording` stores it. It is
+                // never taken for a recording with no audio, and an open row would hold rule 15
+                // against every capture on the device.
+                log.capture(row.id, "recording_not_read", .code(KnotError.conversionFailed.code))
+                end = CaptureEnd(
+                    captureID: row.id, endedAt: row.startedAt, outcome: .failed(KnotError.conversionFailed.code),
+                    revision: row.revision)
+            } else {
+                // No working file: no audio reached the drive. A manifest alone is not audio.
+                end = CaptureEnd(
+                    captureID: row.id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision)
+            }
         }
         do throws(KnotError) {
             let receipt = try await notes.end(end)
@@ -287,19 +292,17 @@ public struct LaunchRecovery: Sendable {
         }
     }
 
-    /// True only when neither the recording's manifest nor its working file is at the
-    /// recorder's locations, and `Recording/` could be looked into, or is not there at all. A
-    /// folder that cannot be listed says nothing, and the recording is then kept.
-    private func nothingOfTheRecordingIsOnTheDrive(_ id: CaptureID) -> Bool {
-        let files =
-            [locations.recordingManifest(id)]
-            + RecordingFormat.allCases.map { locations.recordingAudio(id, format: $0) }
-        if files.contains(where: { layer.entryKind($0) != nil }) { return false }
+    /// True when a working file of the recording is at the recorder's locations, or `Recording/`
+    /// cannot be looked into, which says nothing. False only when it was looked into, or is not
+    /// there at all, and holds no working file of the recording. The manifest does not count.
+    private func workingFileMayBeOnTheDrive(_ id: CaptureID) -> Bool {
+        let files = RecordingFormat.allCases.map { locations.recordingAudio(id, format: $0) }
+        if files.contains(where: { layer.entryKind($0) != nil }) { return true }
         do throws(KnotError) {
             let listed = Set(try layer.contents(of: locations.recording))
-            return !files.contains { listed.contains($0.lastPathComponent) }
+            return files.contains { listed.contains($0.lastPathComponent) }
         } catch {
-            return error.context.posixError == ENOENT
+            return error.context.posixError != ENOENT
         }
     }
 
