@@ -31,7 +31,8 @@
     ///
     /// The text is synthetic. It begins with a token that names the capture,
     /// `s<seed>c<index>`, which no save changes. A save may add a word, replace the last word
-    /// or one in the middle, or take the last word away. Some captures carry a body longer than
+    /// or one in the middle, or take the last word away. Its words hold characters of one, two,
+    /// three and four bytes of UTF-8. Some captures carry a body longer than
     /// one segment can hold (`Limits.segmentTextBytes`), which the store keeps as several
     /// pieces; capture `alwaysLong` always does, so that every script holds one.
     struct SoakScript {
@@ -88,11 +89,13 @@
             let save: Int
         }
 
-        /// The words the saves add and replace.
+        /// The words the saves add and replace: characters of one, two, three and four bytes of
+        /// UTF-8, all precomposed, so that a text is its own NFC form.
         static let words = [
             "amber", "basil", "cedar", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper",
-            "kelp", "lumen", "mosaic", "nectar", "orchid", "pebble", "quartz", "russet", "saffron", "tundra",
-            "umber", "velvet", "willow", "xenon", "yarrow", "zephyr",
+            "café", "naïve", "über", "señal", "ångström", "smørbrød", "Ελλάδα", "кедр",
+            "日本", "한글", "€uro", "∑σ", "ありがとう", "中文",
+            "𝄞clef", "😀", "🌲pine", "𐍈",
         ]
 
         /// Every capture whose index this gives carries a body past one piece: so that even a
