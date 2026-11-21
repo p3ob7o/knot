@@ -53,6 +53,27 @@ public struct SavedRecordingState: Hashable, Sendable, Codable {
     }
 }
 
+extension SavedRecordingState {
+    /// The saved state a press weighs, from the snapshot that `RecordingStateStore` reads: the one
+    /// mapping, which the appliers of `RecordingPressRule` and the recorder's tests share.
+    ///
+    /// An idle snapshot, or one that names no capture, is no saved state. A snapshot with no
+    /// heartbeat has given no sign of life, and its heartbeat is the distant past: stale. A
+    /// snapshot with a capture and no owner launch maps to a launch that no process has, the
+    /// nil UUID: every recorder writes its launch, so such a state can belong to no launch that
+    /// runs now, and the press rule still recovers its capture, so that a press never does
+    /// nothing after a crash.
+    public init?(_ snapshot: RecordingStateSnapshot) {
+        guard snapshot.phase != .idle, let captureID = snapshot.captureID else { return nil }
+        self.init(
+            captureID: captureID, launchID: snapshot.ownerLaunch ?? Self.noLaunch,
+            heartbeatAt: snapshot.heartbeat ?? .distantPast)
+    }
+
+    /// The launch that no process has: the nil UUID, which no ID generator makes.
+    static let noLaunch = LaunchID(uuid: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+}
+
 /// What a press does.
 public enum PressDecision: Hashable, Sendable {
     /// Start a recording, with the started cue.
