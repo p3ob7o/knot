@@ -116,10 +116,13 @@ import Testing
 
     /// An interleaved stereo buffer, made the way a tap's is, goes through `Downmix.mono` and
     /// mixes to the mean. Each step is checked on the way and its count of right frames printed:
-    /// the samples written into the buffer, the system's read-only copy of it, the mix. Where the
-    /// system's copy does not hold what it was given, that is recorded as a known issue of that
-    /// system, by its version, and the mix is not judged on it. Where the copy is whole and the mix
-    /// is wrong, the test fails.
+    /// the samples written into the buffer, the system's read-only copy of it, the mix.
+    ///
+    /// One system is known to lose part of the copy: macOS 27.0.1, whose copy of this buffer
+    /// keeps two of its four frames. There, and for that loss only, the loss is a known issue, and
+    /// the mix must still be right on every frame the copy kept. On any other system, and for any
+    /// other loss, a short copy fails the test, as a wrong mix of a whole copy does. After finding
+    /// 25.
     @Test(arguments: [16_000.0, 44_100.0, 48_000.0])
     func anInterleavedTapBufferIsMixedDown(rate: Double) throws {
         let stereo = try #require(
@@ -148,9 +151,23 @@ import Testing
         )
         #expect(source == 4, "The buffer holds what was written into it.")
         guard inCopy == 4 else {
-            withKnownIssue("On \(system) the system's copy of an interleaved buffer holds \(inCopy) of 4 frames.") {
+            #if os(macOS)
+                let version = ProcessInfo.processInfo.operatingSystemVersion
+                let knownSystem = version.majorVersion == 27 && version.minorVersion == 0 && version.patchVersion == 1
+            #else
+                let knownSystem = false
+            #endif
+            guard knownSystem, inCopy == 2 else {
+                Issue.record("On \(system) the system's copy holds \(inCopy) of 4 frames: no known issue covers it.")
+                return
+            }
+            withKnownIssue("On macOS 27.0.1 the system's copy of an interleaved buffer keeps 2 of 4 frames.") {
                 Issue.record("The copy lost frames before the mix-down: \(inCopy) of 4 are right.")
             }
+            let kept = Self.rightFrameIndices(copied, written)
+            #expect(
+                kept.allSatisfy { $0 < mixed.count && mixed[$0] == Self.mean[$0] },
+                "The mix is wrong on a frame the copy kept: kept \(kept), mixed \(mixed).")
             return
         }
         #expect(mixed == Self.mean, "The copy is whole and the mix-down is wrong: \(inMix) of 4 frames are right.")
@@ -158,9 +175,14 @@ import Testing
 
     /// How many of the frames of an interleaved stereo `found` equal those of `expected`.
     static func rightFrames(_ found: [Float], _ expected: [Float]) -> Int {
+        rightFrameIndices(found, expected).count
+    }
+
+    /// The frames of an interleaved stereo `found` that equal those of `expected`, by index.
+    static func rightFrameIndices(_ found: [Float], _ expected: [Float]) -> [Int] {
         stride(from: 0, to: expected.count, by: 2).filter { start in
             start + 1 < found.count && found[start] == expected[start] && found[start + 1] == expected[start + 1]
-        }.count
+        }.map { $0 / 2 }
     }
 
     static let left: [Float] = [0.5, -0.5, 1, 0]
