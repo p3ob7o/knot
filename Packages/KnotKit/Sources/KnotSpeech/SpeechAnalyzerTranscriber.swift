@@ -228,26 +228,28 @@
             let rate = audio.processingFormat.sampleRate
             guard rate > 0 else { throw KnotError.audioUnreadable }
             let total = audio.length
-            let first = min(max(Self.frames(offset, rate: rate), 0), total)
-            guard first < total else {
+            // The run starts at its offset, and reads from a little before it, in audio the run
+            // before has heard, so that the engine hears its first word whole (SpeechRunCut).
+            let floor = max(offset, .zero)
+            guard Self.frames(floor, rate: rate) < total else {
                 return TranscriptionRun(startsAt: offset, pieces: [], resumeAt: nil, provenance: provenance(locale))
             }
             var window = budget.map { max($0, SpeechRunCut.shortestWindow) }
+            let preroll = SpeechRunCut.preroll(for: window ?? .seconds(4))
+            let first = min(max(Self.frames(floor - preroll, rate: rate), 0), total)
             var last = window.map { min(first + Self.frames($0, rate: rate), total) } ?? total
             var buffers = try Self.read(audio, from: first, to: last)
 
             if let notReady = SpeechErrorMapping.notReady(await readiness()) { throw notReady }
             let locale = self.locale
             let start = Self.duration(first, rate: rate)
-            // The run's floor is the offset it was asked for. The first frame is that offset
-            // rounded to a frame, which may fall a hair before the end of the previous run.
-            let floor = max(offset, start)
             while true {
                 let phrases = try await analyse(buffers, startingAt: start, locale: locale)
                 if Task.isCancelled { throw KnotError.cancelled }
                 let cut = Self.duration(last, rate: rate)
                 hooks.windowAnalysed(start..<cut, phrases)
-                switch SpeechRunCut.decide(phrases, start: floor, cut: cut, reachedEnd: last >= total) {
+                let pauses = SpeechPauses.find(levels: Self.levels(of: buffers), start: start)
+                switch SpeechRunCut.decide(phrases, floor: floor, cut: cut, reachedEnd: last >= total, pauses: pauses) {
                 case .run(let pieces, let resumeAt):
                     return TranscriptionRun(
                         startsAt: offset, pieces: pieces, resumeAt: resumeAt, provenance: provenance(locale))
@@ -289,11 +291,22 @@
             return buffers
         }
 
+        /// The level of each frame of 20 ms of the window, from its first channel.
+        private static func levels(of buffers: [AVAudioPCMBuffer]) -> [Double] {
+            guard let rate = buffers.first?.format.sampleRate else { return [] }
+            var samples: [Float] = []
+            for buffer in buffers {
+                guard let channel = buffer.floatChannelData?[0] else { continue }
+                samples += UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
+            }
+            return SpeechPauses.levels(of: samples, rate: rate)
+        }
+
         /// Transcribes `buffers`, which start at `start` in the file, and returns their final
         /// phrases in the file's time. Cancelling the calling task stops the analyzer with
         /// `cancelAndFinishNow()` and throws the yield, without waiting for the results.
         private func analyse(_ buffers: [AVAudioPCMBuffer], startingAt start: Duration, locale: Locale)
-            async throws(KnotError) -> [TranscriptPiece]
+            async throws(KnotError) -> [SpeechPhrase]
         {
             let module = SpeechModules.file(locale)
             var inputs: [AnalyzerInput] = []
@@ -312,12 +325,10 @@
             await hooks.afterLastCheck()
 
             let analyzer = SpeechAnalyzer(modules: [module])
-            let collector = Task { () throws -> [TranscriptPiece] in
-                var phrases: [TranscriptPiece] = []
+            let collector = Task { () throws -> [SpeechPhrase] in
+                var phrases: [SpeechPhrase] = []
                 for try await result in module.results where result.isFinal {
-                    let lower = start + Self.duration(result.range.start)
-                    let upper = max(start + Self.duration(result.range.end), lower)
-                    phrases.append(TranscriptPiece(text: String(result.text.characters), range: lower..<upper))
+                    phrases.append(Self.phrase(of: result, startingAt: start))
                 }
                 return phrases
             }
@@ -355,6 +366,31 @@
                 if Task.isCancelled { throw KnotError.cancelled }
                 throw SpeechErrorMapping.knotError(error)
             }
+        }
+
+        /// A final result as its words, each with its time in the file. A run of the text with no
+        /// time of its own, such as a space, joins the word before it, or the first word when it
+        /// comes first. A result with no word times at all is one word over the result's range.
+        private static func phrase(of result: SpeechTranscriber.Result, startingAt start: Duration) -> SpeechPhrase {
+            var words: [SpeechWord] = []
+            var pending = ""
+            for run in result.text.runs {
+                let text = String(result.text[run.range].characters)
+                guard let time = run.audioTimeRange, time.start.isNumeric, time.end.isNumeric else {
+                    if words.isEmpty { pending += text } else { words[words.count - 1].text += text }
+                    continue
+                }
+                let lower = start + duration(time.start)
+                let upper = max(start + duration(time.end), lower)
+                words.append(SpeechWord(text: pending + text, range: lower..<upper))
+                pending = ""
+            }
+            guard !words.isEmpty else {
+                let lower = start + duration(result.range.start)
+                let upper = max(start + duration(result.range.end), lower)
+                return SpeechPhrase(text: String(result.text.characters), range: lower..<upper)
+            }
+            return SpeechPhrase(words: words)
         }
 
         // MARK: Live
@@ -463,8 +499,8 @@
     /// What a test can watch of a run. The defaults do nothing.
     struct SpeechRunHooks: Sendable {
         /// After a run has analysed a window of the file: the window's range in the file's time,
-        /// and the phrases the engine finalised in it.
-        var windowAnalysed: @Sendable (Range<Duration>, [TranscriptPiece]) -> Void = { _, _ in }
+        /// and the phrases the engine finalised in it, with their words.
+        var windowAnalysed: @Sendable (Range<Duration>, [SpeechPhrase]) -> Void = { _, _ in }
         /// After a run's last check for cancellation before the analyzer, in the run's task.
         var afterLastCheck: @Sendable () async -> Void = {}
         /// Inside the cancellation handler, just before the analyzer is given its audio, in the

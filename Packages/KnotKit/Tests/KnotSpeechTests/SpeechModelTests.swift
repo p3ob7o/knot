@@ -36,16 +36,18 @@ import Testing
         struct Run {
             var offset: Duration
             var run: TranscriptionRun
-            var windows: [(range: Range<Duration>, phrases: [TranscriptPiece])]
+            /// Each window the run analysed, from where it began to read, with its phrases.
+            var windows: [(range: Range<Duration>, phrases: [SpeechPhrase])]
             /// The window the run ended on: what it read last.
             var window: Range<Duration> { windows.last?.range ?? offset..<offset }
         }
 
         /// The file in runs of `budget`, as the queue runs it, each with what it read. Each run
         /// is checked against the budget: its first window is at most the budget, and a window is
-        /// read again longer only when its one phrase is open from its start to its edge.
+        /// read again longer only when its one phrase, of the words the run keeps, is open from
+        /// the run's start to the window's edge.
         static func runs(_ url: URL, budget: Duration) async throws -> [Run] {
-            let seen = Mutex<[(range: Range<Duration>, phrases: [TranscriptPiece])]>([])
+            let seen = Mutex<[(range: Range<Duration>, phrases: [SpeechPhrase])]>([])
             let transcriber = transcriber(
                 hooks: SpeechRunHooks(windowAnalysed: { range, phrases in
                     seen.withLock { $0.append((range, phrases)) }
@@ -64,12 +66,12 @@ import Testing
                     #expect(read <= budget + .milliseconds(1), "A run's first window is its budget at most.")
                 }
                 for window in windows.dropLast() {
-                    let spoken = SpeechRunCut.normalise(window.phrases, from: window.range.lowerBound)
+                    let spoken = SpeechRunCut.heard(window.phrases, from: offset)
                     #expect(
-                        spoken.count == 1
-                            && spoken[0].range.lowerBound <= window.range.lowerBound + SpeechRunCut.edge
+                        spoken.count == 1 && spoken[0].range.lowerBound <= offset + SpeechRunCut.edge
                             && spoken[0].range.upperBound >= window.range.upperBound - SpeechRunCut.edge,
-                        "A window was read again longer though its one phrase was not open from its start to its end.")
+                        "A window was read again longer though its one phrase was not open from the run's start to its end."
+                    )
                 }
                 guard let next = run.resumeAt else { break }
                 #expect(next > offset, "Every run moves on.")
@@ -88,36 +90,95 @@ import Testing
             }
         }
 
-        /// The words of `whole` that the runs' words lack, by a minimum edit alignment that
-        /// prefers a substitution: all of them, and those missing right where a run begins.
-        /// `starts` holds the index in `runs` of each run's first word.
-        static func missing(runs: [String], whole: [String], starts: Set<Int>) -> (all: Int, atJoins: Int) {
-            var cost = Array(repeating: Array(repeating: 0, count: runs.count + 1), count: whole.count + 1)
-            for i in 0...whole.count { cost[i][0] = i }
-            for j in 0...runs.count { cost[0][j] = j }
-            if !whole.isEmpty, !runs.isEmpty {
-                for i in 1...whole.count {
-                    for j in 1...runs.count {
-                        let same = whole[i - 1] == runs[j - 1] ? 0 : 1
+        static func describe(_ word: SpeechWord) -> String {
+            let from = String(format: "%.2f", seconds(word.range.lowerBound))
+            let to = String(format: "%.2f", seconds(word.range.upperBound))
+            return "\(word.text)@\(from)-\(to)"
+        }
+
+        /// The last words a run heard before `until`, and where it read to.
+        static func describe(tail run: Run, until: Duration) -> String {
+            guard let window = run.windows.last else { return "" }
+            let words = window.phrases.flatMap(\.words).filter {
+                $0.range.lowerBound < until && $0.range.upperBound > until - .seconds(3)
+            }
+            let end = String(format: "%.2f", seconds(window.range.upperBound))
+            let phrases = window.phrases.map {
+                "\(String(format: "%.2f", seconds($0.range.lowerBound)))..\(String(format: "%.2f", seconds($0.range.upperBound)))"
+            }
+            return "read to \(end), phrases \(phrases.joined(separator: ",")), words near "
+                + words.map(describe).joined(separator: " ")
+        }
+
+        /// The first words a run heard, and where it read from.
+        static func describe(head run: Run) -> String {
+            guard let window = run.windows.first else { return "" }
+            let words = window.phrases.flatMap(\.words).prefix(5)
+            let start = String(format: "%.2f", seconds(window.range.lowerBound))
+            return "read from \(start), heard " + words.map(describe).joined(separator: " ")
+        }
+
+        static func seconds(_ duration: Duration) -> Double {
+            Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+        }
+
+        /// The file's words with their times, from one analyzer over the whole file, set up as
+        /// the transcriber sets up its own. It only uses the model, and never installs.
+        static func timedWords(_ file: URL) async throws -> [(word: String, start: Double, end: Double)] {
+            let module = SpeechModules.file(Locale(identifier: "en_US"))
+            let analyzer = SpeechAnalyzer(modules: [module])
+            let collector = Task { () throws -> [(word: String, start: Double, end: Double)] in
+                var out: [(word: String, start: Double, end: Double)] = []
+                for try await result in module.results where result.isFinal {
+                    for run in result.text.runs {
+                        guard let range = run.audioTimeRange else { continue }
+                        for word in words(String(result.text[run.range].characters)) {
+                            out.append((word, range.start.seconds, range.end.seconds))
+                        }
+                    }
+                }
+                return out
+            }
+            let audio = try AVAudioFile(forReading: file)
+            if let end = try await analyzer.analyzeSequence(from: audio) {
+                try await analyzer.finalizeAndFinish(through: end)
+            } else {
+                await analyzer.cancelAndFinishNow()
+            }
+            return try await collector.value
+        }
+
+        /// A minimum edit alignment of the runs' words against the whole file's, which prefers a
+        /// substitution: each word of the whole that the runs lack, with the index in the runs'
+        /// words it is missing before, and the index of each word of the runs the whole lacks.
+        static func align(runs r: [String], whole w: [String]) -> (missing: [(whole: Int, before: Int)], extra: [Int]) {
+            var cost = Array(repeating: Array(repeating: 0, count: r.count + 1), count: w.count + 1)
+            for i in 0...w.count { cost[i][0] = i }
+            for j in 0...r.count { cost[0][j] = j }
+            if !w.isEmpty, !r.isEmpty {
+                for i in 1...w.count {
+                    for j in 1...r.count {
+                        let same = w[i - 1] == r[j - 1] ? 0 : 1
                         cost[i][j] = min(cost[i - 1][j - 1] + same, cost[i - 1][j] + 1, cost[i][j - 1] + 1)
                     }
                 }
             }
-            var (i, j, all, atJoins) = (whole.count, runs.count, 0, 0)
+            var (i, j) = (w.count, r.count)
+            var missing: [(whole: Int, before: Int)] = []
+            var extra: [Int] = []
             while i > 0 || j > 0 {
-                if i > 0, j > 0, cost[i][j] == cost[i - 1][j - 1] + (whole[i - 1] == runs[j - 1] ? 0 : 1) {
+                if i > 0, j > 0, cost[i][j] == cost[i - 1][j - 1] + (w[i - 1] == r[j - 1] ? 0 : 1) {
                     i -= 1
                     j -= 1
                 } else if i > 0, cost[i][j] == cost[i - 1][j] + 1 {
-                    // A word of the whole missing just before the runs' word at index j.
-                    all += 1
-                    if starts.contains(j) { atJoins += 1 }
+                    missing.append((i - 1, j))
                     i -= 1
                 } else {
+                    extra.append(j - 1)
                     j -= 1
                 }
             }
-            return (all, atJoins)
+            return (missing.reversed(), extra.reversed())
         }
 
         /// The words of a transcript, as letters and digits.
@@ -220,30 +281,57 @@ import Testing
             }
         }
 
-        @Test(arguments: [Duration.seconds(60), .seconds(20)])
-        func runsLoseNoWordWhereTheyJoin(_ budget: Duration) async throws {
+        @Test(arguments: [Duration.seconds(60), .seconds(20), .seconds(5)])
+        func runsJoinBetweenWordsAndHearNoWordTwice(_ budget: Duration) async throws {
+            // The long clip in runs, against the word times of one analysis of the whole file:
+            // no run starts inside a word, so no word is lost there, and no word is heard twice.
             let long = try SpeechClips.url(SpeechClips.long)
-            let (whole, _) = try await SpeechClips.timedRun(long)
+            let timed = try await SpeechClips.timedWords(long)
             let runs = try await SpeechClips.runs(long, budget: budget)
-            let wholeWords = SpeechClips.words(whole.text)
             var runWords: [String] = []
-            var starts: Set<Int> = []
-            for run in runs {
-                if run.offset > .zero { starts.insert(runWords.count) }
+            var joinOf: [Int: Int] = [:]
+            for (index, run) in runs.enumerated() {
+                if index > 0 { joinOf[runWords.count] = index }
                 runWords += SpeechClips.words(run.run.text)
             }
-            let missing = SpeechClips.missing(runs: runWords, whole: wholeWords, starts: starts)
-            // Measured on this Mac: in runs of 60 s, no join of 10 misses a word, and in runs of
-            // 20 s, 5 joins of 38, where the engine hears a word differently at a run's start. A
-            // run that drops the word after every join misses 8 of 10 and 38 of 38.
-            #expect(starts.count > 5)
+            let aligned = SpeechClips.align(runs: runWords, whole: timed.map(\.word))
+            var inside: [String] = []
+            var differently = 0
+            for miss in aligned.missing {
+                guard let index = joinOf[miss.before] else { continue }
+                let join = SpeechClips.seconds(runs[index].offset)
+                let word = timed[miss.whole]
+                if word.start < join, word.end > join {
+                    let before = SpeechClips.describe(tail: runs[index - 1], until: .seconds(join) + .seconds(1))
+                    let after = SpeechClips.describe(head: runs[index])
+                    inside.append(
+                        "'\(word.word)' \(word.start)...\(word.end) across the join at \(join); before: \(before); after: \(after)"
+                    )
+                } else {
+                    differently += 1
+                }
+            }
+            var twice: [String] = []
+            for extra in aligned.extra {
+                guard let start = joinOf.keys.first(where: { extra >= $0 - 1 && extra <= $0 + 1 }) else { continue }
+                let before = runWords[max(0, start - 3)..<start]
+                if before.contains(runWords[extra]) {
+                    twice.append(
+                        "'\(runWords[extra])' at the join at \(SpeechClips.seconds(runs[joinOf[start]!].offset))")
+                } else {
+                    differently += 1
+                }
+            }
+            let joins = joinOf.count
+            print(
+                "speech: runs of \(budget): \(joins) joins, \(inside.count) inside a word, \(twice.count) heard twice, \(differently) heard differently"
+            )
+            #expect(joins > 5)
+            #expect(inside.isEmpty, "Runs of \(budget) start inside a word: \(inside)")
+            #expect(twice.isEmpty, "Runs of \(budget) hear a word twice: \(twice)")
             #expect(
-                missing.atJoins * 4 <= starts.count,
-                "Runs of \(budget) miss a word at \(missing.atJoins) of \(starts.count) joins.")
-            #expect(
-                Double(runWords.count) >= 0.98 * Double(wholeWords.count),
-                "Runs of \(budget) hold \(runWords.count) words, one run \(wholeWords.count).")
-            #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file falls between two runs.")
+                differently * 6 <= joins + 6,
+                "Runs of \(budget): \(differently) words heard differently near \(joins) joins.")
         }
 
         @Test func silenceLongerThanTheBudgetEndsARunWithNoPhrases() async throws {
@@ -288,10 +376,10 @@ import Testing
             #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file is lost between runs.")
         }
 
-        @Test(arguments: [5.0, 4.75, 5.25])
+        @Test(arguments: [3.8, 4.2, 4.4, 4.5, 4.6, 4.75, 5.0, 5.25])
         func speechThatBeginsAtAWindowsEdgeLosesNoWord(_ silence: Double) async throws {
-            // Speech that begins exactly where the first window ends, a quarter of a second
-            // before, and a quarter after.
+            // Speech that begins up to 1.2 s before the end of the first window, exactly at it,
+            // and a quarter of a second after: the review's leads.
             let scratch = try SpeechScratch()
             let file = try SpeechClips.join(
                 [(SpeechClips.silence, silence), (SpeechClips.clean, nil)], into: scratch.folder)

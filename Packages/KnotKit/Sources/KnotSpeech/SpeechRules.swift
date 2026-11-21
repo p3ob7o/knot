@@ -66,21 +66,71 @@ public struct SpeechFacts: Hashable, Sendable {
     }
 }
 
-/// Where a run over a file ends (docs/architecture.md §9).
+/// A word the engine finalised, with its time range in the file: the run of a result's text
+/// that carries one `audioTimeRange`, with the spaces and the punctuation around it.
+public struct SpeechWord: Hashable, Sendable {
+    public var text: String
+    public var range: Range<Duration>
+
+    public init(text: String, range: Range<Duration>) {
+        self.text = text
+        self.range = range
+    }
+
+    /// The middle of the word, which decides which run it belongs to.
+    public var middle: Duration { range.lowerBound + (range.upperBound - range.lowerBound) / 2 }
+
+    /// Whether the word holds a letter or a digit, and not only spaces or punctuation.
+    public var isSpoken: Bool { text.contains { $0.isLetter || $0.isNumber } }
+}
+
+/// A phrase the engine finalised, as its words.
+public struct SpeechPhrase: Hashable, Sendable {
+    public var words: [SpeechWord]
+
+    public init(words: [SpeechWord]) {
+        self.words = words
+    }
+
+    /// A phrase of one word, as an engine that gives no word times would give it.
+    public init(text: String, range: Range<Duration>) {
+        self.init(words: [SpeechWord(text: text, range: range)])
+    }
+
+    public var text: String { words.map(\.text).joined() }
+    public var isSpoken: Bool { words.contains(where: \.isSpoken) }
+    /// From its first word's start to its last word's end.
+    public var range: Range<Duration> {
+        guard let first = words.first, let last = words.last else { return .zero ..< .zero }
+        return first.range.lowerBound..<max(first.range.lowerBound, last.range.upperBound)
+    }
+    public var piece: TranscriptPiece { TranscriptPiece(text: text, range: range) }
+}
+
+/// Where a run over a file ends, and where the next one starts (docs/architecture.md §9).
 ///
 /// A run reads a window of at most its budget and finalises everything in it. The budget bounds
 /// what a run reads, with the one exception the port gives: a first phrase longer than the
 /// budget is taken whole. Silence is not a phrase.
 ///
+/// A run starts at its offset, which the run before chose, but it reads from a little earlier,
+/// `preroll(for:)`, in audio the run before has heard, so that the engine hears the first word
+/// whole. Of what it hears, it keeps the words whose middle is not before its offset: a word
+/// heard again is dropped by its own time. The engine's phrase times can fall a third of a
+/// second inside the next word, so no join rests on them: a join is at the end of the last word
+/// a run gave, or in the pause after it (`join(after:until:floor:fallback:)`).
+///
 /// - A window with no speech ends the run with no phrases. The next run starts `edge` before
 ///   the window's end, so that a word that begins at the edge, too short there to be heard, is
 ///   heard whole in the next run.
-/// - A phrase that ended more than `edge` before the window's end is whole, and a run keeps it.
-///   The next run starts where the run's last phrase ended.
-/// - A phrase that ends within `edge` of the window's end may be cut there. A run leaves it for
-///   the next run, which starts where it starts. When it is the window's only phrase and began
-///   within `edge` of the window's start, it is a first phrase longer than the budget, and the
-///   window is read again twice as long: that alone makes a window longer than the budget.
+/// - A last phrase that ended more than `edge` before the window's end is whole, and the run
+///   keeps every phrase. The next run starts in the pause after the run's last word.
+/// - A last phrase that ends within `edge` of the window's end may be cut there. The run leaves
+///   it for the next run, which starts between the run's last word and that phrase's first. When it is
+///   the window's only phrase and began within `edge` of the run's start, it is a first phrase
+///   longer than the budget, and the window is read again twice as long: that alone makes a
+///   window longer than the budget. When it began later, the run ends with no phrases, and the
+///   next run starts just before its first word.
 public enum SpeechRunCut {
     /// What to do with the phrases of one window.
     public enum Decision: Hashable, Sendable {
@@ -93,31 +143,125 @@ public enum SpeechRunCut {
     /// How close to the window's end a phrase may end and still count as cut there.
     public static let edge: Duration = .milliseconds(500)
 
-    /// Decides a run from the phrases of a window that starts at `start` and ends at `cut`, in
-    /// the file's time. `reachedEnd` says whether the window ran to the end of the file.
-    public static func decide(_ phrases: [TranscriptPiece], start: Duration, cut: Duration, reachedEnd: Bool)
-        -> Decision
-    {
-        let pieces = normalise(phrases, from: start)
+    /// How far before a phrase's first word the next run starts, when a run gave nothing.
+    public static let lead: Duration = .milliseconds(300)
+
+    /// How much heard audio a run reads before its offset: a quarter of its window, and at most
+    /// a second. It is part of the window, so the run still reads at most its budget.
+    public static func preroll(for window: Duration) -> Duration { min(.seconds(1), window / 4) }
+
+    /// The words of `phrases` that belong to a run that starts at `floor`: those whose middle is
+    /// not before it. A phrase with no spoken word left is dropped.
+    public static func heard(_ phrases: [SpeechPhrase], from floor: Duration) -> [SpeechPhrase] {
+        phrases.compactMap { phrase in
+            let kept = SpeechPhrase(words: phrase.words.filter { $0.middle >= floor })
+            return kept.isSpoken ? kept : nil
+        }
+    }
+
+    /// Decides a run that starts at `floor` from the phrases of a window that ends at `cut`, in
+    /// the file's time. `reachedEnd` says whether the window ran to the end of the file, and
+    /// `pauses` holds the quiet stretches the window's audio has (`SpeechPauses`).
+    public static func decide(
+        _ phrases: [SpeechPhrase], floor: Duration, cut: Duration, reachedEnd: Bool, pauses: [Range<Duration>] = []
+    ) -> Decision {
+        let decision = decideUnclamped(
+            trim(phrases, at: pauses), floor: floor, cut: cut, reachedEnd: reachedEnd, pauses: pauses)
+        // No piece of a run ends past where the next run starts.
+        guard case .run(let pieces, let resume?) = decision else { return decision }
+        let clamped = pieces.map { piece in
+            let upper = min(piece.range.upperBound, resume)
+            return TranscriptPiece(text: piece.text, range: min(piece.range.lowerBound, upper)..<upper)
+        }
+        return .run(clamped, resumeAt: resume)
+    }
+
+    /// Each word whose span reaches into a pause that begins after its middle, ended where the
+    /// pause begins. The engine stretches a word at the end of a sentence into the silence after
+    /// it, by as much as half a second, and does it differently in each run; the audio's pause
+    /// says where the word ended.
+    public static func trim(_ phrases: [SpeechPhrase], at pauses: [Range<Duration>]) -> [SpeechPhrase] {
+        guard !pauses.isEmpty else { return phrases }
+        return phrases.map { phrase in
+            SpeechPhrase(
+                words: phrase.words.map { word in
+                    guard
+                        let pause = pauses.first(where: {
+                            $0.lowerBound > word.middle && $0.lowerBound < word.range.upperBound
+                        })
+                    else { return word }
+                    return SpeechWord(text: word.text, range: word.range.lowerBound..<pause.lowerBound)
+                })
+        }
+    }
+
+    private static func decideUnclamped(
+        _ phrases: [SpeechPhrase], floor: Duration, cut: Duration, reachedEnd: Bool, pauses: [Range<Duration>]
+    ) -> Decision {
+        let spoken = heard(phrases, from: floor)
+        let pieces = normalise(spoken.map(\.piece), from: floor)
         if reachedEnd { return .run(pieces, resumeAt: nil) }
-        let edgeOfWindow = max(cut - edge, start)
-        guard let last = pieces.last else {
+        let edgeOfWindow = max(cut - edge, floor)
+        guard let last = spoken.last else {
             // No speech in the window.
-            return .run([], resumeAt: edgeOfWindow > start ? edgeOfWindow : cut)
+            return .run([], resumeAt: edgeOfWindow > floor ? edgeOfWindow : cut)
         }
         guard last.range.upperBound >= edgeOfWindow else {
             // Every phrase ended before the edge: all of them are whole.
-            return .run(pieces, resumeAt: last.range.upperBound > start ? last.range.upperBound : edgeOfWindow)
+            let point = join(after: spoken, until: edgeOfWindow, floor: floor, fallback: edgeOfWindow)
+            let after = spoken.last?.words.last?.middle ?? floor
+            return .run(pieces, resumeAt: anchor(point, after: after, before: edgeOfWindow, floor: floor, in: pauses))
         }
         // The last phrase may be cut at the edge: it is left for the next run.
-        if pieces.count >= 2, last.range.lowerBound > start {
-            return .run(Array(pieces.dropLast()), resumeAt: last.range.lowerBound)
+        if spoken.count >= 2, let next = last.words.first {
+            let kept = Array(spoken.dropLast())
+            let point = join(after: kept, until: last.range.lowerBound, floor: floor, fallback: last.range.lowerBound)
+            let after = kept.last?.words.last?.middle ?? floor
+            let resume = anchor(point, after: after, before: next.middle, floor: floor, in: pauses)
+            if resume > floor { return .run(Array(pieces.dropLast()), resumeAt: resume) }
         }
-        // The window's one phrase is open at its edge. Only a phrase open from the window's
-        // start, a first phrase longer than the budget, makes the window longer. One that began
-        // later ends the run with no phrases, and the next run starts where it starts.
-        if last.range.lowerBound <= start + edge { return .extend }
-        return .run([], resumeAt: last.range.lowerBound)
+        // The window's one phrase is open at its edge. Only a phrase open from the run's start,
+        // a first phrase longer than the budget, makes the window longer. One that began later
+        // ends the run with no phrases, and the next run starts just before its first word.
+        let begins = last.range.lowerBound
+        if begins <= floor + edge { return .extend }
+        let point = begins - min((begins - floor) / 2, lead)
+        let before = last.words.first?.middle ?? begins
+        return .run([], resumeAt: anchor(point, after: floor, before: before, floor: floor, in: pauses))
+    }
+
+    /// How far from the point the engine's times give a quiet stretch may lie and still be taken
+    /// for the pause there: more than two runs' times differ, which reaches half a second.
+    public static let reach: Duration = .milliseconds(600)
+
+    /// The join for `point`, which the engine's times put between a word whose middle is `after`
+    /// and one whose middle is `before`: the middle of the longest quiet stretch of the audio
+    /// that lies between the two and within `reach` of the point, or the point when there is
+    /// none. Two runs time a word near a pause differently, by up to half a second, while the
+    /// audio is the same for both: a join in the middle of a real pause leaves each word on the
+    /// same side of it in either run.
+    public static func anchor(
+        _ point: Duration, after: Duration, before: Duration, floor: Duration, in pauses: [Range<Duration>]
+    ) -> Duration {
+        let candidates = pauses.filter { pause in
+            let middle = pause.lowerBound + (pause.upperBound - pause.lowerBound) / 2
+            return middle > after && middle < before && middle > floor
+                && abs((middle - point) / .seconds(1)) <= reach / .seconds(1)
+        }
+        guard let longest = candidates.max(by: { ($0.upperBound - $0.lowerBound) < ($1.upperBound - $1.lowerBound) })
+        else { return point }
+        return longest.lowerBound + (longest.upperBound - longest.lowerBound) / 2
+    }
+
+    /// Where the next run starts after a run that gave `phrases`, when the next word the run
+    /// heard begins at `until`, or the window holds no speech before `until`: halfway from the
+    /// end of their last word to `until`, and no more than `lead` past that end. Two runs time
+    /// the end of a sentence differently, by as much as 0.4 s on the synthetic voices, so a join
+    /// in the pause after it keeps the word from being heard twice; with no pause, the join is
+    /// that word's end. A run whose words end where it began starts the next at `fallback`.
+    static func join(after phrases: [SpeechPhrase], until: Duration, floor: Duration, fallback: Duration) -> Duration {
+        guard let end = phrases.last?.words.last?.range.upperBound, end > floor else { return fallback }
+        return end + min(max(until - end, .zero) / 2, lead)
     }
 
     /// The phrases with words, in order, none before `start` and none overlapping the one
@@ -248,4 +392,47 @@ public enum SpeechOSBuild {
     }()
 
     private static var fallback: String { ProcessInfo.processInfo.operatingSystemVersionString }
+}
+
+/// The quiet stretches of a window's audio, from its level in frames of 20 ms (docs/architecture.md
+/// §9). Quiet is relative to the window: within a quarter of the way from its noise floor, the
+/// 10th percentile of its levels, to its speech, the 95th, and at least 6 dB above the floor. A
+/// stretch counts when it lasts at least `shortest`.
+public enum SpeechPauses {
+    /// The length of one frame of level.
+    public static let frame: Duration = .milliseconds(20)
+    /// The shortest quiet stretch that counts as a pause.
+    public static let shortest: Duration = .milliseconds(100)
+
+    /// The pauses of a window that starts at `start`, from the levels of its frames in dBFS.
+    public static func find(levels: [Double], start: Duration) -> [Range<Duration>] {
+        guard levels.count >= 10 else { return [] }
+        let sorted = levels.sorted()
+        let floor = sorted[sorted.count / 10]
+        let speech = sorted[min(sorted.count - 1, sorted.count * 95 / 100)]
+        let threshold = floor + max(6, (speech - floor) / 4)
+        var pauses: [Range<Duration>] = []
+        var begun: Int?
+        for index in 0...levels.count {
+            let level = index < levels.count ? levels[index] : .infinity
+            if level <= threshold {
+                if begun == nil { begun = index }
+            } else if let first = begun {
+                let range = (start + frame * first)..<(start + frame * index)
+                if range.upperBound - range.lowerBound >= shortest { pauses.append(range) }
+                begun = nil
+            }
+        }
+        return pauses
+    }
+
+    /// The level in dBFS of each frame of 20 ms of mono samples at `rate`.
+    public static func levels(of samples: [Float], rate: Double) -> [Double] {
+        let size = max(1, Int(rate * 0.02))
+        return stride(from: 0, to: samples.count, by: size).map { first in
+            let frame = samples[first..<min(first + size, samples.count)]
+            let power = frame.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(frame.count)
+            return 10 * log10(max(power, 1e-12))
+        }
+    }
 }

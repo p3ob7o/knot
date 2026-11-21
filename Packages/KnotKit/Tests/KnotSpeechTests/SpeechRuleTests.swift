@@ -89,156 +89,202 @@ private func piece(_ text: String, _ from: Double, _ to: Double) -> TranscriptPi
     TranscriptPiece(text: text, range: .seconds(from) ..< .seconds(to))
 }
 
+/// A phrase of one word.
+private func phrase(_ text: String, _ from: Double, _ to: Double) -> SpeechPhrase {
+    SpeechPhrase(text: text, range: .seconds(from) ..< .seconds(to))
+}
+
+private func word(_ text: String, _ from: Double, _ to: Double) -> SpeechWord {
+    SpeechWord(text: text, range: .seconds(from) ..< .seconds(to))
+}
+
 @Test func aWindowThatReachesTheEndKeepsEveryPhraseAndEndsTheFile() {
-    let phrases = [piece("one", 10, 11), piece(" two", 12, 14.9)]
+    let phrases = [phrase("one", 10, 11), phrase(" two", 12, 14.9)]
     #expect(
-        SpeechRunCut.decide(phrases, start: .seconds(10), cut: .seconds(15), reachedEnd: true)
-            == .run(phrases, resumeAt: nil))
+        SpeechRunCut.decide(phrases, floor: .seconds(10), cut: .seconds(15), reachedEnd: true)
+            == .run(phrases.map(\.piece), resumeAt: nil))
     #expect(
-        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(15), reachedEnd: true) == .run([], resumeAt: nil))
+        SpeechRunCut.decide([], floor: .seconds(10), cut: .seconds(15), reachedEnd: true) == .run([], resumeAt: nil))
 }
 
 @Test func aWindowWithNoSpeechEndsTheRunJustBeforeItsEdge() {
     // Silence is no phrase: the run ends with none, and never reads on. The next run starts
     // half a second before the edge, so that a word that begins at the edge is heard whole.
     #expect(
-        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+        SpeechRunCut.decide([], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .run([], resumeAt: .seconds(14.5)))
     // A phrase with no words is no speech either.
     #expect(
-        SpeechRunCut.decide([piece(" ", 11, 12)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+        SpeechRunCut.decide([phrase(" ", 11, 12)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .run([], resumeAt: .seconds(14.5)))
     // A window shorter than the edge still moves on.
     #expect(
-        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(10.25), reachedEnd: false)
+        SpeechRunCut.decide([], floor: .seconds(10), cut: .seconds(10.25), reachedEnd: false)
             == .run([], resumeAt: .seconds(10.25)))
 }
 
 @Test func aPhraseThatEndedBeforeTheEdgeIsARunWithIt() {
     // One phrase, then silence to the edge: it is whole, and the run is that phrase.
-    let one = [piece("one", 11, 12)]
+    let one = [phrase("one", 11, 12)]
     #expect(
-        SpeechRunCut.decide(one, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
-            == .run(one, resumeAt: .seconds(12)))
+        SpeechRunCut.decide(one, floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run(one.map(\.piece), resumeAt: .seconds(12) + .milliseconds(300)))
     // Several, the last of them ended before the edge: all are whole.
-    let two = [piece("one", 10, 11), piece(" two", 12, 14.4)]
+    let two = [phrase("one", 10, 11), phrase(" two", 12, 14.4)]
+    let end: Duration = .seconds(14.4)
+    let edge: Duration = .seconds(14.5)
+    let halfway: Duration = end + (edge - end) / 2
     #expect(
-        SpeechRunCut.decide(two, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
-            == .run(two, resumeAt: .seconds(14.4)))
+        SpeechRunCut.decide(two, floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run(two.map(\.piece), resumeAt: halfway))
 }
 
 @Test func aPhraseOpenAtTheEdgeIsLeftForTheNextRun() {
-    let phrases = [piece("one", 10, 11), piece(" two", 12, 13), piece(" thr", 14, 14.6)]
+    // The next run starts at the end of the last word the run gave, not at the open phrase's
+    // start, whose time may fall inside a word.
+    let phrases = [phrase("one", 10, 11), phrase(" two", 12, 13), phrase(" thr", 14, 14.6)]
     #expect(
-        SpeechRunCut.decide(phrases, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
-            == .run(Array(phrases.prefix(2)), resumeAt: .seconds(14)))
+        SpeechRunCut.decide(phrases, floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run(phrases.prefix(2).map(\.piece), resumeAt: .seconds(13) + .milliseconds(300)))
 }
 
 @Test func onlyAPhraseOpenFromTheWindowsStartMakesTheWindowLonger() {
     // A first phrase longer than the budget is taken whole by reading on: the window's one
     // phrase, open from its start, or from within half a second of it, to its edge.
     #expect(
-        SpeechRunCut.decide([piece("one", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+        SpeechRunCut.decide([phrase("one", 10, 15)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
     #expect(
-        SpeechRunCut.decide([piece("one", 10.4, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+        SpeechRunCut.decide([phrase("one", 10.4, 14.8)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
     #expect(SpeechRunCut.longer(.seconds(3)) == .seconds(6))
 }
 
 @Test func aLonePhraseThatBeganLaterAndIsOpenEndsTheRunWithNone() {
     // Nothing else reads past the budget: a phrase that began later in the window ends the run
-    // with no phrases, and the next run starts where it starts.
+    // with no phrases, and the next run starts just before its first word: at most 0.3 s, and
+    // never back past the run's own start.
     #expect(
-        SpeechRunCut.decide([piece("one", 13, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
-            == .run([], resumeAt: .seconds(13)))
+        SpeechRunCut.decide([phrase("one", 13, 14.8)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(13) - .milliseconds(300)))
     #expect(
-        SpeechRunCut.decide([piece("one", 10.6, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
-            == .run([], resumeAt: .seconds(10.6)))
+        SpeechRunCut.decide([phrase("one", 10.8, 15)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(10.8) - .milliseconds(300)))
+    // One that begins within half a second of the run's start counts as open from it.
+    #expect(
+        SpeechRunCut.decide([phrase("one", 10.75, 15)], floor: .seconds(10.5), cut: .seconds(15), reachedEnd: false)
+            == .extend)
     // A last phrase open at the edge that starts where the run starts would not move on.
     #expect(
         SpeechRunCut.decide(
-            [piece("a", 10, 10), piece("b", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            [phrase("a", 10, 10), phrase("b", 10, 15)], floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
 }
 
-@Test func phrasesWithoutWordsAreDroppedAndNeighboursNeverOverlap() {
-    let phrases = [piece(" ", 9, 9.5), piece("one", 9.9, 11), piece(" two", 10.98, 12), piece("\n", 12, 12.5)]
-    let kept = SpeechRunCut.normalise(phrases, from: .seconds(10))
-    #expect(kept.map(\.text) == ["one", " two"])
-    #expect(kept[0].range == .seconds(10) ..< .seconds(11), "Nothing starts before the run.")
-    #expect(kept[1].range == .seconds(11) ..< .seconds(12), "A phrase starts where the one before it ends.")
-}
-
-@Test(arguments: [
-    ("SFSpeechErrorDomain", 4, "speech_model_not_installed"),
-    ("SFSpeechErrorDomain", 10, "speech_model_not_installed"),
-    ("SFSpeechErrorDomain", 15, "speech_unavailable"),
-    ("SFSpeechErrorDomain", 16, "system_resources_limited"),
-    ("SFSpeechErrorDomain", 11, "system_resources_limited"),
-    ("SFSpeechErrorDomain", 2, "audio_unreadable"),
-    ("SFSpeechErrorDomain", 17, "audio_unreadable"),
-    ("SFSpeechErrorDomain", 3, "transcription_failed"),
-    ("SFSpeechErrorDomain", 1, "transcription_failed"),
-    ("com.apple.coreaudio.avfaudio", 2_003_334_207, "audio_unreadable"),
-    ("com.apple.coreaudio.avfaudio", 1_954_115_647, "audio_unreadable"),
-    (NSOSStatusErrorDomain, -50, "audio_unreadable"),
-    (NSCocoaErrorDomain, 260, "transcription_failed"),
-])
-func engineErrorsAreNamedCasesThatKeepOnlyTheirNumber(_ row: (String, Int, String)) {
-    let error = SpeechErrorMapping.knotError(NSError(domain: row.0, code: row.1, userInfo: ["words": "said aloud"]))
-    #expect(error.code.rawValue == row.2)
-    #expect(error.context.engineCode == row.1)
-    #expect(!"\(error)".contains("said aloud"), "An engine's description never reaches the error.")
-}
-
-@Test func theClassOfEachSpeechFailureIsTheOneTheQueueNeeds() {
-    #expect(SpeechErrorMapping.knotError(NSError(domain: "SFSpeechErrorDomain", code: 4)).isDeferral)
-    #expect(SpeechErrorMapping.knotError(NSError(domain: "SFSpeechErrorDomain", code: 16)).isDeferral)
-    #expect(SpeechErrorMapping.knotError(NSError(domain: "SFSpeechErrorDomain", code: 15)).isFinal)
-    #expect(SpeechErrorMapping.knotError(CancellationError()).isYield)
-    #expect(SpeechErrorMapping.knotError(KnotError.diskFull) == KnotError.diskFull, "A KnotError passes through.")
-    let failed = SpeechErrorMapping.knotError(NSError(domain: "SFSpeechErrorDomain", code: 3))
-    #expect(!failed.isDeferral && !failed.isFinal && !failed.isYield, "An engine failure is an attempt.")
-}
-
-@Test func anInstallThatFailsLeavesTheModelMissing() {
-    let network = SpeechErrorMapping.installError(NSError(domain: NSURLErrorDomain, code: -1009))
-    #expect(network.code == KnotError.speechModelNotInstalled.code)
-    #expect(network.context.engineCode == -1009)
+@Test func wordsHeardAgainAreDroppedByTheirOwnTimes() {
+    // A run that starts at 10 s read from 9 s: the words whose middle is before 10 s belong to
+    // the run before, and a word that straddles 10 s with its middle after it is this run's.
+    let heard = [
+        SpeechPhrase(words: [word("so", 9.2, 9.5), word(" the", 9.6, 9.95), word(" bus", 9.9, 10.3)]),
+        SpeechPhrase(words: [word(" leaves", 11, 11.4)]),
+    ]
     #expect(
-        SpeechErrorMapping.installError(NSError(domain: "SFSpeechErrorDomain", code: 16)).code
-            == KnotError.systemResourcesLimited.code)
+        SpeechRunCut.decide(heard, floor: .seconds(10), cut: .seconds(15), reachedEnd: true)
+            == .run(
+                [piece(" bus", 10, 10.3), piece(" leaves", 11, 11.4)], resumeAt: nil))
+    // A phrase heard again whole is no speech of this run.
     #expect(
-        SpeechErrorMapping.installError(NSError(domain: "SFSpeechErrorDomain", code: 15)).code
-            == KnotError.speechUnavailable.code)
-    #expect(SpeechErrorMapping.installError(CancellationError()).code == KnotError.cancelled.code)
+        SpeechRunCut.decide(
+            Array(heard.prefix(1).map { SpeechPhrase(words: Array($0.words.prefix(2))) }),
+            floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(14.5)))
 }
 
-@Test(
-    arguments: [
-        (TranscriberReadiness.ready, nil),
-        (.notInstalled, "speech_model_not_installed"),
-        (.installing, "speech_model_not_installed"),
-        (.unsupportedLocale, "speech_unavailable"),
-        (.unavailable, "speech_unavailable"),
-    ] as [(TranscriberReadiness, String?)])
-func aTranscriberThatIsNotReadySaysWhy(_ row: (TranscriberReadiness, String?)) {
-    #expect(SpeechErrorMapping.notReady(row.0)?.code.rawValue == row.1)
+@Test func aJoinIsInThePauseAfterTheLastWordGivenOrAtItsEnd() {
+    // A pause after the run's last word: the join is in it, 0.3 s at most past the word.
+    let paused = [
+        SpeechPhrase(words: [word("call", 10, 10.4), word(" home", 10.5, 10.9)]),
+        SpeechPhrase(words: [word(" so", 11.6, 12.0), word(" we", 12.1, 12.3), word(" can", 14.6, 15)]),
+    ]
+    #expect(
+        SpeechRunCut.decide(paused, floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([piece("call home", 10, 10.9)], resumeAt: .seconds(10.9) + .milliseconds(300)))
+    // No pause: the open phrase's first word starts where the last word given ends, as the
+    // engine's phrase times can put it. The join is that end, and the next run keeps the word.
+    let touching = [
+        SpeechPhrase(words: [word("call", 10, 10.4), word(" home", 10.5, 10.9)]),
+        SpeechPhrase(words: [word(" so", 10.9, 11.3), word(" we", 11.4, 14.8)]),
+    ]
+    #expect(
+        SpeechRunCut.decide(touching, floor: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([piece("call home", 10, 10.9)], resumeAt: .seconds(10.9)))
+    #expect(SpeechRunCut.preroll(for: .seconds(60)) == .seconds(1))
+    #expect(SpeechRunCut.preroll(for: .seconds(1)) == .milliseconds(250))
 }
 
-@Test func liveTextGrowsByFinalPhrasesAndReplacesItsVolatileTail() {
-    var text = SpeechLiveText()
-    #expect(text.apply("pick", isFinal: false) == LiveTranscript(final: "", volatile: "pick"))
-    #expect(text.apply("pick up", isFinal: false) == LiveTranscript(final: "", volatile: "pick up"))
-    #expect(text.apply("Pick up", isFinal: true) == LiveTranscript(final: "Pick up", volatile: ""))
-    #expect(text.apply(" the", isFinal: false) == LiveTranscript(final: "Pick up", volatile: " the"))
-    #expect(text.apply(" the bike.", isFinal: true) == LiveTranscript(final: "Pick up the bike.", volatile: ""))
-    #expect(text.apply(" fro", isFinal: false) == LiveTranscript(final: "Pick up the bike.", volatile: " fro"))
-    #expect(text.end() == LiveTranscript(final: "Pick up the bike.", volatile: ""))
+@Test func aPauseIsAQuietStretchOfTheWindowsOwnAudio() {
+    // Speech at -20 dBFS, then 0.2 s at the noise floor, then speech: one pause. A quiet
+    // stretch of 80 ms is too short to count.
+    let speech = Array(repeating: -20.0, count: 20)
+    let levels = speech + Array(repeating: -60.0, count: 10) + speech + Array(repeating: -60.0, count: 4) + speech
+    let pauses = SpeechPauses.find(levels: levels, start: .seconds(10))
+    let expected: Range<Duration> = (.seconds(10) + .milliseconds(20) * 20)..<(.seconds(10) + .milliseconds(20) * 30)
+    #expect(pauses == [expected])
+    // Quiet is relative to the window: speech at 10 dB over the noise still has its pauses.
+    let noisy = levels.map { $0 == -60 ? -40.0 : -30.0 }
+    #expect(SpeechPauses.find(levels: noisy, start: .seconds(10)) == [expected])
+    // The level of a frame.
+    let level = SpeechPauses.levels(of: Array(repeating: 0.1, count: 640), rate: 16_000)
+    #expect(level.count == 2)
+    #expect(abs(level[0] + 20) < 0.01)
 }
 
-@Test func aTranscriptNamesTheBuildThatMadeIt() {
-    #expect(!SpeechOSBuild.current.isEmpty)
-    #expect(SpeechOSBuild.current == SpeechOSBuild.current)
+@Test func aJoinIsAnchoredInTheMiddleOfAPauseNearIt() {
+    let pause: Range<Duration> = .seconds(12) ..< .seconds(12.8)
+    // A pause between the two words and within reach of the point: its middle.
+    #expect(
+        SpeechRunCut.anchor(
+            .seconds(12.3), after: .seconds(11.5), before: .seconds(13), floor: .seconds(10), in: [pause])
+            == .seconds(12.4))
+    // Out of reach, or not between the two words: the point itself.
+    #expect(
+        SpeechRunCut.anchor(
+            .seconds(11.0), after: .seconds(10.5), before: .seconds(13), floor: .seconds(10), in: [pause])
+            == .seconds(11.0))
+    #expect(
+        SpeechRunCut.anchor(
+            .seconds(12.3), after: .seconds(12.5), before: .seconds(13), floor: .seconds(10), in: [pause])
+            == .seconds(12.3))
+    // A run that gave one phrase, then silence: the join is the pause after its last word.
+    #expect(
+        SpeechRunCut.decide(
+            [SpeechPhrase(text: "one", range: .seconds(11) ..< .seconds(12))], floor: .seconds(10), cut: .seconds(15),
+            reachedEnd: false, pauses: [pause])
+            == .run([piece("one", 11, 12)], resumeAt: .seconds(12.4)))
+}
+
+@Test func aWordStretchedIntoAPauseEndsWhereThePauseBegins() {
+    // "time." heard to 138.96 s, while the audio falls quiet at 138.7 s: the word ends there.
+    let phrases = [SpeechPhrase(words: [word("a", 138.0, 138.2), word(" time.", 138.3, 138.96)])]
+    let pause: Range<Duration> = .seconds(138.7) ..< .seconds(139.4)
+    #expect(SpeechRunCut.trim(phrases, at: [pause])[0].words[1].range == .seconds(138.3) ..< .seconds(138.7))
+    // A pause that begins before the word's middle is not its end.
+    #expect(SpeechRunCut.trim(phrases, at: [.seconds(138.5) ..< .seconds(139)]) == phrases)
+}
+
+@Test func noPieceOfARunEndsPastTheNextRunsStart() {
+    // The phrase's last word ends at 13.3 s, past the pause where the join falls, 13.25 s.
+    let phrases = [
+        SpeechPhrase(words: [word("one", 11, 11.5), word(" two.", 12, 13.3)]),
+        SpeechPhrase(words: [word(" three", 14.6, 15)]),
+    ]
+    let pause: Range<Duration> = .seconds(13.0) ..< .seconds(13.5)
+    guard
+        case .run(let pieces, let resume?) =
+            SpeechRunCut.decide(phrases, floor: .seconds(10), cut: .seconds(15), reachedEnd: false, pauses: [pause])
+    else {
+        Issue.record("The run must end before the open phrase.")
+        return
+    }
+    #expect(pieces.allSatisfy { $0.range.upperBound <= resume })
 }
