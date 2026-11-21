@@ -21,10 +21,20 @@ enum AccessibilityAudit {
     /// Every exclusion, each with its reason. The aim is an empty list.
     static let exclusions: [Exclusion] = []
 
-    /// True when `issue` is one of `exclusions`.
+    /// The exclusions that name no element or give no reason. An empty identifier would match
+    /// every element that has none, so such an entry never applies, and the audit fails on it.
+    static func malformed(_ list: [Exclusion]) -> [Exclusion] {
+        list.filter { exclusion in
+            exclusion.identifier.allSatisfy(\.isWhitespace) || exclusion.reason.allSatisfy(\.isWhitespace)
+        }
+    }
+
+    /// True when `issue` is one of `exclusions` that names its element and gives its reason.
     static func isExcluded(_ issue: XCUIAccessibilityAuditIssue) -> Bool {
-        exclusions.contains { exclusion in
-            issue.auditType.contains(exclusion.type) && issue.element?.identifier == exclusion.identifier
+        let bad = malformed(exclusions)
+        return exclusions.contains { exclusion in
+            !bad.contains { $0.identifier == exclusion.identifier && $0.reason == exclusion.reason }
+                && issue.auditType.contains(exclusion.type) && issue.element?.identifier == exclusion.identifier
         }
     }
 }
@@ -35,6 +45,11 @@ extension XCUIApplication {
     /// `accessibility-audit-in-every-ui-smoke-test`.
     @MainActor
     func auditAccessibility() throws {
+        for exclusion in AccessibilityAudit.malformed(AccessibilityAudit.exclusions) {
+            XCTFail(
+                "An accessibility audit exclusion must name its element and give its reason: "
+                    + "identifier \"\(exclusion.identifier)\", reason \"\(exclusion.reason)\"")
+        }
         try performAccessibilityAudit(for: .all) { issue in
             AccessibilityAudit.isExcluded(issue)
         }
