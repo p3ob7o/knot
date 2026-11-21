@@ -271,9 +271,10 @@ struct SystemInputEngine: InputEngine {
 /// own undoing included, waits for it, and the start then takes away what it put there. One stop
 /// finishes the input and every other waits until it has. Every delivery, of the tap, of a
 /// configuration change or of the session, is counted while it runs, and none begins once the
-/// input is finishing. So every stop, during the start, after it or at once with another, returns
-/// only once the tap is gone, the engine stopped, every delivery under way ended and the session
-/// given back: no delivery follows it.
+/// input is finishing, but one: the converter's tail, the audio the tap took before the engine
+/// stopped, which the stop delivers itself before the tap goes. So every stop, during the start,
+/// after it or at once with another, returns only once the tap is gone, the engine stopped, every
+/// delivery under way ended and the session given back: no delivery follows it.
 final class OpenMicrophone: OpenAudioInput {
     let sampleRate: Double
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
@@ -296,6 +297,10 @@ final class OpenMicrophone: OpenAudioInput {
         /// The working file's format and the counted delivery, which a restart takes again.
         var format: AVAudioFormat?
         var deliver: (@Sendable (AudioDelivery) -> Void)?
+        /// The recorder's own delivery, for the converter's tail, which goes out as the tap goes.
+        var tail: (@Sendable (AudioDelivery) -> Void)?
+        /// The tap's carrier, drained before its tap goes.
+        var carrier: Carrier?
         /// How many times the engine was started again after a configuration change.
         var restarts = 0
         /// A configuration change that came while the start ran, carried out once it has ended.
@@ -347,10 +352,12 @@ final class OpenMicrophone: OpenAudioInput {
             return true
         }
         guard proceed else { return }
+        let raw = deliver
         let deliver = counted(deliver)
         state.withLock {
             $0.format = format
             $0.deliver = deliver
+            $0.tail = raw
         }
         var failure: KnotError?
         do throws(KnotError) {
@@ -388,7 +395,10 @@ final class OpenMicrophone: OpenAudioInput {
             }
             if carried.frameLength > 0 { deliver(.audio(carried)) }
         }
-        state.withLock { $0.tapInstalled = true }
+        state.withLock {
+            $0.tapInstalled = true
+            $0.carrier = carrier
+        }
     }
 
     /// Watches, once, for the engine's configuration changes, which start it again, and for the
@@ -562,17 +572,38 @@ final class OpenMicrophone: OpenAudioInput {
         }
     }
 
-    /// Stops the engine and takes the tap away, if they are there, for a restart.
+    /// Stops the engine and takes the tap away, if they are there, for a restart and at the end.
+    /// The converter's tail, audio the tap took before the engine stopped, is delivered first:
+    /// counted as every delivery is, and the one that goes out once the input is finishing.
     private func detach() {
-        let (engineStarted, tapInstalled) = state.withLock { state in
+        let (engineStarted, tapInstalled, carrier, tail) = state.withLock { state in
             defer {
                 state.engineStarted = false
                 state.tapInstalled = false
+                state.carrier = nil
             }
-            return (state.engineStarted, state.tapInstalled)
+            return (state.engineStarted, state.tapInstalled, state.carrier, state.tail)
         }
         if engineStarted { engine.stop() }
+        if let tail, let rest = carrier?.drain() { deliverTail(rest, through: tail) }
         if tapInstalled { engine.removeTap() }
+    }
+
+    /// Hands the converter's tail to the recorder, counted while it runs, so that a stop waits for
+    /// it as for any delivery.
+    private func deliverTail(
+        _ rest: AVReadOnlyAudioPCMBuffer, through deliver: @escaping @Sendable (AudioDelivery) -> Void
+    ) {
+        state.withLock { $0.delivering += 1 }
+        deliver(.audio(rest))
+        let waiters = state.withLock { state in
+            state.delivering -= 1
+            guard state.delivering == 0 else { return [CheckedContinuation<Void, Never>]() }
+            state.suspended -= state.deliveryWaiters.count
+            defer { state.deliveryWaiters = [] }
+            return state.deliveryWaiters
+        }
+        for waiter in waiters { waiter.resume() }
     }
 
     /// Stops the engine and takes the tap away, if they are there, once, and stops watching. No
@@ -590,15 +621,18 @@ final class OpenMicrophone: OpenAudioInput {
 
 /// Carries a tap's buffers into the working file's format: mixed down to one channel and, when
 /// the tap's rate is not the file's, converted into the file's rate (docs/architecture.md §8). One
-/// carrier for each tap, used on the tap's thread only, so that its converter's state runs from
-/// one buffer to the next. What the converter still holds when its tap is taken away, at most
-/// 20 ms, is not written.
+/// carrier for each tap, so that its converter's state runs from one buffer to the next. What the
+/// converter still holds when its tap goes, at a restart or a stop, is drained out of it first
+/// (`drain()`): nothing of what the tap took is lost to the conversion. The tap's thread and the
+/// one that drains take the converter in turn.
 final class Carrier: Sendable {
     /// The working file's format.
     private let format: AVAudioFormat
     /// One channel at the tap's rate.
     private let mono: AVAudioFormat
     private let converter: AVAudioConverter?
+    /// True once the converter is drained: it takes nothing more.
+    private let drained = Mutex(false)
 
     /// `nil` when no converter can be made between the two rates.
     init?(tapRate: Double, into format: AVAudioFormat) {
@@ -625,19 +659,44 @@ final class Carrier: Sendable {
         let ratio = format.sampleRate / mono.sampleRate
         let capacity = AVAudioFrameCount((Double(mixed.frameLength) * ratio).rounded(.up)) + 64
         guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-        // The converter asks for input until it has none for now: the one buffer, then no data,
-        // which keeps its state for the next buffer. The block runs inside the call only
-        // (AVAudioConverter.h, convertToBuffer:error:withInputFromBlock:).
-        var pending: AVAudioPCMBuffer? = AVAudioPCMBuffer(copying: mixed)
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, inputStatus in
-            let next = pending
-            pending = nil
-            inputStatus.pointee = next == nil ? .noDataNow : .haveData
-            return next
+        return drained.withLock { drained -> AVReadOnlyAudioPCMBuffer? in
+            // A late buffer after the drain has nowhere to go: the tap that took it is gone.
+            guard !drained else { return AVReadOnlyAudioPCMBuffer(copying: output) }
+            // The converter asks for input until it has none for now: the one buffer, then no
+            // data, which keeps its state for the next buffer. The block runs inside the call
+            // only (AVAudioConverter.h, convertToBuffer:error:withInputFromBlock:).
+            var pending: AVAudioPCMBuffer? = AVAudioPCMBuffer(copying: mixed)
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, inputStatus in
+                let next = pending
+                pending = nil
+                inputStatus.pointee = next == nil ? .noDataNow : .haveData
+                return next
+            }
+            guard status != .error, error == nil else { return nil }
+            return AVReadOnlyAudioPCMBuffer(copying: output)
         }
-        guard status != .error, error == nil else { return nil }
-        return AVReadOnlyAudioPCMBuffer(copying: output)
+    }
+
+    /// What the converter still holds, in the file's format, once: the end of the tap's audio,
+    /// asked for with `endOfStream` (AVAudioConverter.h, AVAudioConverterInputStatus). `nil` when
+    /// there is no converter, or it held nothing.
+    func drain() -> AVReadOnlyAudioPCMBuffer? {
+        guard let converter else { return nil }
+        // The filter's length at most: a tenth of a second at the file's rate.
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate / 10))
+        else { return nil }
+        return drained.withLock { drained -> AVReadOnlyAudioPCMBuffer? in
+            guard !drained else { return nil }
+            drained = true
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            guard status != .error, error == nil, output.frameLength > 0 else { return nil }
+            return AVReadOnlyAudioPCMBuffer(copying: output)
+        }
     }
 }
 

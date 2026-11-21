@@ -56,9 +56,9 @@ import Testing
         let working = try #require(audio.workingFile)
         let contents = try #require(WorkingFileReader.contents(of: working))
         #expect(contents.sampleRate == 48_000)
-        // A second at 44.1 kHz is 48,000 frames at 48 kHz, less what the converter still holds.
+        // A second at 44.1 kHz is 48,000 frames at 48 kHz, the converter's tail drained at the stop.
         let converted = contents.frames - 4_800
-        #expect(Int64(48_000 - Carrying.heldBack(at: 48_000))...48_000 ~= converted, "\(converted) after the change")
+        #expect(abs(converted - 48_000) <= 1, "\(converted) frames after the change")
         let samples = try #require(WorkingFileReader.samples(of: working))
         try #require(samples.count > 5_200, "\(samples.count) frames in the file")
         let frequency = Tone.frequency(of: Array(samples[5_000..<(samples.count - 200)]), rate: 48_000)
@@ -200,9 +200,42 @@ import Testing
         await opened.stop()
     }
 
+    /// What the converter holds is drained before its tap goes, at a restart and at a stop
+    /// (finding 2 of the review): a tenth of a second at 48 kHz, a second at 44.1 kHz in two
+    /// channels, and, back at 48 kHz, a tenth more, or a stop while it converts. In against out,
+    /// every frame the tap took reaches the recorder, to the converter's own rounding.
+    @Test(arguments: [false, true])
+    func theConvertersTailIsDelivered(stoppedWhileConverting: Bool) async throws {
+        let (opened, engine, _) = try await HardwareInputTests.openStandIn()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let frames = Mutex(0)
+        try opened.start(format: format) { delivery in
+            if case .audio(let buffer) = delivery { frames.withLock { $0 += Int(buffer.frameLength) } }
+        }
+        var at48 = try #require(Tone(rate: 48_000, channels: 1))
+        engine.deliver(try at48.next(4_800))
+        engine.setShape(InputShape(sampleRate: 44_100, channels: 2))
+        engine.changeConfiguration()
+        #expect(await SuiteWait.until("the first restart", limit: .seconds(10)) { opened.restarts == 1 })
+        var at44 = try #require(Tone(rate: 44_100, channels: 2))
+        for _ in 0..<10 { engine.deliver(try at44.next(4_410)) }
+        var expected = 4_800 + 48_000
+        if !stoppedWhileConverting {
+            engine.setShape(InputShape(sampleRate: 48_000, channels: 1))
+            engine.changeConfiguration()
+            #expect(await SuiteWait.until("the second restart", limit: .seconds(10)) { opened.restarts == 2 })
+            engine.deliver(try at48.next(4_800))
+            expected += 4_800
+        }
+        await opened.stop()
+        let delivered = frames.withLock { $0 }
+        #expect(abs(delivered - expected) <= 1, "\(delivered) frames out of \(expected)")
+    }
+
     /// The carrier converts a tap's rate into the file's at every pair of rates the hardware
-    /// gives: a second of a 1 kHz tone comes out as a second at the file's rate, less what the
-    /// converter holds, and still at 1 kHz.
+    /// gives: a second of a 1 kHz tone comes out, its tail drained, as a second at the file's
+    /// rate, to the converter's own rounding, and still at 1 kHz. A drained carrier gives nothing
+    /// more.
     @Test(arguments: [
         (44_100.0, 48_000.0), (48_000.0, 44_100.0), (48_000.0, 16_000.0), (16_000.0, 48_000.0),
         (24_000.0, 48_000.0), (96_000.0, 48_000.0),
@@ -217,8 +250,10 @@ import Testing
             #expect(carried.format == format)
             samples += Tone.samples(of: carried)
         }
+        if let tail = carrier.drain() { samples += Tone.samples(of: tail) }
+        #expect(carrier.drain() == nil, "A carrier drains once.")
         let expected = Int(fileRate)
-        #expect((expected - Carrying.heldBack(at: fileRate))...expected ~= samples.count, "\(samples.count) frames")
+        #expect(abs(samples.count - expected) <= 1, "\(samples.count) frames")
         let frequency = Tone.frequency(of: samples.dropFirst(200).map { Int16($0 * 32_767) }, rate: fileRate)
         #expect(abs(frequency - 1_000) < 5, "\(frequency) Hz")
     }
@@ -237,13 +272,6 @@ import Testing
         case .ended(let why): "ended \(why.rawValue)"
         }
     }
-}
-
-/// What a converter of the input still holds when the recording stops, at most: 20 ms of the
-/// file's rate. Measured, it is 8 to 262 frames for the pairs of rates here, the most at 48 kHz
-/// into 16 kHz, 16 ms.
-enum Carrying {
-    static func heldBack(at rate: Double) -> Int { Int(rate / 50) }
 }
 
 /// A 1 kHz tone at half scale, the same on every channel, from frame 0 on.
