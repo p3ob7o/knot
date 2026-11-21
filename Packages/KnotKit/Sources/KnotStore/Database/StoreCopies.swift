@@ -41,28 +41,32 @@ public enum StoreCopies {
 
     // MARK: Migrating
 
-    /// Migrates an older store: a checked copy first, which is required, then every later
-    /// migration and the new version in one transaction. The newest pre-migration copy is kept
-    /// until the following migration. A failure leaves the store as it was.
+    /// Migrates an older store one version at a time: before each migration a checked copy,
+    /// which is required, then the migration and its version in one transaction. The newest
+    /// pre-migration copy is kept until the following migration. A failure leaves the store at
+    /// the last version it reached whole.
     static func migrate(
         pool: DatabasePool, from version: Int, migrations: [StoreSchema.Migration], locations: StoreLocations,
         files: StoreFiles, clock: any WallClock, hooks: StoreHooks
     ) throws {
-        let copy = preMigrationCopy(locations, from: version)
-        try makeCopy(of: pool, to: copy, files: files, hooks: hooks, killPoint: .insidePreMigrationCopy)
-        let latest = migrations.last?.version ?? version
-        try pool.barrierWriteWithoutTransaction { db in
-            try db.inTransaction(.exclusive) {
-                for migration in migrations where migration.version > version { try migration.apply(db) }
-                try db.execute(sql: "PRAGMA user_version = \(latest)")
-                hooks.reach(.insideMigration)
-                return .commit
+        var current = version
+        for migration in migrations where migration.version > version {
+            let copy = preMigrationCopy(locations, from: current)
+            try makeCopy(of: pool, to: copy, files: files, hooks: hooks, killPoint: .insidePreMigrationCopy)
+            try pool.barrierWriteWithoutTransaction { db in
+                try db.inTransaction(.exclusive) {
+                    try migration.apply(db)
+                    try db.execute(sql: "PRAGMA user_version = \(migration.version)")
+                    hooks.reach(.insideMigration)
+                    return .commit
+                }
+                _ = try? db.checkpoint(.truncate)
             }
-            _ = try? db.checkpoint(.truncate)
-        }
-        for older in copies(locations, prefix: "pre-migration-") where older.lastPathComponent != copy.lastPathComponent
-        {
-            try files.remove(older)
+            for older in copies(locations, prefix: "pre-migration-")
+            where older.lastPathComponent != copy.lastPathComponent {
+                try files.remove(older)
+            }
+            current = migration.version
         }
     }
 

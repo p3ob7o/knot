@@ -344,6 +344,31 @@ import Testing
     private func digest(_ url: URL) throws -> String {
         SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// A store two versions behind migrates one version at a time, each after a checked copy of
+    /// its own, and keeps the copy made before the last. A migration that fails leaves the store
+    /// at the version it reached whole, with the copy made before it.
+    @Test func eachMigrationHasACopyOfItsOwn() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        try openStore(in: root).close()
+        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
+        let failing = StoreSchema.Migration(version: 3) { _ in throw KnotError.diskFull }
+        await expectFailure(.diskFull) { try openStore(in: root, migrations: StoreSchema.migrations + [v2, failing]) }
+        let locations = StoreLocations.testing(root: root)
+        #expect(try version(of: locations) == 2, "The store keeps the migration it finished.")
+        #expect(FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: 2).path))
+        let v3 = StoreSchema.Migration(version: 3) { try $0.execute(sql: "CREATE TABLE synthetic_v3 (id INTEGER)") }
+        let other = folders.make()
+        try openStore(in: other).close()
+        let migrated = try openStore(in: other, migrations: StoreSchema.migrations + [v2, v3])
+        #expect(try version(of: migrated.locations) == 3)
+        #expect(
+            StoreCopies.copies(migrated.locations, prefix: "pre-migration-").map(\.lastPathComponent) == [
+                "pre-migration-v2.sqlite"
+            ])
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.
