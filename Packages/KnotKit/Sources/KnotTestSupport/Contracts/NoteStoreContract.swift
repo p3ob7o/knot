@@ -2214,6 +2214,8 @@ public enum NoteStoreContract {
         let earlier = try await h.store.record(h.typed("Earlier", from: 0, to: 0.5))
         for (index, reason) in KeptInboxItem.reasons.sorted(by: { $0.rawValue < $1.rawValue }).enumerated() {
             let item = h.keptItem(h.ids.make(), reason: reason, at: 1 + Double(index))
+            // Found then, written later: the note is dated by the item, not by the store's clock.
+            h.clock.set(h.at(20 + Double(index)))
             let receipt = try await h.store.recordKeptItem(item)
             #expect(receipt.outcome == .failed(reason), "It failed, and says why.")
             #expect(!receipt.joinedExistingNote && receipt.noteID != earlier.noteID, "A new note of its own.")
