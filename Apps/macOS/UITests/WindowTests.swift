@@ -21,30 +21,34 @@ final class KnotMacWindowTests: XCTestCase {
         app.launch()
         XCTAssertTrue(field.waitForExistence(timeout: 30), "The window is there at launch.")
 
-        // Closing the window leaves the app running with no window.
-        try closeTheWindow(of: app)
-        XCTAssertEqual(app.state, .runningForeground, "The app stays when its window closes.")
+        // Closing the window leaves the app running with no window. The system may bring
+        // another app forward then, so the app runs in the background or in front.
+        try closeTheWindow(of: app, field: field)
+        XCTAssertNotEqual(app.state, .notRunning, "The app stays when its window closes.")
 
         // Opening the running app again, as the Dock or the Finder does, shows the window.
         try await openAgain(app)
         XCTAssertTrue(field.waitForExistence(timeout: 30), "Opening the app again shows the window.")
 
-        // Close the window and quit: the next launch shows the window again.
-        try closeTheWindow(of: app)
-        app.typeKey("q", modifierFlags: .command)
+        // Close the window and quit, through the app menu's Quit item, which works whichever
+        // app is in front: the next launch shows the window again.
+        try closeTheWindow(of: app, field: field)
+        app.menuItems["terminate:"].click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 30), "The app quit.")
         app.launch()
         XCTAssertTrue(field.waitForExistence(timeout: 30), "The window is there at the next launch.")
-        try app.auditAccessibility()
+        // No accessibility audit here: this is not a smoke test, and the launch test audits
+        // the same window.
     }
 
-    /// Clicks the window's close button and waits until no window is left.
+    /// Clicks the main window's close button and waits until its capture field is gone. The
+    /// accessibility tree may keep listing a closed window, so the field is what is waited on.
     @MainActor
-    private func closeTheWindow(of app: XCUIApplication) throws {
+    private func closeTheWindow(of app: XCUIApplication, field: XCUIElement) throws {
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 30))
         window.buttons[XCUIIdentifierCloseWindow].click()
-        let gone = expectation(for: NSPredicate(format: "count == 0"), evaluatedWith: app.windows)
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: field)
         wait(for: [gone], timeout: 30)
     }
 
