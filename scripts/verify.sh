@@ -704,20 +704,39 @@ step_two_process() {
 
 # ---- The soak step. It belongs to WP-06, which builds the harness in
 # ---- Packages/KnotKit/Tests/KnotSoak/ and fills this function in.
+# The capture ledger soak (docs/architecture.md §17, docs/plan/WP-06.md): every test of the
+# KnotSoak target, at the soak tier's size, which KNOT_SOAK_SEED selects: the soak of 500
+# typed captures from the seed, each injected fault that must turn it red, and the store's
+# every-order test, which only this tier runs. A seed comes from --seed, or a fresh one is
+# drawn and printed. A failure is never retried: it prints the seed, the kill points and where
+# the store was kept, and the rerun with that seed.
 step_soak() {
     local seed=${SEED:-$((RANDOM * 32768 + RANDOM))}
+    local output="$KNOT_LOGS/verify-soak.out" status=0
     echo "soak: seed $seed"
     knot_swiftpm_flags
-    local output="$KNOT_LOGS/verify-soak.out"
-    KNOT_SOAK_SEED=$seed swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "${KNOT_SOAK_FILTER:-^KnotSoak\.}" 2>&1 | tee "$output" || {
+    soak_tests() {
+        KNOT_SOAK_SEED=$seed swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
+            --filter "${KNOT_SOAK_FILTER:-^KnotSoak\.}" 2>&1 | tee "$output" # limit: soak_tests
+    }
+    knot_swift_test_limited soak soak_tests || status=$?
+    # A soak that ran no test, or that skipped or cancelled one, is a failure, not a pass.
+    if ((status == 0)) && ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
+        echo "soak: no test ran, with seed $seed."
+        status=1
+    fi
+    if ((status == 0)) && [[ -n "$(knot_skipped_tests "$output")" ]]; then
+        echo "soak: a test was skipped or cancelled, with seed $seed:"
+        knot_skipped_tests "$output"
+        status=1
+    fi
+    if ((status != 0)); then
+        # The verdict's own lines: the seed, the kill points, the kept store and the codes.
+        grep -E '^(capture ledger soak: RED|the store is kept at|kills by point|repeat it with)' "$output" || true
         echo "soak: failed with seed $seed. Repeat it with scripts/verify.sh --soak --seed $seed"
         return 1
-    }
-    # A soak that ran no test is a failure, not a pass.
-    if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
-        echo "soak: no test ran, with seed $seed."
-        return 1
     fi
+    grep -E '^capture ledger soak: |^everyOrderKeepsTheEdit: ' "$output" || true
 }
 # ---- End of the soak step.
 
