@@ -115,7 +115,9 @@ public struct LaunchRecovery: Sendable {
     /// Ends a recovered recording's capture, so that no row of an earlier launch stays open
     /// once the store answered. Audio that converts is stored. A working file that is missing or
     /// holds no frame is a recording with no audio: its row ends discarded and empty, and its
-    /// manifest goes. Audio that will not convert ends its row as failed, and the working file
+    /// manifest goes, except that a failed row ends empty only when its working file was read
+    /// and holds no frame. A failed row whose working file is missing stays failed, and its
+    /// manifest stays. Audio that will not convert ends its row as failed, and the working file
     /// and its manifest stay for the retry: the audio a person spoke is never thrown away.
     /// Returns `nil` for a recording whose row must be made after every other row has ended.
     private func finishRecording(_ recording: RecordedAudio, cyclic: Bool, kept: [CaptureID: ErrorCode]) async
@@ -132,9 +134,19 @@ public struct LaunchRecovery: Sendable {
             default:
                 break
             }
-            let hasAudio = recording.frames > 0 && recording.workingFile.map { layer.entryKind($0) == .file } == true
+            let fileIsThere = recording.workingFile.map { layer.entryKind($0) == .file } == true
+            let hasAudio = recording.frames > 0 && fileIsThere
             guard hasAudio else {
-                if let row, row.outcome == .open {
+                if let row, row.outcome != .open, !fileIsThere {
+                    // A failed row had audio, as one whose conversion failed: its working file
+                    // gone is not a recording with no audio. It stays failed, and nothing of it
+                    // is removed.
+                    log.capture(id, "recording_failed_without_file")
+                    return .ended(row.outcome)
+                }
+                // An open row with no audio ends empty. A failed row ends empty only when its
+                // working file was read and holds no frame, as reported.
+                if let row {
                     _ = try await notes.end(
                         CaptureEnd(
                             captureID: id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision))
@@ -264,9 +276,23 @@ public struct LaunchRecovery: Sendable {
                 captureID: row.id, endedAt: row.lastSavedAt ?? row.startedAt, outcome: .stored(.none),
                 revision: row.revision)
         default:
-            // A recording whose file nobody found: no audio reached the drive.
-            end = CaptureEnd(
-                captureID: row.id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision)
+            if workingFileMayBeOnTheDrive(row.id) {
+                // The recorder returned no recording, and its working file is on the drive, or
+                // the folder cannot be looked into: it could not be read now, as when it is
+                // protected while the device is locked. The row ends failed, as a conversion
+                // that failed leaves it, and the files stay: the recorder returns the orphan at
+                // a later launch, once it can be read, and `finishRecording` stores it. It is
+                // never taken for a recording with no audio, and an open row would hold rule 15
+                // against every capture on the device.
+                log.capture(row.id, "recording_not_read", .code(KnotError.conversionFailed.code))
+                end = CaptureEnd(
+                    captureID: row.id, endedAt: row.startedAt, outcome: .failed(KnotError.conversionFailed.code),
+                    revision: row.revision)
+            } else {
+                // No working file: no audio reached the drive. A manifest alone is not audio.
+                end = CaptureEnd(
+                    captureID: row.id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision)
+            }
         }
         do throws(KnotError) {
             let receipt = try await notes.end(end)
@@ -275,6 +301,20 @@ public struct LaunchRecovery: Sendable {
         } catch {
             log.failure(error.about(capture: row.id), "capture_not_recovered")
             return .kept(error.code)
+        }
+    }
+
+    /// True when a working file of the recording is at the recorder's locations, or `Recording/`
+    /// cannot be looked into, which says nothing. False only when it was looked into, or is not
+    /// there at all, and holds no working file of the recording. The manifest does not count.
+    private func workingFileMayBeOnTheDrive(_ id: CaptureID) -> Bool {
+        let files = RecordingFormat.allCases.map { locations.recordingAudio(id, format: $0) }
+        if files.contains(where: { layer.entryKind($0) != nil }) { return true }
+        do throws(KnotError) {
+            let listed = Set(try layer.contents(of: locations.recording))
+            return files.contains { listed.contains($0.lastPathComponent) }
+        } catch {
+            return error.context.posixError != ENOENT
         }
     }
 
