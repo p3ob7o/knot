@@ -70,6 +70,7 @@ public struct SearchField: View {
             }
             .textFieldStyle(.plain)
             .autocorrectionDisabled()
+            .accessibilityLabel(Text("Search", bundle: .module))
             if !text.isEmpty {
                 Button {
                     onChange("")

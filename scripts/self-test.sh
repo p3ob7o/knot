@@ -176,20 +176,30 @@ assert k.core_api_exemption("WP-02", [("WP-02", False)] * 3) is None, "WP-02 wit
 assert k.core_api_exemption("WP-10", []) is None, "another package"
 assert k.core_api_exemption("contract", [("WP-02", False)] * 3), "a contract branch"
 # A named test given to a pull request is required once that pull request has merged
-# (finding 23): WP-11 plans three, and its last is held. One given to no pull request waits
-# for the package's last, as before.
+# (finding 23): WP-11 plans several, and its last is held. One given to no pull request waits
+# for the package's last, as before, however many the brief plans: the count is read from
+# the brief, so that a package cut into more pull requests does not fail this check.
 assert k.named_test_pr("WP-11", "WP-11 PR 2 adds one file of kill points to the soak") == "2"
 assert k.named_test_pr("WP-11 PR 1", "A late draft save") == "1"
 assert k.named_test_pr("WP-11", "A late draft save") is None
 one = [("WP-11", False)]
 assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("WP-11", "2", one)
 assert not k.named_test_required("WP-11", None, one)
-assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
-assert k.named_test_required("WP-11", None, one * 3)
+# Where the brief puts its pull request "2" among its rows is read from the brief too: a row
+# for a pull request beside the planned ones may stand before it.
+rows = [row for row in k.plan_rows("WP-11") if row not in k.NOTE_ROWS]
+second = rows.index("2") + 1
+planned = len(rows)
+assert planned >= 3 and second < planned, rows
+assert not k.named_test_required("WP-11", "2", one * (second - 1))
+assert k.named_test_required("WP-11", "2", one * second) and not k.named_test_required("WP-11", None, one * second)
+assert not k.named_test_required("WP-11", None, one * (planned - 1))
+assert k.named_test_required("WP-11", None, one * planned)
 # And the command holds to it (finding 41): named-tests itself, with a given list of merged
 # pull requests, on a list of made-up tests that no code holds. At WP-11's first pull request
-# the test given to it is required and missing, and the others wait; at its second, the test
-# given to that one joins it, and the package's own still waits.
+# the test given to it is required and missing, and the others wait; at its pull request "2",
+# where the brief puts it, the test given to that one joins it, and the package's own still
+# waits; at its last, every one is required.
 import contextlib, io, os, tempfile
 with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as named:
     named.write("# made-up tests\n"
@@ -205,9 +215,9 @@ def named_missing(branch, merged, package="WP-11"):
         status = k.cmd_named_tests("git", package, branch)
     return status, sorted(w.rstrip(",") for w in out.getvalue().split() if w.startswith("selftest-"))
 assert named_missing("wp/11-engine", []) == (1, ["selftest-given-to-pr-one"]), named_missing("wp/11-engine", [])
-assert named_missing("wp/11-engine-2", one) == (1, ["selftest-given-to-pr-one", "selftest-given-to-pr-two"])
-assert named_missing("wp/11-engine-3", one * 2)[1] == ["selftest-given-to-package", "selftest-given-to-pr-one",
-                                                       "selftest-given-to-pr-two"]
+assert named_missing("wp/11-engine-2", one * (second - 1)) == (1, ["selftest-given-to-pr-one", "selftest-given-to-pr-two"])
+assert named_missing("wp/11-engine-last", one * (planned - 1))[1] == ["selftest-given-to-package",
+                                                                     "selftest-given-to-pr-one", "selftest-given-to-pr-two"]
 # A note's branch is not the package's code (41b): WP-14's proof step under test leaves the
 # test given to its first code pull request waiting, and that pull request's branch, after
 # the note, requires it.

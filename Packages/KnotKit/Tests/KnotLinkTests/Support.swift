@@ -188,7 +188,9 @@ final class KeptLog: LogSink {
 final class GatedRecorder: Recorder {
     private struct State {
         var gated: Set<CaptureID> = []
-        var waiters: [CheckedContinuation<Void, Never>] = []
+        var holdsEvery = false
+        var released: Set<CaptureID> = []
+        var waiters: [(capture: CaptureID, waiter: CheckedContinuation<Void, Never>)] = []
         var now: [CaptureID: Int] = [:]
         var most: [CaptureID: Int] = [:]
         var all: [CaptureID: Int] = [:]
@@ -202,11 +204,28 @@ final class GatedRecorder: Recorder {
     /// The next conversions of `capture` wait until `open()`.
     func gate(_ capture: CaptureID) { state.update { _ = $0.gated.insert(capture) } }
 
+    /// Every conversion waits, whatever its capture, until `release(_:)` or `open()`. For a
+    /// capture whose ID is not known before its conversion starts.
+    func holdEvery() { state.update { $0.holdsEvery = true } }
+
+    /// Lets the conversions of one capture go, now and later.
+    func release(_ capture: CaptureID) {
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        state.update {
+            $0.released.insert(capture)
+            $0.gated.remove(capture)
+            waiters = $0.waiters.filter { $0.capture == capture }.map(\.waiter)
+            $0.waiters.removeAll { $0.capture == capture }
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
     func open() {
         var waiters: [CheckedContinuation<Void, Never>] = []
         state.update {
             $0.gated = []
-            waiters = $0.waiters
+            $0.holdsEvery = false
+            waiters = $0.waiters.map(\.waiter)
             $0.waiters = []
         }
         for waiter in waiters { waiter.resume() }
@@ -237,8 +256,9 @@ final class GatedRecorder: Recorder {
         await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
             var waits = false
             state.update { state in
-                waits = state.gated.contains(capture)
-                if waits { state.waiters.append(waiter) }
+                waits =
+                    state.gated.contains(capture) || (state.holdsEvery && !state.released.contains(capture))
+                if waits { state.waiters.append((capture, waiter)) }
             }
             if !waits { waiter.resume() }
         }

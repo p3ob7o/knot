@@ -38,12 +38,17 @@ public actor InboxIngest {
     private let launchID: LaunchID
     private let items: InboxItems
     private let log: KnotLog
+    private let holds: @Sendable (CaptureManifest) -> ErrorCode?
     private var running: Set<CaptureID> = []
 
+    /// - Parameter holds: whether an item is kept where it is for now, and with which code,
+    ///   whoever asks for it to be ingested. The composition holds the items of earlier launches
+    ///   in a launch whose recovery its breaker skipped (docs/architecture.md §13). By default
+    ///   nothing is held.
     public init(
         notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
         clock: any WallClock, launchID: LaunchID, locations: StoreLocations, layer: any FileLayer,
-        log: KnotLog = KnotLog(.capture)
+        log: KnotLog = KnotLog(.capture), holds: @escaping @Sendable (CaptureManifest) -> ErrorCode? = { _ in nil }
     ) {
         self.notes = notes
         self.assets = assets
@@ -53,6 +58,7 @@ public actor InboxIngest {
         self.launchID = launchID
         self.items = InboxItems(locations: locations, layer: layer)
         self.log = log
+        self.holds = holds
     }
 
     /// Ingests every item in `Inbox/`, in the order their captures started, each after the
@@ -171,6 +177,10 @@ public actor InboxIngest {
             return .kept(error.code)
         }
         if manifest.endedAt == nil, manifest.launchID == launchID { return .leftOpen }
+        if let code = holds(manifest) {
+            log.capture(capture, "inbox_item_held", .code(code))
+            return .kept(code)
+        }
         do throws(KnotError) {
             let place = { () async throws(KnotError) -> FollowerPlacement in
                 try await self.items.placement(of: manifest, notes: self.notes, cyclic: cyclic, kept: kept)

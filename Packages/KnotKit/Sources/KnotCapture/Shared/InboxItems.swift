@@ -1,6 +1,8 @@
 import CryptoKit
+import Darwin
 import Foundation
 import KnotCore
+import Synchronization
 
 /// The items of `Inbox/`, as the engine writes them and ingest reads them
 /// (docs/architecture.md §6, rules 2 and 6).
@@ -26,21 +28,42 @@ struct InboxItems: Sendable {
     let layer: any FileLayer
     let files: StoreFiles
 
+    /// The lock this store's engine and ingest share.
+    private let itemLock: ItemLock
+
     init(locations: StoreLocations, layer: any FileLayer) {
         self.locations = locations
         self.layer = layer
         self.files = locations.durableFiles(layer: layer)
+        self.itemLock = ItemLock.of(inbox: locations.inbox, layer: layer)
     }
 
-    /// Places a typed capture's item: the manifest, then the text.
+    /// Places a typed capture's item: the manifest, then the text. The two placings hold the
+    /// store's item lock, so that ingest never removes an item between them: a payload placed after
+    /// its item was taken and removed would be left with no manifest.
     func writeTyped(_ manifest: CaptureManifest, text: String) throws(KnotError) {
         var manifest = manifest
         let payload = Data(text.utf8)
         manifest.payloadByteCount = Int64(payload.count)
         manifest.payloadSHA256 = Self.sha256(payload)
-        try files.place(try manifest.encoded(), at: locations.inboxManifest(manifest.captureID))
-        try files.place(payload, at: locations.inboxPayload(manifest.captureID, kind: .typed))
+        let encoded = try manifest.encoded()
+        try itemLock.mutex.withLock { _ throws(KnotError) in
+            try files.place(encoded, at: locations.inboxManifest(manifest.captureID))
+            #if DEBUG
+                Self.afterManifestPlaced.withLock { $0 }?(manifest.captureID, itemLock)
+            #endif
+            // A payload already on the drive with the same bytes is not placed again: it is durable.
+            let url = locations.inboxPayload(manifest.captureID, kind: .typed)
+            if layer.entryKind(url) == .file, (try? layer.read(url)) == payload { return }
+            try files.place(payload, at: url)
+        }
     }
+
+    #if DEBUG
+        /// Runs after a typed item's manifest is placed and before its payload, holding the lock:
+        /// the test of finding 74 runs an ingest there.
+        static let afterManifestPlaced = Mutex<(@Sendable (CaptureID, ItemLock) -> Void)?>(nil)
+    #endif
 
     /// Places a recording's item: the manifest alone, which names the stored file's digest.
     func writeRecording(_ manifest: CaptureManifest) throws(KnotError) {
@@ -70,10 +93,17 @@ struct InboxItems: Sendable {
 
     /// Removes an item whose content the store holds: the payload, then the manifest.
     func remove(_ capture: CaptureID, kind: SegmentKind) throws(KnotError) {
-        let payload = locations.inboxPayload(capture, kind: kind)
-        if layer.entryKind(payload) != nil { try files.remove(payload) }
-        let manifest = locations.inboxManifest(capture)
-        if layer.entryKind(manifest) != nil { try files.remove(manifest) }
+        itemLock.removalsWaiting.withLock { $0[capture, default: 0] += 1 }
+        try itemLock.mutex.withLock { _ throws(KnotError) in
+            itemLock.removalsWaiting.withLock { waiting in
+                waiting[capture, default: 1] -= 1
+                if waiting[capture] == 0 { waiting[capture] = nil }
+            }
+            let payload = locations.inboxPayload(capture, kind: kind)
+            if layer.entryKind(payload) != nil { try files.remove(payload) }
+            let manifest = locations.inboxManifest(capture)
+            if layer.entryKind(manifest) != nil { try files.remove(manifest) }
+        }
     }
 
     static func sha256(_ data: Data) -> String {
@@ -164,4 +194,59 @@ extension AssetID {
     /// The asset of a capture's recording or drawing: the capture's own ID, so that a retry
     /// after a death finds the file it placed (docs/architecture.md §4).
     static func ofCapture(_ capture: CaptureID) -> AssetID { AssetID(capture) }
+}
+
+/// Orders the engine's writing of an item and ingest's removal of one, for one store's `Inbox/`
+/// in this process. The engine and ingest of a store reach it through the same file layer and
+/// folder, so they share it, and no other store waits for it.
+final class ItemLock: Sendable {
+    let mutex = Mutex(())
+
+    /// The removals that wait for the lock now, by capture: a test reads it to know that ingest
+    /// waits for the engine's writing of that capture's item.
+    let removalsWaiting = Mutex<[CaptureID: Int]>([:])
+
+    private static let locks = Mutex<[String: ItemLock]>([:])
+
+    /// The lock of the `Inbox/` at `inbox`, as `layer` reaches it: a layer that is an object is
+    /// told apart by its identity, as a test's file layer in memory is from another test's. The
+    /// key is the folder's real path, the same before the folder exists and after, with
+    /// `/private` and without (findings 76 and 79).
+    static func of(inbox: URL, layer: any FileLayer) -> ItemLock {
+        var key = realPath(inbox)
+        if type(of: layer as Any) is AnyClass { key += "|\(ObjectIdentifier(layer as AnyObject).hashValue)" }
+        return locks.withLock { locks in
+            if let lock = locks[key] { return lock }
+            let lock = ItemLock()
+            locks[key] = lock
+            return lock
+        }
+    }
+
+    /// The real path of what `url` names: `.` and `..` worked out from the text, the deepest part
+    /// that exists resolved as the system resolves it, through every symbolic link, and the rest
+    /// as written. KnotCore's `PathForm` does the same, for the files code; it is internal there.
+    static func realPath(_ url: URL) -> String {
+        func lexical(_ path: String) -> [String] {
+            var parts: [String] = []
+            for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+                switch component {
+                case ".": continue
+                case "..": if !parts.isEmpty { parts.removeLast() }
+                default: parts.append(String(component))
+                }
+            }
+            return parts
+        }
+        let parts = lexical(url.path)
+        var count = parts.count
+        while count > 0 {
+            if let resolved = Darwin.realpath("/" + parts.prefix(count).joined(separator: "/"), nil) {
+                defer { free(resolved) }
+                return "/" + (lexical(String(cString: resolved)) + parts.dropFirst(count)).joined(separator: "/")
+            }
+            count -= 1
+        }
+        return "/" + parts.joined(separator: "/")
+    }
 }

@@ -235,41 +235,32 @@ extension RecheckSequenceTests {
     }
 }
 
-/// Two sequences in which two starts wait for each other's line for ever: findings 52 and 53
-/// of re-check G at 91f961b3, set aside from pull request 40 as the first findings of WP-11,
-/// the capture engine. Each is a known issue: when WP-11 makes every call return, the issue no
-/// longer occurs, the test fails, and the mark comes out.
-///
-/// Each waits for its stuck calls a short time of its own, not `SuiteWait`'s ten minutes. A
-/// stuck call is a task suspended on its own rig's engine, holding no thread, so it holds up no
-/// other test.
-@Suite struct EngineKnownIssues {
-    /// How long a test waits for a start that never returns.
-    static let stuckLimit: Duration = .seconds(5)
-
+/// Two sequences in which two starts waited for each other's line for ever on the tracer:
+/// findings 52 and 53 of re-check G at 91f961b3, set aside from pull request 40 as the first
+/// findings of WP-11. The engine now holds one capture's line at a time, and a start reaches
+/// disk before it waits for anything, so every call returns. Each call has `SuiteWait`'s limit.
+@Suite struct EngineLineTests {
     private static func returned(
-        _ what: String, _ task: Task<CaptureState, any Error>, limit: Duration = SuiteWait.limit,
-        sourceLocation: SourceLocation = #_sourceLocation
+        _ what: String, _ task: Task<CaptureState, any Error>, sourceLocation: SourceLocation = #_sourceLocation
     ) async -> Result<CaptureState, any Error>? {
-        await SuiteWait.value(what, limit: limit, sourceLocation: sourceLocation) { await task.result }
+        await SuiteWait.value(what, sourceLocation: sourceLocation) { await task.result }
     }
 
-    /// A stuck call shows as a wait that ran out, or as an answer that never came.
-    private static func isStuck(_ issue: Issue) -> Bool {
-        issue.comments.contains { $0.rawValue.contains("Waited") || $0.rawValue.contains("never returned") }
+    private static func texts(_ r: Rig) async -> [String] {
+        ((try? await r.stream())?.notes.flatMap(\.liveSegments).map(\.text) ?? []).sorted()
     }
 
-    /// Finding 52, re-check G's G1, set aside for WP-11. The first typed start on the app
-    /// reaches no disk while two calls wait for its line: its retry on the same surface, then a
-    /// typed start on the Mac panel. The retry holds the line and is the retry; rule 15 then
-    /// ends, for it, the newest open capture, the panel's start, while holding its own line,
-    /// and the panel's start holds its line and waits for the retry's. Neither returns.
+    /// Finding 52, re-check G's G1. The first typed start on the app reaches no disk while two
+    /// calls wait for its line: its retry on the same surface, and the end of it that a typed
+    /// start on the Mac panel makes once that start is on the drive. On the tracer the retry
+    /// ended the panel's start while it held its own line, and the panel's start held its line
+    /// while it waited for the retry's. Now the panel's start records first, lets its line go,
+    /// then waits for the first capture's; the retry saves the first capture's text, and the
+    /// panel's start then ends it at its own start. Both return, and both texts are kept.
     @Test func retryAndAnotherSurfacesStartWaitingOnOneLineBothReturn() async throws {
         let r = Rig(engineIngests: false)
         let engine = r.engine.engine
         let hold = await r.notes.holdNextCaptureWrite()
-        await r.notes.failNextCaptureWrites(with: .storeBusy)
-        r.layer.failNextWrite(with: .diskFull)
         let first = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first")) }
         await reached(hold)
         let retry = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "first")) }
@@ -280,25 +271,34 @@ extension RecheckSequenceTests {
             await eventually("the panel's start to wait for the open capture") {
                 r.logs.logged("start_waits_for_open_capture")
             })
+        // The first start's held record fails, and so does its item: it reached no disk. The
+        // panel's start is on the drive already, so the failures are the first start's.
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        r.layer.failNextWrite(with: .diskFull)
         hold.release()
         let failed = await Self.returned("the first start", first)
-        if case .success? = failed { Issue.record("The first start reached disk.") }
-        await withKnownIssue("Finding 52, WP-11: the retry and the panel's start wait for each other") {
-            let retried = await Self.returned("the retry", retry, limit: Self.stuckLimit)
-            let other = await Self.returned("the panel's start", panel, limit: Self.stuckLimit)
-            #expect(retried != nil, "The retry never returned.")
-            #expect(other != nil, "The panel's start never returned.")
-        } matching: {
-            Self.isStuck($0)
+        guard case .failure(let error as KnotError)? = failed else {
+            Issue.record("The first start did not fail: \(String(describing: failed))")
+            return
         }
+        let firstID = try #require(error.context.captureID)
+        let retried = try #require(try await Self.returned("the retry", retry)?.get())
+        let other = try #require(try await Self.returned("the panel's start", panel)?.get())
+        #expect(retried.captureID == firstID, "The retry is the same capture.")
+        #expect(other.captureID != firstID)
+        #expect(!r.logs.logged("line_nested"))
+        _ = try await r.engine.end(other.captureID)
+        _ = try await r.engine.end(firstID)
+        _ = await r.ingest.ingestAll()
+        #expect(await eventually("both texts to be stored") { await Self.texts(r) == ["first", "other"] })
+        #expect(try await r.notes.openCaptures().isEmpty)
     }
 
-    /// Finding 53, re-check G's G6, set aside for WP-11. No failure at all: the open typed
-    /// capture's end waits in the store; a typed start on the Mac panel waits for that
-    /// capture's line; a typed start on the intent surface waits for the panel's. Once the end
-    /// is stored, the panel's start plans again while it holds its own line, finds the intent's
-    /// start the newest open capture and waits for its line, which the intent's start holds
-    /// while it waits for the panel's. The end returns; neither start does.
+    /// Finding 53, re-check G's G6. No failure at all: the open typed capture's end waits in the
+    /// store; a typed start on the Mac panel follows that capture, and a typed start on the
+    /// intent surface follows the panel's. On the tracer the two starts each held their own
+    /// line and waited for the other's. Now each records first and waits for one line, holding
+    /// none. The end returns, both starts return, and every text is kept.
     @Test func twoStartsWaitingBehindAnEndBothReturn() async throws {
         let r = Rig()
         let engine = r.engine.engine
@@ -315,29 +315,28 @@ extension RecheckSequenceTests {
         r.clock.advance(by: 1)
         let intent = Task { try await engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "c")) }
         #expect(
-            await eventually("the intent's start to wait") {
+            await eventually("the intent's start to follow the panel's") {
                 r.logs.lines.filter { $0.contains("start_waits_for_open_capture") }.count >= 2
             })
         hold.release()
         let ended = await Self.returned("the end", ending)
         #expect(ended != nil)
-        await withKnownIssue("Finding 53, WP-11: two starts behind an end wait for each other") {
-            let b = await Self.returned("the panel's start", panel, limit: Self.stuckLimit)
-            let c = await Self.returned("the intent's start", intent, limit: Self.stuckLimit)
-            #expect(b != nil, "The panel's start never returned.")
-            #expect(c != nil, "The intent's start never returned.")
-        } matching: {
-            Self.isStuck($0)
-        }
+        let b = try #require(try await Self.returned("the panel's start", panel)?.get())
+        let c = try #require(try await Self.returned("the intent's start", intent)?.get())
+        #expect(!r.logs.logged("line_nested"))
+        _ = try await r.engine.end(c.captureID)
+        #expect(try await r.notes.capture(b.captureID)?.outcome == .stored, "The intent's start ended the panel's.")
+        #expect(await eventually("every text to be stored") { await Self.texts(r) == ["a", "b", "c"] })
+        #expect(try await r.notes.openCaptures().isEmpty)
     }
 
     /// Finding 54 of the review of pull request 50, set aside for WP-11. Typed capture A is open
-    /// on the `Inbox/` path with the window off, and recording B starts; the recorder writes a
-    /// manifest that names A, the capture open at the start. While the recorder's start is
-    /// held, A ends by its own call, and the store refuses B's row. Alive, rule 15 ends
-    /// nothing, B's item names nothing, and B is a note of its own. After a death while B
-    /// records, recovery reads the first manifest and puts B in A's note, which it would not
-    /// join alive: the known issue. Nothing is lost or doubled either way.
+    /// on the `Inbox/` path with the window off, and recording B starts: B follows A, decided as
+    /// B arrives, while A is open, and never again. While the recorder's start is held, A ends
+    /// by its own call, and B goes to `Inbox/` the way of A, with no row. The recorder's first
+    /// manifest and B's item both name A, so B lands in A's note alive and after a death while
+    /// it records alike. On the tracer the item named nothing while the manifest named A, and
+    /// the two cases gave two different notes.
     @Test(arguments: [false, true]) func openCaptureEndsDuringTheStart(death: Bool) async throws {
         let r = Rig(engineIngests: false)
         await r.notes.setWindow(.off)
@@ -352,8 +351,6 @@ extension RecheckSequenceTests {
         let a = try await engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
         r.clock.advance(by: 1)
         recorder.startGate.close()
-        // The store refuses the recording's row.
-        await r.notes.failNextCaptureWrites(with: .storeBusy)
         let inner = engine.engine
         let starting = Task { try await inner.begin(CaptureRequest(kind: .voice, surface: .app)) }
         #expect(await eventually("the recording's start to be held") { recorder.startGate.isHolding })
@@ -363,11 +360,13 @@ extension RecheckSequenceTests {
         let firstManifest = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(b.captureID)))
         #expect(
             firstManifest.followsCaptureID == a.captureID, "The first manifest names the capture open at the start.")
-        #expect(try await r.notes.capture(b.captureID) == nil, "The store did not take the recording's row.")
+        #expect(
+            try await r.notes.capture(b.captureID) == nil,
+            "The recording goes to `Inbox/` the way of the capture it follows, with no row.")
         if !death {
             _ = try await engine.end(b.captureID)
             let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(b.captureID)))
-            #expect(item.followsCaptureID == nil, "The item names what rule 15 ended: nothing.")
+            #expect(item.followsCaptureID == a.captureID, "The item names what the manifest names.")
         }
         r.clock.advance(by: 5)
         let next = r.relaunch()
@@ -375,12 +374,6 @@ extension RecheckSequenceTests {
         #expect(r.inboxFiles().isEmpty)
         let noteA = try #require(try await r.notes.segment(SegmentID(a.captureID))).noteID
         let noteB = try #require(try await r.notes.segment(SegmentID(b.captureID))).noteID
-        if death {
-            withKnownIssue("Finding 54, WP-11: after a death the recording joins a note it would not join alive") {
-                #expect(noteA != noteB, "The recording joined the typed capture's note.")
-            }
-        } else {
-            #expect(noteA != noteB, "Alive, with the window off, the recording is a note of its own.")
-        }
+        #expect(noteA == noteB, "death: \(death): the recording is the next segment of the capture it follows.")
     }
 }
