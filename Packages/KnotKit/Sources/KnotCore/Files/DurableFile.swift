@@ -106,10 +106,12 @@ public struct DurableFile: Sendable {
         }
     }
 
-    /// Removes a file and syncs its folder, so the removal stays.
+    /// Removes a file and syncs its folder, so the removal stays. A path outside the root is
+    /// refused, and the layer is given the path that was checked.
     public func remove(_ url: URL) throws(KnotError) {
-        try layer.remove(url)
-        try layer.syncFolder(url.deletingLastPathComponent())
+        let target = try below(url)
+        try layer.remove(target)
+        try layer.syncFolder(target.deletingLastPathComponent())
     }
 
     /// Makes sure `url` and every folder between the store's root and it exist, and that the
@@ -184,12 +186,14 @@ public struct DurableFile: Sendable {
         }
     }
 
-    /// Removes what a crash left of files being placed in `folder`.
+    /// Removes what a crash left of files being placed in `folder`, a folder below the root,
+    /// given to the layer as it was checked.
     public func removePartials(in folder: URL) throws(KnotError) {
-        for name in try layer.contents(of: folder) where name.hasPrefix(".") && name.hasSuffix(Self.partialSuffix) {
-            try layer.remove(folder.appending(path: name, directoryHint: .notDirectory))
+        let checked = try below(folder)
+        for name in try layer.contents(of: checked) where name.hasPrefix(".") && name.hasSuffix(Self.partialSuffix) {
+            try layer.remove(checked.appending(path: name, directoryHint: .notDirectory))
         }
-        try layer.syncFolder(folder)
+        try layer.syncFolder(checked)
     }
 
     /// The store's root and every folder below it down to `url`. A path outside the root is refused.
