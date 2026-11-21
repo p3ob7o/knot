@@ -36,9 +36,12 @@ final class Tally: Sendable {
 struct ScratchFolder: ~Copyable {
     let url: URL
 
-    init() throws {
-        url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "KnotAudioTests-\(UUID().uuidString)", isDirectory: true)
+    /// With `privateForm`, the folder is written with `/private` in front, as the system hands
+    /// some containers over: the same folder, written another way.
+    init(privateForm: Bool = false) throws {
+        let temporary = FileManager.default.temporaryDirectory
+        let base = privateForm ? URL(fileURLWithPath: "/private" + temporary.path, isDirectory: true) : temporary
+        url = base.appendingPathComponent("KnotAudioTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
     }
 
