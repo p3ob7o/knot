@@ -131,7 +131,9 @@ public protocol NoteStore: Sendable {
     /// capture, kept as a conflict copy when a person replaced the text since; at the same
     /// revision with other content it fails with `capture_id_conflict`. The retry of a failed
     /// capture, by `end` or `ingest`, stores it through the same precedence: a person's text
-    /// since the failure stays, and the retry's content is kept as a conflict copy. A segment's
+    /// since the failure stays, and the retry's content is kept as a conflict copy. A failed
+    /// recording or drawing ended `discarded_empty`, as launch recovery ends a recording that it
+    /// reads at last and finds to hold no frame, is discarded as an open one is. A segment's
     /// revision is the store's own: never taken from a producer's content revision, and it
     /// only rises. A recording that ends stored with no file, or a negative revision, is refused
     /// with `capture_invalid`; a drawing ended as it stands goes on to recognition.

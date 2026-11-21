@@ -35,6 +35,8 @@ public final class PowerCutFileLayer: FileLayer {
         var syncs = 0
         var forgotten: Set<Int> = []
         var denied: Set<String> = []
+        /// Files whose content this process cannot read now.
+        var unreadable: Set<String> = []
         var dieAfter: Int?
         var failNextWrite: KnotError?
     }
@@ -70,6 +72,19 @@ public final class PowerCutFileLayer: FileLayer {
     /// open a folder above its container: syncing it fails with `EPERM`.
     public func denyOpening(_ url: URL) {
         state.withLock { _ = $0.denied.insert(Self.path(url)) }
+    }
+
+    /// Makes the file at `url` one whose content this process cannot read, as a file protected
+    /// while the device is locked, or readable again: a read fails with `EACCES`, as a read of
+    /// the real drive does, and the file stays where it is.
+    public func setReadable(_ url: URL, _ readable: Bool) {
+        state.withLock { state in
+            if readable {
+                state.unreadable.remove(Self.path(url))
+            } else {
+                state.unreadable.insert(Self.path(url))
+            }
+        }
     }
 
     /// Removes a folder and everything in it, synced, as something other than Knot might.
@@ -196,6 +211,9 @@ public final class PowerCutFileLayer: FileLayer {
 
     public func read(_ url: URL) throws(KnotError) -> Data {
         try state.withLock { state throws(KnotError) in
+            guard !state.unreadable.contains(Self.path(url)) else {
+                throw KnotError.writeFailed.with(.init(posixError: EACCES))
+            }
             let id = try Self.file(url, in: state)
             return state.files[id]!.current
         }

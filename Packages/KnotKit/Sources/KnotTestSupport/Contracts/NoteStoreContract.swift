@@ -104,6 +104,7 @@ public enum NoteStoreContract {
         Check(name: "late-start", run: aLateStartDoesNotEndTheCaptureBeingMadeNow),
         Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
         Check(name: "failed-recording-retry", run: aFailedRecordingsRetryIsStored),
+        Check(name: "failed-recording-empty", run: aFailedRecordingThatHoldsNoFrameEndsEmpty),
         Check(name: "blank-repeat", run: aRepeatOfABlankCaptureChangesNothing),
         Check(name: "saved-at-record", run: theFirstSaveIsOnTheRowAfterRecord),
         Check(name: "run-not-last", run: aRunThatIsNotTheLastLeavesTheTranscriptGoing),
@@ -2122,6 +2123,26 @@ public enum NoteStoreContract {
                 try await h.store.jobs(for: SegmentID(start.id)).map(\.id) == [.transcribe(of: SegmentID(start.id))],
                 "The recording stored \(how) has its transcribe job.")
         }
+    }
+
+    /// A failed recording that a later launch reads and finds to hold no frame ends
+    /// `discarded_empty`, as an open one does: its segment goes, and no job is written. The same
+    /// end again changes nothing.
+    public static func aFailedRecordingThatHoldsNoFrameEndsEmpty(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let start = h.recordingStart(at: 0, surface: .app)
+        _ = try await h.store.record(start)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: start.id, endedAt: h.at(0), outcome: .failed(KnotError.conversionFailed.code), revision: 0))
+        let empty = CaptureEnd(captureID: start.id, endedAt: h.at(0), outcome: .discardedEmpty, revision: 0)
+        let receipt = try await h.store.end(empty)
+        #expect(receipt.outcome == .discardedEmpty, "The failed recording ends empty.")
+        #expect(try await h.row(start.id)?.outcome == .discardedEmpty)
+        #expect(try await h.store.segment(SegmentID(start.id)) == nil, "Its failed segment goes.")
+        #expect(try await h.store.jobs(for: SegmentID(start.id)).isEmpty, "No job is written for it.")
+        #expect(try await h.store.end(empty).outcome == .discardedEmpty, "The same end again changes nothing.")
+        #expect(try await h.store.openCaptures().isEmpty)
     }
 
     /// Content is judged after the emptiness rule: empty against empty is the same content. A
