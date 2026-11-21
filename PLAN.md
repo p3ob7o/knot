@@ -120,7 +120,7 @@ A milestone build is made from `main` in a fresh worktree by the thread of the o
 | Milestone | Owning package | Also needs |
 |---|---|---|
 | M1 | WP-22 PR 1 | WP-05; WP-06 PR 1; WP-06a; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
-| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
+| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-12 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
 | M3 | WP-32 PR 2 | WP-17 PR 2; WP-19 PR 3; SP-2 |
 | M4 | WP-33 PR 2 | WP-16; WP-34 PR 3; SP-3; SP-4; SP-5 |
 | M5 | WP-35 | WP-18; WP-11 PR 4; WP-16; WP-19 PR 4; WP-31 PR 2 |
@@ -132,7 +132,7 @@ If M5 is cut, the second PR of WP-31 loses the Sketch control and M6 needs it. M
 
 - **Identifiers.** Milestone builds use `com.p3ob7o.knot`, with its app group and its iCloud container (D34). They carry a version above 0.2.0, which is the retired app's. Every build that is not a milestone build uses development identifiers: the bundle ID with a `.dev` suffix, its own app group and its own iCloud container. That covers agent builds, PR builds, spikes and tests, and the TestFlight upload of the SP-3 spike app, so nothing before the M1 milestone build touches the retired app or its container. Only a milestone build opens the default store or the real iCloud container.
 - **Levels.** Every milestone build, and every fix built for an earlier milestone, is made at a level from M1 to M7. A feature whose milestone has not passed is switched off in it by a gate: sync and the command line open at M4, and ink at M5. A fix made for M2 during the keep-gate week therefore carries nothing from M3 or M4.
-- **Real notes.** Notes on the owner's iPhone and iPad are disposable until the M2 milestone build, and notes on his Mac until the M4 milestone build, which needs SP-3's answer on where the Mac store lives. After those builds, every change to the schema or to the store's location ships a tested migration. Schema version 1 is the schema of the M2 milestone build. Every change after that build is a numbered migration, whichever package makes it, the second PR of WP-10 included.
+- **Real notes.** Notes on the owner's iPhone and iPad are disposable until the M2 milestone build, and notes on his Mac until the M4 milestone build, which needs SP-3's answer on where the Mac store lives. After those builds, every change to the schema or to the store's location ships a tested migration. Schema version 1 is the schema of the M1 milestone build, the first build installed on the owner's devices: the build after it must open the store that it left there, because on a device a milestone build is installed over the one before, and the app's container, which also holds the retired app's folder, is not cleared between them. Every change after the commit that the M1 build is made from is a numbered migration, whichever package makes it, the second PR of WP-10 included. The owner's notes stay disposable until the builds named above: the migrations are for the build's sake, not yet for theirs.
 - **At each milestone.** The capture ledger soak runs, and `scripts/verify.sh --perf` measures the timed targets (§9). At each milestone tag a seeded synthetic store made by that build is committed. It holds work in flight: an open capture, a queued job and a pending delete. Every later build opens it, migrates it and passes the whole `NoteStore` contract suite on it.
 - **The retired app.** The first milestone build installed on a device replaces the retired app there. Before that install, on every device that had the retired app, the owner clears its Recovery window of drafts, pending captures and outcomes that need review, keeps a copy of the retired app, and quits it. If something was missed, that copy still opens its store, which v1 leaves untouched.
 - **Upgrades.** The upgrade rows name what they install over. At M1 the milestone build, signed for development as `com.p3ob7o.knot`, is installed over the retired app, and the row checks that the retired app's folder is still there. At M7 the TestFlight build is installed over the M6 milestone build, which has the same identifier and development signing. The SP-3 upload under the development identifier proves neither.
@@ -193,7 +193,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-05 | 1 | The thinnest real engine and queue, one end-to-end test and the preview environment | WP-02 PR 2 |
 | WP-06 | 1 | The soak harness, covering typed captures first | WP-05; WP-10 PR 1 |
 | WP-06 | 06a | The soak's step in `scripts/verify.sh`, split out of the first PR | WP-06 PR 1 |
-| WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1 |
+| WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1; WP-12 PR 2 |
 | SP-1 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | SP-1 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 | SP-2 | Notes | The code half on `spike/watch-delivery`, and its short note | WP-01 PR 1; WP-04 |
@@ -209,12 +209,13 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
 | WP-11 | 11a | The engine's tests made steady: tests that failed now and then on loaded runs wait for what they read, and one outcome of the random interleavings is a stated limit | WP-11 PR 1 |
-| WP-11 | 2 | A follower placed by the capture it follows, the engine as the one applier of a press, live words and levels, a stored recording's peaks, and the moments with no kill seam | WP-11 PR 1; the contract pull request that gives `NewCapture` the capture it follows |
+| WP-11 | 2 | The engine as the one applier of a press, live words and levels, a stored recording's peaks, KnotCapture's copy of the real-path code replaced by KnotCore's, the moments with no kill seam, and the two tests of `FollowerPlacementTests` restated as limits | WP-11 PR 1; the contract pull request that gives `CaptureEngine` its `live` and `press` |
 | WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
+| WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
 | WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
@@ -279,7 +280,7 @@ Until the keep-gate ruling, nothing that the cut order names is built, and wave 
 
 The hold names PRs, so that no milestone waits for a held part. Each held part of WP-11, WP-19, WP-31 and WP-32 is that package's last PR:
 
-- WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second places a follower by the capture it follows, makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks and gives the engine its missing kill seams. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
+- WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks, takes KnotCore's real-path code for KnotCapture's copy, gives the engine its missing kill seams and restates the follower's two tests as limits. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
 - WP-19's fourth PR is the OpenSketch intent.
 - WP-31 ships in two PRs. The first has the controls, the Live Activity and the Action Button tip. The second, held, has the Sketch control and the Home Screen and Lock Screen widgets.
 - WP-32 ships in three PRs. Its third, held, has the complication families beyond the first and the Smart Stack widget.
@@ -505,7 +506,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
 | G2 | Before WP-40 starts | Read the handoff's gap list | 15 |
 | G4 | M1 | Checklist | 15 |
-| G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 40 |
+| G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 50 |
 | G4 | Seven days after the M2 checklist has passed | The keep-gate sitting (§5) | 30 |
 | G4 | M3 | Checklist | 30 |
 | G4 | M4 | Checklist in three sittings: hotkey, CLI and MCP, two-device sync | 45 |
