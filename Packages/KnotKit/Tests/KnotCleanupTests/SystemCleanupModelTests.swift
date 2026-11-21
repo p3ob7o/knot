@@ -172,3 +172,38 @@ import Testing
         #expect(CleanupModelFailure.olderGenerationError(CocoaError(.fileReadUnknown)) == nil)
     }
 #endif
+
+#if canImport(FoundationModels) && !os(watchOS)
+    /// N6 of the re-check: the name the cleaner reads is the SDK's own. The older error is built
+    /// from the SDK in an extension that is itself deprecated, so that naming it raises no
+    /// warning, and the test reaches it through a cast at run time. A misspelled name in the
+    /// cleaner fails this test.
+    protocol OlderErrorSamples {
+        static var samples: [(error: any Error, failure: CleanupModelFailure)] { get }
+    }
+
+    enum TheSDKsOlderError {}
+
+    @available(macOS, deprecated: 27.0, message: "Builds the SDK's deprecated GenerationError on purpose.")
+    @available(iOS, deprecated: 27.0, message: "Builds the SDK's deprecated GenerationError on purpose.")
+    extension TheSDKsOlderError: OlderErrorSamples {
+        static var samples: [(error: any Error, failure: CleanupModelFailure)] {
+            let context = LanguageModelSession.GenerationError.Context(debugDescription: "synthetic")
+            return [
+                (LanguageModelSession.GenerationError.rateLimited(context), .rateLimited(retryAt: nil)),
+                (LanguageModelSession.GenerationError.assetsUnavailable(context), .notReady),
+                (LanguageModelSession.GenerationError.guardrailViolation(context), .declined(.guardrailViolation)),
+                (LanguageModelSession.GenerationError.concurrentRequests(context), .busy),
+            ]
+        }
+    }
+
+    @Test func theCleanerReadsTheOlderErrorByTheSDKsOwnName() throws {
+        let source = try #require((TheSDKsOlderError.self as Any) as? any OlderErrorSamples.Type)
+        #expect(source.samples.count == 4)
+        for sample in source.samples {
+            #expect(CleanupModelFailure.olderGenerationError(sample.error) == sample.failure)
+            #expect(CleanupModelFailure(sample.error) == sample.failure)
+        }
+    }
+#endif
