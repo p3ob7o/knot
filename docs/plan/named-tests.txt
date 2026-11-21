@@ -138,6 +138,7 @@ WP-22	gates-listed-for-each-milestone-level	A test lists the gates for each leve
 WP-30 PR 1	live-smoke-type-kill-relaunch-read-iphone	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
 WP-30	ui-late-capture-through-preview-iphone	A UI test that injects a late capture through `.preview`.
 WP-30	ui-smoke-move-segment-and-undo-iphone	The UI smoke test on the iPhone moves a segment and undoes the move.
+WP-32 PR 1	live-smoke-record-saved-watch	The Watch app's real composition, on injected audio and a temporary store: press, wait over a second, press, "Saved" is on the screen, and the recorder, the link and the outbox it wired are read back.
 WP-33	hotkey-release-that-never-arrives	A hotkey release that never arrives.
 WP-33 PR 1	live-smoke-type-kill-relaunch-read-mac	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
 WP-33	ui-drag-note-onto-text-field	A UI test drags a note onto a text field.
