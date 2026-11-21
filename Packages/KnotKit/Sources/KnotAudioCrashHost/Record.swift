@@ -39,18 +39,21 @@ let endedEarlyStatus: Int32 = 3
 /// Prints `pid <n>`, then `capture <id>`, and every later line names the capture after its first
 /// word: `live <id>` once the start has returned, `durable <id> <frames>` after each sync, and at
 /// the end `stopped <id> frames <n> ending <ending>`. A recording that ends before it is stopped,
-/// by itself or because its input ends after `--ends-after` frames, ends the command at once with
+/// by itself or because its input ends after `--ends-after` frames, short of `--seconds`, ends the
+/// command at once, without waiting for the frames that will never come, with
 /// `ended-early <id> frames <n> ending <ending>`, and status 3. The gate reads these lines.
 func record(_ arguments: Arguments) async throws(HostError) {
     let witness = try Witness(url: try arguments.url("witness"))
     let rate = try arguments.double("rate", default: 16_000)
     let endsAfter = arguments.string("ends-after").flatMap { Int64($0) }
     let seconds = try arguments.double("seconds", default: 60)
-    let total = endsAfter ?? Int64(rate * seconds)
+    // What the command waits for, whatever the input delivers: an input that ends early leaves
+    // frames that will never come.
+    let total = Int64(rate * seconds)
     let interval = Duration.milliseconds(try arguments.int("sync-ms", default: 1000))
     let taken = Counter()
     let ended = Counter()
-    let input = try injected(arguments, pace: .realTime, frames: total, ends: endsAfter != nil) { frames in
+    let input = try injected(arguments, pace: .realTime, frames: endsAfter ?? total, ends: endsAfter != nil) { frames in
         witness.taken(frames)
         taken.set(frames)
     }
