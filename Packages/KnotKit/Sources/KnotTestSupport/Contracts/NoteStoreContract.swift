@@ -2183,7 +2183,8 @@ public enum NoteStoreContract {
                 // Its note held nothing else: it is emptied, hidden and out of the stream, as an
                 // open recording's is (`anEmptyCaptureLeavesAnEmptiedNote`).
                 #expect(
-                    try await h.store.note(late.noteID)?.isShown != true, "Its note, which held nothing else, is gone.")
+                    try await h.store.note(late.noteID)?.isShown != true,
+                    "Its note, which held nothing else, is not shown.")
                 let shown = try await h.store.stream(after: nil, limit: 10).notes.map(\.note.id)
                 #expect(!shown.contains(late.noteID) && shown.contains(now.noteID), "Only the newer note is shown.")
                 #expect(try await h.store.end(empty) == receipt, "A repeat changes nothing.")
