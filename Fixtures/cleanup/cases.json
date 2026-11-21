@@ -246,7 +246,8 @@
       "reference": "So I want to try the new running route tomorrow morning, the one by the river.",
       "keep": ["try the new running route tomorrow morning", "the one by the river"],
       "remove": ["um", "uh", "uh", "like", "you", "know"],
-      "notes": "\"Like\" and \"you know\" are fillers here. Compare c29 and c30, where they are not."
+      "mayEndAsQuestion": true,
+      "notes": "\"Like\" and \"you know\" are fillers here. Compare c29 and c30, where they are not. It may end as a question: \"… you know the one by the river?\" asks the listener to place the route, and the plan stays as it was said."
     },
     {
       "id": "c18",

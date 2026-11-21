@@ -310,4 +310,42 @@ import Testing
         #expect(!CleanupReadings.matches("I'm not sure, we should cancel the booking.", readings: c16))
         #expect(!CleanupReadings.matches("I'm not sure. We should cancel the booking.", readings: c16))
     }
+
+    /// N3: every case is judged for a question mark at its end, with readings or without, and a
+    /// case may say that it fairly ends as one.
+    @Test func everyCaseIsJudgedForAQuestionAddedAtItsEnd() async throws {
+        let folder = try CleanupFolder()
+        try folder.file(
+            "cleanup/cases.json",
+            """
+            {"schema": 1, "cases": [
+              {"id": "c28", "title": "t", "categories": ["casing"], "meaningCritical": false,
+               "raw": "remind me to check the keys tonight", "reference": "Remind me to check the keys tonight.",
+               "keep": ["check the keys tonight"], "remove": []},
+              {"id": "c17", "title": "t", "categories": ["filler"], "meaningCritical": false,
+               "raw": "try the route you know the one by the river", "reference": "Try the route, the one by the river.",
+               "keep": ["the one by the river"], "remove": [], "mayEndAsQuestion": true},
+              {"id": "c23", "title": "t", "categories": ["question"], "meaningCritical": false,
+               "raw": "do we still have the key", "reference": "Do we still have the key?",
+               "keep": ["do we still have the key"], "remove": []}
+            ]}
+            """)
+        try folder.file("cleanup/cases-extra.json", oneExtraCase)
+        let model = ScriptedCleanupModel()
+        model.setAnswer { text, isTitle in
+            .success(isTitle ? "key" : text.prefix(1).uppercased() + text.dropFirst() + "?")
+        }
+        #expect(
+            await CleanupCommand.run(
+                EvalOptions(set: .synthetic, fixtures: folder.url), model: model, output: CleanupPrinted().output)
+                == EvalExit.ok)
+        let entries = try #require(try results(folder)["results"] as? [[String: Any]])
+        let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0["id"] as? String ?? "", $0) })
+        #expect(byID["c28"]?["questionAdded"] as? Bool == true, "a statement made a question")
+        #expect(byID["c28"]?["meaningChanged"] as? Bool == true && byID["c28"]?["pass"] as? Bool == false)
+        #expect(byID["c17"]?["questionAdded"] as? Bool == false, "the case says it may end as one")
+        #expect(byID["c23"]?["questionAdded"] as? Bool == false, "the case is a question")
+        let summary = try #require(try results(folder)["summary"] as? [String: Any])
+        #expect((summary["other"] as? [String: Any])?["reachedTheNote"] as? Int == 1)
+    }
 #endif

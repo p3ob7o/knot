@@ -19,6 +19,11 @@ enum CleanupSynthetic {
         let readings: [String]?
         /// `beyond-the-guard` or `transcriber-form` for an extra case; nil for the main set.
         let group: String?
+        /// A correct cleanup, whose last mark says whether the case ends as a question.
+        let reference: String
+        /// True for a case whose text may fairly end as a question though its reference does
+        /// not, as c17's "… you know the one by the river?".
+        let mayEndAsQuestion: Bool?
     }
 
     struct Input: Sendable {
@@ -155,7 +160,10 @@ enum CleanupSynthetic {
         /// Whether the final text holds one of the case's readings; nil when the case has none,
         /// or when the final text is the raw transcript, which is the speaker's own.
         let readingsHeld: Bool?
-        var pass: Bool { keptAll && matchedForbidden.isEmpty && readingsHeld != false }
+        /// True when the final text ends as a question and the case does not: a statement made a
+        /// question. Every case is judged for it, with readings or without.
+        let questionAdded: Bool
+        var pass: Bool { keptAll && matchedForbidden.isEmpty && readingsHeld != false && !questionAdded }
         /// The meaning changed and the note shows it: the guard accepted the changed text.
         var reachedTheNote: Bool { meaningChanged && outcome == "cleaned" }
 
@@ -171,11 +179,25 @@ enum CleanupSynthetic {
             let readings = item.readings ?? []
             readingsHeld =
                 readings.isEmpty || finalText == item.raw ? nil : CleanupReadings.matches(finalText, readings: readings)
+            questionAdded = Self.addsAQuestion(finalText, item)
             meaningChanged =
                 !modelOutput.isEmpty
                 && (!Self.keeps(modelOutput, item.keep)
                     || !Self.forbidden(modelOutput, item.mustNotMatch ?? []).isEmpty
-                    || (!readings.isEmpty && !CleanupReadings.matches(modelOutput, readings: readings)))
+                    || (!readings.isEmpty && !CleanupReadings.matches(modelOutput, readings: readings))
+                    || Self.addsAQuestion(modelOutput, item))
+        }
+
+        /// Whether `text` ends as a question where the case's own text does not.
+        static func addsAQuestion(_ text: String, _ item: Case) -> Bool {
+            endsAsQuestion(text) && !endsAsQuestion(item.reference) && !endsAsQuestion(item.raw)
+                && item.mayEndAsQuestion != true
+        }
+
+        /// Whether the last mark of `text`, past closing quotes and brackets, is a question mark.
+        static func endsAsQuestion(_ text: String) -> Bool {
+            let last = text.last { !$0.isWhitespace && !"\"'”’)]»".contains($0) }
+            return last == "?" || last == "？"
         }
 
         /// Whether `text` holds each phrase, in order, compared as words.
@@ -237,6 +259,7 @@ enum CleanupSynthetic {
                 ("matchedForbidden", .array(full.matchedForbidden.map(CleanupJSON.string))),
                 ("removed", .array(full.removed.map(CleanupJSON.string))),
                 ("readingsHeld", full.readingsHeld.map(CleanupJSON.bool) ?? .null),
+                ("questionAdded", .bool(full.questionAdded)),
                 ("meaningChanged", .bool(full.meaningChanged)), ("pass", .bool(full.pass)),
                 ("title", .optional(title)), ("titleDropped", .optional(titleDropped)),
                 (
@@ -245,6 +268,7 @@ enum CleanupSynthetic {
                         ("outcome", .string(punctuation.outcome)), ("modelOutput", .string(punctuation.modelOutput)),
                         ("guard", .string(punctuation.guard)),
                         ("readingsHeld", punctuation.readingsHeld.map(CleanupJSON.bool) ?? .null),
+                        ("questionAdded", .bool(punctuation.questionAdded)),
                         ("meaningChanged", .bool(punctuation.meaningChanged)),
                         ("pass", .bool(punctuation.pass)),
                     ])

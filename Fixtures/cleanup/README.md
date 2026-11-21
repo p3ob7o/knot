@@ -19,6 +19,7 @@ They follow the v1 rules of docs/product-spec.md §5 and docs/architecture.md §
 | `mustNotMatch` | Case-insensitive regular expressions that a correct cleanup never matches. Every `punctuation` case has them, because the guard cannot catch those errors: the words stay the same. |
 | `readings` | Correct cleanups written with their marks, for every meaning-critical case. Between two words a cleanup has none, a pause (`,` `;` `:` or a dash), a stop (`.` `!` or a line break) or a question (`?`). Where a reading has none or a pause, a cleanup may have none or a pause; where it has a stop, a pause or a stop; a gap written `{…}` allows exactly what the braces hold: `_` none, `,` a pause, `.` a stop, `?` a question. The end compares as a question or not. A cleanup matches when it matches one reading, so a break in a place nobody foresaw fails. `knot-eval`'s `CleanupReadings` reads them. |
 | `group` | In `cases-extra.json` only: `beyond-the-guard` or `transcriber-form`. |
+| `mayEndAsQuestion` | `true` for a case whose text may fairly end as a question though its reference does not, with `notes` saying why. Every other case changes its meaning when a cleanup ends it as a question and neither its reference nor its raw text does. |
 | `wrong` | Example outputs that change the meaning, each with `why`. |
 | `notes` | What the case is about, for a person reading the results. |
 
@@ -32,8 +33,8 @@ They follow the v1 rules of docs/product-spec.md §5 and docs/architecture.md §
 
 WP-14 owns the evaluation and its format, in [`../results/cleanup/README.md`](../results/cleanup/README.md). The rules this set assumes:
 
-- A case passes when the final text keeps every `keep` phrase in order, matches no `mustNotMatch` pattern and, when the final text is the cleaned one, matches one of its `readings`. The final text is the cleaned text when the guard accepts it, and the raw transcript when it does not.
-- A case changes the meaning when the model's output, before the guard, loses a `keep` phrase, matches a `mustNotMatch` pattern or matches none of its `readings`. Results record this for every case, so that what the model does is visible even when the guard saves the note.
+- A case passes when the final text keeps every `keep` phrase in order, matches no `mustNotMatch` pattern, does not end as a question where the case does not (`mayEndAsQuestion`), and, when the final text is the cleaned one, matches one of its `readings`. The final text is the cleaned text when the guard accepts it, and the raw transcript when it does not.
+- A case changes the meaning when the model's output, before the guard, loses a `keep` phrase, matches a `mustNotMatch` pattern, matches none of its `readings`, or ends as a question where the case does not. Results record this for every case, so that what the model does is visible even when the guard saves the note.
 - One changed meaning among the meaning-critical cases sends the cleanup default to the owner's decision (WP-04 failure rules).
 - A meaning-critical case that passed and now fails blocks the pull request.
 

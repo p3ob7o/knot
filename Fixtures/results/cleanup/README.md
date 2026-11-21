@@ -40,6 +40,7 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "<the proposed title that passed the title check, or null>",
@@ -49,6 +50,7 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
         "modelOutput": "<the model's body under punctuation only, before the guard>",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -71,10 +73,10 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
 - One entry per case, in the order of `cases.json`.
 - `outcome` is `cleaned`, `declined` (a refusal, a guardrail violation, or an empty or malformed result) or `rejected` (the guard refused it). `guard` is `accepted`, `rejected:` followed by the guard's reason code, or `not_run` for a decline, which the guard never sees.
 - `finalText` is `modelOutput` when the guard accepted it, and the raw transcript otherwise.
-- `keptAll`, `matchedForbidden` and `readingsHeld` are measured on `finalText`. `readingsHeld` is null for a case with no readings, and for a final text that is the raw transcript, which is the speaker's own. `pass` is `keptAll`, no forbidden match and no reading broken.
+- `keptAll`, `matchedForbidden` and `readingsHeld` are measured on `finalText`. `readingsHeld` is null for a case with no readings, and for a final text that is the raw transcript, which is the speaker's own. `questionAdded` is true when the final text ends as a question and neither the case's reference nor its raw text does, unless the case has `mayEndAsQuestion`; every case is judged for it. `pass` is `keptAll`, no forbidden match, no reading broken and no question added.
 - `group` is `main` for the cases of `cases.json`, and `beyond-the-guard` or `transcriber-form` for those of `cases-extra.json`. `summary.meaningCritical`, `punctuationOnly` and `other` count the main set; `beyondTheGuard` and `transcriberForm` count the extra cases apart.
 - `reachedTheNote` counts the changed meanings that the guard accepted, so that the note shows them: what the guard cannot see.
-- `meaningChanged` is measured on `modelOutput`: a lost `keep` phrase, a forbidden match or a broken reading. It shows what the model did even when the guard saved the note.
+- `meaningChanged` is measured on `modelOutput`: a lost `keep` phrase, a forbidden match, a broken reading or a question added. It shows what the model did even when the guard saved the note.
 - `removed` lists the words of `raw` that `finalText` leaves out.
 - `summary.punctuationOnly` counts the `punctuation` cases, which are also in `meaningCritical`.
 - The top-level fields of a result score full cleanup. `punctuationOnly` scores the same case under punctuation only, by the same rules, and `summary.punctuationOnlyMode` counts those: the owner chooses between full cleanup, punctuation only and off.
