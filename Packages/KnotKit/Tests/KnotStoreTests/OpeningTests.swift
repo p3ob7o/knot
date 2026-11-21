@@ -77,7 +77,7 @@ import Testing
         let layer = HookedFileLayer(beforeCreate: { url in
             if realPath(url) == realPath(locations.storeRoot) { gate.stop() }
         })
-        let slower = Task.detached { try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer) }
+        let slower = onOwnThread { try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer) }
         defer { gate.release() }
         #expect(await gate.untilReached())
         let made = try await CopiesTests.make(in: root, seed: 81)
@@ -513,7 +513,7 @@ import Testing
             let name = url.lastPathComponent
             if name.hasPrefix(".knot.sqlite."), name.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
         })
-        let slower = Task.detached { () throws -> StoreDatabase in
+        let slower = onOwnThread { () throws -> StoreDatabase in
             try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer)
         }
         defer { gate.release() }
@@ -574,7 +574,7 @@ import Testing
         let hooks = StoreHooks(statements: { sql in
             if sql.uppercased().hasPrefix("BEGIN EXCLUSIVE") { gate.stop() }
         })
-        let slower = Task.detached { () throws -> StoreDatabase in
+        let slower = onOwnThread { () throws -> StoreDatabase in
             try StoreDatabase.open(locations: locations, role: .app, migrations: migrations, hooks: hooks)
         }
         defer { gate.release() }

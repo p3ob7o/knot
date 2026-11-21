@@ -48,7 +48,9 @@ struct HookedFileLayer: FileLayer {
 }
 
 /// A point that the code under test stops at until the test lets it go. The test's wait ends
-/// through `SuiteWait`, and the stopped call's wait ends after the same ten minutes.
+/// through `SuiteWait`, and the stopped call's wait ends after the same ten minutes. The stop
+/// blocks the thread the code runs on, so code that a gate stops runs on a thread of its own,
+/// started with `onOwnThread`, never on a thread of the cooperative pool.
 final class Gate: Sendable {
     private let state = Mutex((armed: true, reached: false))
     private let released = DispatchSemaphore(value: 0)
@@ -72,6 +74,30 @@ final class Gate: Sendable {
     }
 
     func release() { released.signal() }
+}
+
+/// A thread of its own for the code a test stops, outside Swift's cooperative pool.
+///
+/// A `Gate` stops the code under test by blocking the thread it runs on, and a call that waits
+/// on stopped code, as a caller of GRDB's writer does, blocks its own thread too. The pool has
+/// as many threads as the machine has cores, three on a hosted runner: three stopped tests took
+/// every one, and the tests that would have let them go never ran. So no test blocks a thread
+/// of the pool: a wait in a test is async, or the code it stops runs here. The task that prefers
+/// this executor owns it, and every job of the task runs on its one serial queue.
+final class OwnThread: TaskExecutor {
+    private let queue = DispatchQueue(label: "knot.store-tests.own-thread")
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedTaskExecutor()
+        queue.async { job.runSynchronously(on: executor) }
+    }
+}
+
+/// Starts `operation` in a task of its own whose code runs on a thread of its own
+/// (`OwnThread`): the way to run code under test that a `Gate` stops.
+func onOwnThread<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) -> Task<T, any Error> {
+    Task.detached(executorPreference: OwnThread(), operation: operation)
 }
 
 /// A switch a test turns on and off while the code under test reads it.

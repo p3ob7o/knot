@@ -370,7 +370,7 @@ import Testing
         })
         let database = try StoreDatabase.open(
             locations: made.database.locations, role: .app, clock: made.clock, fileLayer: layer)
-        let first = Task.detached { try database.makeDailyCopy() }
+        let first = onOwnThread { try database.makeDailyCopy() }
         defer { gate.release() }
         #expect(await gate.untilReached())
         let other = try database.makeDailyCopy()
@@ -548,7 +548,7 @@ import Testing
         })
         let database = try StoreDatabase.open(
             locations: made.database.locations, role: .app, clock: made.clock, fileLayer: layer)
-        let copy = Task.detached { try database.makeDailyCopy() }
+        let copy = onOwnThread { try database.makeDailyCopy() }
         defer { gate.release() }
         #expect(await gate.untilReached())
         try openStore(in: root).close()

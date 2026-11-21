@@ -81,7 +81,7 @@ import Testing
                 if url.lastPathComponent.hasSuffix(DurableFile.partialSuffix) { writeGate.stop() }
                 if realPath(url) == realPath(source) { moveGate.stop() }
             }))
-        let placing = Task.detached { try await slower.place(Data([1]), as: written, kind: .audio) }
+        let placing = onOwnThread { try await slower.place(Data([1]), as: written, kind: .audio) }
         defer { writeGate.release() }
         #expect(await writeGate.untilReached())
         let first = try await made.assets.place(Data([2]), as: written, kind: .audio)
@@ -89,7 +89,7 @@ import Testing
         await expectFailure(.assetConflict) { try await placing.value }
         #expect(try await made.assets.find(written, kind: .audio)?.sha256 == first.sha256)
 
-        let moving = Task.detached { try await slower.move(source, as: moved, kind: .audio) }
+        let moving = onOwnThread { try await slower.move(source, as: moved, kind: .audio) }
         defer { moveGate.release() }
         #expect(await moveGate.untilReached())
         let placed = try await made.assets.place(Data([2]), as: moved, kind: .audio)
@@ -291,7 +291,7 @@ import Testing
             layer: HookedFileLayer(beforeSyncFile: { url in
                 if url.lastPathComponent.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
             }))
-        let drawing = Task.detached { () throws -> StoredFile in
+        let drawing = onOwnThread { () throws -> StoredFile in
             try await slower.place(Data([9]), as: asset, kind: .ink)
         }
         defer { gate.release() }
