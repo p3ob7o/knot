@@ -1,3 +1,4 @@
+import KnotApp
 import KnotCore
 import KnotUI
 import Observation
@@ -10,8 +11,8 @@ import UIKit
 @MainActor
 @Observable
 final class Shell {
-    let environment: AppEnvironment
-    let context: UIContext
+    /// The process's app, from the composition's one call.
+    let app: AppComposition
     let capture: NoteViewModel
     let stream: StreamViewModel
     let search: SearchViewModel
@@ -24,19 +25,32 @@ final class Shell {
         case note(NoteID)
     }
 
-    init(environment: AppEnvironment) {
-        self.environment = environment
-        // No port gives the views this device's ID yet: the composition of WP-22 brings the
-        // context with `.live`. Until then the shell makes one, which only decides whether a
-        // recording's text is made here or elsewhere, and no recording runs in this skeleton.
-        let context = UIContext(thisDevice: environment.ids.make(), sync: .notInThisBuild)
-        self.context = context
+    var environment: AppEnvironment { app.environment }
+    var context: UIContext { app.context }
+
+    /// The shell implements none of the shell's ports yet: the cues, the surface router and
+    /// the Live Activity come with WP-30's second pull request.
+    init(app: AppComposition = EnvironmentFactory.app(shell: ShellPorts())) {
+        self.app = app
+        let environment = app.environment
+        let context = app.context
         capture = NoteViewModel(
             environment: environment, context: context, surface: .app, announcer: VoiceOverAnnouncer())
         stream = StreamViewModel(environment: environment, context: context)
         search = SearchViewModel(environment: environment, context: context)
         player = PlayerViewModel(player: environment.player)
     }
+
+    /// Starts the launch sequence, once, when the capture surface is on screen. Typing never
+    /// waits for it: until the store opens, a capture goes to `Inbox/`. It runs in a task of
+    /// its own, so a screen pushed over the surface does not cancel it.
+    func startLaunchSequence() {
+        guard launch == nil else { return }
+        let app = app
+        launch = Task { _ = await app.runLaunchSequence() }
+    }
+
+    @ObservationIgnored private var launch: Task<Void, Never>?
 
     /// A model for a note opened from the stream. Its field appends to that note (rule 5).
     func noteModel(_ id: NoteID) -> NoteViewModel {
@@ -62,6 +76,7 @@ struct ShellView: View {
                         .accessibilityIdentifier("shell.notes")
                     }
                 }
+                .onAppear { shell.startLaunchSequence() }
                 .navigationDestination(for: Shell.Screen.self) { screen in
                     switch screen {
                     case .stream:
