@@ -155,6 +155,38 @@ import Testing
         }
     }
 
+    /// Finding 84: the same for a recording. The placement asked for and the note shown reach the
+    /// recorder's first manifest, the store's record call, and on the `Inbox/` path the item, for
+    /// the window, for "New note" and for a named note.
+    @Test(arguments: [false, true])
+    func recordingsPlacementAndShownNoteReachTheStoreAndTheManifestsUnchanged(inbox: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        let shown = try await Self.capture("shown", in: r)
+        let engine = BoundedEngine(r.engine(ingests: false))
+        for placement in [CapturePlacement.window, .newNote, .named(shown)] {
+            r.clock.advance(by: 10)
+            if inbox { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+            let begun = try await r.beginRecording(
+                CaptureRequest(kind: .voice, surface: .app, placement: placement, shownNote: shown), on: engine)
+            let id = begun.captureID
+            let first = try CaptureManifest.decode(try r.layer.read(r.locations.recordingManifest(id)))
+            #expect(first.placement == placement)
+            #expect(first.shownNoteID == shown)
+            if !inbox {
+                let row = try #require(try await r.notes.capture(id))
+                #expect(row.placement == placement)
+                #expect(row.shownNoteID == shown)
+            }
+            r.clock.advance(by: 3)
+            _ = try await engine.end(id)
+            if inbox {
+                let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(id)))
+                #expect(item.placement == placement)
+                #expect(item.shownNoteID == shown)
+            }
+        }
+    }
+
     // MARK: Rule 12
 
     /// Rule 12: a draft found after a crash becomes a finished typed segment at relaunch, ending
