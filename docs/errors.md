@@ -384,7 +384,7 @@ A step was cancelled: the task that awaited it was cancelled, because background
 
 ### `inbox_item_unreadable`
 
-An inbox item cannot be read: its manifest, or a body that does not fit its kind, such as a file whose digest is not 64 hexadecimal digits. The store writes it as a failed segment that says so, and the file is kept.
+An inbox item cannot be read: its manifest, or a body that does not fit its kind, such as a file whose digest is not 64 hexadecimal digits. It becomes a failed segment that says so, and its files are kept in `Inbox/`. When a later version can read the item, it is stored where that failed segment is.
 
 - Class: failure
 - Next: report_problem
@@ -394,7 +394,7 @@ An inbox item cannot be read: its manifest, or a body that does not fit its kind
 
 ### `inbox_item_newer_version`
 
-An inbox item was written by a newer Knot. It is kept, and ingested after an update.
+An inbox item was written by a newer Knot. It becomes a failed segment that says so, and its files are kept in `Inbox/`. After an update that can read it, it is stored where that failed segment is.
 
 - Class: failure
 - Next: update_knot
