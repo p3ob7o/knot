@@ -57,7 +57,7 @@ enum CleanupLocal {
                 tallies[mode, default: CleanupTally()].add(run)
             }
             if let full = pair.runs[.full] {
-                pair.title = await CleanupEvaluation.title(full, model: model)
+                pair.title = await CleanupEvaluation.title(full, model: model).title
             }
             pairs.append(pair)
         }

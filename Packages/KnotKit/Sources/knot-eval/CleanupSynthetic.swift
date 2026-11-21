@@ -1,8 +1,9 @@
 import Foundation
 import KnotCleanup
 
-/// `knot-eval cleanup --set synthetic`: the 30 committed cases of `Fixtures/cleanup/cases.json`,
-/// scored as `Fixtures/cleanup/README.md` says and written in the format of
+/// `knot-eval cleanup --set synthetic`: the 30 committed cases of `Fixtures/cleanup/cases.json`
+/// and the cases of `Fixtures/cleanup/cases-extra.json`, counted apart, scored as
+/// `Fixtures/cleanup/README.md` says and written in the format of
 /// `Fixtures/results/cleanup/README.md`.
 enum CleanupSynthetic {
     /// `Fixtures/cleanup/cases.json`, the fields the evaluation reads.
@@ -13,23 +14,41 @@ enum CleanupSynthetic {
         let raw: String
         let keep: [String]
         let mustNotMatch: [String]?
+        /// Correct cleanups written with their marks (`CleanupReadings`). Every meaning-critical
+        /// case of the main set has them.
+        let readings: [String]?
+        /// `beyond-the-guard` or `transcriber-form` for an extra case; nil for the main set.
+        let group: String?
     }
 
     struct Input: Sendable {
         let fixtures: URL
         let cases: [Case]
         let casesSha256: String
+        let extraCasesSha256: String
     }
+
+    /// The groups the results are counted in.
+    static let mainGroup = "main"
+    static let beyondTheGuard = "beyond-the-guard"
+    static let transcriberForm = "transcriber-form"
 
     /// The results file, inside the fixtures folder.
     static let resultsPath = "results/cleanup/synthetic.json"
 
     static func input(_ fixtures: URL) throws -> Input {
         struct File: Decodable { let cases: [Case] }
-        guard let data = try? Data(contentsOf: fixtures.appendingPathComponent("cleanup/cases.json")),
-            let file = try? JSONDecoder().decode(File.self, from: data), !file.cases.isEmpty
-        else { throw CleanupStop.inputMissing("Fixtures/cleanup/cases.json is missing or unreadable.") }
-        return Input(fixtures: fixtures, cases: file.cases, casesSha256: CleanupEvaluation.sha256(data))
+        func read(_ name: String) throws -> (cases: [Case], sha256: String) {
+            guard let data = try? Data(contentsOf: fixtures.appendingPathComponent("cleanup/\(name)")),
+                let file = try? JSONDecoder().decode(File.self, from: data), !file.cases.isEmpty
+            else { throw CleanupStop.inputMissing("Fixtures/cleanup/\(name) is missing or unreadable.") }
+            return (file.cases, CleanupEvaluation.sha256(data))
+        }
+        let main = try read("cases.json")
+        let extra = try read("cases-extra.json")
+        return Input(
+            fixtures: fixtures, cases: main.cases + extra.cases, casesSha256: main.sha256,
+            extraCasesSha256: extra.sha256)
     }
 
     /// Cleans every case in both modes, writes the results and prints the numbers. A
@@ -55,6 +74,7 @@ enum CleanupSynthetic {
             ("schema", .int(1)),
             ("set", .string("synthetic")),
             ("casesSha256", .string(input.casesSha256)),
+            ("extraCasesSha256", .string(input.extraCasesSha256)),
             (
                 "model",
                 .object([
@@ -77,24 +97,29 @@ enum CleanupSynthetic {
         }
 
         let summary = Summary(results)
+        let main = results.filter { $0.group == mainGroup }.count
         output.line(
-            "knot-eval cleanup --set synthetic: \(results.count) cases, model \(identity.name), "
-                + "macOS \(identity.osBuild), greedy")
+            "knot-eval cleanup --set synthetic: \(main) cases and \(results.count - main) extra, model "
+                + "\(identity.name), macOS \(identity.osBuild), greedy")
         output.line(tallies[.full, default: CleanupTally()].line("full cleanup"))
         output.line(tallies[.punctuationOnly, default: CleanupTally()].line("punctuation only"))
         for (label, group) in [
             ("meaning-critical", summary.meaningCritical), ("punctuation", summary.punctuationCases),
-            ("other", summary.other),
+            ("other", summary.other), ("beyond the guard", summary.beyondTheGuard),
+            ("transcriber's form", summary.transcriberForm),
         ] {
             output.line(
                 "  full, \(label): pass \(group.pass) of \(group.cases), meaning changed by the model "
-                    + "\(group.meaningChanged)")
+                    + "\(group.meaningChanged), of which shown in the note \(group.reachedTheNote)")
         }
         let mode = summary.punctuationMode
         output.line(
-            "  punctuation only, meaning-critical: pass \(mode.meaningCriticalPass) of \(summary.meaningCritical.cases), "
-                + "meaning changed by the model \(mode.meaningChanged) of \(results.count)")
-        output.line("  titles kept: \(results.filter { $0.title != nil }.count) of \(results.count)")
+            "  punctuation only, meaning-critical: pass \(mode.meaningCriticalPass) of "
+                + "\(summary.meaningCriticalAll), meaning changed by the model \(mode.meaningChanged) of "
+                + "\(results.count), of which shown in the note \(mode.reachedTheNote)")
+        output.line(
+            "  titles kept: \(summary.titlesKept) of \(results.count), dropped for a negation left out: "
+                + "\(summary.titlesDroppedForNegation)")
         output.line("  wrote Fixtures/\(resultsPath)")
 
         let regressions = results.filter { $0.meaningCritical && !$0.full.pass && before.contains($0.id) }
@@ -127,7 +152,12 @@ enum CleanupSynthetic {
         let matchedForbidden: [String]
         let removed: [String]
         let meaningChanged: Bool
-        var pass: Bool { keptAll && matchedForbidden.isEmpty }
+        /// Whether the final text holds one of the case's readings; nil when the case has none,
+        /// or when the final text is the raw transcript, which is the speaker's own.
+        let readingsHeld: Bool?
+        var pass: Bool { keptAll && matchedForbidden.isEmpty && readingsHeld != false }
+        /// The meaning changed and the note shows it: the guard accepted the changed text.
+        var reachedTheNote: Bool { meaningChanged && outcome == "cleaned" }
 
         init(_ run: CleanupRun, _ item: Case) {
             outcome = CleanupEvaluation.outcomeName(run)
@@ -138,10 +168,14 @@ enum CleanupSynthetic {
             keptAll = Self.keeps(finalText, item.keep)
             matchedForbidden = Self.forbidden(finalText, item.mustNotMatch ?? [])
             removed = CleanupEvaluation.removed(run)
+            let readings = item.readings ?? []
+            readingsHeld =
+                readings.isEmpty || finalText == item.raw ? nil : CleanupReadings.matches(finalText, readings: readings)
             meaningChanged =
                 !modelOutput.isEmpty
                 && (!Self.keeps(modelOutput, item.keep)
-                    || !Self.forbidden(modelOutput, item.mustNotMatch ?? []).isEmpty)
+                    || !Self.forbidden(modelOutput, item.mustNotMatch ?? []).isEmpty
+                    || (!readings.isEmpty && !CleanupReadings.matches(modelOutput, readings: readings)))
         }
 
         /// Whether `text` holds each phrase, in order, compared as words.
@@ -175,36 +209,43 @@ enum CleanupSynthetic {
     /// Fixtures/results/cleanup/README.md.
     struct Result {
         let id: String
+        let group: String
         let meaningCritical: Bool
         let categories: [String]
         let full: Score
         let punctuation: Score
         let title: String?
+        let titleDropped: String?
 
-        init(_ item: Case, full: CleanupRun, punctuation: CleanupRun, title: String?) {
+        init(_ item: Case, full: CleanupRun, punctuation: CleanupRun, title: ModelCleaner.TitleProposal) {
             id = item.id
+            group = item.group ?? mainGroup
             meaningCritical = item.meaningCritical
             categories = item.categories
             self.full = Score(full, item)
             self.punctuation = Score(punctuation, item)
-            self.title = title
+            self.title = title.title
+            titleDropped = title.dropped?.rawValue
         }
 
         var json: CleanupJSON {
             .object([
-                ("id", .string(id)), ("meaningCritical", .bool(meaningCritical)),
+                ("id", .string(id)), ("group", .string(group)), ("meaningCritical", .bool(meaningCritical)),
                 ("categories", .array(categories.map(CleanupJSON.string))), ("outcome", .string(full.outcome)),
                 ("modelOutput", .string(full.modelOutput)), ("guard", .string(full.guard)),
                 ("finalText", .string(full.finalText)), ("keptAll", .bool(full.keptAll)),
                 ("matchedForbidden", .array(full.matchedForbidden.map(CleanupJSON.string))),
                 ("removed", .array(full.removed.map(CleanupJSON.string))),
+                ("readingsHeld", full.readingsHeld.map(CleanupJSON.bool) ?? .null),
                 ("meaningChanged", .bool(full.meaningChanged)), ("pass", .bool(full.pass)),
-                ("title", .optional(title)),
+                ("title", .optional(title)), ("titleDropped", .optional(titleDropped)),
                 (
                     "punctuationOnly",
                     .object([
                         ("outcome", .string(punctuation.outcome)), ("modelOutput", .string(punctuation.modelOutput)),
-                        ("guard", .string(punctuation.guard)), ("meaningChanged", .bool(punctuation.meaningChanged)),
+                        ("guard", .string(punctuation.guard)),
+                        ("readingsHeld", punctuation.readingsHeld.map(CleanupJSON.bool) ?? .null),
+                        ("meaningChanged", .bool(punctuation.meaningChanged)),
                         ("pass", .bool(punctuation.pass)),
                     ])
                 ),
@@ -216,15 +257,20 @@ enum CleanupSynthetic {
         let cases: Int
         let pass: Int
         let meaningChanged: Int
+        let reachedTheNote: Int
 
         init(_ results: [Result]) {
             cases = results.count
             pass = results.filter(\.full.pass).count
             meaningChanged = results.filter(\.full.meaningChanged).count
+            reachedTheNote = results.filter(\.full.reachedTheNote).count
         }
 
         var json: CleanupJSON {
-            .object([("cases", .int(cases)), ("pass", .int(pass)), ("meaningChanged", .int(meaningChanged))])
+            .object([
+                ("cases", .int(cases)), ("pass", .int(pass)), ("meaningChanged", .int(meaningChanged)),
+                ("reachedTheNote", .int(reachedTheNote)),
+            ])
         }
     }
 
@@ -233,6 +279,7 @@ enum CleanupSynthetic {
         let rejected: Int
         let declined: Int
         let meaningChanged: Int
+        let reachedTheNote: Int
         let meaningCriticalPass: Int
 
         init(_ results: [Result]) {
@@ -240,6 +287,7 @@ enum CleanupSynthetic {
             rejected = results.filter { $0.punctuation.outcome == "rejected" }.count
             declined = results.filter { $0.punctuation.outcome == "declined" }.count
             meaningChanged = results.filter(\.punctuation.meaningChanged).count
+            reachedTheNote = results.filter(\.punctuation.reachedTheNote).count
             meaningCriticalPass = results.filter { $0.meaningCritical && $0.punctuation.pass }.count
         }
     }
@@ -251,27 +299,51 @@ enum CleanupSynthetic {
         let guardRejected: Int
         let declined: Int
         let punctuationMode: PunctuationMode
+        let beyondTheGuard: Group
+        let transcriberForm: Group
+        let meaningCriticalAll: Int
+        let titlesKept: Int
+        let titlesDroppedForNegation: Int
 
         init(_ results: [Result]) {
-            meaningCritical = Group(results.filter(\.meaningCritical))
-            punctuationCases = Group(results.filter { $0.categories.contains("punctuation") })
-            other = Group(results.filter { !$0.meaningCritical })
+            // The groups of the main set, as before, and the extra cases apart.
+            let main = results.filter { $0.group == mainGroup }
+            meaningCritical = Group(main.filter(\.meaningCritical))
+            punctuationCases = Group(main.filter { $0.categories.contains("punctuation") })
+            other = Group(main.filter { !$0.meaningCritical })
+            beyondTheGuard = Group(results.filter { $0.group == CleanupSynthetic.beyondTheGuard })
+            transcriberForm = Group(results.filter { $0.group == CleanupSynthetic.transcriberForm })
             guardRejected = results.filter { $0.full.outcome == "rejected" }.count
             declined = results.filter { $0.full.outcome == "declined" }.count
             punctuationMode = PunctuationMode(results)
+            meaningCriticalAll = results.filter(\.meaningCritical).count
+            titlesKept = results.filter { $0.title != nil }.count
+            titlesDroppedForNegation =
+                results.filter {
+                    $0.titleDropped == CleanupTitle.Drop.negationLeftOut.rawValue
+                }.count
         }
 
         var json: CleanupJSON {
             .object([
                 ("meaningCritical", meaningCritical.json), ("punctuationOnly", punctuationCases.json),
-                ("other", other.json), ("guardRejected", .int(guardRejected)), ("declined", .int(declined)),
+                ("other", other.json), ("beyondTheGuard", beyondTheGuard.json),
+                ("transcriberForm", transcriberForm.json), ("guardRejected", .int(guardRejected)),
+                ("declined", .int(declined)),
                 (
                     "punctuationOnlyMode",
                     .object([
                         ("cleaned", .int(punctuationMode.cleaned)), ("rejected", .int(punctuationMode.rejected)),
                         ("declined", .int(punctuationMode.declined)),
                         ("meaningChanged", .int(punctuationMode.meaningChanged)),
+                        ("reachedTheNote", .int(punctuationMode.reachedTheNote)),
                         ("meaningCriticalPass", .int(punctuationMode.meaningCriticalPass)),
+                    ])
+                ),
+                (
+                    "titles",
+                    .object([
+                        ("kept", .int(titlesKept)), ("droppedForNegationLeftOut", .int(titlesDroppedForNegation)),
                     ])
                 ),
             ])

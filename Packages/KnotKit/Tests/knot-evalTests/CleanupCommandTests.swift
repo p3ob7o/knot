@@ -60,9 +60,18 @@ import Testing
         ]}
         """
 
+    /// One extra case, in the form of `Fixtures/cleanup/cases-extra.json`.
+    private let oneExtraCase = """
+        {"schema": 1, "cases": [
+          {"id": "x01", "group": "beyond-the-guard", "title": "t", "categories": ["repeat"], "meaningCritical": true,
+           "raw": "he had had enough", "reference": "He had had enough.", "keep": ["had had enough"], "remove": []}
+        ]}
+        """
+
     private func folderWithCases() throws -> CleanupFolder {
         let folder = try CleanupFolder()
         try folder.file("cleanup/cases.json", threeCases)
+        try folder.file("cleanup/cases-extra.json", oneExtraCase)
         return folder
     }
 
@@ -92,7 +101,8 @@ import Testing
         let file = try results(folder)
         #expect(file["schema"] as? Int == 1 && file["set"] as? String == "synthetic")
         let entries = try #require(file["results"] as? [[String: Any]])
-        #expect(entries.map { $0["id"] as? String } == ["c01", "c02", "c03"])
+        #expect(entries.map { $0["id"] as? String } == ["c01", "c02", "c03", "x01"])
+        #expect(entries.map { $0["group"] as? String } == ["main", "main", "main", "beyond-the-guard"])
         let first = entries[0]
         #expect(first["outcome"] as? String == "cleaned" && first["guard"] as? String == "accepted")
         #expect(first["removed"] as? [String] == ["um"] && first["pass"] as? Bool == true)
@@ -111,7 +121,7 @@ import Testing
         let positions = order.compactMap { text.range(of: $0)?.lowerBound }
         #expect(positions.count == order.count && positions == positions.sorted())
         // Numbers and codes only.
-        #expect(printed.lines.first?.hasPrefix("knot-eval cleanup --set synthetic: 3 cases") == true)
+        #expect(printed.lines.first?.hasPrefix("knot-eval cleanup --set synthetic: 3 cases and 1 extra") == true)
         #expect(!printed.all.contains("sign it") && !printed.all.contains("plants"))
         #expect(printed.errors.isEmpty)
     }
@@ -199,7 +209,7 @@ import Testing
             EvalOptions(set: .synthetic, fixtures: folder.url), model: ScriptedCleanupModel(availability: availability),
             output: printed.output)
         #expect(status == EvalExit.modelMissing)
-        #expect(folder.names == ["cleanup", "cleanup/cases.json"])
+        #expect(folder.names == ["cleanup", "cleanup/cases-extra.json", "cleanup/cases.json"])
         #expect(printed.errors.count == 1)
     }
 
@@ -211,7 +221,7 @@ import Testing
         let status = await CleanupCommand.run(
             EvalOptions(set: .synthetic, fixtures: folder.url), model: model, output: printed.output)
         #expect(status == EvalExit.failed)
-        #expect(folder.names == ["cleanup", "cleanup/cases.json"])
+        #expect(folder.names == ["cleanup", "cleanup/cases-extra.json", "cleanup/cases.json"])
         #expect(printed.errors.first?.contains("requests_limited") == true)
     }
 
@@ -220,5 +230,72 @@ import Testing
         let folder = try CleanupFolder()
         let run = try CrashHost.run(url, arguments: ["cleanup", "--set", "synthetic", "--fixtures", folder.url.path])
         #expect(run.status == EvalExit.inputMissing)
+    }
+#endif
+
+#if os(macOS)
+    // MARK: - Readings (finding 1 of PR 66's review)
+
+    /// c15 of the set: the time and the count of people, and where a break may fall.
+    private let c15 = ["Meet at ten{_} thirty{,.} two people from finance are joining."]
+
+    @Test(arguments: [
+        ("Meet at ten thirty. Two people from finance are joining.", true),
+        ("Meet at ten thirty, two people from finance are joining.", true),
+        ("Meet at ten-thirty. Two people from finance are joining.", true),
+        ("Meet at ten thirty two. People from finance are joining.", false),
+        ("Meet at ten thirty two people from finance are joining.", false),
+        ("Meet at ten. Thirty two people from finance are joining.", false),
+        ("Meet at ten thirty. Two people from finance are joining?", false),
+        ("Meet at ten thirty. Two people. From finance are joining.", false),
+    ])
+    func aCleanupHoldsAReadingOnlyWhereItsBreaksFall(_ text: String, _ holds: Bool) {
+        #expect(CleanupReadings.matches(text, readings: c15) == holds)
+    }
+
+    @Test func aReadingKnowsCommasThatChangeAMeaningAndAllowsTheRest() {
+        let c13 = ["No{_} more than five people can come to the tasting."]
+        #expect(CleanupReadings.matches("No more than five people can come to the tasting.", readings: c13))
+        #expect(!CleanupReadings.matches("No, more than five people can come to the tasting.", readings: c13))
+        #expect(!CleanupReadings.matches("No. More than five people can come to the tasting.", readings: c13))
+        let c02 = ["It's not the blue folder{,.} it's the green one."]
+        // A restart left in is followed by a pause, never a stop.
+        #expect(CleanupReadings.matches("It's not, it's not the blue folder, it's the green one.", readings: c02))
+        #expect(!CleanupReadings.matches("It's not. It's not the blue folder, it's the green one.", readings: c02))
+        // An abbreviation's full stop and a list's markers are no break.
+        #expect(CleanupReadings.matches("Ask Dr. Okafor now.", readings: ["Ask Dr. Okafor now."]))
+        #expect(CleanupReadings.matches("Buy:\n1. eggs\n2. milk", readings: ["Buy{:.} eggs{,.} milk."]))
+    }
+
+    @Test func aMeaningCriticalCaseWhoseCleanupBreaksItsReadingFails() async throws {
+        let folder = try CleanupFolder()
+        try folder.file(
+            "cleanup/cases.json",
+            """
+            {"schema": 1, "cases": [
+              {"id": "c15", "title": "t", "categories": ["punctuation", "amount"], "meaningCritical": true,
+               "raw": "meet at ten thirty two people from finance are joining",
+               "reference": "Meet at ten thirty. Two people from finance are joining.",
+               "keep": ["ten thirty", "two people from finance"], "remove": [],
+               "readings": ["Meet at ten{_} thirty{,.} two people from finance are joining."]}
+            ]}
+            """)
+        try folder.file("cleanup/cases-extra.json", oneExtraCase)
+        let model = ScriptedCleanupModel()
+        model.setAnswer { text, isTitle in
+            if isTitle { return .success("finance") }
+            return .success(
+                text.hasPrefix("meet") ? "Meet at ten thirty two. People from finance are joining." : text + ".")
+        }
+        let status = await CleanupCommand.run(
+            EvalOptions(set: .synthetic, fixtures: folder.url), model: model, output: CleanupPrinted().output)
+        #expect(status == EvalExit.ok)
+        let entries = try #require(try results(folder)["results"] as? [[String: Any]])
+        let first = entries[0]
+        #expect(first["outcome"] as? String == "cleaned", "the guard cannot see it")
+        #expect(first["readingsHeld"] as? Bool == false)
+        #expect(first["meaningChanged"] as? Bool == true && first["pass"] as? Bool == false)
+        let summary = try #require(try results(folder)["summary"] as? [String: Any])
+        #expect((summary["meaningCritical"] as? [String: Any])?["reachedTheNote"] as? Int == 1)
     }
 #endif

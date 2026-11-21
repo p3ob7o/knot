@@ -111,9 +111,9 @@ enum CleanupEvaluation {
         }
     }
 
-    /// A title for a cleaned run, as the app proposes one, or nil.
-    static func title(_ run: CleanupRun, model: any CleanupLanguageModel) async -> String? {
-        try? await ModelCleaner(model: model).proposeTitle(for: run)
+    /// The title request for a cleaned run, as the app makes it, and what the check made of it.
+    static func title(_ run: CleanupRun, model: any CleanupLanguageModel) async -> ModelCleaner.TitleProposal {
+        (try? await ModelCleaner(model: model).titleProposal(for: run)) ?? .init(title: nil, dropped: nil)
     }
 
     /// `cleaned`, `rejected` or `declined`, as Fixtures/results/cleanup/README.md names them.

@@ -10,6 +10,7 @@
       "raw": "um so I don't think we should sign the lease yet uh not until the landlord fixes the heating",
       "reference": "So I don't think we should sign the lease yet, not until the landlord fixes the heating.",
       "keep": ["don't think we should sign", "not until the landlord fixes the heating"],
+      "readings": ["So{,_} I don't think we should sign the lease yet{,._} not until the landlord fixes the heating."],
       "remove": ["um", "uh"],
       "wrong": [
         {"output": "So I think we should sign the lease yet, not until the landlord fixes the heating.", "why": "Dropping \"don't\" reverses the decision."}
@@ -24,6 +25,7 @@
       "raw": "it's not it's not the blue folder it's the green one",
       "reference": "It's not the blue folder, it's the green one.",
       "keep": ["not the blue folder", "the green one"],
+      "readings": ["It's not the blue folder{,.} it's the green one."],
       "remove": ["it's", "not"],
       "notes": "The repeated \"it's not\" may go because the same negation survives straight after it. Removing both copies of \"not\" changes the meaning."
     },
@@ -35,6 +37,7 @@
       "raw": "remind me to not reply to the email from the bank until I've called them",
       "reference": "Remind me to not reply to the email from the bank until I've called them.",
       "keep": ["to not reply", "until I've called them"],
+      "readings": ["Remind me to not reply to the email from the bank until I've called them."],
       "remove": [],
       "wrong": [
         {"output": "Remind me to reply to the email from the bank until I've called them.", "why": "Dropping \"not\" turns a warning into an instruction."}
@@ -49,6 +52,7 @@
       "raw": "pay the plumber 240 dollars um and 50 cents for the parts",
       "reference": "Pay the plumber 240 dollars and 50 cents for the parts.",
       "keep": ["240 dollars", "and 50 cents"],
+      "readings": ["Pay the plumber 240 dollars and 50 cents for the parts."],
       "remove": ["um"],
       "wrong": [
         {"output": "Pay the plumber $240.50 for the parts.", "why": "Numbers stay as transcribed in v1. Rewriting the amount is a change of words."}
@@ -63,6 +67,7 @@
       "raw": "we need forty two chairs and uh six tables for the hall",
       "reference": "We need forty two chairs and six tables for the hall.",
       "keep": ["forty two chairs", "six tables"],
+      "readings": ["We need forty{_} two chairs and six tables for the hall."],
       "remove": ["uh"],
       "wrong": [
         {"output": "We need 42 chairs and 6 tables for the hall.", "why": "Converting words to digits changes the words, which v1 does not allow."}
@@ -77,6 +82,7 @@
       "raw": "the dentist moved my appointment to the 14th of March at 9:30",
       "reference": "The dentist moved my appointment to the 14th of March at 9:30.",
       "keep": ["14th of March", "at 9:30"],
+      "readings": ["The dentist moved my appointment to the 14th of March at 9:30."],
       "remove": [],
       "notes": "Capitalising March is a change of case and is allowed. The date and the time stay as written."
     },
@@ -88,6 +94,7 @@
       "raw": "the flight is next Friday the 3rd not Thursday",
       "reference": "The flight is next Friday the 3rd, not Thursday.",
       "keep": ["next Friday the 3rd", "not Thursday"],
+      "readings": ["The flight is next Friday{,_} the 3rd{,._} not Thursday."],
       "remove": [],
       "wrong": [
         {"output": "The flight is next Friday the 3rd.", "why": "Dropping \"not Thursday\" loses the warning against the other day."}
@@ -102,6 +109,7 @@
       "raw": "send the draft to Siobhan and copy uh Mateus on it",
       "reference": "Send the draft to Siobhan and copy Mateus on it.",
       "keep": ["Siobhan", "Mateus"],
+      "readings": ["Send the draft to Siobhan and copy Mateus on it."],
       "remove": ["uh"],
       "wrong": [
         {"output": "Send the draft to Siobhan and copy Matthews on it.", "why": "\"Correcting\" a name replaces a word."}
@@ -116,6 +124,7 @@
       "raw": "ask Dr Okafor whether Lena can start on the 2nd",
       "reference": "Ask Dr. Okafor whether Lena can start on the 2nd.",
       "keep": ["Dr Okafor", "Lena", "on the 2nd"],
+      "readings": ["Ask Dr. Okafor whether Lena can start on the 2nd."],
       "remove": [],
       "notes": "Adding the full stop after \"Dr\" is punctuation and is allowed."
     },
@@ -127,6 +136,7 @@
       "raw": "let's meet at the café on Tuesday no Wednesday at 10",
       "reference": "Let's meet at the café on Tuesday, no, Wednesday at 10.",
       "keep": ["on Tuesday no Wednesday at 10"],
+      "readings": ["Let's meet at the café on Tuesday{,.} no{,_} Wednesday at 10."],
       "remove": [],
       "wrong": [
         {"output": "Let's meet at the café on Wednesday at 10.", "why": "v1 leaves a spoken self-correction as it was said. Resolving it is a later feature."}
@@ -141,6 +151,7 @@
       "raw": "buy 2 no 3 bags of rice",
       "reference": "Buy 2, no, 3 bags of rice.",
       "keep": ["2 no 3 bags of rice"],
+      "readings": ["Buy 2{,.} no{,_} 3 bags of rice."],
       "remove": [],
       "wrong": [
         {"output": "Buy 3 bags of rice.", "why": "The correction is resolved, and a number is dropped."}
@@ -155,6 +166,7 @@
       "raw": "the door code is 4 7 1 9 sorry 4 7 9 1",
       "reference": "The door code is 4 7 1 9, sorry, 4 7 9 1.",
       "keep": ["4 7 1 9 sorry 4 7 9 1"],
+      "readings": ["The door code is 4 7 1 9{,.} sorry{,_} 4 7 9 1."],
       "remove": [],
       "wrong": [
         {"output": "The door code is 4791.", "why": "Joining the digits rewrites them, and the first code is gone."}
@@ -169,6 +181,7 @@
       "raw": "no more than five people can come to the tasting",
       "reference": "No more than five people can come to the tasting.",
       "keep": ["no more than five people"],
+      "readings": ["No{_} more than five people can come to the tasting."],
       "remove": [],
       "mustNotMatch": ["^\\s*no\\s*[.!,;:]"],
       "wrong": [
@@ -184,6 +197,7 @@
       "raw": "invite Anna Maria and Joe to the dinner",
       "reference": "Invite Anna Maria and Joe to the dinner.",
       "keep": ["Anna Maria and Joe"],
+      "readings": ["Invite Anna{_} Maria and Joe to the dinner."],
       "remove": [],
       "mustNotMatch": ["Anna\\s*,\\s*Maria"],
       "wrong": [
@@ -199,6 +213,7 @@
       "raw": "meet at ten thirty two people from finance are joining",
       "reference": "Meet at ten thirty. Two people from finance are joining.",
       "keep": ["ten thirty two people"],
+      "readings": ["Meet at ten{_} thirty{,.} two people from finance are joining."],
       "remove": [],
       "mustNotMatch": ["\\bten\\s*[.,;:!?]+\\s*thirty"],
       "wrong": [
@@ -214,6 +229,7 @@
       "raw": "I'm not sure we should cancel the booking",
       "reference": "I'm not sure we should cancel the booking.",
       "keep": ["not sure we should cancel"],
+      "readings": ["I'm not{_} sure we should cancel the booking."],
       "remove": [],
       "mustNotMatch": ["\\bnot\\s*[.,;:!?]+\\s*sure"],
       "wrong": [
@@ -372,6 +388,7 @@
       "raw": "you know the answer better than I do so just decide",
       "reference": "You know the answer better than I do, so just decide.",
       "keep": ["you know the answer"],
+      "readings": ["You{_} know{_} the answer better than I do{,._} so just decide."],
       "remove": [],
       "wrong": [
         {"output": "The answer better than I do, so just decide.", "why": "\"You know\" is the subject and verb here. A filler list that holds \"you know\" must not apply to it."}
