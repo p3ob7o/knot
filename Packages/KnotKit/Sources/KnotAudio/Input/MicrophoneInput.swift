@@ -40,14 +40,17 @@ public struct MicrophoneInput: AudioInput {
             hardware.deactivateSession()
             throw error
         }
-        // The hardware's format: a rate or a channel count of zero means no input is available,
-        // and the engine would throw, or raise an exception, at the start.
-        let format = engine.tapFormat
-        guard format.sampleRate > 0, format.channelCount > 0 else {
+        // The input node's input format is the hardware's: a rate or a channel count of zero
+        // means no input is available, and the engine would throw, or raise an exception, at the
+        // start (AVAudioEngine.h, inputNode). The working file takes the rate of what the tap
+        // delivers, the node's output format.
+        let hardwareShape = engine.hardware
+        let tap = engine.tap
+        guard hardwareShape.sampleRate > 0, hardwareShape.channels > 0, tap.sampleRate > 0, tap.channels > 0 else {
             hardware.deactivateSession()
             throw KnotError.noInputDevice
         }
-        return OpenMicrophone(engine: engine, sampleRate: format.sampleRate, hardware: hardware)
+        return OpenMicrophone(engine: engine, sampleRate: tap.sampleRate, hardware: hardware)
     }
 }
 
@@ -63,13 +66,28 @@ protocol HardwareAudio: Sendable {
     func makeEngine() throws(KnotError) -> any InputEngine
 }
 
+/// A rate and a channel count, read from a format.
+struct InputShape: Hashable, Sendable {
+    var sampleRate: Double
+    var channels: Int
+
+    init(sampleRate: Double, channels: Int) {
+        self.sampleRate = sampleRate
+        self.channels = channels
+    }
+
+    init(_ format: AVAudioFormat) {
+        self.init(sampleRate: format.sampleRate, channels: Int(format.channelCount))
+    }
+}
+
 /// The engine's input node, as the microphone uses it. A test passes one that opens nothing,
 /// records each call, and lets the test deliver an ending at a point of its choosing.
 protocol InputEngine: Sendable {
-    /// The format the input node's tap delivers: its output format.
-    var tapFormat: AVAudioFormat { get }
-    /// The hardware's format: the input node's input format.
-    var hardwareFormat: AVAudioFormat { get }
+    /// What the tap delivers: the input node's output format.
+    var tap: InputShape { get }
+    /// What the hardware gives: the input node's input format.
+    var hardware: InputShape { get }
     /// Installs the tap, which hands over each buffer the input delivers.
     func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
         throws(KnotError)
@@ -99,9 +117,12 @@ struct SystemHardwareAudio: HardwareAudio {
                 try session.setCategory(.record, mode: .default, options: [])
                 try session.setActive(true)
             } catch {
-                // Another app or a call holds the audio (AVAudioSessionErrorCodeInsufficientPriority),
-                // or the session cannot record now.
-                throw KnotError.audioSessionBusy.with(ErrorContext(engineCode: (error as NSError).code))
+                throw SessionError.knotError(code: (error as NSError).code)
+            }
+            // The session answers whether input hardware is there (AVAudioSession.h, inputAvailable).
+            guard session.isInputAvailable else {
+                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                throw KnotError.noInputDevice
             }
         #endif
     }
@@ -117,12 +138,28 @@ struct SystemHardwareAudio: HardwareAudio {
     }
 }
 
+/// The taxonomy's case for an error of the audio session, by what its code says
+/// (CoreAudioTypes, AudioSessionTypes.h, `AVAudioSessionErrorCode`).
+enum SessionError {
+    /// `AVAudioSessionErrorCodeResourceNotAvailable`, '!res': "the device has no audio input
+    /// available".
+    static let resourceNotAvailable = 0x2172_6573
+
+    /// `no_input_device` when the session says there is no input hardware; `audio_session_busy`
+    /// for the rest, such as `AVAudioSessionErrorCodeInsufficientPriority` when a call holds the
+    /// audio. The session's code is kept, never its text.
+    static func knotError(code: Int) -> KnotError {
+        let base = code == resourceNotAvailable ? KnotError.noInputDevice : KnotError.audioSessionBusy
+        return base.with(ErrorContext(engineCode: code))
+    }
+}
+
 /// `AVAudioEngine`'s input node.
 struct SystemInputEngine: InputEngine {
     let engine: AVAudioEngine
 
-    var tapFormat: AVAudioFormat { engine.inputNode.outputFormat(forBus: 0) }
-    var hardwareFormat: AVAudioFormat { engine.inputNode.inputFormat(forBus: 0) }
+    var tap: InputShape { InputShape(engine.inputNode.outputFormat(forBus: 0)) }
+    var hardware: InputShape { InputShape(engine.inputNode.inputFormat(forBus: 0)) }
 
     func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
         throws(KnotError)

@@ -197,6 +197,33 @@ import Testing
         #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1, "\(hardware.uses)")
     }
 
+    /// The check for an input reads the hardware's format, the input node's input format, as
+    /// the SDK says: an input with no channel or no rate is no input device, whatever the tap
+    /// says, and so is a tap with no rate. The session is given back.
+    @Test(arguments: [
+        (InputShape(sampleRate: 48_000, channels: 0), InputShape(sampleRate: 48_000, channels: 1)),
+        (InputShape(sampleRate: 0, channels: 1), InputShape(sampleRate: 48_000, channels: 1)),
+        (InputShape(sampleRate: 48_000, channels: 1), InputShape(sampleRate: 0, channels: 1)),
+    ])
+    func anInputWithNoHardwareIsNoInputDevice(hardware shape: InputShape, tap: InputShape) async {
+        let hardware = StandInHardware(permission: true, engine: StandInEngine(tap: tap, hardware: shape))
+        let error = await #expect(throws: KnotError.self) {
+            try await MicrophoneInput(hardware: hardware, policy: { nil }).open()
+        }
+        #expect(error?.code == KnotError.noInputDevice.code)
+        #expect(hardware.uses == ["permission", "activate", "engine", "deactivate"], "\(hardware.uses)")
+    }
+
+    /// The session's errors are told by what they say: no input hardware is `no_input_device`,
+    /// and the rest, a call holding the audio among them, `audio_session_busy`, with the code.
+    @Test func theSessionsErrorsAreToldApart() {
+        let noInput = SessionError.knotError(code: 0x2172_6573)  // '!res'
+        #expect(noInput.code == KnotError.noInputDevice.code && noInput.context.engineCode == 0x2172_6573)
+        for code in [0x2170_7269, 0x7768_6174, 0x2172_6563, -50] {  // '!pri', 'what', '!rec', bad parameter
+            #expect(SessionError.knotError(code: code).code == KnotError.audioSessionBusy.code)
+        }
+    }
+
     /// A stop that came before the start leaves nothing to start: no tap, no engine.
     @Test func aStopBeforeTheStartLeavesNothingToStart() async throws {
         let (opened, engine, _) = try await Self.openStandIn()
@@ -226,9 +253,7 @@ import Testing
 
     /// The microphone opened on a stand-in engine at 48 kHz, which opens nothing.
     static func openStandIn() async throws -> (OpenMicrophone, StandInEngine, StandInHardware) {
-        let format = try #require(
-            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
-        let engine = StandInEngine(tapFormat: format)
+        let engine = StandInEngine(tap: InputShape(sampleRate: 48_000, channels: 1))
         let hardware = StandInHardware(permission: true, engine: engine)
         let opened = try await MicrophoneInput(hardware: hardware, policy: { nil }).open()
         return (try #require(opened as? OpenMicrophone), engine, hardware)
@@ -335,14 +360,14 @@ final class StandInEngine: InputEngine {
         case starting
     }
 
-    let tapFormat: AVAudioFormat
-    let hardwareFormat: AVAudioFormat
+    let tap: InputShape
+    let hardware: InputShape
     private let state = Mutex<(calls: [String], tap: (@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?)>(([], nil))
     private let hook = Mutex<(point: Point, run: @Sendable (StandInEngine) -> Void)?>(nil)
 
-    init(tapFormat: AVAudioFormat, hardwareFormat: AVAudioFormat? = nil) {
-        self.tapFormat = tapFormat
-        self.hardwareFormat = hardwareFormat ?? tapFormat
+    init(tap: InputShape, hardware: InputShape? = nil) {
+        self.tap = tap
+        self.hardware = hardware ?? tap
     }
 
     var calls: [String] { state.withLock { $0.calls } }
