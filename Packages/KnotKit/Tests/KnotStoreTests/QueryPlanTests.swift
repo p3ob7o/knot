@@ -143,4 +143,16 @@ import Testing
         }
         return head.hasPrefix("INSERT") && head.contains("SELECT")
     }
+
+    /// Any `Int` is a limit: the largest reads every note in one page, with no page after it.
+    @Test func theLargestLimitReadsOnePage() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 97)
+        let page = try await made.notes.stream(after: nil, limit: .max)
+        #expect(page.notes.count == 2)
+        #expect(page.next == nil)
+        #expect(try await made.notes.search("stamps", limit: .max) == [made.typed.noteID])
+        #expect(try await made.notes.changes(after: nil, limit: .max).changes.count == 2)
+    }
 }

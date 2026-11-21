@@ -40,7 +40,8 @@ extension StoreTransaction {
     /// One page of the stream in one query: the shown notes after `position`, newest first by
     /// the time of their latest capture and then by ID, each with all its segments.
     func streamPage(after position: StreamPosition?, limit: Int) throws -> StreamPage {
-        let size = max(limit, 1)
+        // Any `Int` is a limit: one more is read to tell whether a page follows.
+        let size = min(max(limit, 1), Int.max - 1)
         var arguments: StatementArguments = []
         var after = ""
         if let position {
