@@ -263,6 +263,7 @@ These rules sit beside the table:
 - "The ruling" is the keep-gate ruling (§5).
 - A row names the PR wherever a package ships in several. Elsewhere, a package named without a number means its last PR.
 - The PRs of WP-11, WP-12 and WP-15 that add kill points merge after WP-06.
+- The first PRs of WP-30 and WP-33 merge after WP-22 PR 1, and each carries the UI smoke test on `.live` on its platform.
 - `scripts/check-plan.sh` fails on a cycle, on a row that names a package without a PR where the package has several, and on a milestone that needs a held PR.
 
 ### The hold until the ruling
