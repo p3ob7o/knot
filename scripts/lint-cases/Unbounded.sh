@@ -100,6 +100,22 @@ step_three() {
     # expect: nothing
     version="$(knot_limit 10 xcodebuild -version | head -n 1)"
 }
+step_four() {
+    # expect: unbounded
+    arch -arm64 xcodebuild -version
+    # expect: unbounded
+    /usr/bin/time xcodebuild -version
+    # expect: unbounded
+    echo a | xargs xcrun simctl delete
+    # expect: unbounded
+    declare -a cmd2=(swift test); "${cmd2[@]}"
+    # expect: nothing
+    flags=$((1 << 3))
+    # expect: unbounded
+    xcodebuild -version
+    # expect: unbounded
+    run=xcodebuild; "$run" -version
+}
 xcb() {
     # expect: nothing
     xcodebuild -project x "$@" 2>&1 | cat >>"$log" # limit: xcb

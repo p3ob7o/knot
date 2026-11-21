@@ -904,9 +904,11 @@ OTHER_PARTS = ("soak",)
 # Words that may stand before the command word of a simple command.
 RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
                   "time", "case", "esac", "in", "function", "select", "for"}
-PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate"}
+PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs"}
 FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{(.*)$")
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+# A here-document: `<<` or `<<-`, not `<<<`, and a word that starts with a letter, an
+# underscore or a quote, so that an arithmetic shift such as $((1 << 3)) is none.
+HEREDOC = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)([A-Za-z_]\w*)\1")
 
 
 def shell_segments(text, first_line=1):
@@ -1072,10 +1074,10 @@ def command_words(words, scalars, arrays):
         if re.match(r"^[A-Za-z_]\w*(\[[^]]*\])?\+?=", word) or word in RESERVED_WORDS:
             k += 1
             continue
-        if word in PREFIX_WORDS:
+        if os.path.basename(word) in PREFIX_WORDS:
             k += 1
             while k < len(words) and (words[k].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[k])):
-                k += 1 + (words[k] in ("-u", "-n", "-g", "-C"))
+                k += 1 + (words[k] in ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-S"))
             continue
         break
     rest = words[k:]
@@ -1136,7 +1138,8 @@ def cmd_unbounded_calls(files):
                 if line.strip() == terminator:
                     terminator = None
                 continue
-            heredoc = HEREDOC.search(line.split("#", 1)[0] if "<<" in line else "")
+            bare = re.sub(r"\$?\(\((?:[^()]|\([^()]*\))*\)\)", "0", line.split("#", 1)[0]) if "<<" in line else ""
+            heredoc = HEREDOC.search(bare)
             lines.append(line)
             if heredoc:
                 terminator = heredoc.group(2)
@@ -1161,7 +1164,7 @@ def cmd_unbounded_calls(files):
         # Simple assignments of a word or an array, for a command word held in a variable.
         scalars, arrays = {}, {}
         for _, _, segment in segments:
-            assign = re.match(r"^(?:local\s+|readonly\s+)?([A-Za-z_]\w*)=\((.*)\)$", segment)
+            assign = re.match(r"^(?:(?:local|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=\((.*)\)$", segment)
             if assign:
                 arrays[assign.group(1)] = shell_words(assign.group(2))
                 continue
