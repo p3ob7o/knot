@@ -1447,7 +1447,7 @@ import sys
 path = sys.argv[1]
 text = open(path).read()
 for name, body in (("step_doctor", 'echo "doctor stand-in"'),
-                   ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"\n    if [[ -n ${KNOT_UI_SIGNAL:-} ]]; then sh -c \'kill -TERM $$\'; fi')):
+                   ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"')):
     start = text.index(name + "() {")
     end = text.index("\n}\n", start) + 3
     text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
@@ -1532,24 +1532,50 @@ else
 fi
 
 # An xcodebuild ended by a signal that the step's limit did not send (finding 66): the step
-# says so, with the signal's number, and does not judge the run as one with no tests. A
-# stand-in xcb whose run dies by TERM, in the Mac UI step and in the hosted step.
-cat >"$ul/interrupted.log" <<'LOG'
-** BUILD INTERRUPTED **
-LOG
-signal_step() { # signal_step <step>: status, and the step's log
-    local status=0 run="$ul/signal-$1"
+# says so, with the signal's number, and does not judge the run as one with no tests; and
+# bash's own notice of the killed command, which names the script by its path, reaches
+# neither the log nor the console. A copy of scripts/ with the real xcb, its doctor a
+# stand-in, no project generated and a stand-in sim.sh, runs the Mac UI step and the hosted
+# step with a stub xcodebuild that writes `** BUILD INTERRUPTED **` and dies by TERM.
+us="$scratch/signal-loop"
+mkdir -p "$us/tree" "$us/stub"
+cp -R "$KNOT_SCRIPTS" "$us/scripts"
+cp "$KNOT_SELF/.xcode-version" "$us/tree/"
+python3 -I - "$us/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+for old, new in (
+    ('    knot_generate_project\n    ui_tests "The Mac UI tests"', '    ui_tests "The Mac UI tests"'),
+    ('    knot_generate_project\n    knot_run_limited "The hosted iOS tests"', '    knot_run_limited "The hosted iOS tests"'),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+open(path, "w").write(text)
+PY
+printf '#!/bin/sh\n[ "$1" = udid ] && echo SELF-TEST-UDID\nexit 0\n' >"$us/scripts/sim.sh"
+chmod +x "$us/scripts/sim.sh"
+printf '#!/bin/sh\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><false/></dict></plist>\\n"\n' >"$us/stub/ioreg"
+printf '#!/bin/sh\n[ "$1" = -version ] && exec /usr/bin/xcodebuild -version\necho "** BUILD INTERRUPTED **"\nkill -TERM $$\n' >"$us/stub/xcodebuild"
+chmod +x "$us/stub/ioreg" "$us/stub/xcodebuild"
+signal_step() { # signal_step <step>: status, the step's log, and any notice on the console
+    local status=0 run="$us/run-$1"
     mkdir -p "$run/slots"
-    env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/interrupted.log" KNOT_UI_SIGNAL=1 KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$run/slots" \
-        "$ul/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
+    env PATH="$us/stub:$PATH" KNOT_TREE="$us/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$us/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
     echo "$status"
-    cat "$ul/tree/.build/logs/verify-$1.log" 2>/dev/null || true
+    cat "$us/tree/.build/logs/verify-$1.log" 2>/dev/null || true
+    grep -h -e 'Terminated' "$run/out" 2>/dev/null | sed 's/^/notice: /' || true
 }
 signal_ui="$(signal_step mac-ui)"
 signal_hosted="$(signal_step ios-hosted)"
 if [[ ${signal_ui%%$'\n'*} == 1 && $signal_ui == *"ended by signal 15 (TERM)"*"did not send"* && $signal_ui != *"xctest: 0 passed"* &&
-    ${signal_hosted%%$'\n'*} == 1 && $signal_hosted == *"ended by signal 15 (TERM)"*"did not send"* && $signal_hosted != *"No hosted test ran"* ]]; then
-    pass "an xcodebuild ended by a signal from outside the step is named so, with its number, in the UI and hosted steps"
+    ${signal_hosted%%$'\n'*} == 1 && $signal_hosted == *"ended by signal 15 (TERM)"*"did not send"* && $signal_hosted != *"No hosted test ran"* &&
+    $signal_ui != *"Terminated"* && $signal_hosted != *"Terminated"* ]]; then
+    pass "an xcodebuild ended by a signal from outside the step is named so, with its number, in the UI and hosted steps, and bash's notice of it reaches no log"
 else
     fail "an xcodebuild ended by a signal from outside: the Mac UI step: $signal_ui; the hosted step: $signal_hosted"
 fi

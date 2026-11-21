@@ -143,8 +143,11 @@ xcb() {
     shift
     knot_xcodebuild_settings
     # Xcode writes the team's prefix into the log of every app build on a Mac that knows the
-    # team, so the log is filtered as it is written (knot_filter_team).
-    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log" # limit: xcb
+    # team, so the log is filtered as it is written (knot_filter_team). xcodebuild's own
+    # output goes to the log; the shell's standard error, where bash reports an xcodebuild
+    # that a signal ended with this script's path, goes nowhere: the step names the signal
+    # itself (ended_by_signal).
+    { xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log"; } 2>/dev/null # limit: xcb
 }
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
