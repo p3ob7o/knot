@@ -228,6 +228,41 @@ import Testing
         #expect(WorkingFileReader.samples(of: working) == synthetic(16_000), "The file is kept whole.")
     }
 
+    /// A discard after the recording ended, by itself or by a stop, removes its working file and
+    /// its manifest all the same, and a stop after it is empty: the next launch finds nothing to
+    /// store.
+    @Test(arguments: [EndedFirst.inputInterrupted, .limitReached, .stopped])
+    func aDiscardAfterTheEndRemovesTheFiles(first: EndedFirst) async throws {
+        let folder = try ScratchFolder()
+        let input = first == .inputInterrupted ? injected(frames: 3_200, ending: .ends(.interrupted)) : injected()
+        let recorder = recorder(folder.locations, input: input)
+        let request = request(limit: first == .limitReached ? .milliseconds(200) : .seconds(1_800))
+        let session = try await recorder.start(request)
+        if first == .stopped {
+            await durable(atLeast: 3_200, of: session)
+            #expect(await session.stop().ending == .stopped)
+        } else {
+            let events = await allEvents(of: session)
+            guard case .ended(let audio)? = events.last, audio.ending.endedByItself else {
+                Issue.record("The recording did not end by itself: \(events.suffix(1))")
+                return
+            }
+        }
+        await session.discard()
+        #expect(!exists(folder.locations.recordingAudio(request.captureID, format: .caf)), "The working file stays.")
+        #expect(!exists(folder.locations.recordingManifest(request.captureID)), "The manifest stays.")
+        let after = await session.stop()
+        #expect(after.ending == .discarded && after.frames == 0 && after.workingFile == nil, "\(after)")
+        let orphans = try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(!orphans.contains { $0.captureID == request.captureID }, "\(orphans)")
+    }
+
+    enum EndedFirst: String, Sendable {
+        case inputInterrupted
+        case limitReached
+        case stopped
+    }
+
     /// A discard removes the recording's files and ends its events with one `.ended`, discarded.
     @Test func aDiscardLeavesNoFileAndEndsTheEvents() async throws {
         let folder = try ScratchFolder()

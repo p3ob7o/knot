@@ -37,6 +37,8 @@ final class LiveSession: RecordingSession {
     private let queue: DispatchQueue
     private let writer: Mutex<Writer>
     private let ending = Mutex<Task<RecordedAudio, Never>?>(nil)
+    /// The empty result of a discard that came after the recording had ended another way.
+    private let discarded = Mutex<RecordedAudio?>(nil)
     private let ticker = Mutex<Task<Void, Never>?>(nil)
     private let ended: @Sendable (RecordedAudio) -> Void
 
@@ -101,11 +103,25 @@ final class LiveSession: RecordingSession {
     // MARK: The port
 
     func stop() async -> RecordedAudio {
-        await end(.stopped).value
+        let result = await end(.stopped).value
+        // After a discard, a stop is empty, whatever the ending before it.
+        return discarded.withLock { $0 } ?? result
     }
 
+    /// Ends the recording and removes its file and manifest, whenever it arrives: before the
+    /// ending, while it runs, after the recording ended by itself, or after a stop. The working
+    /// file goes first and the manifest after it, so a death between the two leaves a manifest
+    /// with no audio, never audio that recovery would store.
     func discard() async {
-        _ = await end(.discarded).value
+        let first = await end(.discarded).value
+        // A discard that was the ending removed the files as it settled.
+        guard first.ending != .discarded else { return }
+        discarded.withLock {
+            $0 = RecordedAudio(
+                captureID: captureID, frames: 0, sampleRate: sampleRate, ending: .discarded, workingFile: nil)
+        }
+        await onQueue { self.files.removeAll(log: self.log, capture: self.captureID) }
+        log.capture(captureID, "recording_discarded_after_its_end")
     }
 
     /// Ends a recording that recovery finds live in this process for a launch that is not the
