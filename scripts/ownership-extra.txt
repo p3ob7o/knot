@@ -22,3 +22,11 @@ WP-14	Packages/KnotKit/Tests/knot-evalTests/Cleanup*.swift	pull request 19
 WP-00	Packages/KnotKit/Sources/knot-eval/main.swift	pull request 19: shared by the two commands
 WP-00	Packages/KnotKit/Sources/knot-eval/EvalOptions.swift	pull request 19: shared by the two commands
 WP-00	Packages/KnotKit/Tests/knot-evalTests/knot-evalTests.swift	pull request 19: shared by the two commands
+WP-11	Packages/KnotKit/Sources/KnotCapture/Shared/	pull request 40: WP-15 asks the orchestrator for a change there
+WP-21	Apps/UITestSupport/	pull request 53: the accessibility audit that the three apps' UI tests call
+WP-21	Apps/iOS/UITests/LaunchTests.swift	pull request 53: the call of the accessibility audit only
+WP-21	Apps/macOS/UITests/LaunchTests.swift	pull request 53: the call of the accessibility audit only
+WP-21	Apps/watchOS/UITests/LaunchTests.swift	pull request 53: the call of the accessibility audit only
+WP-21	Apps/iOS/targets.yml	pull request 53: the UI-test target's sources line, for the audit, only
+WP-21	Apps/macOS/targets.yml	pull request 53: the UI-test target's sources line, for the audit, only
+WP-21	Apps/watchOS/targets.yml	pull request 53: the UI-test target's sources line, for the audit, only

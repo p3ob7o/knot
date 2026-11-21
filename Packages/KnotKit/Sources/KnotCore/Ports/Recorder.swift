@@ -13,9 +13,13 @@ public protocol Recorder: Sendable {
     func prepare() async
 
     /// Writes the manifest and the working file, starts the input, and returns once the
-    /// recording is live: the moment of the "live" cue. Before it returns, nothing implies a
-    /// recording. Cancelling the calling task does not cancel the start: a start runs to live
-    /// or to an error whatever its caller does, so a caller that gave up while it ran (the
+    /// recording is live: the moment of the "live" cue. The manifest's first write records the
+    /// capture, the launch, the origin, the placement, the shown note and `followsCaptureID`,
+    /// as the request gives them, so a death at any moment after the start leaves a manifest
+    /// that names the capture the request named. The request's `limit` is the recorder's own,
+    /// and the manifest has no field for it. Before it returns, nothing implies a recording.
+    /// Cancelling the calling task does not cancel the start: a start runs to live or to an
+    /// error whatever its caller does, so a caller that gave up while it ran (the
     /// engine, after a press that ended the wait) must stop or discard the session that comes
     /// back, or it records on.
     ///
@@ -63,7 +67,7 @@ public struct ConvertedRecording: Hashable, Sendable {
 }
 
 /// What a recording is for: what its manifest records before the first sample
-/// (docs/architecture.md §6, rule 3).
+/// (docs/architecture.md §6, rule 3), and the longest it runs.
 public struct RecordingRequest: Hashable, Sendable {
     public var captureID: CaptureID
     public var launchID: LaunchID
@@ -73,26 +77,37 @@ public struct RecordingRequest: Hashable, Sendable {
     public var placement: CapturePlacement
     /// The note the surface showed, if any.
     public var shownNote: NoteID?
+    /// The capture the engine names, as it starts the recording, as the one the recording
+    /// follows under rules 13 and 15 of docs/product-spec.md §3, whose note the recording joins
+    /// as its next segment. The recorder writes it unchanged in the manifest's first write.
+    /// Whether that capture is still the one the recording follows when the start returns is
+    /// the engine's affair, not the recorder's: the engine names what the recording then follows
+    /// in the items it writes later. `nil`, and absent from the manifest, when the request names
+    /// nothing.
+    public var followsCaptureID: CaptureID?
     /// The longest the recording runs before it ends by itself: 30 minutes in v1.
     public var limit: Duration
 
     public init(
         captureID: CaptureID, launchID: LaunchID, origin: CaptureOrigin, placement: CapturePlacement = .window,
-        shownNote: NoteID? = nil, limit: Duration = .seconds(Limits.longestRecording)
+        shownNote: NoteID? = nil, followsCaptureID: CaptureID? = nil,
+        limit: Duration = .seconds(Limits.longestRecording)
     ) {
         self.captureID = captureID
         self.launchID = launchID
         self.origin = origin
         self.placement = placement
         self.shownNote = shownNote
+        self.followsCaptureID = followsCaptureID
         self.limit = limit
     }
 
-    /// The manifest the recorder writes before the first sample.
+    /// The manifest the recorder writes before the first sample: the capture, the launch, the
+    /// origin, the placement, the shown note and `followsCaptureID`. Not `limit`.
     public func manifest(startedAt: Date) -> CaptureManifest {
         CaptureManifest(
             captureID: captureID, kind: .voice, origin: origin, launchID: launchID, startedAt: startedAt,
-            placement: placement, shownNoteID: shownNote)
+            placement: placement, shownNoteID: shownNote, followsCaptureID: followsCaptureID)
     }
 }
 
