@@ -73,6 +73,13 @@ import Testing
         }
     }
 
+    /// A log sink that keeps each line.
+    final class ScriptedLogSink: LogSink {
+        private let kept = Mutex<[String]>([])
+        var lines: [String] { kept.withLock { $0 } }
+        func write(_ record: LogRecord) { kept.withLock { $0.append(record.line) } }
+    }
+
     /// Files made of synthetic samples, in a folder of the test's own that it removes.
     struct SpeechScratch: ~Copyable {
         let folder: URL
@@ -262,6 +269,27 @@ import Testing
         #expect(reported.withLock { $0 } == [0.5, 1])
         #expect(await transcriber.readiness() == .ready)
         #expect(system.installs == 1)
+    }
+
+    @Test func anInstallLogsItsOutcomeWithNumbersAndCodesOnly() async throws {
+        // The install's lines, on the scripted system: no test reaches the real install.
+        let system = ScriptedSpeechSystem()
+        let sink = ScriptedLogSink()
+        let transcriber = SpeechAnalyzerTranscriber(
+            source: .fixed(Locale(identifier: "en_GB")), system: system, log: KnotLog(.speech, sink: sink))
+        try await transcriber.install { _ in }
+        system.script.withLock {
+            $0.installed = ["en_US"]
+            $0.installFailure = URLError(.notConnectedToInternet)
+        }
+        _ = try? await transcriber.install { _ in }
+        let lines = sink.lines
+        #expect(lines.count == 2)
+        #expect(lines.first?.hasPrefix("speech_model_installed downloaded=true took_ms=") == true)
+        #expect(
+            lines.last
+                == "speech_model_install_failed code=speech_model_not_installed engine_code=\(URLError.Code.notConnectedToInternet.rawValue)"
+        )
     }
 
     @Test func aTranscriberIsInstallingWhileItsInstallRuns() async throws {

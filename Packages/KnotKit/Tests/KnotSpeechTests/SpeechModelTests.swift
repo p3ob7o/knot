@@ -23,9 +23,12 @@ import Testing
 
         static func url(_ path: String) throws -> URL { try FixtureFiles.url(path) }
 
-        /// The transcriber under test: US English, which the synthetic voices speak.
-        static func transcriber(log: KnotLog = KnotLog(.speech)) -> SpeechAnalyzerTranscriber {
-            SpeechAnalyzerTranscriber(locale: Locale(identifier: "en_US"), log: log)
+        /// The transcriber under test: US English, which the synthetic voices speak, on the
+        /// speech system of a model test, which never installs.
+        static func transcriber(locale: Locale = Locale(identifier: "en_US"), log: KnotLog = KnotLog(.speech))
+            -> SpeechAnalyzerTranscriber
+        {
+            SpeechAnalyzerTranscriber(source: .fixed(locale), system: SpeechModelSystem(), log: log)
         }
 
         static let model = OnDeviceModel.speech { transcriber() }
@@ -151,10 +154,9 @@ import Testing
         }
 
         @Test func noWordReachesTheLog() async throws {
+            // The install's lines are tested on the scripted system: a model test never installs.
             let sink = SpeechLogSink()
             let transcriber = SpeechClips.transcriber(log: KnotLog(.speech, sink: sink))
-            // The model is on this Mac, so the install only reserves the locale: nothing downloads.
-            try await transcriber.install { _ in }
             let clean = try SpeechClips.url(SpeechClips.clean)
             let run = try await transcriber.transcribe(file: clean, from: .zero, budget: nil)
             let (chunks, feed) = AsyncStream.makeStream(of: AudioChunk.self)
@@ -172,14 +174,14 @@ import Testing
                 (run.text + " " + live).lowercased().split { !$0.isLetter }.map(String.init).filter { $0.count >= 4 })
             #expect(!words.isEmpty)
             let lines = sink.lines
-            #expect(lines.contains { $0.hasPrefix("speech_model_installed") })
+            #expect(lines.isEmpty, "A run and live text log nothing: a line about a capture needs its ID.")
             for line in lines {
                 #expect(!words.contains { line.lowercased().contains($0) }, "A log line holds a word: \(line)")
             }
         }
 
         @Test func aLocaleTheEngineDoesNotKnowIsUnsupportedAndFinal() async throws {
-            let unknown = SpeechAnalyzerTranscriber(locale: Locale(identifier: "xx_XX"))
+            let unknown = SpeechClips.transcriber(locale: Locale(identifier: "xx_XX"))
             #expect(await unknown.readiness() == .unsupportedLocale)
             let clean = try SpeechClips.url(SpeechClips.clean)
             do {
@@ -201,7 +203,7 @@ import Testing
                     !installed.contains(SpeechLocaleChoice.key($0))
                 })
             else { return }
-            let transcriber = SpeechAnalyzerTranscriber(locale: missing)
+            let transcriber = SpeechClips.transcriber(locale: missing)
             #expect([.notInstalled, .installing].contains(await transcriber.readiness()))
             let clean = try SpeechClips.url(SpeechClips.clean)
             do {
@@ -210,6 +212,53 @@ import Testing
             } catch {
                 #expect(error.code == KnotError.speechModelNotInstalled.code)
                 #expect(error.isDeferral)
+            }
+        }
+    }
+
+    /// The speech system of every model test: the device's own for every question, and an
+    /// install that fails the test. Only the app installs, so a model test that reached the real
+    /// install could start a download whenever the system has one to offer, an asset update
+    /// after a system update for one, whatever readiness says.
+    struct SpeechModelSystem: SpeechSystem {
+        private let live = LiveSpeechSystem()
+
+        var isAvailable: Bool { live.isAvailable }
+        func supportedLocales() async -> [Locale] { await live.supportedLocales() }
+        func installedLocales() async -> [Locale] { await live.installedLocales() }
+        func status(of locale: Locale) async -> SpeechFacts.AssetStatus { await live.status(of: locale) }
+
+        func install(_ locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> Bool {
+            Issue.record("A model test reached the speech system's install, which may download.")
+            throw CancellationError()
+        }
+    }
+
+    @Test func aModelTestCannotReachTheRealInstall() async throws {
+        // Every model test builds its transcriber through SpeechClips, on SpeechModelSystem.
+        #expect(SpeechClips.transcriber().system is SpeechModelSystem)
+        #expect(SpeechClips.transcriber(locale: Locale(identifier: "xx_XX")).system is SpeechModelSystem)
+        // Its install fails the test before it asks the system for anything.
+        await withKnownIssue("The install of a model test's speech system fails the test.") {
+            _ = try await SpeechModelSystem().install(Locale(identifier: "en_US")) { _ in }
+        }
+        // And no test builds a transcriber on the device's own speech system: the public
+        // initialisers, and the live system itself outside SpeechModelSystem, appear nowhere
+        // in this test target.
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        // The patterns are put together here, so that this file never spells them out.
+        let open = "("
+        let live = "LiveSpeechSystem" + open + ")"
+        let forbidden = [
+            "SpeechAnalyzerTranscriber" + open + "locale:", "SpeechAnalyzerTranscriber" + open + "variant:", live,
+        ]
+        for name in try FileManager.default.contentsOfDirectory(atPath: folder.path) where name.hasSuffix(".swift") {
+            let source = try String(contentsOf: folder.appending(path: name), encoding: .utf8)
+            for pattern in forbidden {
+                let uses = source.components(separatedBy: pattern).count - 1
+                // The one use allowed: SpeechModelSystem's own, above.
+                let allowed = name == "SpeechModelTests.swift" && pattern == live ? 1 : 0
+                #expect(uses == allowed, "\(name) uses \(pattern) \(uses) times.")
             }
         }
     }

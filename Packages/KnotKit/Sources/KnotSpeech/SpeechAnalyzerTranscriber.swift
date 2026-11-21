@@ -47,7 +47,9 @@
         }
 
         private let source: LocaleSource
-        private let system: any SpeechSystem
+        /// What the transcriber asks of the speech system. A test reads it to see which one a
+        /// transcriber uses.
+        let system: any SpeechSystem
         private let log: KnotLog
         private let state: Mutex<State>
 
