@@ -21,7 +21,7 @@ fixtures	required	WP-04	Fixtures/tools/generate.sh --check: the committed fixtur
 format	required	WP-01	swift format lint --strict with .swift-format.
 pins	required	WP-01	GRDB's version and revision for SwiftPM and for Xcode, and no other dependency.
 team-id	required	the owner's local configuration, on the build Mac since 2026-11-20 (KNOT_TEAM_CONFIG)	The signing team's ID from the owner's local configuration is in no tracked file. At every depth. Without the configuration the step is skipped, and the gate fails on a skipped step.
-lint	required	WP-01	No network call, logged text, standard defaults domain, eraseDatabaseOnSchemaChange, unlisted concurrency escape, undeclared required-reason API, or file named "… 2".
+lint	required	WP-01	No network call, logged text, standard defaults domain, eraseDatabaseOnSchemaChange, unlisted concurrency escape, undeclared required-reason API, test that cancels itself, or file named "… 2"; and the nightly workflow makes the audio before the package tests under Thread Sanitizer.
 ownership	required	WP-01	The diff stays inside the paths the package owns, from its brief and scripts/ownership-extra.txt.
 core-api	required	WP-01	KnotCore's public API matches the base, except on a contract branch.
 named-tests	required	WP-01	Every test in docs/plan/named-tests.txt exists once its package has merged.

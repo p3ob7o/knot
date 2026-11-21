@@ -897,17 +897,44 @@ else
     fail "making the audio: first call '$first', spoken after the second '$second', bootstrap through knot_make_audio: $bootstrap_ok"
 fi
 
-# The hosted nightly run makes this tree's audio before the package tests under Thread
-# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio. Only a
-# step's own `run:` line counts, so a step that is commented out is none.
-nightly="$KNOT_SELF/.github/workflows/nightly.yml"
-nightly_step() { grep -n -E "^ *(- )?run: +scripts/verify\.sh --only $1 *\$" "$nightly" | head -n 1 | cut -d: -f1 || true; }
-fixtures_line=$(nightly_step fixtures)
-tsan_line=$(nightly_step tsan)
-if [[ -n $fixtures_line && -n $tsan_line ]] && ((fixtures_line < tsan_line)); then
-    pass "the hosted nightly run makes the audio before the package tests under Thread Sanitizer"
+# The hosted nightly run makes the tree's audio before the package tests under Thread
+# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio. The
+# gate's lint step checks it on the tree's own workflow (knot_tool.py workflows), since the
+# self-test reads its own checkout. Here the check is run on six workflows: the scripts' own,
+# which passes; and five wrong ones, each refused: tsan before the fixtures (36a), the
+# fixtures step commented out (36b), the fixtures step with `if: false` (43a), the fixtures
+# step in another job (43b), and the tsan step with an `if:` of its own.
+nw="$scratch/nightly"
+mkdir -p "$nw"
+python3 -I - "$KNOT_SELF/.github/workflows/nightly.yml" "$nw" <<'PY'
+import os, sys
+text, out = open(sys.argv[1]).read(), sys.argv[2]
+fixtures = "      - name: The fixtures, with this tree's audio\n        run: scripts/verify.sh --only fixtures\n"
+tsan = "      - name: Package tests under Thread Sanitizer\n        run: scripts/verify.sh --only tsan\n"
+assert fixtures in text and tsan in text
+both = fixtures + tsan
+variants = {
+    "tsan-first": text.replace(both, tsan + fixtures),
+    "commented": text.replace(fixtures, "".join("      # " + l[6:] + "\n" for l in fixtures.splitlines())),
+    "if-false": text.replace(fixtures, fixtures.replace("        run:", "        if: false\n        run:")),
+    "other-job": text.replace(fixtures, "") + "  audio:\n    runs-on: xcode-27\n    steps:\n" + fixtures,
+    "tsan-if": text.replace(tsan, tsan.replace("        run:", "        if: github.event_name == 'schedule'\n        run:")),
+}
+for name, body in variants.items():
+    assert body != text, name
+    open(os.path.join(out, name + ".yml"), "w").write(body)
+PY
+nightly_ok=0
+python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$KNOT_SELF/.github/workflows/nightly.yml" >"$nw/own.out" 2>&1 || nightly_ok=$?
+nightly_refused=""
+for variant in tsan-first commented if-false other-job tsan-if; do
+    python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$nw/$variant.yml" >"$nw/$variant.out" 2>&1 &&
+        nightly_refused="$nightly_refused passed:$variant" || nightly_refused="$nightly_refused refused:$variant"
+done
+if [[ $nightly_ok == 0 && $nightly_refused == " refused:tsan-first refused:commented refused:if-false refused:other-job refused:tsan-if" ]]; then
+    pass "the hosted nightly run makes the audio first, in the same job, unconditionally, and each wrong workflow is refused"
 else
-    fail "the hosted nightly run: the fixtures step at line '${fixtures_line:-none}', tsan at '${tsan_line:-none}'"
+    fail "the nightly workflow's check: the scripts' own workflow status $nightly_ok ($(tail -n 1 "$nw/own.out")), the wrong ones:$nightly_refused"
 fi
 
 # A test cancelled at run time counts as one skipped, as a test skipped by its trait does:

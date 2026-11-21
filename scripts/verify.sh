@@ -284,7 +284,15 @@ step_format() {
         scripts/lib/models.swift)
 }
 
-step_lint() { (cd "$KNOT_ROOT" && tool lint); }
+# The lint, and the tree's workflows: the nightly one makes the audio before the package
+# tests under Thread Sanitizer (knot_tool.py workflows). The workflow is read here, on the
+# tree, since the self-test reads its own checkout; the lint runs at every depth of the gate.
+step_lint() {
+    local status=0
+    (cd "$KNOT_ROOT" && tool lint) || status=$?
+    (cd "$KNOT_ROOT" && tool workflows) || status=1
+    return "$status"
+}
 
 # The signing team's ID in no tracked file. Without the owner's local configuration on this
 # Mac there is no ID to look for: the step then exits 3 and counts as skipped, never as

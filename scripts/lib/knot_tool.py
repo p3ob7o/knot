@@ -828,6 +828,89 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
     return 1 if problems else 0
 
 
+# ---------------------------------------------------------------- workflows
+
+
+NIGHTLY = ".github/workflows/nightly.yml"
+
+
+def workflow_jobs(text):
+    """The jobs of a workflow, as {job: [step]}, each step a dict of its keys, with a block
+    value such as `run: |` joined into one string. It reads the plain layout of this
+    repository's workflows (two spaces a level, a step as `- name:` or `- uses:`), not every
+    form YAML allows, and comment lines count for nothing."""
+    jobs, job, steps, step, block, in_jobs = {}, None, None, None, None, False
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if block is not None:
+            if indent > block[1]:
+                step[block[0]] = (step[block[0]] + "\n" + line.strip()).strip()
+                continue
+            block = None
+        if indent == 0:
+            in_jobs = line.startswith("jobs:")
+            continue
+        if not in_jobs:
+            continue
+        if indent == 2 and line.rstrip().endswith(":"):
+            job = line.strip()[:-1]
+            jobs[job], steps, step = [], None, None
+            continue
+        if job and indent == 4 and line.strip() == "steps:":
+            steps = jobs[job]
+            continue
+        if steps is not None and line.lstrip().startswith("- "):
+            step = {}
+            steps.append(step)
+            line = line.replace("- ", "  ", 1)
+            indent += 2
+        if step is not None and steps is not None and ":" in line:
+            key, value = line.strip().split(":", 1)
+            value = value.strip()
+            step[key] = "" if value in ("|", ">") else value
+            if value in ("|", ">"):
+                block = (key, indent)
+    return jobs
+
+
+def cmd_workflows(path=NIGHTLY):
+    """The tree's nightly workflow makes the tree's audio before the package tests under
+    Thread Sanitizer: in the job that runs `scripts/verify.sh --only tsan`, a step whose run
+    is `scripts/verify.sh --only fixtures` comes first, and neither step has a condition.
+    `--only tsan` has no fixtures step, and the tests that read the audio need it. The gate's
+    lint step runs this on the tree; the self-test, on wrong workflows of its own."""
+    problems = []
+    if not os.path.exists(path):
+        print(f"workflows: {path} is missing")
+        return 1
+    jobs = workflow_jobs(open(path).read())
+    found = False
+    for job, steps in jobs.items():
+        runs = [step.get("run", "").strip() for step in steps]
+        if "scripts/verify.sh --only tsan" not in runs:
+            continue
+        found = True
+        tsan = runs.index("scripts/verify.sh --only tsan")
+        fixtures = runs.index("scripts/verify.sh --only fixtures") if "scripts/verify.sh --only fixtures" in runs else None
+        if fixtures is None:
+            problems.append(f"the job {job} runs the tsan step with no fixtures step in it")
+        elif fixtures > tsan:
+            problems.append(f"the job {job} runs the tsan step before the fixtures step")
+        for name, at in (("fixtures", fixtures), ("tsan", tsan)):
+            if at is not None and "if" in steps[at]:
+                problems.append(f"the {name} step of the job {job} has a condition, if: {steps[at]['if']}")
+    if not found:
+        problems.append("no job runs scripts/verify.sh --only tsan")
+    for problem in problems:
+        print(f"workflows: {path}: {problem}")
+    if problems:
+        return 1
+    print(f"workflows: {path} makes the audio before the package tests under Thread Sanitizer")
+    return 0
+
+
 # ---------------------------------------------------------------- links
 
 
@@ -1529,6 +1612,8 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "workflows":
+        return cmd_workflows(option(args, "--file", NIGHTLY))
     if command == "lint":
         only = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--files"]
         return cmd_lint(only or None, option(args, "--as"), option(args, "--manifest"))
