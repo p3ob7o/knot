@@ -164,15 +164,18 @@ public final class LiveRecorder: Recorder {
     // MARK: Recovery
 
     /// Every working file of an earlier launch that `removeWorkingFile` has not removed, once
-    /// each, by its manifest in `Recording/`: one that never ended as `recovered`, read to its
-    /// last complete frame, and one that ended, stopped and was never converted, as `stopped`.
-    /// The manifest keeps that a recording ended, not why, so a recording that ended by itself
-    /// comes back as `stopped` too.
+    /// each, in the order of their captures: the orphan is the working file. It is read to its
+    /// last complete frame. Its ending comes from its manifest: `recovered` for one that never
+    /// ended, `stopped` for one that ended and was never converted. The manifest keeps that a
+    /// recording ended, not why, so a recording that ended by itself comes back as `stopped` too.
+    /// With a manifest that cannot be read, or none, it comes back as `recovered`, and the
+    /// manifest is left where it is.
     ///
-    /// A recording comes back with no audio only when its working file is not there, ends
-    /// before its header does, or holds no frame. A working file that is there and cannot be
-    /// read now is not returned and stays where it is, with a log line: it comes back at a later
-    /// call, once it can be read.
+    /// A manifest with no working file is a recording with no audio, and comes back with none.
+    /// A recording comes back with no audio only then, or when its working file ends before its
+    /// header does or holds no frame. A working file that is there and cannot be read now is not
+    /// returned, and nothing of its recording is touched: it comes back at a later call, once it
+    /// can be read.
     ///
     /// A manifest of `currentLaunch` is never touched. A recording of this process that belongs
     /// to another launch, which only a test makes, is ended first as that launch's death would
@@ -192,39 +195,62 @@ public final class LiveRecorder: Recorder {
         guard layer.entryKind(locations.recording) == .folder else { return [] }
         let names = try layer.contents(of: locations.recording)
         removePartials(names)
+        // Every capture that a working file or a manifest in `Recording/` names. One that is live
+        // in this process is the current launch's, whatever its manifest says or lacks.
+        var captures = Set<CaptureID>()
+        for name in names where !name.hasPrefix(".") {
+            for suffix in [".\(RecordingFormat.caf.fileExtension)", ".json"] where name.hasSuffix(suffix) {
+                if let id = CaptureID(String(name.dropLast(suffix.count))) { captures.insert(id) }
+            }
+        }
+        let live = sessions.withLock { Set($0.keys) }
         var found: [RecordedAudio] = []
-        for name in names where name.hasSuffix(".json") {
-            guard let id = CaptureID(String(name.dropLast(".json".count))) else { continue }
+        for id in captures.sorted() where !live.contains(id) {
             let files = SessionFiles(locations: locations, capture: id, layer: layer, store: store)
-            let manifest: CaptureManifest
-            do {
-                manifest = try CaptureManifest.decode(try layer.read(files.manifest))
-            } catch {
-                log.failure(error.about(capture: id), "recording_manifest_unreadable")
-                continue
-            }
-            guard manifest.captureID == id, manifest.kind == .voice, manifest.launchID != currentLaunch else {
-                continue
-            }
-            let ending: RecordingEnding = manifest.endedAt == nil ? .recovered : .stopped
+            let manifest = usableManifest(files, id)
+            // A recording of the current launch is never touched.
+            if let manifest, manifest.launchID == currentLaunch { continue }
+            let ending: RecordingEnding = manifest?.endedAt == nil ? .recovered : .stopped
             switch WorkingFileReader.inspect(files.workingFile) {
             case .read(let contents):
+                // The orphan is the working file: it comes back whether or not its manifest can be read.
                 found.append(
                     RecordedAudio(
                         captureID: id, frames: contents.frames, sampleRate: contents.sampleRate, ending: ending,
                         workingFile: files.workingFile))
-            case .missing, .shorterThanItsHeader:
-                // No audio: the recording comes back with none, so that its capture ends and its
-                // manifest goes.
-                found.append(
-                    RecordedAudio(captureID: id, frames: 0, sampleRate: 0, ending: ending, workingFile: nil))
+            case .shorterThanItsHeader:
+                // No audio: it comes back with none, so that its capture ends and its files go.
+                found.append(RecordedAudio(captureID: id, frames: 0, sampleRate: 0, ending: ending, workingFile: nil))
+            case .missing:
+                // A manifest with no working file is a recording with no audio; a manifest that
+                // cannot be read, with no working file, names nothing to return.
+                guard manifest != nil else { continue }
+                found.append(RecordedAudio(captureID: id, frames: 0, sampleRate: 0, ending: ending, workingFile: nil))
             case .unreadable(let why):
-                // No verdict on the audio: the file stays where it is, and comes back at a later
-                // call, once it can be read.
+                // No verdict on the audio: nothing of the recording is touched, and it comes back at
+                // a later call, once it can be read.
                 log.capture(id, "recording_working_file_unreadable", why.logField, level: .error)
             }
         }
-        return found.sorted { $0.captureID < $1.captureID }
+        return found
+    }
+
+    /// The manifest of `id` in `Recording/`, when it is there and is the manifest of that
+    /// recording. One that cannot be read is left where it is, with a log line.
+    private func usableManifest(_ files: SessionFiles, _ id: CaptureID) -> CaptureManifest? {
+        guard layer.entryKind(files.manifest) != nil else { return nil }
+        let manifest: CaptureManifest
+        do {
+            manifest = try CaptureManifest.decode(try layer.read(files.manifest))
+        } catch {
+            log.failure(error.about(capture: id), "recording_manifest_unreadable")
+            return nil
+        }
+        guard manifest.captureID == id, manifest.kind == .voice else {
+            log.capture(id, "recording_manifest_not_this_recording", level: .error)
+            return nil
+        }
+        return manifest
     }
 
     /// Removes what a death inside `DurableFile.place` left in `Recording/`: a manifest's partial

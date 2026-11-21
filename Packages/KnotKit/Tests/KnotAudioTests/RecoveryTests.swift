@@ -198,6 +198,54 @@ import Testing
         #expect(delivered.value == afterRecovery, "Its input went on after recovery.")
     }
 
+    /// The orphan is the working file: one whose manifest is gone comes back, as `recovered` and
+    /// read to its end, and its removal takes it.
+    @Test func aWorkingFileWithNoManifestComesBack() async throws {
+        let folder = try ScratchFolder()
+        let capture = CaptureID(uuid: UUID())
+        let working = folder.locations.recordingAudio(capture, format: .caf)
+        _ = try writeWorkingFile(at: working, frames: 12_000, close: false)
+        let recorder = recorder(folder.locations, input: injected())
+        let orphans = try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(
+            orphans == [
+                RecordedAudio(
+                    captureID: capture, frames: 12_000, sampleRate: 16_000, ending: .recovered, workingFile: working)
+            ], "\(orphans)")
+        try await recorder.removeWorkingFile(of: capture)
+        #expect(recordingFolder(folder.locations).isEmpty)
+    }
+
+    /// A manifest that cannot be read no longer hides its recording: the working file comes back
+    /// as `recovered`, and the manifest is left where it is.
+    @Test func aWorkingFileWithAnUnreadableManifestComesBack() async throws {
+        let folder = try ScratchFolder()
+        let capture = CaptureID(uuid: UUID())
+        let working = folder.locations.recordingAudio(capture, format: .caf)
+        _ = try writeWorkingFile(at: working, frames: 8_000)
+        let manifest = folder.locations.recordingManifest(capture)
+        try Data("{not a manifest".utf8).write(to: manifest)
+        let orphans = try await recorder(folder.locations, input: injected())
+            .recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(orphans.map(\.captureID) == [capture] && orphans.first?.ending == .recovered)
+        #expect(orphans.first?.frames == 8_000 && orphans.first?.workingFile == working)
+        #expect(exists(manifest))
+    }
+
+    /// A working file of a recording live in this process is the current launch's, even with its
+    /// manifest gone: it is never returned.
+    @Test func aLiveRecordingWithNoManifestIsLeftAlone() async throws {
+        let folder = try ScratchFolder()
+        let launch = LaunchID(uuid: UUID())
+        let recorder = recorder(folder.locations, input: injected())
+        let request = request(launch)
+        let session = try await recorder.start(request)
+        try FileManager.default.removeItem(at: folder.locations.recordingManifest(request.captureID))
+        let orphans = try await recorder.recoverOrphans(currentLaunch: launch)
+        #expect(!orphans.contains { $0.captureID == request.captureID }, "\(orphans)")
+        #expect(await session.stop().ending == .stopped, "It records on.")
+    }
+
     /// No `Recording/` folder yet: nothing to recover.
     @Test func anEmptyStoreHasNoOrphans() async throws {
         let folder = try ScratchFolder()
