@@ -99,16 +99,16 @@
         }
 
         func run() async {
-            Say.line("launch \(options.launch)")
+            Say.line(SoakLine.launch(options.launch).rendered)
             // The clock starts where this launch's part of the script starts, just before it.
             let first = script.captures.indices.contains(options.range.lowerBound) ? options.range.lowerBound : nil
             clock.set(SoakScript.base.addingTimeInterval((first.map { script.captures[$0].startsAt } ?? 0) - 1))
             if options.fault == .skippedRecovery {
-                Say.line("recovered 0")
+                Say.line(SoakLine.recovered(0).rendered)
             } else {
                 do {
                     let outcomes = try await recovery.run(ingest: ingest)
-                    Say.line("recovered \(outcomes.count)")
+                    Say.line(SoakLine.recovered(outcomes.count).rendered)
                 } catch {
                     Say.fail("recovery failed: \(error.code)")
                 }
@@ -123,7 +123,7 @@
                 await end(open.index, open.id, text: open.text, discard: false)
             }
             _ = await ingest.ingestAll()
-            Say.line("done")
+            Say.line(SoakLine.done.rendered)
             try? database.close()
         }
 
@@ -132,7 +132,7 @@
         private func runCapture(_ capture: SoakScript.Capture) async {
             let index = capture.index
             clock.set(SoakScript.base.addingTimeInterval(capture.startsAt))
-            Say.line("intent \(index)")
+            Say.line(SoakLine.intent(index).rendered)
             let begun: CaptureState
             do throws(KnotError) {
                 begun = try await disturbed(capture, save: 0) { () async throws(KnotError) -> CaptureState in
@@ -147,7 +147,7 @@
                             text: capture.texts[0]))
                 }
             } catch {
-                Say.line("refused \(index) \(error.code)")
+                Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
                 // The capture left open stays so: it ends by itself, as the app would end it.
                 if let open = leftOpen {
                     leftOpen = nil
@@ -171,7 +171,7 @@
                     }
                     acknowledge(index, state, text: text, state: "open")
                 } catch {
-                    Say.line("refused \(index) \(error.code)")
+                    Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
                 }
                 await arming.step("after_checkpoint")
             }
@@ -188,7 +188,7 @@
             let capture = script.captures[index]
             // Said before the call: a discard that commits before a kill has kept nothing, and
             // rightly so.
-            if discard { Say.line("discarding \(index) \(id)") }
+            if discard { Say.line(SoakLine.discarding(index: index, capture: id).rendered) }
             do throws(KnotError) {
                 let state = try await disturbed(capture, save: capture.texts.count) {
                     () async throws(KnotError) -> CaptureState in
@@ -204,7 +204,7 @@
                 acknowledge(index, state, text: discarded ? "" : text, state: discarded ? "discarded" : "ended")
                 if state.outcome == .stored { await injectAfterStore(index, id, text: text) }
             } catch {
-                Say.line("refused \(index) \(error.code)")
+                Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
             }
             await arming.step("after_end")
         }
@@ -278,9 +278,13 @@
             durable[state.captureID] = max(durable[state.captureID] ?? 0, state.durableRevision)
             let bytes = Data(text.utf8)
             let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-            let blank = text.allSatisfy { $0 == " " || $0 == "\n" } ? 1 : 0
             Say.line(
-                "ack \(index) \(state.captureID) \(state.durableRevision) \(bytes.count) \(digest) \(name) \(blank)")
+                SoakLine.ack(
+                    SoakLine.Acknowledgement(
+                        index: index, capture: state.captureID, revision: state.durableRevision, bytes: bytes.count,
+                        digest: digest, state: SoakLine.Acknowledgement.State(rawValue: name) ?? .open,
+                        blank: text.allSatisfy { $0 == " " || $0 == "\n" })
+                ).rendered)
         }
     }
 #endif

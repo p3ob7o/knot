@@ -78,7 +78,7 @@
         /// Passes `name` on a thread that may be held: the store's writer, or a log's caller.
         func pass(_ name: String) {
             guard isTheStop(name) else { return }
-            Say.line("stopped \(name)")
+            Say.line(SoakLine.stopped(name).rendered)
             // The process ends here, by its parent's SIGKILL, or by itself when its parent has gone
             // (`ParentWatch`) or after `stopLimit`.
             let until = Date().addingTimeInterval(Self.stopLimit)
@@ -95,7 +95,7 @@
         /// waits without holding a thread.
         func reach(_ name: String) async {
             guard isTheStop(name) else { return }
-            Say.line("stopped \(name)")
+            Say.line(SoakLine.stopped(name).rendered)
             let until = Date().addingTimeInterval(Self.stopLimit)
             while Date() < until { try? await Task.sleep(for: .seconds(1)) }
             Say.fail("waited \(Int(Self.stopLimit)) s at \(name) and no parent killed it")
@@ -134,7 +134,7 @@
 
         func write(_ record: LogRecord) {
             if echoesAll || record.level == .error || record.level == .fault {
-                Say.line("log \(record.category.rawValue) \(record.line)")
+                Say.line(SoakLine.log("\(record.category.rawValue) \(record.line)").rendered)
             }
             arming.pass("log:\(record.event)")
         }

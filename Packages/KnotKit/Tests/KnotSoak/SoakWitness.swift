@@ -4,16 +4,17 @@ import GRDB
 import KnotCore
 import KnotStore
 
+@testable import KnotSoakChild
+
 /// The parent as the witness (docs/architecture.md §17): it keeps every save the child said the
 /// engine acknowledged, with its revision and the hash of its text, and once the last launch has
 /// recovered it checks each one against the store. A capture that vanished whole therefore fails
 /// the run, as does one that kept less than it was acknowledged with.
 struct SoakWitness {
     /// One acknowledged save of one capture.
+    typealias State = SoakLine.Acknowledgement.State
+
     struct Acknowledgement: Hashable, Sendable {
-        enum State: String, Sendable {
-            case open, ended, discarded
-        }
 
         let index: Int
         let capture: CaptureID
@@ -48,29 +49,76 @@ struct SoakWitness {
     /// acknowledged with before.
     private(set) var discarding: Set<CaptureID> = []
 
-    /// Takes in what one launch printed.
-    mutating func absorb(_ lines: [String], launch: Int) {
-        for line in lines {
-            let fields = line.split(separator: " ").map(String.init)
-            switch fields.first {
-            case "intent":
-                if fields.count == 2, let index = Int(fields[1]) { highestIntent = max(highestIntent, index) }
-            case "discarding":
-                if fields.count == 3, let capture = CaptureID(fields[2]) { discarding.insert(capture) }
-            case "ack":
-                guard fields.count == 8, let index = Int(fields[1]), let capture = CaptureID(fields[2]),
-                    let revision = Int64(fields[3]), let bytes = Int(fields[4]),
-                    let state = Acknowledgement.State(rawValue: fields[6])
-                else { continue }
-                acknowledgements[capture, default: []].append(
-                    Acknowledgement(
-                        index: index, capture: capture, revision: revision, bytes: bytes, digest: fields[5],
-                        state: state, blank: fields[7] == "1", launch: launch))
-                acknowledged += 1
-            default:
+    /// How one launch ended, as the parent saw it.
+    enum LaunchEnd: Sendable {
+        /// Killed at its armed kill point, which it said it reached.
+        case killedAtPoint(String)
+        /// Killed after its nth acknowledgement, wherever it was.
+        case killedAnywhere
+        /// Ran its part and quit by itself, with status 0.
+        case quit
+        /// Anything else: an error, or a wait that ran out.
+        case failed
+    }
+
+    /// Takes in what one launch printed, and returns what is wrong with its account. Every line
+    /// must parse; the launch says which launch it is first; its intents run from the start of
+    /// its range with no gap; a launch that quit says `done` after an intent for every index of
+    /// its range; and a launch killed at its point said it stopped at that point and no other.
+    mutating func absorb(_ lines: [String], launch: Int, range: Range<Int>, end: LaunchEnd) -> [Problem] {
+        var problems: [Problem] = []
+        func problem(_ code: String, _ ids: String...) {
+            problems.append(Problem(code: code, ids: ["launch=\(launch)"] + ids))
+        }
+        var parsed: [SoakLine] = []
+        for (number, line) in lines.enumerated() {
+            guard let read = SoakLine.parse(line) else {
+                // Its length only: a line that does not parse may hold anything.
+                problem("unreadable_line", "line=\(number + 1)", "bytes=\(line.utf8.count)")
                 continue
             }
+            parsed.append(read)
         }
+        if parsed.first != .launch(launch) { problem("launch_line_missing") }
+        var intents: [Int] = []
+        var stops: [String] = []
+        for line in parsed {
+            switch line {
+            case .intent(let index):
+                intents.append(index)
+                highestIntent = max(highestIntent, index)
+            case .discarding(_, let capture):
+                discarding.insert(capture)
+            case .ack(let a):
+                acknowledgements[a.capture, default: []].append(
+                    Acknowledgement(
+                        index: a.index, capture: a.capture, revision: a.revision, bytes: a.bytes, digest: a.digest,
+                        state: State(rawValue: a.state.rawValue) ?? .open, blank: a.blank, launch: launch))
+                acknowledged += 1
+                if !intents.contains(a.index) { problem("acknowledged_without_intent", "index=\(a.index)") }
+            case .stopped(let point):
+                stops.append(point)
+            default:
+                break
+            }
+        }
+        if intents != Array(range.lowerBound..<(range.lowerBound + intents.count)) || intents.count > range.count {
+            problem("intents_out_of_order", "from=\(range.lowerBound)", "count=\(intents.count)")
+        }
+        switch end {
+        case .quit:
+            if parsed.last != .done || intents.count != range.count {
+                problem("launch_did_not_finish", "intents=\(intents.count)", "of=\(range.count)")
+            }
+            if !stops.isEmpty { problem("stopped_and_quit") }
+        case .killedAtPoint(let armed):
+            if stops != [armed] { problem("stopped_at_other_point", "armed=\(armed)") }
+        case .killedAnywhere:
+            if !stops.isEmpty { problem("stopped_unarmed") }
+        case .failed:
+            break
+        }
+        return problems
     }
 
     /// Every check of the run, on the store as the last recovery left it: the store's own

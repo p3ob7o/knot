@@ -22,7 +22,7 @@
             // the store, and fails.
             #expect(verdict.isGreen, "\(verdict.report)")
             #expect(
-                verdict.captures == configuration.captures || verdict.stoppedByTimeBox,
+                verdict.captures == configuration.captures,
                 "Every capture of the script began.")
             #expect(verdict.acknowledgements > 0, "The child acknowledged saves.")
             #expect(
