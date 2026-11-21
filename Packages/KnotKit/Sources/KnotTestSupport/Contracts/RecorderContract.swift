@@ -49,6 +49,7 @@ public enum RecorderContract {
         try await anOrphanWhoseManifestCannotBeReadEndsRecovered(make)
         try await aManifestWithNoWorkingFileHoldsNoAudio(make)
         try await aStopThatCannotReadTheFileBackIsAWriteFailure(make)
+        try await aRecordingsPeaksGoWithIt(make)
     }
 
     static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -223,6 +224,39 @@ public enum RecorderContract {
         #expect(after.ending == .discarded && after.frames == 0 && after.workingFile == nil, "Nothing is kept.")
         #expect(!subject.exists(subject.locations.recordingAudio(request.captureID, format: .caf)))
         #expect(!subject.exists(subject.locations.recordingManifest(request.captureID)))
+    }
+
+    /// A recorder may leave a recording's level peaks at `StoreLocations.recordingPeaks(_:)`. A
+    /// peaks file that is there reads back as `RecordingPeaks`, and none is left after
+    /// `removeWorkingFile(of:)` or after a discard: a peaks file never outlives its recording. A
+    /// recorder that writes none meets this too.
+    public static func aRecordingsPeaksGoWithIt(_ make: @Sendable () async throws -> RecorderSubject) async throws {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let kept = request()
+        let session = try await recorder.start(kept)
+        _ = await SuiteWait.value("a durable count above zero") {
+            for await event in session.events {
+                if case .durable(let frames) = event, frames > 0 { break }
+            }
+        }
+        _ = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        let peaks = subject.locations.recordingPeaks(kept.captureID)
+        if subject.exists(peaks) {
+            #expect(subject.read(peaks).flatMap(RecordingPeaks.init(reading:)) != nil, "Peaks read back as the format.")
+        }
+        try await recorder.removeWorkingFile(of: kept.captureID)
+        #expect(!subject.exists(peaks), "Removing the working file takes the peaks.")
+
+        let dropped = request()
+        let discarded = try await recorder.start(dropped)
+        _ = await SuiteWait.value("a durable count above zero") {
+            for await event in discarded.events {
+                if case .durable(let frames) = event, frames > 0 { break }
+            }
+        }
+        _ = await SuiteWait.value("the discard") { await discarded.discard() }
+        #expect(!subject.exists(subject.locations.recordingPeaks(dropped.captureID)), "A discard takes the peaks.")
     }
 
     /// Recovery finishes recordings of earlier launches and never one of the current launch.
