@@ -63,7 +63,7 @@ public final class AssetRepository: AssetStore {
             guard try Self.digest(of: source) == stored.sha256 else {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
             }
-            try files.remove(source)
+            removeSource(source)
             return try settled(stored)
         }
         let (sha, byteCount) = try Self.digestAndSize(of: source)
@@ -75,7 +75,7 @@ public final class AssetRepository: AssetStore {
             guard let stored = try find(url, asset: asset, kind: kind), stored.sha256 == sha else {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
             }
-            try files.remove(source)
+            removeSource(source)
             return try settled(stored)
         }
         return StoredFile(asset: asset, kind: kind, url: url, byteCount: byteCount, sha256: sha)
@@ -122,6 +122,14 @@ public final class AssetRepository: AssetStore {
     }
 
     // MARK: Files
+
+    /// Removes a move's source once its content is the stored file's. The source is the caller's
+    /// file, such as one the watch sent, and may lie anywhere, below the store's roots or not:
+    /// it goes if it can, and one that cannot be removed does not fail the move, whose answer is
+    /// the stored asset.
+    private func removeSource(_ source: URL) {
+        try? layer.remove(source)
+    }
 
     /// The conflict rule is on the ID: an asset ID that holds a file of one kind takes no file
     /// of another, whose place would differ only by its extension.

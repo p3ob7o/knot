@@ -227,4 +227,27 @@ import Testing
         #expect(try await made.assets.find(made.audio, kind: .audio) == nil, "Named by nothing, it goes.")
         expectConsistent(made.database)
     }
+
+    /// A move of content already stored answers the stored file. Its source is the caller's file,
+    /// which may lie anywhere: it is removed when it can be, and one that cannot be removed does
+    /// not fail the move.
+    @Test func aMoveOfStoredContentAnswersTheStoredFile() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 126)
+        let bytes = Data("synthetic recording bytes".utf8)
+        let outside = folders.make("watch")
+        let source = outside.appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try bytes.write(to: source)
+        let moved = try await made.assets.move(source, as: made.audio, kind: .audio)
+        #expect(moved.sha256 == AssetRepository.sha256(bytes))
+        #expect(!FileManager.default.fileExists(atPath: source.path), "The source goes when it can.")
+        let locked = folders.make("locked")
+        let kept = locked.appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try bytes.write(to: kept)
+        #expect(chmod(locked.path, 0o555) == 0)
+        defer { _ = chmod(locked.path, 0o755) }
+        let again = try await made.assets.move(kept, as: made.audio, kind: .audio)
+        #expect(again.sha256 == moved.sha256, "A source that cannot be removed does not fail the move.")
+    }
 }
