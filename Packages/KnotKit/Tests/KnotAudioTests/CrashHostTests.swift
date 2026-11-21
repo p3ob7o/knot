@@ -3,6 +3,8 @@ import KnotTestSupport
 import Synchronization
 import Testing
 
+@testable import KnotAudio
+
 #if os(macOS)
     /// The crash host as the gate runs it: each command ends by itself.
     @Suite struct CrashHostTests {
@@ -20,6 +22,40 @@ import Testing
                 ])
             #expect(run.status == 3, "\(run.output)")
             #expect(run.output.contains("ended-early ") && run.output.contains(" ending input_lost"), "\(run.output)")
+        }
+    }
+
+    /// The policy lets a real process that carries none of its signs open a hardware input: a
+    /// recorder that refuses every process would never record. The child is the crash host,
+    /// asked and never opened: its `policy` command prints the policy's answer and touches
+    /// nothing of the audio system, and no command of the host opens an input other than
+    /// injected audio. Each sign put back refuses again, so the child reads what it is given.
+    @Test func aProcessWithNoSignMayOpenAHardwareInput() async throws {
+        let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
+        var plain = ProcessInfo.processInfo.environment
+        for key in ["KNOT_AGENT"] + HardwareInputPolicy.testEnvironment { plain.removeValue(forKey: key) }
+        let allowed = try await HostRun.run(host, ["policy"], environment: plain)
+        #expect(allowed.status == 0 && allowed.output == "policy allowed\n", "\(allowed.output)")
+        var agent = plain
+        agent["KNOT_AGENT"] = "1"
+        #expect(try await HostRun.run(host, ["policy"], environment: agent).output == "policy refused agent\n")
+        var test = plain
+        test["XCTestConfigurationFilePath"] = "/x"
+        #expect(try await HostRun.run(host, ["policy"], environment: test).output == "policy refused test\n")
+
+        // No command of the host reaches the hardware: it names none of the types that do.
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../Sources/KnotAudioCrashHost").standardizedFileURL
+        let files = try FileManager.default.contentsOfDirectory(atPath: sources.path).filter { $0.hasSuffix(".swift") }
+        #expect(files.count >= 6, "\(files)")
+        for file in files {
+            let text = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            for name in [
+                "MicrophoneInput", "SystemHardwareAudio", "SystemInputEngine", "AVAudioEngine", "AVAudioSession",
+                "AVAudioApplication", "KnotAudioLive",
+            ] {
+                #expect(!text.contains(name), "\(file) names \(name)")
+            }
         }
     }
 
