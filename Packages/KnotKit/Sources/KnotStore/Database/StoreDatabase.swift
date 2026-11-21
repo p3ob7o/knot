@@ -124,7 +124,9 @@ public final class StoreDatabase: Sendable {
         if !FileManager.default.fileExists(atPath: path) {
             guard role == .app else { throw KnotError.storeNotOpen }
             removeCreationLeftovers(in: locations)
-            try create(at: locations, files: files, clock: clock, ids: ids, creation: creation, migrations: migrations)
+            try create(
+                at: locations, files: files, layer: fileLayer, clock: clock, ids: ids, creation: creation,
+                migrations: migrations)
         }
         try checkHeader(at: locations.database, latest: latest)
         let pool = try openPool(at: path, hooks: hooks)
@@ -194,11 +196,14 @@ public final class StoreDatabase: Sendable {
         }
     }
 
-    /// Creates a store whole in a hidden file beside its place, then moves it in, so that a
-    /// crash during creation never leaves a half-made database where the store should be.
+    /// Creates a store whole in a hidden file beside its place, then publishes it with an
+    /// exclusive rename, so that a crash during creation never leaves a half-made database where
+    /// the store should be, and two openers that both found none, in one process or two, never
+    /// replace each other: the first to publish is the store, and the other drops what it made
+    /// and opens that one.
     private static func create(
-        at locations: StoreLocations, files: StoreFiles, clock: any WallClock, ids: any IDGenerator,
-        creation: StoreCreation, migrations: [StoreSchema.Migration]
+        at locations: StoreLocations, files: StoreFiles, layer: any FileLayer, clock: any WallClock,
+        ids: any IDGenerator, creation: StoreCreation, migrations: [StoreSchema.Migration]
     ) throws(KnotError) {
         try files.makeFolder(locations.storeRoot)
         let partial = locations.storeRoot.appending(
@@ -232,7 +237,14 @@ public final class StoreDatabase: Sendable {
             StoreCopies.removeJournals(of: partial)
             throw StoreErrors.knotError(error)
         }
-        try files.move(partial, to: locations.database)
+        try layer.syncFile(partial)
+        guard try ExclusiveRename.move(partial, to: locations.database) else {
+            // Another opener published a store first: it is the store, and holds what was
+            // recorded since. What this one made goes.
+            try? FileManager.default.removeItem(at: partial)
+            return
+        }
+        try layer.syncFolder(locations.storeRoot)
     }
 
     /// A store's secret, from the system's random source through CryptoKit, with no generator

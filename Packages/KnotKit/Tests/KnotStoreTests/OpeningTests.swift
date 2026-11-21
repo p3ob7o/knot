@@ -64,6 +64,41 @@ import Testing
         #expect(try Data(contentsOf: locations.database) == whole.prefix(100))
     }
 
+    /// Two opens of a store that is not there yet: the store made first is the store, and every
+    /// note recorded in it stays. The other opener drops what it made and opens that one. The
+    /// new store is published with an exclusive rename, which holds across processes too.
+    @Test func twoOpensAtOnceKeepTheStoreMadeFirst() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let locations = StoreLocations.testing(root: root)
+        let gate = Gate()
+        // The slower opener stops after it found no store, as it makes the store's folder.
+        let layer = HookedFileLayer(beforeCreate: { url in
+            if url.standardizedFileURL.path == locations.storeRoot.standardizedFileURL.path { gate.stop() }
+        })
+        let slower = Task.detached { try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer) }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        let made = try await CopiesTests.make(in: root, seed: 81)
+        // Its log emptied into the database file, so that the file holds the whole store and
+        // nothing of it is read back from a log beside a replaced file.
+        try await made.database.pool.writeWithoutTransaction { db in _ = try db.checkpoint(.truncate) }
+        try made.database.close()
+        gate.release()
+        let opened = try await slower.value
+        #expect(opened.storeID == made.database.storeID, "The store made first is the store.")
+        #expect(try await NoteRepository(database: opened).note(made.typed.noteID) != nil, "Its notes stay.")
+        try opened.close()
+        let again = try openStore(in: root)
+        #expect(again.storeID == made.database.storeID)
+        #expect(try await NoteRepository(database: again).note(made.recording.noteID) != nil)
+        expectConsistent(again)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: locations.storeRoot.path)
+            .filter { $0.contains(DurableFile.partialSuffix) }
+        #expect(leftovers.isEmpty, "The loser's database is gone: \(leftovers)")
+    }
+
     /// The tool never creates a store and never migrates one.
     @Test func theToolNeverCreatesOrMigrates() async throws {
         let folders = TemporaryFolders()
