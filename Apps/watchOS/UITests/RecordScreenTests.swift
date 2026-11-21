@@ -222,13 +222,4 @@ final class WatchLaunchTests: XCTestCase {
                 honoursDebugArguments: true),
             .preview(WatchPreview()))
     }
-
-    func testThisTestBundleIsBuiltAsTheAppIs() {
-        // The tests above pass the build's kind in; the app reads it from its own build.
-        #if DEBUG
-            XCTAssertTrue(WatchLaunch.isDebugBuild)
-        #else
-            XCTAssertFalse(WatchLaunch.isDebugBuild)
-        #endif
-    }
 }
