@@ -239,9 +239,9 @@ public final class StoreDatabase: Sendable {
         ids: any IDGenerator, creation: StoreCreation, migrations: [StoreSchema.Migration]
     ) throws(KnotError) {
         try files.makeFolder(locations.storeRoot)
-        let partial = locations.storeRoot.appending(
-            path: ".knot.sqlite.\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
-            directoryHint: .notDirectory)
+        // Named for this process, and its own while it is built: no other open removes it.
+        let partial = PartialFiles.make(for: locations.database.lastPathComponent, in: locations.storeRoot)
+        defer { PartialFiles.finished(partial) }
         let storeID: StoreID = ids.make()
         let deviceID: DeviceID = creation.deviceID ?? ids.make()
         do {
@@ -290,7 +290,10 @@ public final class StoreDatabase: Sendable {
     /// their journals. A store that was moved into place is never touched.
     private static func removeCreationLeftovers(in locations: StoreLocations) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: locations.storeRoot.path)) ?? []
-        for name in names where name.hasPrefix(".knot.sqlite.") && name.contains(DurableFile.partialSuffix) {
+        for name in names
+        where name.hasPrefix(".knot.sqlite.") && name.contains(DurableFile.partialSuffix)
+            && PartialFiles.isLeftover(name, in: locations.storeRoot)
+        {
             try? FileManager.default.removeItem(at: locations.storeRoot.appending(path: name))
         }
     }

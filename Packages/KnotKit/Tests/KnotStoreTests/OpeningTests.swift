@@ -497,6 +497,64 @@ import Testing
         #expect(try WriteAheadLog.committedVersion(of: log) == 6)
         try database.close()
     }
+
+    /// The slower of two openers stops with its store whole in its partial file, before it syncs
+    /// and publishes it. The faster one finds no store, makes one and records in it. The slower
+    /// then opens the store made first: its partial was its own, and no other open removed it.
+    @Test func aSlowerOpenerWhosePartialIsKeptOpensTheStoreMadeFirst() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let locations = StoreLocations.testing(root: root)
+        let gate = Gate()
+        let layer = HookedFileLayer(beforeSyncFile: { url in
+            let name = url.lastPathComponent
+            if name.hasPrefix(".knot.sqlite."), name.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
+        })
+        let slower = Task.detached { () throws -> StoreDatabase in
+            try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer)
+        }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        let made = try await CopiesTests.make(in: root, seed: 201)
+        try made.database.close()
+        gate.release()
+        switch await slower.result {
+        case .success(let opened):
+            #expect(opened.storeID == made.database.storeID)
+            try opened.close()
+        case .failure(let error):
+            Issue.record("The slower opener failed instead of opening the store made first: \(error)")
+        }
+        let left = try FileManager.default.contentsOfDirectory(atPath: locations.storeRoot.path)
+            .filter { $0.hasSuffix(DurableFile.partialSuffix) }
+        #expect(left.isEmpty, "\(left)")
+    }
+
+    /// An open removes the partial file of a store being made that a dead process left, and keeps
+    /// one whose writer still runs.
+    @Test func anOpenRemovesOnlyTheCreationLeftoversOfTheDead() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        try openStore(in: root).close()
+        let locations = StoreLocations.testing(root: root)
+        var dead: Int32 = 99_998
+        while kill(dead, 0) == 0 || errno != ESRCH { dead -= 1 }
+        func partial(_ writer: Int32?) throws -> URL {
+            let tag = writer.map { ".p\($0)" } ?? ""
+            let url = locations.storeRoot.appending(
+                path: ".knot.sqlite\(tag).\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
+                directoryHint: .notDirectory)
+            try Data("synthetic".utf8).write(to: url)
+            return url
+        }
+        let leftovers = [try partial(dead), try partial(nil)]
+        let live = try partial(getppid())
+        try openStore(in: root).close()
+        for url in leftovers { #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
+        #expect(FileManager.default.fileExists(atPath: live.path))
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.
