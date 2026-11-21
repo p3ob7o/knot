@@ -13,8 +13,7 @@
     ///
     /// - **live**, killed at a moment the seed chooses while it records: recovery finds the
     ///   recording once, as one that never ended, with its manifest whole, all but at most one
-    ///   second of what the recorder took, at least the last durable count the child printed, and
-    ///   every frame equal to the injected audio;
+    ///   second of what the recorder took, and every frame equal to the injected audio;
     /// - **early**, killed stopped dead at `record --stage start`, the recording's first change to
     ///   the drive, which it says it has reached: nothing of the recording is on the drive yet, so
     ///   recovery finds none. The kill is made at that stage, never at a time;
@@ -25,8 +24,9 @@
     ///   during a conversion, finds it as stopped with every frame, and a new conversion gives a
     ///   copy of every frame and leaves no leftover.
     ///
-    /// Every trial also reads the store itself: a working file with no manifest beside it fails
-    /// the trial, whatever recovery says. And a trial passes only when its kill ended the
+    /// In every kind, recovery holds at least the last durable count the child printed or its
+    /// witness kept. Every trial also reads the store itself: a working file with no manifest
+    /// beside it fails the trial, whatever recovery says. And a trial passes only when its kill ended the
     /// recording, by SIGKILL or a runner's 137, and its recovery exited with success: a child that
     /// ended by itself, or a recovery that failed, fails the trial.
     ///
@@ -372,29 +372,40 @@
             guard count == 1, frames >= 0 else { return fail("recovery found \(count) orphans and \(frames) frames") }
             let withinOneSecond = (lossMs ?? .infinity) <= 1000
             passed =
-                withinOneSecond && matching == frames && frames >= printedDurable && ending == "recovered"
+                withinOneSecond && matching == frames && durableFloorHolds && ending == "recovered"
                 && manifest == "readable"
             if !withinOneSecond { failure = "lost more than one second" }
             if matching != frames { failure = "only \(matching) of \(frames) frames equal the injected audio" }
-            if frames < printedDurable { failure = "\(frames) frames, below the \(printedDurable) printed as durable" }
+            if !durableFloorHolds { failure = durableFloorFailure }
             if ending != "recovered" { failure = "recovered as \(ending)" }
             if manifest != "readable" { failure = "the manifest is \(manifest)" }
         }
 
         /// A kill before anything was taken: at most `atMost` recordings, with no frame.
         private mutating func readNothingTaken(_ count: Int, atMost: Int) {
-            passed = taken == 0 && count <= atMost && (count == 0 || frames == 0)
+            passed = taken == 0 && count <= atMost && (count == 0 || frames == 0) && durableFloorHolds
             if !passed { failure = "taken \(taken), and recovery found \(count) orphans with \(frames) frames" }
+            if !durableFloorHolds { failure = durableFloorFailure }
         }
 
         /// A kill after every frame was taken and the file closed: the recording whole.
         private mutating func readWhole(_ count: Int, as expected: String) {
             passed =
                 count == 1 && taken > 0 && frames == taken && matching == frames && ending == expected
-                && manifest == "readable"
+                && manifest == "readable" && durableFloorHolds
             if !passed {
                 failure = "recovery found \(count) orphans, \(frames) of \(taken) frames as \(ending), want \(expected)"
             }
+            if !durableFloorHolds { failure = durableFloorFailure }
+        }
+
+        /// Recovery holds at least every frame said to be durable, in a line the child printed or
+        /// in its witness, in every kind of trial: a durable count above what is recovered is a
+        /// promise the drive did not keep.
+        private var durableFloorHolds: Bool { max(printedDurable, durable) <= max(frames, 0) }
+
+        private var durableFloorFailure: String {
+            "\(max(frames, 0)) frames, below the \(max(printedDurable, durable)) said to be durable"
         }
 
         var line: String {
