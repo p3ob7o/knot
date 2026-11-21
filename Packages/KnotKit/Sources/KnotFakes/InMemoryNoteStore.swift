@@ -1189,7 +1189,8 @@
                     }
                 case .discard:
                     switch row.outcome {
-                    case .open:
+                    case .open, .failed:
+                        // A failed one too: a recording read at last that holds no frame.
                         discard(id, touched: &touched, from: &next)
                         receipt.segmentIDs = []
                         row.outcome = .discardedEmpty

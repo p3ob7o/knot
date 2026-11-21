@@ -308,6 +308,71 @@ import Testing
         #expect(again[begun.captureID] == nil)
     }
 
+    /// The review of pull request 57: a recording whose working file is on the drive and cannot
+    /// be read at one launch is never taken for one with no audio. Its row ends failed, its files
+    /// stay, and the store path stays open to the next capture; the next launch, which can read
+    /// it, stores it. On main the first launch ended its row as empty, and the next removed its
+    /// files.
+    @Test func aRecordingThatCannotBeReadEndsFailedAndIsStoredLater() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        #expect(begun.path == .store)
+        let working = r.locations.recordingAudio(begun.captureID, format: .caf)
+        let manifest = r.locations.recordingManifest(begun.captureID)
+        // The process dies mid-recording; at the next launch the working file cannot be read.
+        r.layer.setReadable(working, false)
+        let second = r.relaunch()
+        let first = try await second.recovery.run(ingest: second.ingest)
+        let failed = CaptureOutcome.failed(KnotError.conversionFailed.code)
+        #expect(first[begun.captureID] == .ended(failed), "It ends failed, as a failed conversion does.")
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == failed)
+        #expect(r.layer.entryKind(manifest) == .file && r.layer.entryKind(working) == .file, "Both files stay.")
+        let typed = try await second.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "later"))
+        #expect(typed.path == .store, "A typed capture on the device goes the store path.")
+        _ = try await second.engine.end(typed.captureID)
+        // The next launch can read it.
+        r.layer.setReadable(working, true)
+        let third = second.relaunch()
+        let outcomes = try await third.recovery.run(ingest: third.ingest)
+        #expect(outcomes[begun.captureID] == .ended(.stored), "Stored at the next launch.")
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .stored)
+        #expect(try await r.notes.jobs(for: SegmentID(begun.captureID)).map(\.kind) == [.transcribe])
+        #expect(r.layer.entryKind(manifest) == nil && r.layer.entryKind(working) == nil, "Its files go.")
+        #expect(try await third.recovery.run(ingest: third.ingest).isEmpty, "Then nothing is left.")
+    }
+
+    /// Its mirror: a voice row with nothing of its recording on the drive, neither a manifest
+    /// nor a working file, still ends empty at the next launch.
+    @Test func aRecordingWithNothingOnTheDriveStillEndsEmpty() async throws {
+        let r = Rig()
+        let id: CaptureID = r.ids.make()
+        _ = try await r.notes.record(
+            NewCapture(
+                id: id, kind: .voice, origin: CaptureOrigin(source: .device(r.deviceID), surface: .app),
+                launchID: r.launchID, placement: .window, startedAt: r.clock.now(), body: .none))
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == nil)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[id] == .ended(.discardedEmpty))
+        #expect(try await r.notes.capture(id)?.outcome == .discardedEmpty)
+    }
+
+    /// And the other side of it: a row that a person's discard ended still loses a working file
+    /// that a death left behind, at the next launch.
+    @Test func aDiscardedRowStillLosesAWorkingFileLeftBehind() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.discard(begun.captureID)
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .discardedEmpty)
+        // A death left the working file and its manifest, as if the discard had not removed them.
+        try r.recorder.leaveOrphan(begun.captureID, launch: r.launchID, frames: 16_000)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[begun.captureID] == .workingFileRemoved)
+        #expect(r.layer.entryKind(r.locations.recordingAudio(begun.captureID, format: .caf)) == nil)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(begun.captureID)) == nil)
+    }
+
     /// Finding 20, the review's R3. A recording whose conversion failed keeps its working file
     /// as the recording; the next launch's recovery finds it among the orphans, converts it
     /// again and stores it, and it goes on to transcription.

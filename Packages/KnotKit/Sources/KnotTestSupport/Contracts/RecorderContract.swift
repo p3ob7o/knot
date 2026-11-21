@@ -12,16 +12,24 @@ public struct RecorderSubject: Sendable {
     public let size: @Sendable (URL) -> Int?
     /// A file's bytes, or `nil` when there is none, read without the recorder.
     public let read: @Sendable (URL) -> Data?
+    /// Makes a file one that the recorder cannot read, as one protected while the device is
+    /// locked, or readable again, without moving it: for the real recorder, its permissions.
+    public let setReadable: @Sendable (URL, Bool) -> Void
+    /// Removes a file without the recorder, as a death between two writes leaves a recording.
+    public let remove: @Sendable (URL) -> Void
 
     public init(
         recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
-        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?
+        size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?,
+        setReadable: @escaping @Sendable (URL, Bool) -> Void, remove: @escaping @Sendable (URL) -> Void
     ) {
         self.recorder = recorder
         self.locations = locations
         self.exists = exists
         self.size = size
         self.read = read
+        self.setReadable = setReadable
+        self.remove = remove
     }
 }
 
@@ -37,6 +45,10 @@ public enum RecorderContract {
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
         try await aStoppedRecordingThatWasNotConvertedIsAnOrphan(make)
+        try await anOrphanThatCannotBeReadIsKept(make)
+        try await anOrphanWhoseManifestCannotBeReadEndsRecovered(make)
+        try await aManifestWithNoWorkingFileHoldsNoAudio(make)
+        try await aStopThatCannotReadTheFileBackIsAWriteFailure(make)
     }
 
     static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -250,6 +262,123 @@ public enum RecorderContract {
         #expect(
             try await !recorder.recoverOrphans(currentLaunch: later).contains { $0.captureID == earlier.captureID },
             "Once its working file is removed, it is not.")
+    }
+
+    /// An orphan whose working file is on the drive and cannot be read is not returned and not
+    /// removed, and it is returned whole once it can be read again: it is never taken for a
+    /// recording with no audio (the review of the recorder's pull request 57).
+    public static func anOrphanThatCannotBeReadIsKept(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        let working = try #require(stopped.workingFile, "The stopped recording names its working file.")
+        let manifest = subject.locations.recordingManifest(earlier.captureID)
+        let later: LaunchID = Identifier(uuid: UUID())
+        subject.setReadable(working, false)
+        let whileLocked = try await recorder.recoverOrphans(currentLaunch: later)
+        #expect(
+            !whileLocked.contains { $0.captureID == earlier.captureID },
+            "A recording that cannot be read is not returned, and never as one with no audio.")
+        #expect(subject.exists(working) && subject.exists(manifest), "Nothing of it is removed.")
+        subject.setReadable(working, true)
+        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
+            $0.captureID == earlier.captureID
+        }
+        #expect(found?.workingFile == working && found?.frames == stopped.frames, "Whole, once it can be read.")
+        try await recorder.removeWorkingFile(of: earlier.captureID)
+    }
+
+    /// The orphan is the working file: one that can be read is returned with its frames, and
+    /// its ending is `recovered` when its manifest cannot be read. The manifest is left where it
+    /// is, and once it can be read the ending is the manifest's again.
+    public static func anOrphanWhoseManifestCannotBeReadEndsRecovered(
+        _ make: @Sendable () async throws -> RecorderSubject
+    ) async throws {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        #expect(stopped.ending == .stopped)
+        let manifest = subject.locations.recordingManifest(earlier.captureID)
+        let later: LaunchID = Identifier(uuid: UUID())
+        subject.setReadable(manifest, false)
+        let found = try await recorder.recoverOrphans(currentLaunch: later).first {
+            $0.captureID == earlier.captureID
+        }
+        #expect(found != nil, "A manifest that cannot be read does not hide its recording.")
+        #expect(found?.ending == .recovered, "Its ending is recovered.")
+        #expect(found?.workingFile == stopped.workingFile && found?.frames == stopped.frames, "With its frames.")
+        #expect(subject.exists(manifest), "The manifest is left where it is.")
+        subject.setReadable(manifest, true)
+        let again = try await recorder.recoverOrphans(currentLaunch: later).first {
+            $0.captureID == earlier.captureID
+        }
+        #expect(again?.ending == .stopped, "Once the manifest can be read, the ending is its own.")
+        try await recorder.removeWorkingFile(of: earlier.captureID)
+    }
+
+    /// A manifest with no working file is a recording with no audio: no frame, or no working
+    /// file. Removing it then takes the manifest.
+    public static func aManifestWithNoWorkingFileHoldsNoAudio(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let earlier = request()
+        let session = try await recorder.start(earlier)
+        _ = await SuiteWait.value("a durable count above zero") {
+            for await event in session.events {
+                if case .durable(let frames) = event, frames > 0 { break }
+            }
+        }
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        #expect(stopped.frames > 0, "The recording held audio before its working file went.")
+        let working = try #require(stopped.workingFile, "The stopped recording names its working file.")
+        let manifest = subject.locations.recordingManifest(earlier.captureID)
+        subject.remove(working)
+        #expect(!subject.exists(working) && subject.exists(manifest))
+        let later: LaunchID = Identifier(uuid: UUID())
+        let found = try #require(
+            try await recorder.recoverOrphans(currentLaunch: later).first { $0.captureID == earlier.captureID },
+            "The manifest's recording is returned.")
+        #expect(found.frames == 0 || found.workingFile == nil, "A manifest with no working file is no audio.")
+        #expect(found.workingFile.map(subject.exists) != false, "No working file is named that is not there.")
+        try await recorder.removeWorkingFile(of: earlier.captureID)
+        #expect(!subject.exists(manifest), "Removing takes the manifest.")
+    }
+
+    /// A stop whose working file is there and whose length cannot be read back answers
+    /// `write_failed`, names the working file, and gives the last length read: a recording on the
+    /// drive is never answered as one with no audio.
+    public static func aStopThatCannotReadTheFileBackIsAWriteFailure(
+        _ make: @Sendable () async throws -> RecorderSubject
+    ) async throws {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let request = request()
+        let session = try await recorder.start(request)
+        let durable: Int64 =
+            await SuiteWait.value("a durable count above zero") {
+                for await event in session.events {
+                    if case .durable(let frames) = event, frames > 0 { return frames }
+                }
+                return 0
+            } ?? 0
+        #expect(durable > 0)
+        let working = subject.locations.recordingAudio(request.captureID, format: .caf)
+        subject.setReadable(working, false)
+        let result = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        #expect(result.ending == .writeFailed, "A length that cannot be read back is a write failure.")
+        #expect(result.workingFile == working, "The working file is named.")
+        #expect(result.frames >= durable, "The last length read, never no audio: \(result.frames).")
+        #expect(subject.exists(working), "The working file stays.")
+        subject.setReadable(working, true)
+        try await recorder.removeWorkingFile(of: request.captureID)
     }
 
     public static func recoveryNeverTouchesTheCurrentLaunch(_ make: @Sendable () async throws -> RecorderSubject)

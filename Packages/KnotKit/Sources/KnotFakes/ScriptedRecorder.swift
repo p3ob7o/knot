@@ -125,6 +125,7 @@
                     try? files.remove(self.manifestURL(request.captureID))
                     self.state.withLock { _ = $0.workingFiles.removeValue(forKey: request.captureID) }
                 },
+                readBack: { [layer] in (try? layer.read(self.workingURL(request.captureID))) != nil },
                 ended: { audio in
                     // A recording that ended leaves its working file until it is removed.
                     self.state.withLock { $0.workingFiles[request.captureID] = (request.launchID, audio) }
@@ -136,7 +137,10 @@
 
         /// Every working file of an earlier launch that `removeWorkingFile` has not removed: a
         /// recording that died while it ran, finished as recovered, and one that stopped and was
-        /// never converted, or whose conversion failed, as it ended (finding 23).
+        /// never converted, or whose conversion failed, as it ended (finding 23). One whose
+        /// working file cannot be read through the layer is left out until it can. One whose
+        /// manifest cannot be read ends `recovered`, and one whose working file is gone holds no
+        /// audio: no frame, and no working file named.
         public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
             // A session of an earlier launch that never ended is finished as recovered, which
             // keeps its working file among the others. It is finished outside the lock, because
@@ -147,10 +151,33 @@
                 return earlier.values.map(\.session)
             }
             for session in earlier { _ = session.recoverIfLive() }
-            return state.withLock { state in
+            let orphans = state.withLock { state in
                 state.workingFiles.values.filter { $0.launch != currentLaunch }.map(\.audio)
                     .sorted { $0.captureID < $1.captureID }
             }
+            // A working file that is there and cannot be read is left where it is, and returned
+            // once it can be read: never as one with no audio. A manifest that cannot be read
+            // hides nothing, and it is left where it is.
+            return orphans.filter { canRead($0) }.compactMap { orphan in
+                var found = orphan
+                let manifest = manifestURL(orphan.captureID)
+                if found.workingFile.map({ layer.entryKind($0) == nil }) ?? true {
+                    // A manifest with no working file is a recording with no audio; with neither
+                    // on the drive, nothing of it is left.
+                    guard layer.entryKind(manifest) != nil else { return nil }
+                    found.frames = 0
+                    found.workingFile = nil
+                }
+                // The ending is the manifest's when the manifest can be read, else `recovered`.
+                if (try? layer.read(manifest)) == nil { found.ending = .recovered }
+                return found
+            }
+        }
+
+        /// Whether the recording's working file, if it is on the drive, can be read now.
+        private func canRead(_ audio: RecordedAudio) -> Bool {
+            guard let working = audio.workingFile, layer.entryKind(working) != nil else { return true }
+            return (try? layer.read(working)) != nil
         }
 
         public func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
@@ -218,6 +245,8 @@
         private let workingFile: URL
         private let write: @Sendable (Int64) -> Void
         private let remove: @Sendable () -> Void
+        /// Whether the working file's length can be read back, once it is written.
+        private let readBack: @Sendable () -> Bool
         private let ended: @Sendable (RecordedAudio) -> Void
         private let state = Mutex(State())
         private let feeder = Mutex<Task<Void, Never>?>(nil)
@@ -225,13 +254,14 @@
         init(
             captureID: CaptureID, script: ScriptedRecorder.Script, workingFile: URL,
             write: @escaping @Sendable (Int64) -> Void, remove: @escaping @Sendable () -> Void,
-            ended: @escaping @Sendable (RecordedAudio) -> Void
+            readBack: @escaping @Sendable () -> Bool, ended: @escaping @Sendable (RecordedAudio) -> Void
         ) {
             self.captureID = captureID
             self.script = script
             self.workingFile = workingFile
             self.write = write
             self.remove = remove
+            self.readBack = readBack
             self.ended = ended
             (events, eventSink) = AsyncStream.makeStream(of: RecordingEvent.self)
             // A slow consumer loses the oldest audio; the file never waits.
@@ -272,7 +302,7 @@
         /// discard, and tells the ending; it returns with `first` true. A later caller gets the
         /// first result at once, with `first` false, and waits with `settle()`.
         private func finish(_ ending: RecordingEnding, discarding: Bool) -> (result: RecordedAudio, first: Bool) {
-            let (result, first): (RecordedAudio, Bool) = state.withLock { state in
+            let (firstResult, first): (RecordedAudio, Bool) = state.withLock { state in
                 if let result = state.result { return (result, false) }
                 let result = RecordedAudio(
                     captureID: captureID, frames: discarding ? 0 : state.durable, sampleRate: script.sampleRate,
@@ -280,13 +310,21 @@
                 state.result = result
                 return (result, true)
             }
-            guard first else { return (result, false) }
+            guard first else { return (firstResult, false) }
+            var result = firstResult
             feeder.withLock { $0?.cancel() }
             // The file is on the drive before the ending is told.
             if discarding {
                 remove()
             } else {
                 write(result.frames)
+                if ending != .recovered, !readBack() {
+                    // The file is there and its length cannot be read back: a write failure, with
+                    // the working file named and the last length read, never a recording with no
+                    // audio.
+                    result.ending = .writeFailed
+                    state.withLock { $0.result = result }
+                }
                 ended(result)
             }
             let waiters = state.withLock { state in
@@ -316,8 +354,10 @@
         private func end(_ ending: RecordingEnding, discarding: Bool) async -> RecordedAudio {
             // The ending runs in a task of its own, so cancelling the caller does not cancel it.
             let (result, first) = await Task { [self] in finish(ending, discarding: discarding) }.value
-            if !first { await settle() }
-            return result
+            guard !first else { return result }
+            await settle()
+            // The first caller's result, as it stood once its file was on the drive.
+            return state.withLock { $0.result } ?? result
         }
 
         func stop() async -> RecordedAudio { await end(.stopped, discarding: false) }
