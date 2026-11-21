@@ -68,7 +68,7 @@ The format names no PencilKit type, so that this package reads no OS 27 API. WP-
 - A test names a clip by its `file` in `manifest.json`, such as `generated/audio/clean.wav`, and its reference by `reference`, such as `audio/clean.txt`.
 - A committed file is checked against its SHA-256 in `manifest.json` before use. Audio has no committed checksum, because each Mac makes its own; `generated/manifest.json` records this Mac's.
 - Tests in the iOS Simulator read the same path, because the Simulator's processes see the Mac's file system. A UI test that needs a fixture inside the app copies it in through `project.yml`.
-- One helper in KnotTestSupport should do this for every package, so that the lookup and the errors below exist once. This package does not own KnotTestSupport, so the PR asks the orchestrator to assign it.
+- One helper in KnotTestSupport does this for every package, `FixtureFiles`, so that the lookup and the errors below exist once.
 
 ## When a fixture is absent
 
