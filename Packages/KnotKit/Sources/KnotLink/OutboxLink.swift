@@ -44,7 +44,8 @@ public actor OutboxLink {
     public static let defaultStallLimit: TimeInterval = 10 * 60
 
     public nonisolated let outbox: WatchOutbox
-    private let transport: any LinkTransport
+    /// The session the link runs over.
+    public nonisolated let transport: any LinkTransport
     private let clock: any WallClock
     private let stallLimit: TimeInterval
     private let log: KnotLog

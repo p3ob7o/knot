@@ -28,6 +28,10 @@ import Testing
         path: "KnotUIPreviewsTests-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
     let environment = AppEnvironment.makePreview(root: root)
+    // The seed's third line joins the second by the window. The preview runs on the wall clock,
+    // so the window is held open for its longest, and the test never rests on running inside it.
+    let longest = try AppendWindow(minutes: AppendWindow.maximumMinutes)
+    await (environment.notes as? InMemoryNoteStore)?.setWindow(longest)
     _ = await SuiteWait.value("the preview seed") { await KnotUIPreviews.seed(environment) }
     let stream = StreamViewModel(environment: environment, context: KnotUIPreviews.context(for: environment))
     await stream.load()

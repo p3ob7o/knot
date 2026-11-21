@@ -30,11 +30,29 @@ enum AccessibilityAudit {
         /// The kind and the frame of its parent, when it is the direct child of a window.
         var parentKind: XCUIElement.ElementType?
         var parentFrame: CGRect?
+        /// True when the element lies inside the system keyboard, which the app does not draw:
+        /// a keyboard is among its ancestors.
+        var inSystemKeyboard = false
+        /// The kinds of its ancestors, from the application down to its parent, when the helper
+        /// found the element in the app's hierarchy.
+        var ancestry: [XCUIElement.ElementType] = []
+        /// The frame of the system keyboard while one is up, which a failure names too.
+        var systemKeyboardFrame: CGRect?
+        /// The index, among the app's windows, of the window that holds the element, and of the
+        /// one that holds the system keyboard.
+        var windowIndex: Int?
+        var keyboardWindowIndex: Int?
 
         /// What a failure says about the element.
         var description: String {
             "\(AccessibilityAudit.name(of: kind)), identifier \"\(identifier)\", label \"\(label)\", frame \(frame)"
                 + (parentKind.map { ", parent \(AccessibilityAudit.name(of: $0))" } ?? "")
+                + (inSystemKeyboard ? ", in the system keyboard" : "")
+                + (ancestry.isEmpty
+                    ? "" : ", path " + ancestry.map { AccessibilityAudit.name(of: $0) }.joined(separator: " > "))
+                + (systemKeyboardFrame.map { ", system keyboard at \($0)" } ?? "")
+                + (windowIndex.map { ", window \($0)" } ?? "")
+                + (keyboardWindowIndex.map { ", keyboard's window \($0)" } ?? "")
         }
     }
 
@@ -58,8 +76,35 @@ enum AccessibilityAudit {
             && element.parentKind == .window && element.parentFrame.map { $0.isClose(to: element.frame) } == true
     }
 
+    /// On iOS, an element of the system keyboard, such as a cell of its prediction bar, which
+    /// WP-30's audit faulted on the iPad as "Element has no description". It is the system's
+    /// interface, drawn in the keyboard's own window: never a screen of the app and never an
+    /// element of ours. An element of the app with no description still fails while the
+    /// keyboard is up.
+    /// True when `element` is the system keyboard's own: a keyboard is among its ancestors, it
+    /// lies inside the keyboard's frame, or it sits in the strip on top of the keyboard, within
+    /// its width and in the keyboard's window, where the keyboard draws its prediction bar.
+    /// WP-30's run found the bar's cells there, under elements of no particular kind.
+    static func belongsToSystemKeyboard(_ element: Element) -> Bool {
+        if element.ancestry.contains(.keyboard) { return true }
+        guard let keyboard = element.systemKeyboardFrame else { return false }
+        if keyboard.insetBy(dx: -0.5, dy: -0.5).contains(element.frame) { return true }
+        let onTop =
+            abs(element.frame.maxY - keyboard.minY) <= 0.5 && element.frame.minX >= keyboard.minX - 0.5
+            && element.frame.maxX <= keyboard.maxX + 0.5 && element.frame.height <= 60
+        return onTop && element.windowIndex != nil && element.windowIndex == element.keyboardWindowIndex
+    }
+
+    static let systemKeyboard = StructuralExclusion(
+        reason: "The system keyboard's own interface, which the app does not draw."
+    ) { element in
+        element.inSystemKeyboard
+    }
+
     #if os(macOS)
         static let structuralExclusions: [StructuralExclusion] = [windowContent]
+    #elseif os(iOS)
+        static let structuralExclusions: [StructuralExclusion] = [systemKeyboard]
     #else
         static let structuralExclusions: [StructuralExclusion] = []
     #endif
@@ -97,6 +142,8 @@ enum AccessibilityAudit {
         case .textField: "text field"
         case .textView: "text view"
         case .other: "other"
+        case .keyboard: "keyboard"
+        case .application: "application"
         default: "element of type \(kind.rawValue)"
         }
     }
@@ -111,6 +158,18 @@ extension CGRect {
 }
 
 extension XCUIApplication {
+    /// Launches the app for a smoke test. On the Mac it ignores the window state that AppKit
+    /// saved at an earlier quit: every development build has the same bundle ID and so shares it,
+    /// and a window that one launch left closed would stay closed at the next. The launch
+    /// argument sets the user default `ApplePersistenceIgnoreState`, which AppKit reads at launch.
+    @MainActor
+    func launchForSmokeTest() {
+        #if os(macOS)
+            launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        launch()
+    }
+
     /// Runs every audit type on the current screen. Each issue fails the test, unless the lists
     /// above exclude it, and the failure names the element: its kind, its identifier, its label
     /// and its frame. Every UI smoke test calls it after its launch: the named test
@@ -150,8 +209,56 @@ extension XCUIApplication {
                 break
             }
         }
+        audited.ancestry = ancestry(of: audited)
+        #if os(iOS)
+            let keyboard = keyboards.firstMatch
+            if keyboard.exists {
+                audited.systemKeyboardFrame = keyboard.frame
+                audited.windowIndex = windowIndex { node in
+                    node.elementType == audited.kind && node.identifier == audited.identifier
+                        && node.label == audited.label && node.frame.isClose(to: audited.frame)
+                }
+                let keyboardFrame = keyboard.frame
+                audited.keyboardWindowIndex = windowIndex { node in
+                    node.elementType == .keyboard && node.frame.isClose(to: keyboardFrame)
+                }
+            }
+            audited.inSystemKeyboard = AccessibilityAudit.belongsToSystemKeyboard(audited)
+        #endif
         return audited
     }
+
+    /// The index of the first of the app's windows that holds a node `matching`.
+    @MainActor
+    private func windowIndex(of matching: (any XCUIElementSnapshot) -> Bool) -> Int? {
+        for (index, window) in windows.allElementsBoundByIndex.enumerated() {
+            guard let root = try? window.snapshot() else { continue }
+            var pending: [any XCUIElementSnapshot] = [root]
+            while let next = pending.popLast() {
+                if matching(next) { return index }
+                pending += next.children
+            }
+        }
+        return nil
+    }
+
+    /// The kinds of the ancestors of the element with `audited`'s kind, identifier, label and
+    /// frame, from the application down, or none when it is not found.
+    @MainActor
+    private func ancestry(of audited: AccessibilityAudit.Element) -> [XCUIElement.ElementType] {
+        guard let root = try? snapshot() else { return [] }
+        var pending: [(node: any XCUIElementSnapshot, path: [XCUIElement.ElementType])] = [(root, [])]
+        while let (node, path) = pending.popLast() {
+            if node.elementType == audited.kind && node.identifier == audited.identifier
+                && node.label == audited.label && node.frame.isClose(to: audited.frame)
+            {
+                return path
+            }
+            pending += node.children.map { ($0, path + [node.elementType]) }
+        }
+        return []
+    }
+
 }
 
 /// The exclusions on elements made up for the purpose: no app is launched.
@@ -222,6 +329,63 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
         var unnamedElement = mark
         unnamedElement.identifier = ""
         XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: unnamedElement, listed: [unnamed], structural: []))
+    }
+
+    func testTheSystemKeyboardIsExcludedOnIOSOnly() {
+        let cell = AccessibilityAudit.Element(
+            kind: .button, identifier: "", label: "", frame: CGRect(x: 283, y: 979, width: 155, height: 49),
+            parentKind: nil, parentFrame: nil, inSystemKeyboard: true)
+        let excluded = AccessibilityAudit.isExcluded(.sufficientElementDescription, on: cell)
+        #if os(iOS)
+            XCTAssertTrue(excluded)
+        #else
+            XCTAssertFalse(excluded)
+        #endif
+        XCTAssertTrue(AccessibilityAudit.systemKeyboard.applies(cell))
+        XCTAssertTrue(cell.description.contains("in the system keyboard"))
+    }
+
+    func testAnElementOfTheAppWithNoDescriptionStillFailsWhileTheKeyboardIsUp() {
+        // The same kind of element, with the same empty name, drawn by the app above the keyboard.
+        let ours = AccessibilityAudit.Element(
+            kind: .button, identifier: "", label: "", frame: CGRect(x: 283, y: 700, width: 155, height: 49),
+            parentKind: nil, parentFrame: nil, inSystemKeyboard: false)
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.sufficientElementDescription, on: ours))
+        XCTAssertFalse(AccessibilityAudit.systemKeyboard.applies(ours))
+        // Nor does the keyboard's exclusion cover the window's content of a screen.
+        var screen = hostedContent()
+        screen.inSystemKeyboard = false
+        XCTAssertFalse(AccessibilityAudit.systemKeyboard.applies(screen))
+    }
+
+    func testThePredictionBarOnTopOfTheKeyboardIsTheKeyboards() {
+        let keyboard = CGRect(x: 0, y: 590, width: 402, height: 226)
+        var cell = AccessibilityAudit.Element(
+            kind: .button, identifier: "", label: "", frame: CGRect(x: 134, y: 546, width: 134, height: 44),
+            parentKind: nil, parentFrame: nil)
+        cell.systemKeyboardFrame = keyboard
+        cell.windowIndex = 1
+        cell.keyboardWindowIndex = 1
+        XCTAssertTrue(AccessibilityAudit.belongsToSystemKeyboard(cell))
+        // The same strip in another window than the keyboard's is the app's, and still fails.
+        var ours = cell
+        ours.windowIndex = 0
+        XCTAssertFalse(AccessibilityAudit.belongsToSystemKeyboard(ours))
+        // Not on top of the keyboard, or taller than a bar: the app's.
+        var above = cell
+        above.frame.origin.y = 400
+        XCTAssertFalse(AccessibilityAudit.belongsToSystemKeyboard(above))
+        var tall = cell
+        tall.frame = CGRect(x: 0, y: 290, width: 402, height: 300)
+        XCTAssertFalse(AccessibilityAudit.belongsToSystemKeyboard(tall))
+        // Inside the keyboard's frame, and with no keyboard up.
+        var key = cell
+        key.frame = CGRect(x: 10, y: 700, width: 30, height: 40)
+        key.windowIndex = nil
+        XCTAssertTrue(AccessibilityAudit.belongsToSystemKeyboard(key))
+        var noKeyboard = cell
+        noKeyboard.systemKeyboardFrame = nil
+        XCTAssertFalse(AccessibilityAudit.belongsToSystemKeyboard(noKeyboard))
     }
 
     func testAFailureNamesTheElement() {
