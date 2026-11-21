@@ -61,6 +61,22 @@ import Testing
         #expect(layer.closedFileSyncs > 0, "The stop returned before its closed file was synced.")
     }
 
+    /// The manifest is in place before the working file exists: a death between the two steps of
+    /// the start leaves a manifest with no audio, never audio with no manifest.
+    @Test func theManifestIsInPlaceBeforeTheWorkingFileExists() async throws {
+        let folder = try ScratchFolder()
+        let request = request()
+        let layer = ObservingLayer(
+            file: folder.locations.recordingAudio(request.captureID, format: .caf),
+            folder: folder.locations.recording, manifest: folder.locations.recordingManifest(request.captureID))
+        let recorder = LiveRecorder(
+            locations: folder.locations, layer: layer, input: injected(frames: 1_600),
+            settings: LiveRecorder.Settings(syncInterval: .seconds(600)))
+        let session = try await recorder.start(request)
+        #expect(layer.fileAtManifestPlacements == [false], "\(layer.fileAtManifestPlacements)")
+        _ = await session.stop()
+    }
+
     /// `Recording/` is synced once the working file exists, before the start returns live: the
     /// working file's name survives a power cut from the moment the recording is live.
     @Test func theWorkingFilesNameIsSyncedBeforeLive() async throws {
@@ -86,13 +102,19 @@ final class ObservingLayer: FileLayer {
     private let file: String
     private let folder: String
     private let slowSync: Bool
+    private let manifest: String?
     private let seen = Mutex<(syncs: Int, closedSyncs: Int, framesAtBegin: Int64, folderSyncs: Int)>((0, 0, 0, 0))
+    private let placements = Mutex<[Bool]>([])
 
-    init(file: URL, folder: URL, slowSync: Bool = false) {
+    init(file: URL, folder: URL, manifest: URL? = nil, slowSync: Bool = false) {
         self.file = file.standardizedFileURL.path
         self.folder = folder.standardizedFileURL.path
+        self.manifest = manifest?.standardizedFileURL.path
         self.slowSync = slowSync
     }
+
+    /// For each placement of the manifest, whether the working file existed as it was placed.
+    var fileAtManifestPlacements: [Bool] { placements.withLock { $0 } }
 
     var fileSyncs: Int { seen.withLock { $0.syncs } }
     /// Completed syncs of the file that began once its header was closed.
@@ -131,7 +153,13 @@ final class ObservingLayer: FileLayer {
 
     func createFolder(_ url: URL) throws(KnotError) { try disk.createFolder(url) }
     func write(_ data: Data, to url: URL) throws(KnotError) { try disk.write(data, to: url) }
-    func rename(_ source: URL, to destination: URL) throws(KnotError) { try disk.rename(source, to: destination) }
+    func rename(_ source: URL, to destination: URL) throws(KnotError) {
+        if destination.standardizedFileURL.path == manifest {
+            let present = FileManager.default.fileExists(atPath: file)
+            placements.withLock { $0.append(present) }
+        }
+        try disk.rename(source, to: destination)
+    }
     func remove(_ url: URL) throws(KnotError) { try disk.remove(url) }
     func read(_ url: URL) throws(KnotError) -> Data { try disk.read(url) }
     func exists(_ url: URL) -> Bool { disk.exists(url) }
