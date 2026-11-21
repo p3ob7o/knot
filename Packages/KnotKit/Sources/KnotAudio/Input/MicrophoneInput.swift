@@ -134,6 +134,11 @@ struct SystemHardwareAudio: HardwareAudio {
             let session = AVAudioSession.sharedInstance()
             do {
                 try session.setCategory(.record, mode: .default, options: [])
+                // Haptics and system sounds are held back while the session takes input unless it
+                // allows them, and by default it does not (AVAudioSession.h,
+                // allowHapticsAndSystemSoundsDuringRecording): without this, the live cue's
+                // haptic is never felt. The live cue's gap keeps its sound out of the recording.
+                try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
                 try session.setActive(true)
             } catch {
                 throw SessionError.knotError(code: (error as NSError).code)
