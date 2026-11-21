@@ -70,6 +70,21 @@ import Testing
         #expect(try await again.recovery.run(ingest: again.ingest)[id] == .ended(.stored), "Stored at the retry.")
     }
 
+    /// The late row with a manifest and no working file: a discard cut between its two removals,
+    /// the working file first and the manifest after. It ends empty, as the person asked, and the
+    /// manifest goes.
+    @Test func aLateRecordingWithOnlyItsManifestEndsEmpty() async throws {
+        let r = Rig()
+        let (id, _) = try await Self.lateRow(r)
+        try r.recorder.leaveOrphan(id, launch: r.launchID, frames: 16_000)
+        try r.layer.remove(Self.working(r, id))
+        let next = r.relaunch()
+        #expect(try await next.recovery.run(ingest: next.ingest)[id] == .ended(.discardedEmpty))
+        #expect(try await r.notes.capture(id)?.outcome == .discardedEmpty)
+        #expect(try await r.notes.segment(SegmentID(id)) == nil, "Nothing of it is in the stream.")
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == nil, "The manifest is gone.")
+    }
+
     /// The late row whose working file was read and holds no frame: it ends empty, and its files go.
     @Test func aLateRecordingThatHoldsNoFrameEndsEmpty() async throws {
         let r = Rig()
