@@ -348,6 +348,24 @@ import Testing
         #expect(partials.isEmpty, "\(partials)")
         #expect(try StoreCopies.tableCounts(in: other)["note"] == (try await noteCount(database)))
     }
+
+    /// With the clock set back past seven later copies, today's copy is the one made, and it is
+    /// kept with the newest six others.
+    @Test func aClockSetBackKeepsTodaysCopy() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 95)
+        for offset in 1...7 {
+            made.clock.set(Captures.base.addingTimeInterval(Double(offset) * 86_400))
+            _ = try made.database.makeDailyCopy()
+        }
+        made.clock.set(Captures.base)
+        let today = try made.database.makeDailyCopy()
+        #expect(FileManager.default.fileExists(atPath: today.path))
+        let kept = StoreCopies.copies(made.database.locations, prefix: "daily-")
+        #expect(kept.count == StoreCopies.dailyCopiesKept)
+        #expect(kept.contains(today))
+    }
 }
 
 extension StoreCopies {

@@ -422,8 +422,12 @@ extension StoreDatabase {
             if !FileManager.default.fileExists(atPath: copy.path) {
                 try StoreCopies.makeCopy(of: pool, to: copy, files: files, publishing: publishing, hooks: hooks)
             }
-            let daily = StoreCopies.copies(locations, prefix: "daily-")
-            for old in daily.dropLast(StoreCopies.dailyCopiesKept) { try files.remove(old) }
+            // Today's copy is kept whatever its date says, as after a clock set back, with the
+            // newest six others.
+            let others = StoreCopies.copies(locations, prefix: "daily-").filter {
+                $0.lastPathComponent != copy.lastPathComponent
+            }
+            for old in others.dropLast(StoreCopies.dailyCopiesKept - 1) { try files.remove(old) }
             return copy
         } catch {
             throw StoreErrors.knotError(error)
