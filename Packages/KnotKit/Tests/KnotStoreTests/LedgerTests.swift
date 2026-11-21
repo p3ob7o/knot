@@ -370,4 +370,29 @@ import Testing
         #expect(left.isEmpty, "Nothing changed: \(left)")
         expectConsistent(database)
     }
+
+    /// History older than the purge's date goes: text the command line replaced is kept for
+    /// 30 days and no longer.
+    @Test func aPurgeRemovesOldHistory() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 505, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let notes = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        let receipt = try await notes.record(captures.typed("old words", from: 0, to: 0.5))
+        _ = try await notes.replaceText(
+            TextReplacement(segment: receipt.segmentIDs[0], text: "new words", origin: .edited, writer: .commandLine))
+        clock.advance(by: 20 * 86_400)
+        _ = try await notes.replaceText(
+            TextReplacement(segment: receipt.segmentIDs[0], text: "newer words", origin: .edited, writer: .commandLine))
+        clock.advance(by: 20 * 86_400)
+        _ = try await notes.purge(before: clock.now().addingTimeInterval(-30 * 86_400))
+        let left = try await database.pool.read { db in
+            try String.fetchAll(db, sql: "SELECT text FROM segment_history ORDER BY seq")
+        }
+        #expect(left == ["new words"], "Only the text replaced within 30 days is kept.")
+        expectConsistent(database)
+    }
 }
