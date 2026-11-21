@@ -60,6 +60,8 @@ enum AccessibilityAudit {
     struct StructuralExclusion: Sendable {
         /// Why it is excluded.
         let reason: String
+        /// The one audit type it covers, or `nil` for every type.
+        var type: XCUIAccessibilityAuditType? = nil
         let applies: @Sendable (Element) -> Bool
     }
 
@@ -90,6 +92,24 @@ enum AccessibilityAudit {
             && element.ancestry.last == .splitGroup
     }
 
+    /// On the Mac, the window's title, which the system draws in the toolbar: a static text with
+    /// no identifier whose parent is the window and which lies in the window's title bar, at its
+    /// top edge. The system dims it while the window is not the key window, as it is in a test
+    /// that does not bring the app to the front, and the app sets none of its colours. WP-33's
+    /// audit of the Mac skeleton faulted it as "Contrast failed". Only the contrast audit is
+    /// excluded: every other issue on the title still fails. WP-41 revisits it.
+    static let windowTitle = StructuralExclusion(
+        reason: "The window's title, which the system draws in the toolbar and dims while the window is not "
+            + "key; the app sets none of its colours.",
+        type: .contrast
+    ) { element in
+        guard element.kind == .staticText, element.identifier.isEmpty, element.parentKind == .window,
+            let window = element.parentFrame
+        else { return false }
+        return abs(element.frame.minY - window.minY) <= 0.5 && element.frame.height <= 60
+            && element.frame.minX >= window.minX - 0.5 && element.frame.maxX <= window.maxX + 0.5
+    }
+
     /// On iOS, an element of the system keyboard, such as a cell of its prediction bar, which
     /// WP-30's audit faulted on the iPad as "Element has no description". It is the system's
     /// interface, drawn in the keyboard's own window: never a screen of the app and never an
@@ -116,7 +136,7 @@ enum AccessibilityAudit {
     }
 
     #if os(macOS)
-        static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn]
+        static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn, windowTitle]
     #elseif os(iOS)
         static let structuralExclusions: [StructuralExclusion] = [systemKeyboard]
     #else
@@ -173,7 +193,7 @@ enum AccessibilityAudit {
             !bad.contains { $0.identifier == exclusion.identifier && $0.reason == exclusion.reason }
                 && type.contains(exclusion.type) && element.identifier == exclusion.identifier
         }
-        return byName || structural.contains { $0.applies(element) }
+        return byName || structural.contains { ($0.type == nil || $0.type == type) && $0.applies(element) }
     }
 
     static func name(of kind: XCUIElement.ElementType) -> String {
@@ -394,6 +414,49 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
         var button = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 40, height: 40))
         button.kind = .button
         XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(button))
+    }
+
+    /// The window's title as the helper sees it: a static text, the window's child, in its title
+    /// bar at its top edge.
+    func windowTitle() -> AccessibilityAudit.Element {
+        let window = CGRect(x: 545, y: 272, width: 960, height: 640)
+        return AccessibilityAudit.Element(
+            kind: .staticText, identifier: "", label: "", frame: CGRect(x: 829, y: 272, width: 672, height: 52),
+            parentKind: .window, parentFrame: window)
+    }
+
+    func testTheWindowTitleIsExcludedForContrastOnTheMacOnly() {
+        let excluded = AccessibilityAudit.isExcluded(.contrast, on: windowTitle())
+        #if os(macOS)
+            XCTAssertTrue(excluded)
+        #else
+            XCTAssertFalse(excluded)
+        #endif
+        // The rule itself, whatever the platform.
+        XCTAssertTrue(AccessibilityAudit.windowTitle.applies(windowTitle()))
+    }
+
+    func testATextOfTheAppWithFailedContrastStillFails() {
+        // A text inside the window's content: its parent is not the window.
+        let text = AccessibilityAudit.Element(
+            kind: .staticText, identifier: "", label: "", frame: CGRect(x: 561, y: 372, width: 81, height: 16),
+            parentKind: nil, parentFrame: nil)
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: text))
+        // A text that is the window's child but lies below the title bar's top edge.
+        var lower = windowTitle()
+        lower.frame = CGRect(x: 829, y: 400, width: 672, height: 20)
+        XCTAssertFalse(AccessibilityAudit.windowTitle.applies(lower))
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: lower))
+        // A text with an identifier is the app's.
+        var named = windowTitle()
+        named.identifier = "note.title"
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: named))
+    }
+
+    func testTheWindowTitleWithAnotherIssueStillFails() {
+        for type: XCUIAccessibilityAuditType in [.hitRegion, .sufficientElementDescription, .elementDetection] {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: windowTitle()), "\(type.rawValue)")
+        }
     }
 
     func testTheWindowContentIsExcludedOnTheMacOnly() {
