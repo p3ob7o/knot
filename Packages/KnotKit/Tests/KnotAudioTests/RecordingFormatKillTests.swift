@@ -17,13 +17,15 @@ import Testing
     /// children, and its last line is the summary. The same command runs in the iOS and watchOS
     /// simulators with `--runner "xcrun simctl spawn <udid>"` and a simulator build as `--child`.
     @Test("recording-format-kill-test", .tags(.named))
-    func recordingFormatKillTest() throws {
+    func recordingFormatKillTest() async throws {
         let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
         let folder = try ScratchFolder()
         let seed = UInt64.random(in: 1...UInt64(Int64.max))
-        let run = try CrashHost.run(
+        // Run as a task waits, through `HostRun`, never by a call that holds a thread of the pool
+        // for the run's seconds.
+        let run = try await HostRun.run(
             host,
-            arguments: [
+            [
                 "kill-test", "--dir", folder.url.path, "--trials", "4", "--seed", "\(seed)", "--min-ms", "300",
                 "--max-ms", "2500", "--early-every", "4", "--stages",
             ])

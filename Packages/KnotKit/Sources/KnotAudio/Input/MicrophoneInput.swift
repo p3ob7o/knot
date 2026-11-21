@@ -222,6 +222,10 @@ final class OpenMicrophone: OpenAudioInput {
     private let engine: any InputEngine
     private let hardware: any HardwareAudio
     private let state = Mutex(State())
+    /// Where a configuration change is delivered: a queue of the input's own, never a thread of
+    /// the cooperative pool, so that a handler that holds its delivery holds no thread a task
+    /// needs.
+    private let changeQueue = DispatchQueue(label: "knot.microphone.configuration-change")
 
     private struct State {
         /// True while the start runs.
@@ -287,11 +291,12 @@ final class OpenMicrophone: OpenAudioInput {
             }
             state.withLock { $0.tapInstalled = true }
             let changes = engine.configurationChanges()
+            let changeQueue = self.changeQueue
             let watcher = Task {
                 // The engine stopped itself because the hardware changed. WP-12's second pull
                 // request restarts it into the file's rate; until then the recording ends, kept.
                 for await _ in changes {
-                    deliver(.ended(.lost))
+                    changeQueue.async { deliver(.ended(.lost)) }
                     return
                 }
             }

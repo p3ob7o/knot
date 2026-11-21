@@ -312,11 +312,18 @@ import Testing
             pipe.fileHandleForReading.readabilityHandler = { handle in output.append(handle.availableData) }
             process.terminationHandler = { _ in finished.append(Data([1])) }
             try process.run()
-            if !(await SuiteWait.until("the crash host to end") { !finished.isEmpty }) { process.terminate() }
-            process.waitUntilExit()
+            if !(await SuiteWait.until("the crash host to end") { !finished.isEmpty }) {
+                process.terminate()
+                // Waited for as a task waits, not by `waitUntilExit`, which holds the thread.
+                _ = await SuiteWait.until("the crash host to end once terminated") { !finished.isEmpty }
+            }
             pipe.fileHandleForReading.readabilityHandler = nil
-            output.append(pipe.fileHandleForReading.readDataToEndOfFile())
-            return HostRun(status: process.terminationStatus, output: String(decoding: output.data, as: UTF8.self))
+            // A process still running after both waits has no rest of its output and no status
+            // to read: nothing is read that would wait for it.
+            let ended = !process.isRunning
+            if ended { output.append(pipe.fileHandleForReading.readDataToEndOfFile()) }
+            let status = ended ? process.terminationStatus : -1
+            return HostRun(status: status, output: String(decoding: output.data, as: UTF8.self))
         }
     }
 

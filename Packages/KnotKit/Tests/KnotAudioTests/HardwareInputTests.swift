@@ -388,6 +388,9 @@ import Testing
     /// A stop returns only once a delivery under way has ended: here the configuration
     /// change's, which asks for the stop and runs on after it. The delivery holds until the stop
     /// waits for it, or returns. After finding 23.
+    ///
+    /// The delivery holds on the input's own queue for a configuration change, and the stop runs
+    /// on a queue of its own: neither wait holds a thread of the cooperative pool.
     @Test func aStopWaitsForTheDeliveryUnderWay() async throws {
         let (opened, engine, hardware) = try await Self.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
