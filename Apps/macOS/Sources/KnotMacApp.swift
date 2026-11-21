@@ -1,18 +1,20 @@
-import KnotApp
-import KnotCore
 import SwiftUI
 
-/// The Mac app: a thin shell over KnotApp. The menu bar, the hotkey and the panel come
-/// with their own packages; until then the app opens one window that shows the mark.
+/// The Mac app: a thin shell over KnotApp and KnotUI (docs/architecture.md §2). This skeleton
+/// has one main window, in which a typed line is saved and found in the stream after a
+/// relaunch. The hotkey, the panel, hold-to-record, the menu bar item and Settings come with
+/// WP-33's second pull request.
 @main
 struct KnotMacApp: App {
-    private let environment = EnvironmentFactory.make()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("Knot", id: "placeholder") {
-            PlaceholderView()
-                .frame(minWidth: 240, minHeight: 200)
+        // The scene's ID names the window's saved frame, which the system writes into the
+        // standard defaults domain, so it carries the `v1.` prefix (docs/architecture.md §7).
+        Window("Knot", id: "v1.main") {
+            MainWindow(shell: delegate.shell)
+                .frame(minWidth: 640, minHeight: 400)
         }
-        .defaultSize(width: 320, height: 240)
+        .defaultSize(width: 960, height: 640)
     }
 }
