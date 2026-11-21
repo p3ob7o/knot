@@ -62,27 +62,29 @@ struct OrderingTests {
     func jobRunsOnlyAfterRecovery() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
-        // An earlier launch stored a recording, whose transcribe job the store wrote.
-        let earlier = folder.compose()
-        _ = try #require(await launch(earlier))
-        let ports = try earlier.gate.ports()
-        let id: CaptureID = earlier.ids.make()
+        // An earlier launch stored a recording, whose transcribe job the store wrote. It is the
+        // store as that launch left it, written here with the store's own API and closed: no
+        // composition of that launch stays alive, so no other queue can run the job. A test keeps
+        // one live composition per store, as a process has one.
+        let locations = folder.locations
+        try FileManager.default.createDirectory(
+            at: locations.storeRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let ids = SystemIDGenerator()
+        let earlier = try OpenedStore.open(locations: locations, role: .app, settingsSuite: folder.settingsSuite)
+        let id: CaptureID = ids.make()
         let assetID = AssetID(id)
-        let file = try await ports.assets.place(Data(repeating: 7, count: 4096), as: assetID, kind: .audio)
+        let file = try await earlier.assets.place(Data(repeating: 7, count: 4096), as: assetID, kind: .audio)
         let asset = Asset(
             id: assetID, segmentID: SegmentID(id), kind: .audio, byteCount: file.byteCount, sha256: file.sha256)
-        let now = earlier.clock.now()
-        _ = try await ports.notes.record(
+        let now = Date()
+        _ = try await earlier.notes.record(
             NewCapture(
-                id: id, kind: .voice, origin: CaptureOrigin(source: .device(earlier.deviceID), surface: .app),
-                launchID: earlier.launchID, placement: .window, startedAt: now.addingTimeInterval(-5), endedAt: now,
+                id: id, kind: .voice, origin: CaptureOrigin(source: .device(earlier.database.deviceID), surface: .app),
+                launchID: ids.make(), placement: .window, startedAt: now.addingTimeInterval(-5), endedAt: now,
                 body: .file(asset, duration: .seconds(5)), revision: 1))
         let job = JobID.transcribe(of: SegmentID(id))
-        // The earlier launch's composition is still alive here, and its queue was released at its
-        // launch. The live cleaner reports itself available, which wakes a released queue to
-        // drain: done here at once, as the strict pool's order does it within the test.
-        _ = await earlier.environment.queue.drain(using: StraightThroughRunner()) { _ in }
-        #expect(try await ports.notes.jobs(for: SegmentID(id)).first { $0.id == job }?.state == .queued)
+        #expect(try await earlier.notes.jobs(for: SegmentID(id)).first { $0.id == job }?.state == .queued)
+        try earlier.database.close()
 
         let held = HeldRecovery()
         let transcriber = ScriptedTranscriber()
