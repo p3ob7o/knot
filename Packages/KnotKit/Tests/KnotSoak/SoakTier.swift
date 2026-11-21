@@ -13,9 +13,14 @@
 
         static var isSoak: Bool { seed != nil }
 
-        /// The capture ledger soak at this tier's size.
-        static var ledger: CaptureLedgerSoak.Configuration {
-            CaptureLedgerSoak.Configuration(
+        /// A run to repeat, as a report printed it (`CaptureLedgerSoak.Configuration.replay`):
+        /// the capture ledger soak then runs that configuration, whichever test made it.
+        static let replay: String? = ProcessInfo.processInfo.environment["KNOT_SOAK_REPLAY"]
+
+        /// The capture ledger soak at this tier's size, or the run `KNOT_SOAK_REPLAY` names.
+        static var ledger: CaptureLedgerSoak.Configuration? {
+            if let replay { return CaptureLedgerSoak.Configuration.parse(replay) }
+            return CaptureLedgerSoak.Configuration(
                 seed: seed ?? 20_261_121, captures: isSoak ? 500 : 40, killPoints: SoakKillPoint.typedCaptures)
         }
     }

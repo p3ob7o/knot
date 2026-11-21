@@ -31,7 +31,63 @@
             var timeBox: Duration = .seconds(180)
             /// A fault the child injects, for the tests that prove the soak catches it.
             var fault: String?
+
+            /// The configuration as one line, which `parse` reads back: what a replay needs.
+            var line: String {
+                var fields = [
+                    "seed=\(seed)", "captures=\(captures)",
+                    "points="
+                        + killPoints.map { "\($0)@\($0.passes.lowerBound)-\($0.passes.upperBound)" }
+                        .joined(separator: ","),
+                    "budget=\(launchBudget.lowerBound)-\(launchBudget.upperBound)",
+                    "box=\(timeBox.components.seconds)",
+                ]
+                if let fault { fields.append("fault=\(fault)") }
+                return fields.joined(separator: ";")
+            }
+
+            /// Reads a configuration's `line`, or `nil`.
+            static func parse(_ line: String) -> Configuration? {
+                var values: [String: String] = [:]
+                for field in line.split(separator: ";") {
+                    let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
+                    guard pair.count == 2 else { return nil }
+                    values[pair[0]] = pair[1]
+                }
+                func range(_ text: String?) -> ClosedRange<Int>? {
+                    let ends = (text ?? "").split(separator: "-").compactMap { Int($0) }
+                    return ends.count == 2 && ends[0] <= ends[1] ? ends[0]...ends[1] : nil
+                }
+                guard let seed = values["seed"].flatMap(UInt64.init),
+                    let captures = values["captures"].flatMap(Int.init),
+                    let budget = range(values["budget"]), let box = values["box"].flatMap(Int64.init),
+                    let points = values["points"]
+                else { return nil }
+                var killPoints: [SoakKillPoint] = []
+                for entry in points.split(separator: ",") {
+                    let parts = entry.split(separator: "@").map(String.init)
+                    guard parts.count == 2, let passes = range(parts[1]) else { return nil }
+                    killPoints.append(
+                        SoakKillPoint(trigger: parts[0] == "anywhere" ? .anywhere : .child(parts[0]), passes: passes))
+                }
+                return Configuration(
+                    seed: seed, captures: captures, killPoints: killPoints, launchBudget: budget,
+                    timeBox: .seconds(box), fault: values["fault"])
+            }
+
+            /// The command that runs this configuration again, whatever test ran it first.
+            var replay: String {
+                "KNOT_SOAK_REPLAY='\(line)' KNOT_SOAK_FILTER='^KnotSoak\\.CaptureLedgerSoakTests' "
+                    + "scripts/verify.sh --soak --seed \(seed)"
+            }
         }
+
+        /// What a seed fixes, and what it does not, as every report says.
+        static let whatASeedFixes =
+            "a seed fixes the script, each launch's kill point, its passes and its budget, and which writes the "
+            + "store refuses or holds past the engine's deadline; it does not fix the order of the engine's work in "
+            + "the background beside the script, which can move a pass of a store or log point, and so a launch's "
+            + "end and the launches after it"
 
         /// One launch of the child and how it ended.
         struct Launch: Sendable, CustomStringConvertible {
@@ -66,6 +122,7 @@
             /// The captures of the script that a launch began.
             let captures: Int
             let acknowledgements: Int
+            let configuration: Configuration
             let duration: Duration
             let stoppedByTimeBox: Bool
             /// Where the store is, when the run kept it.
@@ -80,8 +137,8 @@
             func keeping(_ folder: URL) -> Verdict {
                 Verdict(
                     seed: seed, problems: problems, launches: launches, captures: captures,
-                    acknowledgements: acknowledgements, duration: duration, stoppedByTimeBox: stoppedByTimeBox,
-                    keptStore: folder.path, partialsLeft: partialsLeft)
+                    acknowledgements: acknowledgements, configuration: configuration, duration: duration,
+                    stoppedByTimeBox: stoppedByTimeBox, keptStore: folder.path, partialsLeft: partialsLeft)
             }
 
             /// How many launches a kill ended.
@@ -125,7 +182,9 @@
                             + "\(SoakRules.inboxPartialsAreRed ? "red" : "counted, not red until WP-15 clears them")")
                 }
                 if !isGreen {
-                    lines.append("repeat it with scripts/verify.sh --soak --seed \(seed)")
+                    lines.append("configuration: \(configuration.line)")
+                    lines.append("repeat it with: \(configuration.replay)")
+                    lines.append(CaptureLedgerSoak.whatASeedFixes)
                     if problems.contains(where: { $0.code == CaptureLedgerSoak.timeBoxCode }) {
                         lines.append(
                             "the time box cut the run short: that is not a failure of the ledger, and the run may be "
@@ -215,7 +274,8 @@
             return Verdict(
                 seed: configuration.seed, problems: problems, launches: launches,
                 captures: witness.highestIntent + 1, acknowledgements: witness.acknowledged,
-                duration: ContinuousClock.now - started, stoppedByTimeBox: stoppedByTimeBox,
+                configuration: configuration, duration: ContinuousClock.now - started,
+                stoppedByTimeBox: stoppedByTimeBox,
                 keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft)
         }
 

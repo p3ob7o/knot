@@ -5,6 +5,7 @@
     import KnotCore
     import KnotFakes
     import KnotStore
+    import Synchronization
 
     /// One launch of the soak's child over the real store (docs/architecture.md §17): it
     /// composes the store, the capture engine, ingest and recovery as the app does, over the
@@ -27,6 +28,22 @@
     ///     stopped <point>                 the child waits at its kill point to be killed
     ///     log <category> <line>           an error a part logged: IDs and codes only
     ///     done                            the launch ran its part to the end, and exits
+    /// The engine's deadline in the soak: it runs out at once while the script holds a write,
+    /// and otherwise gives the store two minutes. So whether a write takes `Inbox/` is the
+    /// script's choice, which the seed fixes, and never how fast a loaded machine answers.
+    final class ScriptedDeadline: Sendable {
+        private let expired = Mutex(false)
+
+        func expires(_ now: Bool) { expired.withLock { $0 = now } }
+
+        var deadline: StoreDeadline {
+            StoreDeadline { [self] in
+                guard !expired.withLock({ $0 }) else { return }
+                try? await Task.sleep(for: .seconds(120))
+            }
+        }
+    }
+
     final class SoakLaunch {
         struct Options {
             var root: URL
@@ -52,6 +69,8 @@
         private let recovery: LaunchRecovery
         private let launchID: LaunchID
 
+        /// The engine's deadline, which the script decides (`ScriptedDeadline`).
+        private let scriptedDeadline = ScriptedDeadline()
         /// The write that `acknowledgementBeforeWrite` holds back, per capture.
         private var heldBack: [CaptureID: String] = [:]
         /// The durable revision the engine last answered, per capture.
@@ -94,7 +113,7 @@
             engine = StandardCaptureEngine(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: database.deviceID, launchID: launchID, locations: locations, layer: layer,
-                deadline: .standard, ingest: ingest, log: log,
+                deadline: scriptedDeadline.deadline, ingest: ingest, log: log,
                 killPoint: { point, _ in await arming.reach("engine:\(point.rawValue)") })
         }
 
@@ -291,7 +310,11 @@
                 return try await body()
             case .held:
                 let hold = await notes.holdNextCaptureWrite()
-                defer { hold.release() }
+                scriptedDeadline.expires(true)
+                defer {
+                    scriptedDeadline.expires(false)
+                    hold.release()
+                }
                 return try await body()
             }
         }

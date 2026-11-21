@@ -6,12 +6,13 @@
     /// The capture ledger soak (docs/architecture.md §17): seeded, time-boxed, over the real store
     /// in a child process that the parent kills and relaunches. Under `scripts/verify.sh --soak`
     /// it makes 500 typed captures from the tier's seed; in the other runs of the package tests,
-    /// 40 from a fixed seed (`SoakTier`).
+    /// 40 from a fixed seed (`SoakTier`). With `KNOT_SOAK_REPLAY` it runs the configuration a
+    /// report printed, so that any run, a fault test's control among them, can be repeated.
     @Suite struct CaptureLedgerSoakTests {
         @Test("capture-ledger-soak", .tags(.named))
         func captureLedgerSoak() async throws {
-            let configuration = SoakTier.ledger
-            print("soak: seed \(configuration.seed), \(configuration.captures) captures")
+            let configuration = try #require(SoakTier.ledger, "KNOT_SOAK_REPLAY does not parse.")
+            print("soak: \(configuration.line)")
             let folder = SoakFolders.make("ledger")
             let verdict = try await CaptureLedgerSoak(configuration: configuration).run(in: folder)
             print(verdict.report)
