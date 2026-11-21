@@ -249,6 +249,29 @@ final class StoreTransaction {
                 """, arguments: [segment.description]) ?? false
     }
 
+    // MARK: Kept files
+
+    /// The names of the files `Inbox/` keeps for a capture, in the order they were named.
+    func keptFileNames(of capture: CaptureID) throws -> [String] {
+        try String.fetchAll(
+            db, sql: "SELECT name FROM kept_file WHERE capture_id = ? ORDER BY position",
+            arguments: [capture.description])
+    }
+
+    /// Replaces the record of the files `Inbox/` keeps for a capture.
+    func setKeptFiles(_ names: [String], of capture: CaptureID) throws {
+        try clearKeptFiles(of: capture)
+        for (position, name) in names.enumerated() {
+            try db.execute(
+                sql: "INSERT INTO kept_file (capture_id, position, name) VALUES (?, ?, ?)",
+                arguments: [capture.description, position, name])
+        }
+    }
+
+    func clearKeptFiles(of capture: CaptureID) throws {
+        try db.execute(sql: "DELETE FROM kept_file WHERE capture_id = ?", arguments: [capture.description])
+    }
+
     // MARK: Assets and jobs
 
     func asset(_ id: AssetID) throws -> Asset? {

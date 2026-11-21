@@ -308,8 +308,9 @@ extension StoreTransaction {
             window: try window(), captures: priors, openCapture: openPrior, namedNoteDeletedAt: namedDeletedAt)
     }
 
-    /// The capture that decides for `request` among the segments that are not conflict copies,
-    /// deleted ones counted or not, by the order of `AppendRule`: for a live capture the latest
+    /// The capture that decides for `request` among the segments that are not conflict copies
+    /// and not kept inbox items, whose time is when they were found and not a start, deleted
+    /// ones counted or not, by the order of `AppendRule`: for a live capture the latest
     /// to end, an open one first; for a late one, the last to start among those still running
     /// at its start, or else the latest to end before it. Ties fall to the later start, then the ID.
     private func pick(for request: AppendRequest, includingDeleted: Bool) throws -> PriorCapture? {
@@ -319,7 +320,7 @@ extension StoreTransaction {
                 EXISTS (SELECT 1 FROM segment AS other WHERE other.note_id = segment.note_id
                     AND other.deleted_at IS NULL) AS note_has_live_segment
             FROM segment JOIN note ON note.id = segment.note_id
-            WHERE segment.conflict_of IS NULL \(live)
+            WHERE segment.conflict_of IS NULL AND segment.kind != 'inbox_item' \(live)
             """
         let queries: [(String, StatementArguments)]
         switch request.arrival {
@@ -669,6 +670,69 @@ extension StoreTransaction {
         let revision = try captureRow(item.id)?.capture.revision ?? 0
         _ = try save(item.id, .failed(code), revision: revision, endingAt: item.endedAt ?? now(), mode: .end)
         return true
+    }
+
+    // MARK: Kept inbox items
+
+    /// Writes an item of `Inbox/` that this build cannot read as a failed capture: a row failed
+    /// with its reason, one segment of kind `keptInboxItem` in a new note dated when it was
+    /// found, which joins and closes nothing, and the names of its files. Its time is not a
+    /// start, and it carries no arrival mark.
+    func recordKeptItem(_ item: KeptInboxItem) throws -> CaptureReceipt {
+        let found = NewCapture(
+            id: item.captureID, kind: .keptInboxItem,
+            origin: CaptureOrigin(source: .device(store.deviceID), surface: CaptureSurface(rawValue: "inbox")),
+            launchID: makeID(), placement: .newNote, arrival: .late, startedAt: item.foundAt, endedAt: item.foundAt,
+            body: .none, revision: 0)
+        _ = try place(found, ingesting: true)
+        for segmentID in Self.segmentIDs(of: found) {
+            guard var segment = try segment(segmentID) else { continue }
+            segment.state = .keptInboxItem(item.reason)
+            segment.arrivedAt = nil
+            try put(segment)
+        }
+        guard var row = try captureRow(item.captureID) else { throw KnotError.notFound.about(capture: item.captureID) }
+        row.capture.outcome = .failed(item.reason)
+        row.capture.lastSavedAt = nil
+        try put(row)
+        count("captures_failed")
+        try setKeptFiles(item.fileNames, of: item.captureID)
+        return try receipt(of: item.captureID)
+    }
+
+    /// A kept item's row, met by the item's own `ingest` once it can be read: it takes the
+    /// item's kind and what its manifest says, and stays failed in its note, where its segment
+    /// is, so that the failed-row path stores the item there.
+    func adoptKeptRow(_ stored: CaptureRow, as item: NewCapture) throws {
+        guard case .failed(let reason) = stored.capture.outcome else { return }
+        var row = stored
+        row.capture.kind = item.kind
+        row.capture.origin = item.origin
+        row.capture.startedAt = item.startedAt
+        row.capture.launchID = item.launchID
+        row.capture.placement = item.placement
+        row.capture.shownNoteID = item.shownNote
+        try put(row)
+        let first = SegmentID(row.capture.id)
+        guard var segment = try segment(first) else { return }
+        segment.kind = item.kind
+        segment.origin = item.origin.source
+        segment.startedAt = item.startedAt
+        switch item.kind {
+        case .typed:
+            segment.textOrigin = .typed
+            segment.state = .typed(.failed)
+        case .voice:
+            segment.textOrigin = .rawTranscript
+            segment.processingOwner = item.origin.source.isTool ? nil : store.deviceID
+            segment.state = .voice(.failed(.record, reason))
+        default:
+            segment.textOrigin = .recognised
+            segment.state = .ink(.failed(reason))
+        }
+        try put(segment)
+        // The placeholder's text is the stored text, which no person replaced.
+        try setSavedRevision(segment.revision, of: first)
     }
 
     // MARK: Segments of a capture

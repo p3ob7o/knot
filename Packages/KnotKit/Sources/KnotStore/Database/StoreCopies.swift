@@ -71,7 +71,7 @@ public enum StoreCopies {
     /// The number of rows of each table a copy is checked against.
     static let countedTables = [
         "store_meta", "note", "capture", "segment", "revision_floor", "asset", "job", "segment_history", "tombstone",
-        "setting", "counter", "change_log",
+        "setting", "counter", "change_log", "kept_file",
     ]
 
     static func tableCounts(_ db: Database) throws -> [String: Int] {

@@ -47,6 +47,8 @@ private actor Driver {
     var notes: [NoteID] = []
     var cursors: [StoreCursor?] = [nil]
     var positions: [StreamPosition?] = [nil]
+    /// The items of `Inbox/` kept, which a later ingest may store.
+    var keptItems: [CaptureID] = []
 
     init(seed: UInt64, root: URL) async throws {
         self.seed = seed
@@ -138,7 +140,7 @@ private actor Driver {
 
     func step(_ number: Int) async {
         advance(seconds: Double(random.next(in: 0...400)))
-        switch random.next(in: 0...29) {
+        switch random.next(in: 0...31) {
         case 0, 1, 2:
             // A finished typed capture from this device.
             let start = now.addingTimeInterval(-Double(random.next(in: 0...60)))
@@ -293,6 +295,31 @@ private actor Driver {
             let date = now.addingTimeInterval(-Double(random.next(in: 0...40)) * 86_400)
             advance(seconds: Double(random.next(in: 0...35)) * 86_400)
             _ = await both("purge") { try await $0.purge(before: date) }
+        case 27:
+            // An item of `Inbox/` this build cannot read, kept, or the same again with the files
+            // found now.
+            let id = (chance(30) ? pick(keptItems) : nil) ?? makeIDs.make()
+            let reasons = KeptInboxItem.reasons.sorted { $0.rawValue < $1.rawValue }
+            let names = ["\(id).json"] + (chance(60) ? ["\(id).\(pick(["txt", "m4a", "png", "bin"]) ?? "txt")"] : [])
+            let item = KeptInboxItem(
+                captureID: id, reason: pick(reasons) ?? KnotError.inboxItemUnreadable.code,
+                foundAt: now.addingTimeInterval(-Double(random.next(in: 0...600))), fileNames: names)
+            if let receipt = await both("keep item", { try await $0.recordKeptItem(item) }) {
+                if !keptItems.contains(id) { keptItems.append(id) }
+                if !notes.contains(receipt.noteID) { notes.append(receipt.noteID) }
+            }
+        case 28:
+            // A kept item read after an update: typed or a recording, through `ingest`.
+            guard let id = pick(keptItems) else { return }
+            let voice = chance(40)
+            let item = NewCapture(
+                id: id, kind: voice ? .voice : .typed,
+                origin: CaptureOrigin(source: .device(device), surface: voice ? .watch : .app), launchID: launch,
+                placement: placement(), startedAt: now.addingTimeInterval(-90), endedAt: now.addingTimeInterval(-60),
+                body: voice ? .file(asset(.audio, for: id), duration: .seconds(30)) : .text(text()),
+                revision: Int64(random.next(in: 0...2)))
+            let result = await both("ingest kept item") { try await $0.ingest(item) }
+            remember(result?.receipt, kind: item.kind, revision: item.revision)
         default:
             await reads()
         }
@@ -337,6 +364,12 @@ private actor Driver {
             Self.comparable(try await $0.predictPlacement(request, kind: kind, surface: surface))
         }
         _ = await both("jobs") { try await $0.jobs(for: nil) }
+        if let id = pick(keptItems) {
+            // Each store resolves the names against its own `Inbox/`: the names and roles compare.
+            _ = await both("kept files") {
+                try await $0.keptFiles(of: id).map { "\($0.url.lastPathComponent) \($0.role)" }
+            }
+        }
     }
 
     /// A decision with a refusal read by its code.

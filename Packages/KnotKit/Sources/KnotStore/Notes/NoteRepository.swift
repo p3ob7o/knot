@@ -169,6 +169,9 @@ public final class NoteRepository: NoteStore {
             }
             try tx.check(capture, ingesting: true)
             guard let endedAt = capture.endedAt else { throw unreadable }
+            if let row = try tx.captureRow(capture.id), row.capture.kind == .keptInboxItem {
+                try tx.adoptKeptRow(row, as: capture)
+            }
             if try tx.captureRow(capture.id) == nil {
                 let receipt = try tx.place(capture, ingesting: true)
                 return .commit(IngestResult(receipt: receipt, storedRevision: capture.revision, applied: true))
@@ -182,9 +185,29 @@ public final class NoteRepository: NoteStore {
             let applied = try tx.save(
                 capture.id, incoming, revision: capture.revision, endingAt: endedAt, mode: .ingest)
             guard let row = try tx.captureRow(capture.id) else { throw KnotError.notFound }
+            // Stored, a kept item's files are no longer kept: the caller removes them.
+            if row.capture.outcome == .stored { try tx.clearKeptFiles(of: capture.id) }
             return .commit(
                 IngestResult(receipt: tx.receipt(row), storedRevision: row.capture.revision, applied: applied))
         }.unwrap(orFail: KnotError.inboxItemUnreadable.about(capture: capture.id))
+    }
+
+    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+        try await enterCaptureWrite(item.captureID)
+        return try await write { tx in
+            guard KeptInboxItem.reasons.contains(item.reason), !item.fileNames.isEmpty,
+                item.fileNames.allSatisfy({ KeptInboxItem.isFileName($0, of: item.captureID) })
+            else { throw KnotError.captureInvalid.about(capture: item.captureID) }
+            if let row = try tx.captureRow(item.captureID) {
+                // The same item again: only the record of its files changes.
+                guard row.capture.kind == .keptInboxItem else {
+                    throw KnotError.captureIDConflict.about(capture: item.captureID)
+                }
+                try tx.setKeptFiles(item.fileNames, of: item.captureID)
+                return .commit(tx.receipt(row))
+            }
+            return .commit(try tx.recordKeptItem(item))
+        }
     }
 
     public func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
@@ -255,6 +278,13 @@ public final class NoteRepository: NoteStore {
 
     public func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead? {
         try await read { tx in try tx.segment(id).map(tx.read) }
+    }
+
+    /// Each kept name resolved against the store's own `Inbox/` at the read, so that a moved
+    /// container never leaves a stale path. `Inbox/` itself is never read.
+    public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
+        let inbox = database.locations.inbox
+        return try await read { tx in try tx.keptFileNames(of: capture).map { KeptFile(name: $0, in: inbox) } }
     }
 
     public func asset(_ id: AssetID) async throws(KnotError) -> Asset? {

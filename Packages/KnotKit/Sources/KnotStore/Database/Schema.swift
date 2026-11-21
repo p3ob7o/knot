@@ -203,6 +203,16 @@ public enum StoreSchema {
             PRIMARY KEY (day, name)
         ) WITHOUT ROWID;
 
+        -- The files `Inbox/` keeps for an item this build cannot read, by name and in the order
+        -- ingest named them, until `ingest` stores the item. Names only: each is the capture's
+        -- ID and an extension, resolved against the store's own `Inbox/` at each read.
+        CREATE TABLE kept_file (
+            capture_id TEXT NOT NULL REFERENCES capture (id) DEFERRABLE INITIALLY DEFERRED,
+            position INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (capture_id, position)
+        ) WITHOUT ROWID;
+
         -- One row per record that changed since sync last sent it, and none for a draft or a
         -- recording in progress. Triggers feed it; only sync consumes it. The triggers test for
         -- the row rather than use INSERT OR IGNORE: an UPSERT that fires a trigger imposes its

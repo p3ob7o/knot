@@ -62,6 +62,43 @@ private func check(_ name: String) async throws {
     /// The command-line contract's cases (WP-10's merge criteria).
     @Test(.tags(.contract), arguments: ["repeat", "stale-revision", "changes", "cursor-ahead"])
     func theCommandLineCases(name: String) async throws { try await check(name) }
+
+    /// The kept items of `Inbox/`, each by its name, so that each shows on its own.
+    @Test(
+        .tags(.contract),
+        arguments: ["kept-item", "kept-item-again", "kept-item-ingested", "kept-item-refused", "kept-item-window"])
+    func theKeptItemChecks(name: String) async throws { try await check(name) }
+
+    /// Held by its own type, as the app holds it, the store answers each operation that
+    /// `NoteStore` gives a default with its own method, as it does held as `any NoteStore`, and
+    /// never with the default's `port_unavailable`.
+    @Test func operationsWithADefaultAnswerOnTheConcreteType() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 99, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let store: NoteRepository = NoteRepository(database: database)
+        let id: CaptureID = ids.make()
+        let reason = KnotError.inboxItemUnreadable.code
+        let receipt = try await store.recordKeptItem(
+            KeptInboxItem(captureID: id, reason: reason, foundAt: clock.now(), fileNames: ["\(id).json"]))
+        #expect(receipt.outcome == .failed(reason))
+        let files = try await store.keptFiles(of: id)
+        #expect(
+            files.map(\.url) == [database.locations.inbox.appending(path: "\(id).json")],
+            "Its own answer, resolved in its own Inbox/.")
+        // The kept segment is not a drawing: the store's own refusal, not the default's.
+        let recognition = InkRecognition(
+            text: "words", provenance: RecognitionProvenance(engineVersion: 1, language: "en-GB", osBuild: "build 1"))
+        do {
+            _ = try await store.applyRecognition(recognition, to: SegmentID(id))
+            Issue.record("A recognition of a segment that is not a drawing was applied.")
+        } catch {
+            #expect(error.code != KnotError.portUnavailable.code, "Its own method answers, not the default.")
+        }
+        expectConsistent(database)
+    }
 }
 
 /// The suites of `AssetStore`, `SettingsStore` and `AssetFetcher` on the store's own.
