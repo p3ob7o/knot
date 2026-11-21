@@ -1,6 +1,7 @@
 #if os(macOS)
     import Foundation
     import KnotAudio
+    import KnotCore
 
     /// `kill-test`: the parent of the recording format's kill test (docs/plan/WP-12.md, the
     /// named test `recording-format-kill-test`), on the live recorder.
@@ -26,13 +27,21 @@
     /// Every trial also reads the store itself: a working file with no manifest beside it fails
     /// the trial, whatever recovery says.
     ///
+    /// Each step of a trial that waits on another process waits at most `--step-s` seconds
+    /// (`Step`): the child's first line, its live line or its stage, the end of its runner and of
+    /// its output after the kill, and the recovery. A step that reaches its limit fails the trial
+    /// and prints `step-limit <capture> trial <n> step <step> limitS <s>`. However a trial ends,
+    /// its pipes are closed, and what it started is ended and reaped before the next one. The parent chooses each trial's capture and gives it to `record --capture`,
+    /// so every line about a trial names its capture, even one whose child never printed a line.
+    ///
     ///     kill-test --dir <folder> [--trials 5] [--seed <n>] [--child <crash host>]
     ///               [--runner "<command> <arguments>"] [--min-ms 300] [--max-ms 4000]
-    ///               [--early-every <n>] [--stages] [--rate <Hz>]
+    ///               [--early-every <n>] [--stages] [--rate <Hz>] [--step-s 120]
     ///
     /// `--runner` prefixes the child's command, for example `xcrun simctl spawn <udid>`.
-    /// `--early-every n` makes every n-th of the `--trials` an early one. The last line is the
-    /// summary; the exit status is 0 only if every trial passed.
+    /// `--early-every n` makes every n-th of the `--trials` an early one; `--trials 0` with
+    /// `--stages` runs the staged trials alone. The last line is the summary; the exit status is
+    /// 0 only if every trial passed.
     func killTest(_ arguments: Arguments) async throws(HostError) -> Bool {
         let folder = try arguments.url("dir")
         let trials = try arguments.int("trials", default: 5)
@@ -43,13 +52,19 @@
         let minimum = try arguments.int("min-ms", default: 300)
         let maximum = try arguments.int("max-ms", default: 4000)
         let earlyEvery = try arguments.int("early-every", default: 0)
+        let stepSeconds = try arguments.int("step-s", default: 120)
+        guard stepSeconds > 0 else { throw .usage("--step-s takes a number of seconds above 0") }
+        let limit = Duration.seconds(stepSeconds)
         var rateArguments: [String] = []
         if let rate = arguments.string("rate") { rateArguments = ["--rate", rate] }
         var generator = SplitMix64(seed: seed)
-        var plan: [Kind] = (1...max(trials, 1)).map { earlyEvery > 0 && $0 % earlyEvery == 0 ? .early : .live }
+        var plan: [Kind] =
+            trials > 0 ? (1...trials).map { earlyEvery > 0 && $0 % earlyEvery == 0 ? .early : .live } : []
         if arguments.flag("stages") { plan += Stage.allCases.map { Kind.staged($0) } }
+        guard !plan.isEmpty else { throw .usage("no trials: --trials is 0 and --stages is not given") }
         print(
-            "kill-test trials \(plan.count) seed \(seed) runner \(runner.isEmpty ? "none" : runner.joined(separator: " "))"
+            "kill-test trials \(plan.count) seed \(seed) runner \(runner.isEmpty ? "none" : runner.joined(separator: " ")) "
+                + "stepS \(stepSeconds)"
         )
 
         var results: [TrialResult] = []
@@ -61,43 +76,62 @@
             case .early: delay = Int.random(in: 0...20, using: &generator)
             case .staged: delay = 0
             }
+            let capture = "\(CaptureID(uuid: UUID()))"
             let store = folder.appendingPathComponent("trial-\(seed)-\(trial)", isDirectory: true)
             let witness = folder.appendingPathComponent("trial-\(seed)-\(trial).witness")
-            var result = TrialResult(trial: trial, kind: kind, delayMs: delay)
+            var result = TrialResult(trial: trial, kind: kind, delayMs: delay, capture: capture)
+            // What this trial started and may still be running: nothing of it outlives the trial.
+            var processes: [Process] = []
+            var readers: [LineReader] = []
+            var alive: [pid_t] = []
             do {
                 try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
                 var command =
-                    runner + [child, "record", "--dir", store.path, "--witness", witness.path] + rateArguments
+                    runner + [child, "record", "--dir", store.path, "--witness", witness.path, "--capture", capture]
+                    + rateArguments
                 if case .staged(let stage) = kind {
                     command += ["--seconds", "0.5", "--sync-ms", "100", "--stage", stage.rawValue]
                 } else {
                     command += ["--seconds", "60"]
                 }
                 let recording = try launch(command)
+                processes.append(recording.process)
                 let lines = LineReader(recording.output)
-                guard let pid = waitForPID(lines) else {
-                    recording.process.waitUntilExit()
+                readers.append(lines)
+                var childPID: pid_t?
+                try read(lines, step: .pid, by: .now + limit) { line in
+                    guard line.hasPrefix("pid "), let pid = pid_t(line.dropFirst(4)) else { return false }
+                    childPID = pid
+                    return true
+                }
+                guard let pid = childPID else {
+                    try waitForExit(recording.process, step: .exit, by: .now + limit)
                     throw HostError.system("child gave no pid", recording.process.terminationStatus)
                 }
+                alive.append(pid)
                 switch kind {
                 case .live:
                     // Kill only once the recording is live, so that the kill falls inside it.
-                    while let line = lines.next() {
+                    try read(lines, step: .live, by: .now + limit) { line in
                         result.note(line)
-                        if line.hasPrefix("live ") { break }
+                        return line.hasPrefix("live ")
                     }
                     try? await Task.sleep(for: .milliseconds(delay))
                 case .early:
                     try? await Task.sleep(for: .milliseconds(delay))
                 case .staged:
-                    while let line = lines.next() {
+                    try read(lines, step: .stage, by: .now + limit) { line in
                         result.note(line)
-                        if result.stalled { break }
+                        return result.stalled
                     }
                 }
                 kill(pid, SIGKILL)
-                recording.process.waitUntilExit()
-                while let line = lines.next() { result.note(line) }
+                alive.removeAll { $0 == pid }
+                try waitForExit(recording.process, step: .exit, by: .now + limit)
+                try read(lines, step: .drain, by: .now + limit) { line in
+                    result.note(line)
+                    return false
+                }
                 if let counts = Witness.read(witness) {
                     result.taken = counts.taken
                     result.durable = counts.durable
@@ -105,10 +139,28 @@
                 result.lone = workingFilesAlone(in: store)
                 var recover = runner + [child, "recover", "--dir", store.path] + rateArguments
                 if case .staged(.conversion) = kind { recover.append("--convert") }
-                result.read(try run(recover))
+                let recovery = try launch(recover)
+                processes.append(recovery.process)
+                let deadline = ContinuousClock.now + limit
+                var said: [String] = []
+                let recoveryLines = LineReader(recovery.output)
+                readers.append(recoveryLines)
+                try read(recoveryLines, step: .recovery, by: deadline) { line in
+                    if line.hasPrefix("pid "), let pid = pid_t(line.dropFirst(4)) { alive.append(pid) }
+                    said.append(line)
+                    return false
+                }
+                try waitForExit(recovery.process, step: .recovery, by: deadline)
+                alive.removeAll()
+                result.read(said.joined(separator: "\n"))
+            } catch let reached as StepLimit {
+                result.limited = reached.step
+                result.failure = "step \(reached.step.rawValue) reached its limit of \(stepSeconds) s"
+                print("step-limit \(capture) trial \(trial) step \(reached.step.rawValue) limitS \(stepSeconds)")
             } catch {
                 result.failure = "\(error)"
             }
+            end(processes, readers, alive)
             print(result.line)
             results.append(result)
         }
@@ -119,7 +171,8 @@
             "summary trials \(plan.count) passed \(passed) "
                 + "maxLossMs \(losses.last.map { String(format: "%.1f", $0) } ?? "-") "
                 + "killedWhileTaking \(results.filter { $0.taken > 0 }.count) "
-                + "stalled \(results.filter(\.stalled).count) seed \(seed)")
+                + "stalled \(results.filter(\.stalled).count) "
+                + "limited \(results.filter { $0.limited != nil }.count) seed \(seed)")
         return passed == plan.count
     }
 
@@ -138,16 +191,43 @@
         }
     }
 
+    /// A step of a trial that waits on another process, each for at most `--step-s`, and where
+    /// it could wait.
+    enum Step: String {
+        /// The child's first line, `pid <n>`: its runner, `simctl spawn` in a simulator, must
+        /// start it, and the child must reach its first line.
+        case pid
+        /// The child's `live` line: its recorder's start must return.
+        case live
+        /// The child's `stalled` line: it must reach its stage.
+        case stage
+        /// The end of the child's runner once the child is killed, or of a child that ended by
+        /// itself with no pid.
+        case exit
+        /// The end of the child's output once it is killed: the pipe closes only when no process
+        /// holds it, the runner's and the child's included.
+        case drain
+        /// The recovery, through the same runner, to the end of its output and of its process.
+        case recovery
+    }
+
+    /// A step that reached its limit.
+    struct StepLimit: Error {
+        let step: Step
+    }
+
     /// One trial of the kill test.
     struct TrialResult {
         let trial: Int
         let kind: Kind
         let delayMs: Int
-        var capture: String?
+        var capture: String
         /// Whether the child said that the recording was live before the kill.
         var wentLive = false
         /// Whether the child stopped dead at its stage before the kill.
         var stalled = false
+        /// The step that reached its limit, if one did.
+        var limited: Step?
         /// The last durable count the child printed before it died.
         var printedDurable: Int64 = 0
         var taken: Int64 = 0
@@ -198,7 +278,7 @@
                 guard let index = words.firstIndex(of: key), index + 1 < words.count else { return nil }
                 return words[index + 1]
             }
-            if let orphan, let capture, !orphan.hasPrefix("orphan \(capture) ") {
+            if let orphan, !orphan.hasPrefix("orphan \(capture) ") {
                 failure = "recovery found another capture: \(orphan)"
                 return
             }
@@ -296,30 +376,101 @@
         }
     }
 
-    /// Reads lines from a pipe as they arrive.
+    /// Reads lines from a pipe as they arrive, each by a deadline.
     final class LineReader {
+        enum Next {
+            case line(String)
+            /// The pipe has closed and nothing is left.
+            case end
+            /// The deadline passed with no whole line.
+            case late
+        }
+
         private let handle: FileHandle
         private var pending = Data()
+        private var closed = false
 
         init(_ handle: FileHandle) { self.handle = handle }
 
-        /// The next line, waiting for it; nil once the pipe has closed and nothing is left.
-        func next() -> String? {
+        /// Closes the pipe: a process still writing to it is told that no one reads.
+        func close() {
+            guard !closed else { return }
+            closed = true
+            pending.removeAll()
+            try? handle.close()
+        }
+
+        /// The next line, waiting for it until `deadline`.
+        func next(by deadline: ContinuousClock.Instant) -> Next {
             while true {
                 if let newline = pending.firstIndex(of: 0x0A) {
                     let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
                     pending.removeSubrange(pending.startIndex...newline)
-                    return line
+                    return .line(line)
                 }
-                let data = handle.availableData
-                if data.isEmpty {
-                    guard !pending.isEmpty else { return nil }
+                if closed {
+                    guard !pending.isEmpty else { return .end }
                     let line = String(decoding: pending, as: UTF8.self)
                     pending.removeAll()
-                    return line
+                    return .line(line)
                 }
-                pending.append(data)
+                let left = deadline - .now
+                guard left > .zero else { return .late }
+                let milliseconds = left.components.seconds * 1000 + left.components.attoseconds / 1_000_000_000_000_000
+                var watched = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+                let ready = poll(&watched, 1, Int32(clamping: max(milliseconds, 1)))
+                if ready < 0 {
+                    if errno != EINTR { closed = true }
+                    continue
+                }
+                guard ready > 0 else { continue }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                let count = Darwin.read(handle.fileDescriptor, &bytes, bytes.count)
+                if count > 0 {
+                    pending.append(contentsOf: bytes[0..<count])
+                } else if count == 0 || (errno != EINTR && errno != EAGAIN) {
+                    closed = true
+                }
             }
+        }
+    }
+
+    /// Reads lines from `lines`, giving each to `take`, until `take` has what it waits for or the
+    /// pipe closes. Past `deadline`, `step` has reached its limit.
+    private func read(
+        _ lines: LineReader, step: Step, by deadline: ContinuousClock.Instant, until take: (String) -> Bool
+    ) throws(StepLimit) {
+        while true {
+            switch lines.next(by: deadline) {
+            case .line(let line): if take(line) { return }
+            case .end: return
+            case .late: throw StepLimit(step: step)
+            }
+        }
+    }
+
+    /// Ends what a trial started and may still be running, once the trial is over, however it
+    /// ended: closes its pipes, kills the pids its children printed and the processes it
+    /// started, and waits a while for them to be gone, reaped by this process or, in a simulator,
+    /// by the simulator's own launchd. A process that a child left behind and named to nobody is
+    /// not reached.
+    private func end(_ processes: [Process], _ readers: [LineReader], _ alive: [pid_t]) {
+        for reader in readers { reader.close() }
+        for pid in alive { kill(pid, SIGKILL) }
+        for process in processes where process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while processes.contains(where: \.isRunning) || alive.contains(where: { kill($0, 0) == 0 }),
+            ContinuousClock.now < deadline
+        {
+            usleep(5_000)
+        }
+    }
+
+    /// Waits for `process` to end. Past `deadline`, `step` has reached its limit.
+    private func waitForExit(_ process: Process, step: Step, by deadline: ContinuousClock.Instant) throws(StepLimit) {
+        while process.isRunning {
+            guard ContinuousClock.now < deadline else { throw StepLimit(step: step) }
+            usleep(5_000)
         }
     }
 
@@ -330,13 +481,6 @@
         return names.filter { name in
             !name.hasPrefix(".") && name.hasSuffix(".caf") && !names.contains(String(name.dropLast(4)) + ".json")
         }.count
-    }
-
-    private func waitForPID(_ lines: LineReader) -> pid_t? {
-        while let line = lines.next() {
-            if line.hasPrefix("pid "), let pid = pid_t(line.dropFirst(4)) { return pid }
-        }
-        return nil
     }
 
     /// Starts `command`, found on the path when it is not a path itself, with its standard
@@ -353,13 +497,5 @@
             throw .system("launch \(command.first ?? "")", Int32(truncatingIfNeeded: (error as NSError).code))
         }
         return (process, pipe.fileHandleForReading)
-    }
-
-    /// Runs `command` to its end and returns what it printed.
-    private func run(_ command: [String]) throws(HostError) -> String {
-        let (process, output) = try launch(command)
-        let text = String(decoding: output.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        return text
     }
 #endif

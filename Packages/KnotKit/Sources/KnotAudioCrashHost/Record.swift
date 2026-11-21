@@ -31,7 +31,10 @@ let endedEarlyStatus: Int32 = 3
 /// `--seconds` of audio or a kill, reporting each step on standard output and in a witness file.
 ///
 ///     record --dir <folder> --witness <file> [--rate 16000] [--seconds 60] [--sync-ms 1000]
-///            [--ends-after <frames>] [--stage early|ending|conversion]
+///            [--ends-after <frames>] [--stage early|ending|conversion] [--capture <id>]
+///
+/// `--capture` names the recording's capture, which the kill test chooses, so that its lines
+/// name the capture before the child has printed one; without it, the capture is new.
 ///
 /// With `--stage`, the recording stops dead at that point of its life, prints
 /// `stalled <id> <stage>`, and waits to be killed: `conversion` converts the stopped recording.
@@ -57,7 +60,11 @@ func record(_ arguments: Arguments) async throws(HostError) {
         witness.taken(frames)
         taken.set(frames)
     }
-    let capture = CaptureID(uuid: UUID())
+    let capture =
+        try arguments.string("capture").map { text throws(HostError) in
+            guard let capture = CaptureID(text) else { throw .usage("--capture takes a capture ID") }
+            return capture
+        } ?? CaptureID(uuid: UUID())
     let store = try locations(arguments)
     let stage = try arguments.string("stage").map { name throws(HostError) in
         guard let stage = Stage(rawValue: name) else { throw .usage("--stage is early, ending or conversion") }
@@ -126,12 +133,14 @@ final class Counter: Sendable {
 ///
 ///     recover --dir <folder> [--convert]
 ///
-/// Prints one line for each orphan, `orphan <id> frames <n> rate <Hz> ending <ending>
+/// Prints `pid <n>` first, so that a kill test can end a recovery that hangs in a simulator. Then
+/// one line for each orphan, `orphan <id> frames <n> rate <Hz> ending <ending>
 /// match <n> manifest <readable|unreadable> file <yes|no>`, where `match` counts the frames from
 /// the start that equal the injected audio, then `orphans <count>`. With `--convert`, it then
 /// converts each orphan that has a working file and prints `converted <id> frames <n> leftover
 /// <yes|no>`: the copy's frames, and whether a dead conversion's leftover is still there.
 func recover(_ arguments: Arguments) async throws(HostError) {
+    print("pid \(getpid())")
     let locations = try locations(arguments)
     let recorder = LiveRecorder(locations: locations, input: try injected(arguments, pace: .unpaced, frames: 0))
     let orphans: [RecordedAudio]
