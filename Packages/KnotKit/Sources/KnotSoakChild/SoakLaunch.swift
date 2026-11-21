@@ -113,6 +113,7 @@
                     Say.fail("recovery failed: \(error.code)")
                 }
             }
+            await reportWhatRecoveryLeft()
             for index in options.range {
                 await runCapture(script.captures[index])
             }
@@ -123,8 +124,28 @@
                 await end(open.index, open.id, text: open.text, discard: false)
             }
             _ = await ingest.ingestAll()
+            // The app quits as a process does: its last line, then the exit, with the store as it
+            // stands. Closing the store first would fail the engine's own work in flight, such as
+            // an ingest it started, which the next launch finishes.
             Say.line(SoakLine.done.rendered)
-            try? database.close()
+            exit(0)
+        }
+
+        /// Says what recovery left of earlier launches: their rows still open, and every entry in
+        /// `Inbox/`, whatever its name. This launch has written nothing there yet, so everything
+        /// in it is an earlier launch's.
+        private func reportWhatRecoveryLeft() async {
+            let open: [Capture]
+            do {
+                open = try await notes.openCaptures().filter { $0.launchID != launchID }
+            } catch {
+                Say.fail("the open captures could not be read: \(error.code)")
+            }
+            guard let inbox = InboxEntries.list(locations) else { Say.fail("Inbox/ could not be listed") }
+            Say.line(
+                SoakLine.recoveryLeft(open: open.count, inbox: inbox.others, partials: inbox.partials.count).rendered)
+            for name in inbox.partials.sorted() { Say.line(SoakLine.inboxPartial(name).rendered) }
+            for row in open { Say.line(SoakLine.leftOpen(row.id).rendered) }
         }
 
         // MARK: One capture

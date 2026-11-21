@@ -47,6 +47,10 @@ struct SoakWitness {
     /// The highest index of the script whose capture a launch began.
     private(set) var highestIntent = -1
     private(set) var acknowledged = 0
+    /// The temporaries of writes a kill cut that recovery left in `Inbox/`, each once, by name
+    /// (`InboxEntries`, `SoakRules.inboxPartialsAreRed`).
+    private(set) var partials: Set<String> = []
+    var partialsLeft: Int { partials.count }
     /// The captures the script discarded, or was about to: one may end empty, whatever it was
     /// acknowledged with before.
     private(set) var discarding: Set<CaptureID> = []
@@ -67,7 +71,9 @@ struct SoakWitness {
     /// must parse; the launch says which launch it is first; its intents run from the start of
     /// its range with no gap; a launch that quit says `done` after an intent for every index of
     /// its range; and a launch killed at its point said it stopped at that point and no other.
-    mutating func absorb(_ lines: [String], launch: Int, range: Range<Int>, end: LaunchEnd) -> [Problem] {
+    mutating func absorb(
+        _ lines: [String], launch: Int, range: Range<Int>, end: LaunchEnd, afterKill: Bool
+    ) -> [Problem] {
         var problems: [Problem] = []
         func problem(_ code: String, _ ids: String...) {
             problems.append(Problem(code: code, ids: ["launch=\(launch)"] + ids))
@@ -84,9 +90,13 @@ struct SoakWitness {
         if parsed.first != .launch(launch) { problem("launch_line_missing") }
         var intents: [Int] = []
         var stops: [String] = []
+        var recoveryReported = false
+        var reportedPartials: Set<String> = []
+        var partialCount = 0
         for line in parsed {
             switch line {
             case .intent(let index):
+                if !recoveryReported { problem("capture_before_recovery_report", "index=\(index)") }
                 intents.append(index)
                 highestIntent = max(highestIntent, index)
             case .discarding(_, let capture):
@@ -100,15 +110,32 @@ struct SoakWitness {
                 if !intents.contains(a.index) { problem("acknowledged_without_intent", "index=\(a.index)") }
             case .stopped(let point):
                 stops.append(point)
+            case .recoveryLeft(let open, let inbox, let partials):
+                recoveryReported = true
+                partialCount = partials
+                if open > 0 { problem("recovery_left_rows_open", "count=\(open)") }
+                if inbox > 0 { problem("recovery_left_inbox_items", "count=\(inbox)") }
+            case .leftOpen(let capture):
+                problem("recovery_left_row_open", capture.description)
+            case .inboxPartial(let name):
+                reportedPartials.insert(name)
+
             default:
                 break
             }
         }
+        if reportedPartials.count != partialCount { problem("inbox_partials_miscounted") }
+        // A kill cuts at most one write into `Inbox/`: the child's saves run one at a time.
+        problems += Self.partialProblems(
+            reportedPartials, known: partials, allowance: afterKill ? 1 : 0, red: SoakRules.inboxPartialsAreRed
+        ).map { Problem(code: $0.code, ids: ["launch=\(launch)"] + $0.ids) }
+        partials.formUnion(reportedPartials)
         if intents != Array(range.lowerBound..<(range.lowerBound + intents.count)) || intents.count > range.count {
             problem("intents_out_of_order", "from=\(range.lowerBound)", "count=\(intents.count)")
         }
         switch end {
         case .quit:
+            if !recoveryReported { problem("recovery_not_reported") }
             if parsed.last != .done || intents.count != range.count {
                 problem("launch_did_not_finish", "intents=\(intents.count)", "of=\(range.count)")
             }
@@ -258,6 +285,31 @@ struct SoakWitness {
             }
             return (problems, true)
         }
+    }
+
+    /// What the temporaries of cut writes in `Inbox/` say: more new ones than `allowance`, the
+    /// kills that could have cut them, is red by a code of its own; and any at all is red once
+    /// `red` is, by `inbox_partials_left`.
+    static func partialProblems(_ found: Set<String>, known: Set<String>, allowance: Int, red: Bool) -> [Problem] {
+        var problems: [Problem] = []
+        let new = found.subtracting(known)
+        if new.count > allowance {
+            problems.append(
+                Problem(code: "inbox_partials_beyond_kills", ids: ["new=\(new.count)", "kills=\(allowance)"]))
+        }
+        if red, !found.isEmpty {
+            problems.append(Problem(code: "inbox_partials_left", ids: ["count=\(found.count)"]))
+        }
+        return problems
+    }
+
+    /// What `Inbox/` holds once the last launch has recovered: every entry counts, dot-named or
+    /// not; only the temporaries of cut writes already seen after a kill are set apart.
+    static func inboxProblems(_ entries: InboxEntries?, known: Set<String>, red: Bool) -> [Problem] {
+        guard let entries else { return [Problem(code: "inbox_not_listed", ids: [])] }
+        var problems = partialProblems(entries.partials, known: known, allowance: 0, red: red)
+        if entries.others > 0 { problems.append(Problem(code: "inbox_items_left", ids: ["count=\(entries.others)"])) }
+        return problems
     }
 
     /// Whether an acknowledgement names a save the script has, with that save's text.

@@ -51,6 +51,8 @@
             }
             let ending: Ending
 
+            var wasKilled: Bool { ending == .killedAtPoint || ending == .killedAnywhere }
+
             var description: String {
                 let point = killPoint.map { "\($0) #\(passes)" } ?? "no kill point"
                 return "launch \(number) [\(range.lowerBound)..<\(range.upperBound)] \(point): \(ending.rawValue)"
@@ -68,6 +70,9 @@
             let stoppedByTimeBox: Bool
             /// Where the store is, when the run kept it.
             let keptStore: String?
+            /// The temporaries of writes a kill cut that recovery left in `Inbox/`, counted over
+            /// the run's launches (`SoakWitness.partialsLeft`).
+            var partialsLeft = 0
 
             var isGreen: Bool { problems.isEmpty }
 
@@ -76,7 +81,7 @@
                 Verdict(
                     seed: seed, problems: problems, launches: launches, captures: captures,
                     acknowledgements: acknowledgements, duration: duration, stoppedByTimeBox: stoppedByTimeBox,
-                    keptStore: folder.path)
+                    keptStore: folder.path, partialsLeft: partialsLeft)
             }
 
             /// How many launches a kill ended.
@@ -114,6 +119,11 @@
                 ]
                 if let keptStore { lines.append("the store is kept at \(keptStore)") }
                 lines.append("kills by point: " + killTally)
+                if partialsLeft > 0 {
+                    lines.append(
+                        "inbox_partials_left \(partialsLeft): temporaries of writes a kill cut, left in Inbox/; "
+                            + "\(SoakRules.inboxPartialsAreRed ? "red" : "counted, not red until WP-15 clears them")")
+                }
                 if !isGreen {
                     lines.append("repeat it with scripts/verify.sh --soak --seed \(seed)")
                     if problems.contains(where: { $0.code == CaptureLedgerSoak.timeBoxCode }) {
@@ -175,7 +185,8 @@
                 let budget = Int.random(in: configuration.launchBudget, using: &random)
                 let range = next..<min(total, next + budget)
                 let (launch, launchProblems) = try await runLaunch(
-                    number, range: range, point: point, passes: passes, in: folder, witness: &witness)
+                    number, range: range, point: point, passes: passes, in: folder,
+                    previousWasKilled: launches.last?.wasKilled ?? false, witness: &witness)
                 launches.append(launch)
                 problems += launchProblems
                 if launch.ending == .failed {
@@ -189,7 +200,8 @@
             // The last launch recovers what the one before it left, and runs no capture.
             if problems.allSatisfy({ $0.code == Self.timeBoxCode }) {
                 let (last, lastProblems) = try await runLaunch(
-                    launches.count + 1, range: next..<next, point: nil, passes: 0, in: folder, witness: &witness)
+                    launches.count + 1, range: next..<next, point: nil, passes: 0, in: folder,
+                    previousWasKilled: launches.last?.wasKilled ?? false, witness: &witness)
                 launches.append(last)
                 problems += lastProblems
                 if last.ending != .quit {
@@ -204,7 +216,7 @@
                 seed: configuration.seed, problems: problems, launches: launches,
                 captures: witness.highestIntent + 1, acknowledgements: witness.acknowledged,
                 duration: ContinuousClock.now - started, stoppedByTimeBox: stoppedByTimeBox,
-                keptStore: problems.isEmpty ? nil : folder.path)
+                keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft)
         }
 
         /// The code of a run that its time box cut short: not a failure of the ledger, and one
@@ -214,7 +226,7 @@
         /// Starts one launch, kills it where its point says, and takes in what it printed.
         private func runLaunch(
             _ number: Int, range: Range<Int>, point: SoakKillPoint?, passes: Int, in folder: URL,
-            witness: inout SoakWitness
+            previousWasKilled: Bool, witness: inout SoakWitness
         ) async throws -> (Launch, [SoakWitness.Problem]) {
             var arguments = [
                 "run", "--root", folder.path, "--seed", String(configuration.seed), "--launch", String(number),
@@ -245,7 +257,8 @@
                 case (.quit, _): .quit
                 default: .failed
                 }
-            let problems = witness.absorb(child.lines, launch: number, range: range, end: end)
+            let problems = witness.absorb(
+                child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled)
             return (Launch(number: number, range: range, killPoint: point, passes: passes, ending: ending), problems)
         }
     }

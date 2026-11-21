@@ -77,7 +77,8 @@
         @Test func skippedRecoveryLeavesARowOpen() async throws {
             let codes = try await soak(
                 "skipped-recovery", seed: 65, killPoints: [.step("after_checkpoint", passes: 1...6)])
-            #expect(codes.contains("capture_left_open"), "\(codes.sorted())")
+            // The next launch's report of what its recovery left says so first.
+            #expect(codes.contains("recovery_left_row_open"), "\(codes.sorted())")
         }
 
         /// The engine answers a capture as begun and saved, and writes none of it.

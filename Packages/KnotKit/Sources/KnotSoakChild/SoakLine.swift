@@ -10,6 +10,15 @@
         case launch(Int)
         /// Recovery has run, and finished this many captures.
         case recovered(Int)
+        /// What recovery left of the launches before this one: rows still open, entries in
+        /// `Inbox/`, and apart from them the temporaries of writes a kill cut before their rename
+        /// (`DurableFile`'s `.<name>.<uuid>.partial`), which never held an item.
+        case recoveryLeft(open: Int, inbox: Int, partials: Int)
+        /// A row of an earlier launch that recovery left open.
+        case leftOpen(CaptureID)
+        /// A temporary of a cut write that recovery left in `Inbox/` (`InboxEntries`), by its name,
+        /// which holds a capture ID and a UUID.
+        case inboxPartial(String)
         /// Capture `index` of the script is about to begin.
         case intent(Int)
         /// The engine answered a save as durable.
@@ -48,6 +57,9 @@
             switch self {
             case .launch(let number): "launch \(number)"
             case .recovered(let count): "recovered \(count)"
+            case .recoveryLeft(let open, let inbox, let partials): "recovery-left \(open) \(inbox) \(partials)"
+            case .leftOpen(let capture): "left-open \(capture)"
+            case .inboxPartial(let name): "inbox-partial \(name)"
             case .intent(let index): "intent \(index)"
             case .ack(let a):
                 "ack \(a.index) \(a.save) \(a.capture) \(a.revision) \(a.bytes) \(a.digest) \(a.state.rawValue) \(a.blank ? 1 : 0)"
@@ -65,6 +77,15 @@
             switch fields.first {
             case "launch": return fields.count == 2 ? int(1).map(SoakLine.launch) : nil
             case "recovered": return fields.count == 2 ? int(1).map(SoakLine.recovered) : nil
+            case "recovery-left":
+                guard fields.count == 4, let open = int(1), let inbox = int(2), let partials = int(3) else {
+                    return nil
+                }
+                return .recoveryLeft(open: open, inbox: inbox, partials: partials)
+            case "left-open": return fields.count == 2 ? CaptureID(fields[1]).map(SoakLine.leftOpen) : nil
+            case "inbox-partial":
+                guard fields.count == 2, InboxEntries.capture(ofPartial: fields[1]) != nil else { return nil }
+                return .inboxPartial(fields[1])
             case "intent": return fields.count == 2 ? int(1).map(SoakLine.intent) : nil
             case "ack":
                 guard fields.count == 9, let index = int(1), let save = int(2), let capture = CaptureID(fields[3]),
