@@ -32,15 +32,21 @@
     ///
     /// Each step of a trial that waits on another process waits at most `--step-s` seconds
     /// (`Step`): the child's first line, its live line or its stage, the end of its runner and of
-    /// its output after the kill, and the recovery. A step that reaches its limit fails the trial
-    /// and prints `step-limit <capture> trial <n> step <step> limitS <s>`. However a trial ends,
-    /// its pipes are closed, and what it started is ended and reaped before the next one. The parent chooses each trial's capture and gives it to `record --capture`,
-    /// so every line about a trial names its capture after its first word, even one whose child
-    /// never printed a line: `trial <capture> <n> <kind> … ok|FAIL <why>` for each trial.
+    /// its output after the kill, and the recovery. `--limit-step <step>` with `--limit-step-s
+    /// <s>` gives that one step a limit of its own, as a test of the limits does, so that every
+    /// other step keeps one that load cannot reach. A step that reaches its limit fails the trial
+    /// and prints `step-limit <capture> trial <n> step <step> limitS <s>`, with that step's limit.
+    /// However a trial ends, its pipes are closed, and what it started is ended and reaped before
+    /// the next one.
+    ///
+    /// The parent chooses each trial's capture and gives it to `record --capture`, so every line
+    /// about a trial names its capture after its first word, even one whose child never printed a
+    /// line: `trial <capture> <n> <kind> … ok|FAIL <why>` for each trial.
     ///
     ///     kill-test --dir <folder> [--trials 5] [--seed <n>] [--child <crash host>]
     ///               [--runner "<command> <arguments>"] [--min-ms 300] [--max-ms 4000]
     ///               [--early-every <n>] [--stages] [--rate <Hz>] [--step-s 120]
+    ///               [--limit-step pid|live|stage|exit|drain|recovery --limit-step-s <s>]
     ///
     /// `--runner` prefixes the child's command, for example `xcrun simctl spawn <udid>`.
     /// `--early-every n` makes every n-th of the `--trials` an early one; `--trials 0` with
@@ -57,8 +63,20 @@
         let maximum = try arguments.int("max-ms", default: 4000)
         let earlyEvery = try arguments.int("early-every", default: 0)
         let stepSeconds = try arguments.int("step-s", default: 120)
-        guard stepSeconds > 0 else { throw .usage("--step-s takes a number of seconds above 0") }
-        let limit = Duration.seconds(stepSeconds)
+        let limitedStep = try arguments.string("limit-step").map { name throws(HostError) in
+            guard let step = Step(rawValue: name) else {
+                throw .usage("--limit-step is pid, live, stage, exit, drain or recovery")
+            }
+            return step
+        }
+        let limitedSeconds = try arguments.int("limit-step-s", default: stepSeconds)
+        guard stepSeconds > 0, limitedSeconds > 0 else {
+            throw .usage("--step-s and --limit-step-s take a number of seconds above 0")
+        }
+        /// The limit of `step`, in seconds.
+        func seconds(_ step: Step) -> Int { step == limitedStep ? limitedSeconds : stepSeconds }
+        /// The deadline of `step`, if it begins now.
+        func deadline(_ step: Step) -> ContinuousClock.Instant { .now + .seconds(seconds(step)) }
         var rateArguments: [String] = []
         if let rate = arguments.string("rate") { rateArguments = ["--rate", rate] }
         var generator = SplitMix64(seed: seed)
@@ -68,7 +86,7 @@
         guard !plan.isEmpty else { throw .usage("no trials: --trials is 0 and --stages is not given") }
         print(
             "kill-test trials \(plan.count) seed \(seed) runner \(runner.isEmpty ? "none" : runner.joined(separator: " ")) "
-                + "stepS \(stepSeconds)"
+                + "stepS \(stepSeconds)" + (limitedStep.map { " limitStep \($0.rawValue) \(limitedSeconds)" } ?? "")
         )
 
         var results: [TrialResult] = []
@@ -103,35 +121,35 @@
                 let lines = LineReader(recording.output)
                 readers.append(lines)
                 var childPID: pid_t?
-                try read(lines, step: .pid, by: .now + limit) { line in
+                try read(lines, step: .pid, by: deadline(.pid)) { line in
                     guard line.hasPrefix("pid "), let pid = pid_t(line.dropFirst(4)) else { return false }
                     childPID = pid
                     return true
                 }
                 guard let pid = childPID else {
-                    try waitForExit(recording.process, step: .exit, by: .now + limit)
+                    try waitForExit(recording.process, step: .exit, by: deadline(.exit))
                     throw HostError.system("child gave no pid", recording.process.terminationStatus)
                 }
                 alive.append(pid)
                 switch kind {
                 case .live:
                     // Kill only once the recording is live, so that the kill falls inside it.
-                    try read(lines, step: .live, by: .now + limit) { line in
+                    try read(lines, step: .live, by: deadline(.live)) { line in
                         result.note(line)
                         return line.hasPrefix("live ")
                     }
                     try? await Task.sleep(for: .milliseconds(delay))
                 case .early, .staged:
-                    try read(lines, step: .stage, by: .now + limit) { line in
+                    try read(lines, step: .stage, by: deadline(.stage)) { line in
                         result.note(line)
                         return result.stalled
                     }
                 }
                 kill(pid, SIGKILL)
                 alive.removeAll { $0 == pid }
-                try waitForExit(recording.process, step: .exit, by: .now + limit)
+                try waitForExit(recording.process, step: .exit, by: deadline(.exit))
                 result.childEnd = Ended(recording.process)
-                try read(lines, step: .drain, by: .now + limit) { line in
+                try read(lines, step: .drain, by: deadline(.drain)) { line in
                     result.note(line)
                     return false
                 }
@@ -144,23 +162,24 @@
                 if case .staged(.conversion) = kind { recover.append("--convert") }
                 let recovery = try launch(recover)
                 processes.append(recovery.process)
-                let deadline = ContinuousClock.now + limit
+                let recoveryDeadline = deadline(.recovery)
                 var said: [String] = []
                 let recoveryLines = LineReader(recovery.output)
                 readers.append(recoveryLines)
-                try read(recoveryLines, step: .recovery, by: deadline) { line in
+                try read(recoveryLines, step: .recovery, by: recoveryDeadline) { line in
                     if line.hasPrefix("pid "), let pid = pid_t(line.dropFirst(4)) { alive.append(pid) }
                     said.append(line)
                     return false
                 }
-                try waitForExit(recovery.process, step: .recovery, by: deadline)
+                try waitForExit(recovery.process, step: .recovery, by: recoveryDeadline)
                 result.recoveryEnd = Ended(recovery.process)
                 alive.removeAll()
                 result.read(said.joined(separator: "\n"))
             } catch let reached as StepLimit {
                 result.limited = reached.step
-                result.failure = "step \(reached.step.rawValue) reached its limit of \(stepSeconds) s"
-                print("step-limit \(capture) trial \(trial) step \(reached.step.rawValue) limitS \(stepSeconds)")
+                let limit = seconds(reached.step)
+                result.failure = "step \(reached.step.rawValue) reached its limit of \(limit) s"
+                print("step-limit \(capture) trial \(trial) step \(reached.step.rawValue) limitS \(limit)")
             } catch {
                 result.failure = "\(error)"
             }

@@ -182,10 +182,15 @@ import Testing
 
     /// Every step of a kill test's trial that waits on another process has a limit. A child, a
     /// runner or a recovery that hangs at a step fails its trial there, with a line that names
-    /// the step and the trial's capture, and the run goes on to its summary well before the
-    /// stand-ins below would end by themselves, 30 s on. Every process the trial started is gone
-    /// once the run ends: only the one that `drain` leaves behind, which no trial knows of, is
-    /// still there. After finding 18.
+    /// the step and the trial's capture, and the run goes on to its summary. Every process the
+    /// trial started is gone once the run ends: only the one that `drain` leaves behind, which no
+    /// trial knows of, is still there. After finding 18.
+    ///
+    /// The order rests on no time (finding 31). Only the step under test has a short limit, 1 s,
+    /// through `--limit-step`; every other step keeps 300 s, which no load reaches, so the step
+    /// that ends the trial is the one that hangs. The stand-ins end by themselves 15 minutes on,
+    /// and the run must end within 120 s: a host that left the step to its 300 s, or to the
+    /// stand-ins' end, fails that bound, and a run under load has all that room.
     ///
     /// The stand-in child is a script that does what the crash host does up to the step and then
     /// sleeps: `pid` prints nothing; `live` and `stage` print only the pid; `drain` leaves a
@@ -200,25 +205,26 @@ import Testing
         let folder = try ScratchFolder()
         let pids = folder.file("pids").path
         let held = folder.file("held").path
-        let live = "echo \"pid $$\"; echo \"live x\"; exec sleep 30"
+        let live = "echo \"pid $$\"; echo \"live x\"; exec sleep 900"
         let record: String
         switch step {
-        case "pid": record = "exec sleep 30"
-        case "live", "stage": record = "echo \"pid $$\"; exec sleep 30"
-        case "drain": record = "sleep 30 & echo $! >> '\(held)'; \(live)"
+        case "pid": record = "exec sleep 900"
+        case "live", "stage": record = "echo \"pid $$\"; exec sleep 900"
+        case "drain": record = "sleep 900 & echo $! >> '\(held)'; \(live)"
         default: record = live
         }
-        let recover = step == "recovery" ? "echo \"pid $$\"; exec sleep 30" : "echo \"orphans 0\""
+        let recover = step == "recovery" ? "echo \"pid $$\"; exec sleep 900" : "echo \"orphans 0\""
         let child = try script(
             folder.file("child"),
             "echo $$ >> '\(pids)'\ncase \"$1\" in\nrecord) \(record) ;;\nrecover) \(recover) ;;\nesac")
         var arguments = [
-            "kill-test", "--dir", folder.file("run").path, "--min-ms", "0", "--max-ms", "0", "--step-s", "1",
+            "kill-test", "--dir", folder.file("run").path, "--min-ms", "0", "--max-ms", "0", "--step-s", "300",
+            "--limit-step", step, "--limit-step-s", "1",
             "--child", child.path,
         ]
         arguments += step == "stage" ? ["--trials", "0", "--stages"] : ["--trials", "1"]
         if step != "pid" {
-            let stays = step == "exit" ? "\nexec sleep 30" : ""
+            let stays = step == "exit" ? "\nexec sleep 900" : ""
             let runner = try script(folder.file("runner"), "echo $$ >> '\(pids)'\n\"$@\" &\nwait\(stays)")
             arguments += ["--runner", runner.path]
         }
@@ -257,7 +263,7 @@ import Testing
         }
         #expect(lines.last?.hasPrefix("summary trials \(trials) passed 0 ") == true, "\(run.output)")
         #expect(lines.last?.contains(" limited \(trials) ") == true, "\(run.output)")
-        #expect(elapsed < .seconds(20), "The run waited \(elapsed), past the stand-ins' own end.")
+        #expect(elapsed < .seconds(120), "The run waited \(elapsed): the step did not end at its own limit.")
     }
 
     /// An executable shell script at `url`.
