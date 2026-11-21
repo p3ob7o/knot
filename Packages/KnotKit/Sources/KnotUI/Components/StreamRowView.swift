@@ -28,22 +28,28 @@ public struct StreamRowView: View {
         VStack(alignment: .leading, spacing: theme.spacing.tight) {
             HStack(alignment: .firstTextBaseline, spacing: theme.spacing.regular) {
                 if parts.contains(.arrivedMarker) { ArrivedMarker() }
+                // The title is never clipped, at any text size: the row grows to hold it.
                 Text(row.title)
                     .font(theme.type[.rowTitle])
                     .foregroundStyle(theme.colors[.textPrimary])
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: theme.spacing.regular)
                 if parts.contains(.failedMarker) { FailedMarker() }
                 if parts.contains(.pendingMarker) { PendingMarker() }
             }
             if parts.contains(.preview), let preview = row.preview {
+                // The preview is short by design: the model cuts it to an excerpt, and the row shows
+                // all of it, so it is never clipped at any text size.
                 Text(preview)
                     .font(theme.type[.rowPreview])
                     .foregroundStyle(theme.colors[.textSecondary])
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: theme.spacing.regular) {
-                Text(row.time, format: .relative(presentation: .named))
+                // The time always stays on the row (docs/product-spec.md §7): it wraps rather
+                // than being clipped at large text sizes.
+                Text(row.time.formatted(.relative(presentation: .named)))
+                    .fixedSize(horizontal: false, vertical: true)
                 if parts.contains(.kinds) {
                     ForEach(row.kinds, id: \.rawValue) { kind in
                         Image(systemName: kind.symbol)
