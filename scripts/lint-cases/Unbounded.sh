@@ -101,6 +101,10 @@ step_three() {
     version="$(knot_limit 10 xcodebuild -version | head -n 1)"
 }
 step_four() {
+    bash <<'SH'
+# expect: unbounded
+xcodebuild -version
+SH
     # expect: unbounded
     arch -arm64 xcodebuild -version
     # expect: unbounded
@@ -114,6 +118,8 @@ step_four() {
     # expect: unbounded
     xcodebuild -version
     # expect: unbounded
+    lib_build -scheme X build
+    # expect: unbounded
     legacy
     # expect: unbounded
     run=xcodebuild; "$run" -version
@@ -121,6 +127,10 @@ step_four() {
 function legacy {
     # expect: nothing
     xcodebuild -version # limit: legacy
+}
+step_five() {
+    # expect: unbounded
+    xcodebuild build # limit: step_five
 }
 step_six() {
     # expect: nothing
@@ -148,6 +158,7 @@ EOT
     # expect: nothing
     printf '%s\n' "xcodebuild"
 }
+for step in five six; do "step_${step}"; done
 xcb() {
     # expect: nothing
     xcodebuild -project x "$@" 2>&1 | cat >>"$log" # limit: xcb

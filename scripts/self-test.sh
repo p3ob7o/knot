@@ -639,17 +639,22 @@ pkill -KILL -f "$lim/hangs" 2>/dev/null || true
 
 # The wiring check reads the shell: it finds every unbounded call of its fixture,
 # scripts/lint-cases/Unbounded.sh, in its many spellings, and passes every bounded one.
-unbounded_fixture="$KNOT_SCRIPTS/lint-cases/Unbounded.sh"
-if unbounded_verdict="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$unbounded_fixture" <<'PY'
-import re, subprocess, sys
-fixture = sys.argv[2]
-lines = open(fixture).read().splitlines()
-want = {n + 2: m.group(1) for n, line in enumerate(lines) if (m := re.search(r"#\s*expect:\s*(\w+)", line))}
-out = subprocess.run([sys.executable, "-I", "-B", sys.argv[1] + "/knot_tool.py", "unbounded-calls", fixture],
+if unbounded_verdict="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/lint-cases/Unbounded.sh" \
+    "$KNOT_SCRIPTS/lint-cases/Unbounded-lib.sh" <<'PY'
+import os, re, subprocess, sys
+fixtures = sys.argv[2:]
+want = {}
+for fixture in fixtures:
+    lines = open(fixture).read().splitlines()
+    for n, line in enumerate(lines):
+        m = re.search(r"#\s*expect:\s*(\w+)", line)
+        if m:
+            want[(fixture, n + 2)] = m.group(1)
+out = subprocess.run([sys.executable, "-I", "-B", sys.argv[1] + "/knot_tool.py", "unbounded-calls"] + fixtures,
                      capture_output=True, text=True).stdout
-found = {int(m.group(1)) for m in re.finditer(r"^[^:]+:(\d+):", out, re.M)}
-missed = sorted(n for n, w in want.items() if w == "unbounded" and n not in found)
-wrong = sorted(n for n, w in want.items() if w == "nothing" and n in found)
+found = {(m.group(1), int(m.group(2))) for m in re.finditer(r"^([^:\n]+):(\d+):", out, re.M)}
+missed = sorted(f"{os.path.basename(f)}:{n}" for (f, n), w in want.items() if w == "unbounded" and (f, n) not in found)
+wrong = sorted(f"{os.path.basename(f)}:{n}" for (f, n), w in want.items() if w == "nothing" and (f, n) in found)
 unbounded = sum(1 for w in want.values() if w == "unbounded")
 print(f"found {unbounded - len(missed)} of {unbounded} unbounded calls, flagged {len(wrong)} bounded ones;"
       f" missed lines {missed}, wrongly flagged {wrong}")

@@ -911,6 +911,7 @@ FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\))?|([
 # A here-document: `<<` or `<<-`, not `<<<`, and a word that starts with a letter, an
 # underscore or a quote, so that an arithmetic shift such as $((1 << 3)) is none.
 HEREDOC = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)([A-Za-z_]\w*)\1")
+SHELL_HEREDOC = re.compile(r"^\s*(?:[\w./-]*/)?(?:bash|sh|zsh)\b[^|;&]*<<")
 
 
 def shell_segments(text, first_line=1):
@@ -1147,17 +1148,19 @@ def cmd_unbounded_calls(files):
     together from pieces; an alias; a script that a call runs; and a function named in a
     variable that is assigned in another file. The steps other packages own (OTHER_PARTS) are
     listed and left to them."""
-    found = 0
+    findings, wrappers, calls = set(), {}, []
     for path in files:
         with open(path) as f:
             text = f.read()
         raw = text.splitlines()
         # Heredoc bodies hold no commands of this file.
-        lines, terminator = [], None
+        # A here-document fed to a shell is read as commands; any other's body is not.
+        lines, terminator, shell_body = [], None, False
         for line in raw:
             if terminator:
-                lines.append("")
-                if line.strip() == terminator:
+                ended = line.strip() == terminator
+                lines.append(line if shell_body and not ended else "")
+                if ended:
                     terminator = None
                 continue
             bare = re.sub(r"\$?\(\((?:[^()]|\([^()]*\))*\)\)", "0", line.split("#", 1)[0]) if "<<" in line else ""
@@ -1165,6 +1168,7 @@ def cmd_unbounded_calls(files):
             lines.append(line)
             if heredoc:
                 terminator = heredoc.group(2)
+                shell_body = bool(SHELL_HEREDOC.match(bare))
         # The function that holds each line, by the definitions' indentation.
         holder, stack = {}, []
         for number, line in enumerate(lines, 1):
@@ -1208,7 +1212,6 @@ def cmd_unbounded_calls(files):
                     for inner in shell_segments(words[at + 1]):
                         yield from commands(inner[2])
 
-        wrappers, findings = {}, []
         for first, last, segment in segments:
             part = next((name for name, span in zip(OTHER_PARTS, others) if span and span[0] <= first <= span[1]), None)
             marker = next((markers[n] for n in range(first, last + 1) if n in markers), None)
@@ -1222,23 +1225,39 @@ def cmd_unbounded_calls(files):
                     print(f"{path}:{first}: in the {part} step, which its package bounds: {segment[:100]}")
                     continue
                 if marker and marker == holder.get(first):
-                    wrappers.setdefault(marker, first)
+                    wrappers.setdefault(marker, (path, first))
                     continue
                 if marker:
                     whose = holder.get(first) or "no function"
                     why = "names no function" if marker not in defined else "names another function"
-                    findings.append((first, f"the marker `# limit: {marker}` {why}; the line is in {whose}: {segment[:100]}"))
+                    findings.add((path, first, f"the marker `# limit: {marker}` {why}; the line is in {whose}: {segment[:100]}"))
                 else:
-                    findings.append((first, f"no limit: {call}: {segment[:100]}"))
-        # Every call of a wrapper must be bounded in its turn.
+                    findings.add((path, first, f"no limit: {call}: {segment[:100]}"))
         for first, _, segment in segments:
             for words in commands(segment):
-                if words and words[0] in wrappers and holder.get(first) != words[0]:
-                    findings.append((first, f"{words[0]}, which wraps the call at line {wrappers[words[0]]}, "
-                                            f"is called with no limit: {segment[:100]}"))
-        for first, message in sorted(set(findings)):
-            print(f"{path}:{first}: {message}")
-        found += len(set(findings))
+                if words:
+                    calls.append((path, first, holder.get(first), words, segment))
+    # Every call of a wrapper, in any of the files, must be bounded in its turn, and a wrapper
+    # must have a call that can be seen: a function called only by a name built at run time,
+    # such as a step called as "step_${step}", cannot carry the marker.
+    seen = {name: 0 for name in wrappers}
+    for path, first, inside, words, segment in calls:
+        if words[0] in wrappers and inside != words[0]:
+            seen[words[0]] += 1
+            where = wrappers[words[0]]
+            findings.add((path, first, f"{words[0]}, which wraps the call at {os.path.basename(where[0])}:{where[1]}, "
+                                       f"is called with no limit: {segment[:100]}"))
+        elif words[0] in LIMIT_HELPERS:
+            for name in wrappers:
+                if name in words[1:]:
+                    seen[name] += 1
+    for name, (path, first) in wrappers.items():
+        if not seen[name]:
+            findings.add((path, first, f"the wrapper {name} has no call that can be seen: a function called by a name "
+                                       f"built at run time cannot carry the marker; bound the call inside it"))
+    for path, first, message in sorted(findings):
+        print(f"{path}:{first}: {message}")
+    found = len(findings)
     if found:
         print(f"unbounded-calls: {found} calls with no limit")
         return 1
