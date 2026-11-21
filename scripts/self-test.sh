@@ -1248,16 +1248,20 @@ fi
 
 # sdk-path.sh finds a framework of the SDK, and one that the platform keeps outside it, as
 # XCUIAutomation, which UI tests import, and XCTest are, under the platform's
-# Developer/Library/Frameworks: each by its Swift interfaces, in the pinned Xcode.
-sdk_sdk="$("$KNOT_SCRIPTS/sdk-path.sh" macos Foundation 2>&1 || true)"
+# Developer/Library/Frameworks. It prints every folder that declares the framework: the
+# headers, where XCUIApplication is declared, and the Swift module beside them, where
+# SwiftUI declares nearly everything; in the pinned Xcode.
+sdk_sdk="$("$KNOT_SCRIPTS/sdk-path.sh" macos SwiftUI 2>&1 || true)"
 sdk_ui="$("$KNOT_SCRIPTS/sdk-path.sh" macos XCUIAutomation 2>&1 || true)"
 sdk_ios_ui="$("$KNOT_SCRIPTS/sdk-path.sh" ios-simulator XCUIAutomation 2>&1 || true)"
-if [[ $sdk_sdk == */SDKs/*/Foundation.framework/* &&
-    $sdk_ui == */MacOSX.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Modules/XCUIAutomation.swiftmodule &&
-    $sdk_ios_ui == */iPhoneSimulator.platform/Developer/Library/Frameworks/XCUIAutomation.framework/* ]]; then
-    pass "sdk-path.sh finds a framework in the SDK and XCUIAutomation in the platform's own frameworks"
+sdk_ui_headers="$(sed -n '/\/Headers$/p' <<<"$sdk_ui")"
+if [[ $sdk_sdk == */SDKs/*/SwiftUI.framework/Headers*/SwiftUI.framework/Modules/SwiftUI.swiftmodule &&
+    $sdk_ui == */MacOSX.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Headers*XCUIAutomation.framework/Modules/XCUIAutomation.swiftmodule &&
+    -n $sdk_ui_headers && -n "$(grep -l -e '@interface XCUIApplication' "$sdk_ui_headers"/*.h 2>/dev/null || true)" &&
+    $sdk_ios_ui == */iPhoneSimulator.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Headers* ]]; then
+    pass "sdk-path.sh prints the headers and the Swift module of a framework, in the SDK or in the platform's own frameworks"
 else
-    fail "sdk-path.sh: Foundation '$sdk_sdk', XCUIAutomation on the Mac '$sdk_ui', on the iOS simulator '$sdk_ios_ui'"
+    fail "sdk-path.sh: SwiftUI '$sdk_sdk', XCUIAutomation on the Mac '$sdk_ui', on the iOS simulator '$sdk_ios_ui'"
 fi
 
 # XcodeGen is chosen by the scripts, not by PATH (docs/dev-setup.md): KNOT_XCODEGEN, else the
