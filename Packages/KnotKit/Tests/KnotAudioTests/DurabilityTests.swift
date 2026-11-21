@@ -12,9 +12,10 @@ import Testing
 /// given and written with `/private` in front, the same folder (finding 17).
 @Suite struct DurabilityTests {
     /// Every `.durable` follows a sync of the working file that began when the file already held
-    /// those frames. The layer reads the file's length as each sync begins, and slows the sync so
-    /// that a recorder counting what it writes during the sync shows it: the counts here are
-    /// taken before the sync begins, so this cannot fail by timing.
+    /// those frames. The layer reads the file's length as each sync begins, and holds the sync
+    /// until one more write has landed in the file, so that a recorder counting what it writes
+    /// during the sync shows it. The test also asks that a write did land inside a sync: without
+    /// one, such a recorder could not be told apart.
     @Test(arguments: [false, true])
     func eachDurableCountFollowsASyncOfTheWorkingFile(privateForm: Bool) async throws {
         let folder = try ScratchFolder(privateForm: privateForm)
@@ -42,6 +43,7 @@ import Testing
                 return checked
             } ?? []
         #expect(!checked.isEmpty && checked.allSatisfy { $0 == "ok" }, "\(checked)")
+        #expect(layer.syncsWithAWriteInside > 0, "No write landed inside a sync of the working file.")
         _ = await session.stop()
     }
 
@@ -101,7 +103,8 @@ import Testing
 
 /// The drive's file layer, observing one working file and its folder: each completed sync of the
 /// file, with the frames it held as the sync began and whether its header was closed, and each
-/// sync of the folder while the file exists. With `slowSync`, a sync of the file takes 30 ms more.
+/// sync of the folder while the file exists. With `slowSync`, a sync of the file is held until one
+/// more write lands in the file, for at most 200 ms.
 ///
 /// A path the recorder gives is compared with a known one as written: both come from one
 /// `StoreLocations`. `standardizedFileURL` would read the same folder two ways, with `/private`
@@ -112,7 +115,8 @@ final class ObservingLayer: FileLayer {
     private let folder: String
     private let slowSync: Bool
     private let manifest: String?
-    private let seen = Mutex<(syncs: Int, closedSyncs: Int, framesAtBegin: Int64, folderSyncs: Int)>((0, 0, 0, 0))
+    private let seen = Mutex<(syncs: Int, closedSyncs: Int, framesAtBegin: Int64, folderSyncs: Int, writesInside: Int)>(
+        (0, 0, 0, 0, 0))
     private let placements = Mutex<[Bool]>([])
 
     init(file: URL, folder: URL, manifest: URL? = nil, slowSync: Bool = false) {
@@ -131,16 +135,26 @@ final class ObservingLayer: FileLayer {
     /// The most frames the file held as a completed sync of it began.
     var framesAtSyncBegin: Int64 { seen.withLock { $0.framesAtBegin } }
     var folderSyncsWithTheFile: Int { seen.withLock { $0.folderSyncs } }
+    /// Completed syncs of the file during which one more write landed in it.
+    var syncsWithAWriteInside: Int { seen.withLock { $0.writesInside } }
 
     func syncFile(_ url: URL) throws(KnotError) {
         guard url.path == file else { return try disk.syncFile(url) }
         let frames = WorkingFileReader.contents(of: url)?.frames ?? 0
         let closed = Self.isClosed(url)
-        if slowSync { usleep(30_000) }
+        var grew = false
+        if slowSync {
+            let deadline = ContinuousClock.now + .milliseconds(200)
+            while !grew, ContinuousClock.now < deadline {
+                usleep(1_000)
+                grew = (WorkingFileReader.framesBySize(url) ?? 0) > frames
+            }
+        }
         try disk.syncFile(url)
         seen.withLock { seen in
             seen.syncs += 1
             if closed { seen.closedSyncs += 1 }
+            if grew { seen.writesInside += 1 }
             seen.framesAtBegin = max(seen.framesAtBegin, frames)
         }
     }
