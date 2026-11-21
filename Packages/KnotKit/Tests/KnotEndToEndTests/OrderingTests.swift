@@ -78,6 +78,10 @@ struct OrderingTests {
                 launchID: earlier.launchID, placement: .window, startedAt: now.addingTimeInterval(-5), endedAt: now,
                 body: .file(asset, duration: .seconds(5)), revision: 1))
         let job = JobID.transcribe(of: SegmentID(id))
+        // The earlier launch's composition is still alive here, and its queue was released at its
+        // launch. The live cleaner reports itself available, which wakes a released queue to
+        // drain: done here at once, as the strict pool's order does it within the test.
+        _ = await earlier.environment.queue.drain(using: StraightThroughRunner()) { _ in }
         #expect(try await ports.notes.jobs(for: SegmentID(id)).first { $0.id == job }?.state == .queued)
 
         let held = HeldRecovery()
