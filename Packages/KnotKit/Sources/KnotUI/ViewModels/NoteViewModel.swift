@@ -108,7 +108,13 @@ public final class NoteViewModel {
     public private(set) var editConflict: EditConflict?
 
     /// A running recording blocks typing on every capture surface (rule 15).
-    public var fieldAcceptsTyping: Bool { recording == .idle }
+    /// From the moment an end is asked until it answers, the field takes no typing either, so
+    /// nothing can be typed that the capture will not hold. If the end fails, the field takes
+    /// typing again with its text.
+    public var fieldAcceptsTyping: Bool { recording == .idle && endsAsked == 0 }
+
+    /// True while an end of the typed capture is asked and has not answered.
+    public var isEnding: Bool { endsAsked > 0 }
 
     public var noteID: NoteID? { record?.note.id }
 
@@ -128,6 +134,8 @@ public final class NoteViewModel {
     private var chain: Task<Void, Never>?
     private var sentText = ""
     private var recordingPress: Press?
+    /// The ends of the typed capture asked and not yet answered.
+    private var endsAsked = 0
     /// The revision of each segment when the person began editing it, which the edit carries.
     private var editBases: [SegmentID: StampedRevision] = [:]
     /// The note's revision when the person began editing its title.
@@ -257,15 +265,21 @@ public final class NoteViewModel {
     /// Ends the typed capture: Done, ⌘↩, or the surface hiding (docs/product-spec.md §4.1).
     /// Empty text leaves nothing in the stream.
     public func endCapture() {
-        enqueue { model in _ = await model.endTypedCapture() }
+        endsAsked += 1
+        enqueue { model in
+            _ = await model.endTypedCapture()
+            model.endsAsked -= 1
+        }
     }
 
     /// "New note": forces a new note inside the window (rule 4). The text typed so far stays in
     /// its own note, and the surface shows a blank note until the next capture makes it.
     public func newNote() {
         guard recording == .idle else { return }
+        endsAsked += 1
         enqueue { model in
             await model.endTypedCapture()
+            model.endsAsked -= 1
             guard model.typedCapture == nil else { return }
             model.mode = .capture
             model.isNewNote = true
