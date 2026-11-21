@@ -208,6 +208,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
             shownNote: request.shownNote, startedAt: startedAt)
         entry.follows = follows
+        // IDs only: what this capture follows, decided as it arrives (finding 54).
+        if let follows { log.capture(id, "capture_follows", .segment(SegmentID(follows))) }
         if request.kind == .typed {
             entry.text = request.text ?? ""
             entry.revision = 1
@@ -869,6 +871,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// end it. It waits for `open`'s line holding no other, since the new capture's line is let
     /// go first, and it ends `open` at the new capture's start, as rule 15 ends it.
     private func endFollowed(_ open: CaptureID, by newCapture: CaptureID, call: EngineCall) async {
+        // IDs only: rule 15 has done with the capture this one follows, however it came out.
+        defer { log.capture(newCapture, "followed_capture_settled", .segment(SegmentID(open))) }
         guard entries[open]?.outcome == .open else { return }
         log.capture(newCapture, "start_waits_for_open_capture", .segment(SegmentID(open)))
         let startedAt = entries[newCapture]?.startedAt
