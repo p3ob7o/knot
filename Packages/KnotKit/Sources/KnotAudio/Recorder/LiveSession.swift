@@ -8,12 +8,14 @@ import Synchronization
 /// Three things happen on three paths, and none waits for another:
 ///
 /// - **The input's deliveries.** Each buffer is written to the working file inside the delivery,
-///   under a lock, before the delivery returns, so a kill loses nothing a write accepted. Levels
-///   and live audio go out from there. Nothing pushes back on the input: the live audio drops its
-///   oldest stretches when its consumer falls behind.
+///   under a lock, before the delivery returns, so a kill loses nothing a write accepted. Levels,
+///   live audio and the peaks' values go out from there. Nothing pushes back on the input: the
+///   live audio drops its oldest stretches when its consumer falls behind. The audio of the live
+///   cue's gap, the first frames after the start, goes nowhere at all.
 /// - **The syncs.** Every `syncInterval` the working file is synced to the drive on the
 ///   session's own serial queue, never in a delivery, because a sync can take over 100 ms. What
-///   had been written when the sync began is then durable, and `.durable` says so.
+///   had been written when the sync began is then durable, and `.durable` says so. The peaks
+///   made since the last sync are appended to their file then, unsynced.
 /// - **The ending.** It runs once, in a task of its own that no caller's cancellation reaches,
 ///   whoever asked for it first: a stop, a discard, recovery, or the recording itself at its
 ///   limit, after a failed write or when its input ended. Every caller waits for that one task,
@@ -41,6 +43,9 @@ final class LiveSession: RecordingSession {
     /// The empty result of a discard that came after the recording had ended another way.
     private let discarded = Mutex<RecordedAudio?>(nil)
     private let ticker = Mutex<Task<Void, Never>?>(nil)
+    private let peaks: PeaksWriter
+    /// Told as the ending begins, and once the recording ended.
+    private let willEnd: @Sendable () -> Void
     private let ended: @Sendable (RecordedAudio) -> Void
 
     /// The working file and what has been written to it.
@@ -57,12 +62,14 @@ final class LiveSession: RecordingSession {
         let limit: Int64
         /// True once the file takes no more audio: it is closed, at its limit, or a write failed.
         var full = false
+        /// Frames of the live cue's gap still to drop.
+        var gap: Int64
     }
 
     init(
         request: RecordingRequest, manifest: CaptureManifest, input: any OpenAudioInput, file: any WorkingFileWriter,
         files: SessionFiles, clock: any WallClock, settings: LiveRecorder.Settings, freeSpace: any FreeSpaceProbe,
-        log: KnotLog,
+        log: KnotLog, willEnd: @escaping @Sendable () -> Void = {},
         ended: @escaping @Sendable (RecordedAudio) -> Void
     ) {
         captureID = request.captureID
@@ -74,10 +81,13 @@ final class LiveSession: RecordingSession {
         self.settings = settings
         self.freeSpace = freeSpace
         self.log = log
+        self.willEnd = willEnd
         self.ended = ended
         sampleRate = file.processingFormat.sampleRate
-        let seconds = Double(request.limit.components.seconds) + Double(request.limit.components.attoseconds) / 1e18
-        writer = Mutex(Writer(file: file, limit: Int64((seconds * sampleRate).rounded(.down))))
+        let limit = Int64((Self.seconds(request.limit) * sampleRate).rounded(.down))
+        let gap = Int64((Self.seconds(settings.heldLiveCueGap) * sampleRate).rounded(.down))
+        writer = Mutex(Writer(file: file, limit: limit, gap: max(gap, 0)))
+        peaks = PeaksWriter(url: files.peaks, sampleRate: sampleRate, capture: request.captureID, log: log)
         queue = DispatchQueue(label: "knot.audio.recording", qos: .userInitiated)
         (events, eventSink) = AsyncStream.makeStream(of: RecordingEvent.self)
         (liveAudio, audioSink) = AsyncStream.makeStream(
@@ -144,14 +154,26 @@ final class LiveSession: RecordingSession {
     }
 
     /// Writes one buffer before it returns. Past the limit, after a failed write and once the
-    /// file is closed, audio is not written, and the recording ends.
-    private func write(_ buffer: AVReadOnlyAudioPCMBuffer) {
+    /// file is closed, audio is not written, and the recording ends. The live cue's gap is
+    /// dropped first: not written, and in no level, live audio or peak.
+    private func write(_ delivered: AVReadOnlyAudioPCMBuffer) {
         let reason: RecordingEnding? = writer.withLock { state in
             guard !state.full, let file = state.file else { return nil }
-            guard buffer.format == file.processingFormat else {
+            guard delivered.format == file.processingFormat else {
                 // The input changed under the file: what is written stays, and the recording ends.
                 state.full = true
                 return .inputLost
+            }
+            var buffer = delivered
+            if state.gap > 0 {
+                let dropped = min(state.gap, Int64(delivered.frameLength))
+                state.gap -= dropped
+                guard dropped < Int64(delivered.frameLength) else { return nil }
+                guard let rest = Self.suffix(of: delivered, from: Int(dropped)) else {
+                    state.full = true
+                    return .writeFailed
+                }
+                buffer = rest
             }
             let room = state.limit - state.written
             let count = Int64(buffer.frameLength)
@@ -170,6 +192,7 @@ final class LiveSession: RecordingSession {
                     return ending(after: failure)
                 }
                 state.written += taken
+                peaks.take(part)
                 // Told while the lock is held, so that nothing is told after the ending.
                 let level = Levels.of(part)
                 eventSink.yield(.level(peak: level.peak, average: level.average))
@@ -203,6 +226,35 @@ final class LiveSession: RecordingSession {
         return AVReadOnlyAudioPCMBuffer(copying: copy)
     }
 
+    /// The frames of `buffer` from `start` on, for the first write after the live cue's gap.
+    static func suffix(of buffer: AVReadOnlyAudioPCMBuffer, from start: Int) -> AVReadOnlyAudioPCMBuffer? {
+        let frames = Int(buffer.frameLength)
+        let bytesPerFrame = Int(buffer.format.streamDescription.pointee.mBytesPerFrame)
+        guard start >= 0, start < frames, bytesPerFrame > 0,
+            let rest = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: AVAudioFrameCount(frames - start))
+        else { return nil }
+        rest.frameLength = AVAudioFrameCount(frames - start)
+        let copied = buffer.withUnsafeAudioBufferList { list -> Bool in
+            let sources = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+            let destinations = UnsafeMutableAudioBufferListPointer(rest.mutableAudioBufferList)
+            guard sources.count == destinations.count else { return false }
+            for (source, destination) in zip(sources, destinations) {
+                let length = (frames - start) * bytesPerFrame
+                guard let from = source.mData, let to = destination.mData,
+                    Int(source.mDataByteSize) >= frames * bytesPerFrame,
+                    Int(destination.mDataByteSize) >= length
+                else { return false }
+                to.copyMemory(from: from.advanced(by: start * bytesPerFrame), byteCount: length)
+            }
+            return true
+        }
+        return copied ? AVReadOnlyAudioPCMBuffer(copying: rest) : nil
+    }
+
+    private static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    }
+
     // MARK: Syncs
 
     /// Syncs the working file and says how much of it is durable. On the session's queue.
@@ -230,6 +282,7 @@ final class LiveSession: RecordingSession {
             return true
         }
         if raised { eventSink.yield(.durable(frames: written)) }
+        peaks.flush()
     }
 
     // MARK: The ending
@@ -248,6 +301,7 @@ final class LiveSession: RecordingSession {
     }
 
     private func finish(_ reason: RecordingEnding) async -> RecordedAudio {
+        willEnd()
         // No delivery is under way or will follow, and no sync.
         await input.stop()
         let ticking = ticker.withLock { $0 }
@@ -272,6 +326,7 @@ final class LiveSession: RecordingSession {
         // Closing writes the data chunk's size into the header.
         file?.close()
         if reason == .discarded {
+            peaks.abandon()
             files.removeAll(log: log, capture: captureID)
             return RecordedAudio(
                 captureID: captureID, frames: 0, sampleRate: sampleRate, ending: .discarded, workingFile: nil)
@@ -312,6 +367,8 @@ final class LiveSession: RecordingSession {
             return true
         }
         if raised { eventSink.yield(.durable(frames: frames)) }
+        // Every value of the audio written, the last stretch's among them.
+        peaks.finish()
         let audio = RecordedAudio(
             captureID: captureID, frames: frames, sampleRate: sampleRate, ending: ending, workingFile: workingFile)
         if ending != .recovered { markEnded(audio) }
@@ -356,6 +413,8 @@ struct SessionFiles: Sendable {
     let store: StoreFiles
     let manifest: URL
     let workingFile: URL
+    /// The recording's level peaks, beside the working file.
+    let peaks: URL
     /// Where a conversion writes before its file is moved into place.
     let converting: URL
 
@@ -364,17 +423,19 @@ struct SessionFiles: Sendable {
         self.store = store
         manifest = locations.recordingManifest(capture)
         workingFile = locations.recordingAudio(capture, format: .caf)
+        peaks = locations.recordingPeaks(capture)
         let converted = locations.convertedRecording(capture)
         // Beside the converted file, hidden, with the extension that tells AVAudioFile its type.
         converting = converted.deletingLastPathComponent().appending(
             path: ".\(capture).converting.\(converted.pathExtension)", directoryHint: .notDirectory)
     }
 
-    /// Removes the working file, a conversion's leftover and the manifest, in that order: a
-    /// manifest without its audio is a recording with no audio, and audio without its manifest
-    /// would be a file no recovery could place. Removing what is not there is not an error.
+    /// Removes the peaks, the working file, a conversion's leftover and the manifest, in that
+    /// order: a peaks file never outlives its recording, a manifest without its audio is a
+    /// recording with no audio, and audio without its manifest would be a file no recovery could
+    /// place. Removing what is not there is not an error.
     func remove() throws(KnotError) {
-        for url in [workingFile, converting, manifest] where layer.entryKind(url) != nil {
+        for url in [peaks, workingFile, converting, manifest] where layer.entryKind(url) != nil {
             try store.remove(url)
         }
     }

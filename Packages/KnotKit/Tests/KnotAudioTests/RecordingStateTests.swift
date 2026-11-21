@@ -1,0 +1,186 @@
+import Foundation
+import KnotCore
+import KnotFakes
+import KnotTestSupport
+import Synchronization
+import Testing
+
+@testable import KnotAudio
+
+/// The recording state in the defaults, and what the recorder publishes there. Each test has a
+/// suite of its own, named for no machine and no account, and removes it when it ends, after a
+/// failure too. No test writes to `.standard` or to a group's suite.
+@Suite struct RecordingStateTests {
+    @Test(.tags(.contract)) func theDefaultsStorePassesItsContract() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        try await RecordingStateStoreContract.run { DefaultsRecordingStateStore(defaults: suite.defaults) }
+    }
+
+    /// One key, one value: a value under the key that is not a snapshot reads as idle.
+    @Test func aValueThatCannotBeReadIsIdle() throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = DefaultsRecordingStateStore(defaults: suite.defaults)
+        suite.defaults.set(Data("not a snapshot".utf8), forKey: DefaultsRecordingStateStore.key)
+        #expect(store.read() == .idle)
+        suite.defaults.set("recording", forKey: DefaultsRecordingStateStore.key)
+        #expect(store.read() == .idle)
+        store.write(RecordingStateSnapshot(phase: .starting, captureID: CaptureID(uuid: UUID())))
+        #expect(
+            suite.defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix("knot.") } == [
+                DefaultsRecordingStateStore.key
+            ])
+    }
+
+    /// The recorder writes the state as it changes: starting, recording from the moment it is
+    /// live, with its capture, its launch, its process and the time it went live, stopping, then
+    /// idle once the recording has ended. Between, the heartbeat is written on a queue of its own.
+    @Test func theRecorderPublishesItsRecording() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let folder = try ScratchFolder()
+        let live = LiveRecorder(
+            locations: folder.locations, input: injected(),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20), heartbeatInterval: .milliseconds(20)),
+            state: store)
+        let request = request()
+        let session = try await live.start(request)
+        let published = store.read()
+        #expect(published.phase == .recording && published.captureID == request.captureID)
+        #expect(published.ownerLaunch == request.launchID && published.ownerPID == getpid())
+        #expect(published.startedAt != nil && published.heartbeat != nil)
+        let first = try #require(published.heartbeat)
+        #expect(await SuiteWait.until("a later heartbeat") { (store.read().heartbeat ?? first) > first })
+        #expect(store.read().phase == .recording, "A heartbeat keeps the phase.")
+        _ = await session.stop()
+        #expect(store.read() == .idle)
+        #expect(store.phases == [.starting, .recording, .stopping, .idle], "\(store.phases)")
+        // The heartbeats keep the phase they find, and none follows the idle state.
+        let beats = store.writes.filter { $0.queue == "knot.audio.heartbeat" }
+        #expect(!beats.isEmpty && beats.allSatisfy { $0.snapshot.phase != .idle }, "\(beats.count) heartbeats")
+        #expect(store.writes.last?.snapshot == .idle)
+    }
+
+    /// The heartbeat is written every second by default (docs/plan/WP-12.md).
+    @Test func theHeartbeatIsEverySecond() {
+        #expect(LiveRecorder.Settings().heartbeatInterval == .seconds(1))
+    }
+
+    /// A start that fails, and a recording that ends by itself, leave the state idle.
+    @Test func aRecordingThatEndsHoweverItEndsLeavesIdle() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let folder = try ScratchFolder()
+        let input = FailableInput(injected(frames: 1_600, ending: .ends(.interrupted)))
+        let live = LiveRecorder(
+            locations: folder.locations, input: input, settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)),
+            state: store)
+        input.failNextOpen(with: .noInputDevice)
+        await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
+        #expect(store.read() == .idle && store.phases == [.starting, .idle], "\(store.phases)")
+        let session = try await live.start(request())
+        _ = await allEvents(of: session)
+        #expect(await SuiteWait.until("the idle state") { store.read() == .idle })
+        #expect(store.phases.suffix(4) == [.starting, .recording, .stopping, .idle], "\(store.phases)")
+    }
+
+    /// A second start of a capture that is recording is refused, and the state stays that
+    /// recording's.
+    @Test func aRefusedSecondStartLeavesTheStateAlone() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = DefaultsRecordingStateStore(defaults: suite.defaults)
+        let folder = try ScratchFolder()
+        let live = LiveRecorder(locations: folder.locations, input: injected(), state: store)
+        let request = request()
+        let session = try await live.start(request)
+        let published = store.read()
+        await #expect(throws: KnotError.self) { _ = try await live.start(request) }
+        #expect(store.read().phase == .recording && store.read().captureID == published.captureID)
+        _ = await session.stop()
+        #expect(store.read() == .idle)
+    }
+
+    /// Recovery clears a state that an earlier launch left, as it finishes that launch's
+    /// recordings, and never one of the current launch.
+    @Test func recoveryClearsTheStateOfAnEarlierLaunchOnly() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = DefaultsRecordingStateStore(defaults: suite.defaults)
+        let folder = try ScratchFolder()
+        let live = LiveRecorder(locations: folder.locations, input: injected(), state: store)
+        let current = LaunchID(uuid: UUID())
+        let ofThisLaunch = RecordingStateSnapshot(
+            phase: .recording, captureID: CaptureID(uuid: UUID()), heartbeat: Date(), ownerLaunch: current, ownerPID: 1)
+        store.write(ofThisLaunch)
+        _ = try await live.recoverOrphans(currentLaunch: current)
+        #expect(store.read() == ofThisLaunch, "A state of the current launch stays.")
+        var earlier = ofThisLaunch
+        earlier.ownerLaunch = LaunchID(uuid: UUID())
+        store.write(earlier)
+        _ = try await live.recoverOrphans(currentLaunch: current)
+        #expect(store.read() == .idle, "A state of an earlier launch is cleared.")
+        var unowned = ofThisLaunch
+        unowned.ownerLaunch = nil
+        store.write(unowned)
+        _ = try await live.recoverOrphans(currentLaunch: current)
+        #expect(store.read() == .idle, "A state that names no launch is no launch's that runs now.")
+    }
+}
+
+/// A defaults suite of a test's own, named for nothing of the machine or the account.
+final class TestSuite: Sendable {
+    let name: String
+
+    init() throws {
+        name = "knot-test.state.\(UUID().uuidString.lowercased())"
+        _ = try #require(UserDefaults(suiteName: name))
+    }
+
+    /// A new instance of the suite, for a store to keep or for the test to use: each instance
+    /// sees what another writes.
+    var defaults: UserDefaults {
+        // The suite's name is a test's own, never the app's or the global domain's, and `init`
+        // made one with it: never the standard defaults instead.
+        guard let defaults = UserDefaults(suiteName: name) else { preconditionFailure("no suite \(name)") }
+        return defaults
+    }
+
+    /// Removes the suite and what it holds.
+    func remove() {
+        defaults.removePersistentDomain(forName: name)
+    }
+}
+
+/// A store that keeps every snapshot written, with the queue it was written on.
+final class WatchedStateStore: RecordingStateStore {
+    struct Write: Sendable {
+        let snapshot: RecordingStateSnapshot
+        let queue: String
+    }
+
+    private let base: any RecordingStateStore
+    private let written = Mutex<[Write]>([])
+
+    init(_ base: any RecordingStateStore) { self.base = base }
+
+    var writes: [Write] { written.withLock { $0 } }
+
+    /// The phases written, each change once.
+    var phases: [RecordingPhase] {
+        writes.map(\.snapshot.phase).reduce(into: []) { phases, phase in
+            if phases.last != phase { phases.append(phase) }
+        }
+    }
+
+    func read() -> RecordingStateSnapshot { base.read() }
+
+    func write(_ snapshot: RecordingStateSnapshot) {
+        let queue = String(cString: __dispatch_queue_get_label(nil))
+        written.withLock { $0.append(Write(snapshot: snapshot, queue: queue)) }
+        base.write(snapshot)
+    }
+}
