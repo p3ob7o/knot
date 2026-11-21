@@ -29,7 +29,7 @@
             try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let locations = StoreLocations.testing(root: root)
             let layer = PosixFileLayer()
-            let notes = InMemoryNoteStore(clock: clock, ids: ids, deviceID: deviceID)
+            let notes = InMemoryNoteStore(clock: clock, ids: ids, deviceID: deviceID, inbox: locations.inbox)
             let assets = FileAssetStore(locations: locations, layer: layer)
             let recorder = ScriptedRecorder(locations: locations, layer: layer, clock: clock)
             let transcriber = ScriptedTranscriber()
