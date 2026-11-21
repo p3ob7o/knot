@@ -573,6 +573,37 @@ import Testing
         let copy = try database.makeDailyCopy()
         #expect(FileManager.default.fileExists(atPath: copy.path))
     }
+
+    /// A missing file is `not_found`, whichever call found it missing, and any other failed read
+    /// is `write_failed`.
+    @Test func aMissingFileIsNotFoundAndAFailedReadIsWriteFailed() throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let missing = folders.make().appending(path: "missing", directoryHint: .notDirectory)
+        do {
+            _ = try Data(contentsOf: missing)
+            Issue.record("A file that is not there was read.")
+        } catch {
+            #expect(StoreErrors.knotError(error).code == KnotError.notFound.code)
+        }
+        do {
+            _ = try FileManager.default.contentsOfDirectory(atPath: missing.path)
+            Issue.record("A folder that is not there was listed.")
+        } catch {
+            #expect(StoreErrors.knotError(error).code == KnotError.notFound.code)
+        }
+        #expect(
+            StoreErrors.knotError(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))).code
+                == KnotError.notFound.code)
+        for code in [
+            NSFileReadUnknownError, NSFileReadNoPermissionError, NSFileReadInvalidFileNameError,
+            NSFileReadCorruptFileError, NSFileReadTooLargeError, NSFileReadUnknownStringEncodingError,
+            NSFileReadInapplicableStringEncodingError,
+        ] {
+            let mapped = StoreErrors.knotError(NSError(domain: NSCocoaErrorDomain, code: code)).code
+            #expect(mapped == KnotError.writeFailed.code, "Cocoa \(code) maps to \(mapped)")
+        }
+    }
 }
 
 extension StoreCopies {

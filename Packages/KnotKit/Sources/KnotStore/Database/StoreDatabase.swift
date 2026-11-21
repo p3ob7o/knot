@@ -429,9 +429,11 @@ enum StoreErrors {
         return mapped.with(ErrorContext(engineCode: Int(error.extendedResultCode.rawValue)))
     }
 
-    /// A failure of Foundation's file operations, which a restore and a probe use: a full
-    /// volume is `disk_full`, any other failed write `write_failed`, a file that is not there
-    /// `not_found`. Only what none of them is stays `unexpected`.
+    /// A failure of Foundation's file operations, which a restore and the log's reading use: a
+    /// file that is not there is `not_found`, whichever call found it missing; a full volume or
+    /// quota is `disk_full`; any other failed write or read is `write_failed`. The POSIX error,
+    /// the error's own or the one under it, decides first. Only what is none of them stays
+    /// `unexpected`.
     static func fileError(_ error: any Error) -> KnotError {
         let error = error as NSError
         var posix: Int32?
@@ -440,17 +442,20 @@ enum StoreErrors {
             posix = Int32(underlying.code)
         }
         if let posix {
-            let base: KnotError = (posix == ENOSPC || posix == EDQUOT) ? .diskFull : .writeFailed
+            let base: KnotError
+            switch posix {
+            case ENOENT: base = .notFound
+            case ENOSPC, EDQUOT: base = .diskFull
+            default: base = .writeFailed
+            }
             return base.with(ErrorContext(posixError: posix))
         }
         guard error.domain == NSCocoaErrorDomain else { return KnotError.unexpected }
         switch error.code {
-        case NSFileWriteOutOfSpaceError: return KnotError.diskFull
         case NSFileNoSuchFileError, NSFileReadNoSuchFileError: return KnotError.notFound
-        case NSFileWriteUnknownError, NSFileWriteNoPermissionError, NSFileWriteInvalidFileNameError,
-            NSFileWriteFileExistsError, NSFileWriteVolumeReadOnlyError, NSFileWriteInapplicableStringEncodingError,
-            NSFileReadUnknownError, NSFileReadNoPermissionError, NSFileLockingError:
-            return KnotError.writeFailed
+        case NSFileWriteOutOfSpaceError: return KnotError.diskFull
+        // Every other code of Foundation's file errors, a read's or a write's.
+        case NSFileErrorMinimum...NSFileErrorMaximum: return KnotError.writeFailed
         default: return KnotError.unexpected
         }
     }
