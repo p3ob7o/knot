@@ -15,10 +15,11 @@
     ///   recording once, as one that never ended, with its manifest whole, all but at most one
     ///   second of what the recorder took, at least the last durable count the child printed, and
     ///   every frame equal to the injected audio;
-    /// - **early**, killed within 20 ms of its start, before or while it writes its manifest and
-    ///   its file: nothing was taken, so recovery finds at most one recording, with no frame;
-    /// - **staged**, with `--stages`, one trial for each point of `record --stage`, killed while it
-    ///   is stopped dead there: `early` in the start, once the working file exists, finds at most
+    /// - **early**, killed stopped dead at `record --stage start`, the recording's first change to
+    ///   the drive, which it says it has reached: nothing of the recording is on the drive yet, so
+    ///   recovery finds none. The kill is made at that stage, never at a time;
+    /// - **staged**, with `--stages`, one trial for each later point of `record --stage`, killed
+    ///   while it is stopped dead there: `early` in the start, once the working file exists, finds at most
     ///   one recording with no frame; `ending`, after the close and before the manifest says the
     ///   recording ended, finds it as one that never ended with every frame taken; `conversion`,
     ///   during a conversion, finds it as stopped with every frame, and a new conversion gives a
@@ -61,7 +62,7 @@
         var generator = SplitMix64(seed: seed)
         var plan: [Kind] =
             trials > 0 ? (1...trials).map { earlyEvery > 0 && $0 % earlyEvery == 0 ? .early : .live } : []
-        if arguments.flag("stages") { plan += Stage.allCases.map { Kind.staged($0) } }
+        if arguments.flag("stages") { plan += Stage.allCases.filter { $0 != .start }.map { Kind.staged($0) } }
         guard !plan.isEmpty else { throw .usage("no trials: --trials is 0 and --stages is not given") }
         print(
             "kill-test trials \(plan.count) seed \(seed) runner \(runner.isEmpty ? "none" : runner.joined(separator: " ")) "
@@ -74,8 +75,7 @@
             let delay: Int
             switch kind {
             case .live: delay = Int.random(in: minimum...maximum, using: &generator)
-            case .early: delay = Int.random(in: 0...20, using: &generator)
-            case .staged: delay = 0
+            case .early, .staged: delay = 0
             }
             let capture = "\(CaptureID(uuid: UUID()))"
             let store = folder.appendingPathComponent("trial-\(seed)-\(trial)", isDirectory: true)
@@ -90,10 +90,11 @@
                 var command =
                     runner + [child, "record", "--dir", store.path, "--witness", witness.path, "--capture", capture]
                     + rateArguments
-                if case .staged(let stage) = kind {
+                switch kind {
+                case .live: command += ["--seconds", "60"]
+                case .early: command += ["--seconds", "60", "--stage", Stage.start.rawValue]
+                case .staged(let stage):
                     command += ["--seconds", "0.5", "--sync-ms", "100", "--stage", stage.rawValue]
-                } else {
-                    command += ["--seconds", "60"]
                 }
                 let recording = try launch(command)
                 processes.append(recording.process)
@@ -118,9 +119,7 @@
                         return line.hasPrefix("live ")
                     }
                     try? await Task.sleep(for: .milliseconds(delay))
-                case .early:
-                    try? await Task.sleep(for: .milliseconds(delay))
-                case .staged:
+                case .early, .staged:
                     try read(lines, step: .stage, by: .now + limit) { line in
                         result.note(line)
                         return result.stalled
@@ -299,10 +298,12 @@
             }
             switch kind {
             case .live: readLive(count)
-            case .early: readNothingTaken(count)
+            case .early, .staged(.start):
+                guard stalled else { return fail("the child never stopped at its stage") }
+                readNothingTaken(count, atMost: 0)
             case .staged(.early):
                 guard stalled else { return fail("the child never stopped at its stage") }
-                readNothingTaken(count)
+                readNothingTaken(count, atMost: 1)
             case .staged(.ending):
                 guard stalled else { return fail("the child never stopped at its stage") }
                 readWhole(count, as: "recovered")
@@ -339,9 +340,9 @@
             if manifest != "readable" { failure = "the manifest is \(manifest)" }
         }
 
-        /// A kill before anything was taken: at most the one recording, with no frame.
-        private mutating func readNothingTaken(_ count: Int) {
-            passed = taken == 0 && count <= 1 && (count == 0 || frames == 0)
+        /// A kill before anything was taken: at most `atMost` recordings, with no frame.
+        private mutating func readNothingTaken(_ count: Int, atMost: Int) {
+            passed = taken == 0 && count <= atMost && (count == 0 || frames == 0)
             if !passed { failure = "taken \(taken), and recovery found \(count) orphans with \(frames) frames" }
         }
 

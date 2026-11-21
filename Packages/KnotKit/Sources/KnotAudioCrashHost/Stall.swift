@@ -5,6 +5,9 @@ import Synchronization
 /// A point of a recording's life at which `record --stage` stops dead, so that the kill test
 /// kills it there: between the steps of the start, of the ending, and of a conversion.
 enum Stage: String, CaseIterable {
+    /// The recording's first change to the drive, in the start, before anything of it is there:
+    /// the kill test's early trial is killed here, never at a time.
+    case start
     /// The first change to the drive once the working file exists: in the start, after the
     /// manifest is placed. A start that made the working file first stops while it is alone.
     case early
@@ -43,6 +46,7 @@ final class StallingLayer: FileLayer {
     private func check(_ change: String, _ url: URL) {
         let stall: Bool
         switch stage {
+        case .start: stall = true
         case .early: stall = FileManager.default.fileExists(atPath: working)
         case .ending:
             stall = change == "write" && url.lastPathComponent.hasPrefix(partialPrefix) && stopping.withLock { $0 }

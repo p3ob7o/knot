@@ -31,12 +31,12 @@ let endedEarlyStatus: Int32 = 3
 /// `--seconds` of audio or a kill, reporting each step on standard output and in a witness file.
 ///
 ///     record --dir <folder> --witness <file> [--rate 16000] [--seconds 60] [--sync-ms 1000]
-///            [--ends-after <frames>] [--stage early|ending|conversion] [--capture <id>]
+///            [--ends-after <frames>] [--stage start|early|ending|conversion] [--capture <id>]
 ///
 /// `--capture` names the recording's capture, which the kill test chooses, so that its lines
 /// name the capture before the child has printed one; without it, the capture is new.
 ///
-/// With `--stage`, the recording stops dead at that point of its life, prints
+/// With `--stage`, the recording stops dead at that point of its life (`Stage`), prints
 /// `stalled <id> <stage>`, and waits to be killed: `conversion` converts the stopped recording.
 ///
 /// Prints `pid <n>`, then `capture <id>`, and every later line names the capture after its first
@@ -67,7 +67,7 @@ func record(_ arguments: Arguments) async throws(HostError) {
         } ?? CaptureID(uuid: UUID())
     let store = try locations(arguments)
     let stage = try arguments.string("stage").map { name throws(HostError) in
-        guard let stage = Stage(rawValue: name) else { throw .usage("--stage is early, ending or conversion") }
+        guard let stage = Stage(rawValue: name) else { throw .usage("--stage is start, early, ending or conversion") }
         return stage
     }
     let stalling = stage.map { StallingLayer(stage: $0, capture: capture, locations: store) }

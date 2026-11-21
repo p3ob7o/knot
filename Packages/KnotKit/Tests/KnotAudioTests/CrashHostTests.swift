@@ -88,6 +88,25 @@ import Testing
         }
     }
 
+    /// The early trial is killed at its stage, the start's first change to the drive, never at a
+    /// time: however late its runner hands over the child's output, here 400 ms late, the child
+    /// has taken no audio and left nothing when it is killed. After finding 30.
+    @Test func anEarlyTrialIsKilledAtItsStageHoweverLateItsLinesCome() async throws {
+        let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
+        let folder = try ScratchFolder()
+        // A runner that passes its child's output on 400 ms late, and its death as a shell does.
+        let runner = try script(folder.file("runner"), "set -o pipefail\n\"$@\" | { sleep 0.4; cat; }")
+        let run = try await HostRun.run(
+            host,
+            [
+                "kill-test", "--dir", folder.file("run").path, "--trials", "1", "--early-every", "1", "--runner",
+                runner.path,
+            ])
+        #expect(run.status == 0, "\(run.output)")
+        let trial = run.output.split(separator: "\n").map(String.init).first { $0.hasPrefix("trial ") } ?? ""
+        #expect(trial.contains(" early ") && trial.contains(" taken 0 ") && trial.hasSuffix(" ok"), "\(run.output)")
+    }
+
     /// Every line of the kill test about a trial names the trial's capture after its first word:
     /// the capture whose files the trial's store holds. After finding 26.
     @Test func everyTrialLineNamesItsCapture() async throws {

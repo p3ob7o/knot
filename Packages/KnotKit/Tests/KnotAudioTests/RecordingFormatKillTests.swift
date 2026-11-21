@@ -8,8 +8,9 @@ import Testing
     /// from a launch of its own, must then find what the kill left. Three trials kill it while it
     /// records, at a moment the seed chooses: recovery finds all but at most one second of what
     /// the recorder had taken, at least what it printed as durable, every frame the audio injected.
-    /// One kills it as it starts. Three kill it stopped dead at a point of its life: in the start
-    /// once the working file exists, in the ending between the close and the mark, and during a
+    /// One kills it stopped dead at the start's first change to the drive, where recovery must
+    /// find nothing. Three kill it stopped dead at a later point of its life: in the start once
+    /// the working file exists, in the ending between the close and the mark, and during a
     /// conversion. In every trial, no working file is left with no manifest beside it.
     ///
     /// The crash host does the work: `KnotAudioCrashHost kill-test` starts, kills and recovers its
@@ -29,6 +30,6 @@ import Testing
         #expect(run.status == 0, "The kill test failed. Repeat it with --seed \(seed).\n\(run.output)")
         #expect(run.output.contains("summary trials 7 passed 7 "), "\(run.output)")
         #expect(run.output.contains("killedWhileTaking 5 "), "Five kills fall after audio was taken.\n\(run.output)")
-        #expect(run.output.contains("stalled 3 "), "Three kills fall at their stage.\n\(run.output)")
+        #expect(run.output.contains("stalled 4 "), "Four kills fall at their stage.\n\(run.output)")
     }
 #endif
