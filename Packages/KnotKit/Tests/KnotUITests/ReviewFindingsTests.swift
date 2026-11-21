@@ -13,7 +13,7 @@ import Testing
     /// Finding 1. Product spec §4.4: text that cannot be saved stays on the surface, which says
     /// so. Here the catch-up save at the end fails: the capture must not end on older text.
     @Test func aFailedSaveAtTheEndKeepsTheNewerText() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let flaky = FlakyEngine(rig.environment.engine)
         var environment = rig.environment
@@ -57,7 +57,7 @@ import Testing
     /// capture ends when it is dismissed. The shell calls `endCapture()` as the surface goes,
     /// then lets the view model go: what was queued still runs.
     @Test func theSurfaceGoingAwayStillSavesAndEnds() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         weak var released: NoteViewModel?
         do {
@@ -83,7 +83,7 @@ import Testing
     /// interrupts it, with the stop cue. The surface leaves the recording state and takes typing
     /// again.
     @Test func aRecordingThatEndsByItselfLeavesTheRecordingState() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let recorder = try #require(rig.environment.recorder as? ScriptedRecorder)
         recorder.setScript(.init(buffers: 25, interval: .milliseconds(2), endsBySelf: .limitReached))
@@ -121,7 +121,7 @@ import Testing
     /// caller read and fails when it is stale. An edit carries the revision read when it began,
     /// so a change that arrived meanwhile is never replaced unseen.
     @Test func anEditBegunBeforeAChangeArrivedDoesNotReplaceIt() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("call the plumber"))
         let model = rig.open(note)
@@ -155,7 +155,7 @@ import Testing
     }
 
     @Test func droppingTheDraftKeepsWhatArrived() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("call the plumber"))
         let model = rig.open(note)
@@ -175,7 +175,7 @@ import Testing
     }
 
     @Test func aTitleBegunBeforeAChangeArrivedDoesNotReplaceIt() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("errands"))
         let model = rig.open(note)
@@ -195,7 +195,7 @@ import Testing
     }
 
     @Test func anEditWithNoChangeElsewhereIsWritten() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("call the plumber"))
         let model = rig.open(note)
@@ -212,7 +212,7 @@ import Testing
     /// Finding 5. Product spec §4.4: when the end itself fails, the text stays in the field, the
     /// surface says it could not save, and the capture stays open for the next Done.
     @Test func anEndThatFailsKeepsTheTextInTheField() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let flaky = FlakyEngine(rig.environment.engine)
         var environment = rig.environment
@@ -241,7 +241,7 @@ import Testing
     /// Finding 6. Search filters the stream as the person types: the results of an older text
     /// that arrive late never replace those of the newer one.
     @Test func aLateSearchForAnOlderTextDoesNotReplaceTheNewerResults() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         try await rig.type("the roof leaks")
         try await rig.type("buy stamps", placement: .newNote)

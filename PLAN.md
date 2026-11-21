@@ -205,7 +205,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
-| WP-11 | 2 | The engine's kill points in the soak | WP-11 PR 1; WP-06 |
+| WP-11 | 2 | The engine's kill points in the soak, and a follower placed by the capture it follows | WP-11 PR 1; WP-06; the contract pull request that gives `NewCapture` the capture it follows |
 | WP-11 | 3 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
@@ -227,6 +227,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-19 | 4 | The OpenSketch intent. Held until the keep-gate ruling. | the ruling |
 | WP-20 | 1 | The whole package | WP-02 PR 2 |
 | WP-21 | 1 | A skeleton that does not depend on the design direction: the theme layer, the view models with their tests, and the components | WP-05 |
+| WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
@@ -263,6 +264,7 @@ These rules sit beside the table:
 - "The ruling" is the keep-gate ruling (§5).
 - A row names the PR wherever a package ships in several. Elsewhere, a package named without a number means its last PR.
 - The PRs of WP-11, WP-12 and WP-15 that add kill points merge after WP-06.
+- The first PRs of WP-30 and WP-33 merge after WP-22 PR 1, and each carries the UI smoke test on `.live` on its platform.
 - `scripts/check-plan.sh` fails on a cycle, on a row that names a package without a PR where the package has several, and on a milestone that needs a held PR.
 
 ### The hold until the ruling

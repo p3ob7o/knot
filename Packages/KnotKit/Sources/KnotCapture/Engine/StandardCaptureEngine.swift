@@ -1,9 +1,10 @@
 import Foundation
 import KnotCore
+import Synchronization
 
-/// The one capture engine (docs/architecture.md §5 and §6), the tracer's version: typed
-/// captures and recordings, through the one `NoteStore` operation for each save, with
-/// `Inbox/` behind every one of them.
+/// The one capture engine (docs/architecture.md §5 and §6): typed captures and recordings,
+/// through the one `NoteStore` operation for each save, with `Inbox/` behind every one of them.
+/// Drawings come with WP-11 PR 3: a drawing's `begin` throws `port_unavailable`.
 ///
 /// The paths. A capture begins on the store path, where the capture row is its first durable
 /// write. A recording writes its manifest first, through the `Recorder`, and its row after.
@@ -15,20 +16,40 @@ import KnotCore
 ///
 /// The engine passes the store only the placement asked for and the note the surface
 /// showed: the store decides where a capture lands. Saves of one capture never overlap: each
-/// waits for the one before it, so the store path sees them in revision order, and every
-/// item in `Inbox/` has a higher revision than any save the store was sent.
+/// waits for the one before it in the capture's line, so the store path sees them in revision
+/// order, and every item in `Inbox/` has a higher revision than any save the store was sent.
+///
+/// The lines. Each capture has a line, which orders its calls across their suspension points.
+/// No call waits for one capture's line while it holds another's: a call holds one line at a
+/// time and lets it go before it takes the next (`withLine`). So no two calls can each hold a
+/// line the other waits for, and every call returns once the store, the recorder and the drive
+/// answer, whatever runs beside it (findings 52 and 53). A start reaches disk before it waits
+/// for anything: its own line is new, so taking it never waits, and only after its first
+/// durable write does it let that line go and take the line of the capture it ends.
 ///
 /// When neither path takes a save, the call throws its error and nothing of that save is
 /// acknowledged: the surface keeps the text and says that it could not save
-/// (docs/product-spec.md §4.4), and the next save tries again with the whole text. A begin
-/// that reached no disk starts nothing; a row its store call commits later is ended as
-/// empty, since the next begin carries the text.
+/// (docs/product-spec.md §4.4), and the next save tries again with the whole text. An end, the
+/// surface's or rule 15's, saves the latest text the engine was given, also one whose save it
+/// answered with an error (finding 62). A discard that reached no disk leaves the text as it
+/// was.
 ///
-/// Rule 15 (docs/product-spec.md §3). A start that the open capture refuses, a second typed
-/// capture on the same surface or anything while a recording runs, throws, and nothing is
-/// written. A start of another kind or on another surface ends the open capture: on the
-/// store path the record-a-capture transaction ends it and places the new one in its note;
-/// otherwise the engine ends it first.
+/// A begin that throws names its capture in the error, and from then on that capture is the
+/// caller's: `update`, `end` and `discard` take it (finding 59). It starts nothing and ends
+/// nothing, and nothing follows it or ends it (findings 55 and 56). Its first write on a drive,
+/// by one of those calls, by its retry or by a store call that commits late, does what the start
+/// would have done: it ends at the start of a capture that began after it, if one did, and ends
+/// the capture it follows. A begin on its surface is its retry, with the same ID, only while
+/// nothing of it is acknowledged: a state that names a durable revision is an acknowledgement,
+/// whatever call or late answer published it, and after one a begin is a capture of its own.
+///
+/// Rule 15 (docs/product-spec.md §3). A start that the open capture refuses, anything while a
+/// recording runs, throws, and nothing is written. A typed start on the surface of an open
+/// typed capture is that capture's retry while no call has answered it as saved, and a
+/// capture of its own after. A start of another kind or on another surface follows the open
+/// capture, decided once as it arrives (finding 54), and ends it once it has reached disk: on
+/// the store path the record-a-capture transaction ends it and places the new one in its
+/// note; otherwise the engine ends it at the new capture's start, on that capture's own path.
 public actor StandardCaptureEngine: CaptureEngine {
     private struct Entry {
         let id: CaptureID
@@ -50,6 +71,13 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// Set when a row that a store call commits late must be ended as empty: a recording
         /// discarded off the store path.
         var discardLateRow = false
+        /// True once its start threw with nothing on disk and before a call answers it as saved:
+        /// a capture the surface was told is not saved. Nothing follows it and nothing ends it,
+        /// so that the surface's retry is still this capture (findings 55 and 56).
+        var startFailed = false
+        /// True once the capture has a row: its start's store call answered, or committed after the
+        /// engine stopped waiting for it.
+        var hasRow = false
         /// True once a call of the engine has answered the capture as saved. Until then a
         /// typed start on its surface is its retry; after, the surface was told its text is
         /// saved, and a start never replaces it (findings 1 and 38).
@@ -72,6 +100,11 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let deadline: StoreDeadline
     private let ingest: InboxIngest?
     private let log: KnotLog
+    #if DEBUG || KNOT_FAKES
+        /// The kill-point hook of the kill tests and the soak, which only a debug build or one
+        /// that sets `KNOT_FAKES` has.
+        private let killPoints = KillPointHook()
+    #endif
     private let broadcast = Broadcast<CaptureState>()
     private var entries: [CaptureID: Entry] = [:]
     private var line = KeyedLine<CaptureID>()
@@ -79,6 +112,9 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// their rows are ended as empty when the store next answers. Recovery ends them at the
     /// next launch otherwise, since no file is left.
     private var pendingDiscards: Set<CaptureID> = []
+    /// Recordings that would not convert, whose rows the store did not mark failed: each row is
+    /// ended as failed when the store next answers (settled point 4), without a relaunch.
+    private var pendingFailures: [CaptureID: CaptureEnd] = [:]
     /// Recordings whose conversion failed, with what `convert` needs to try again.
     private struct PendingConversion {
         let audio: RecordedAudio
@@ -114,6 +150,32 @@ public actor StandardCaptureEngine: CaptureEngine {
         self.log = log
     }
 
+    #if DEBUG || KNOT_FAKES
+        /// The engine of the kill tests and the soak's child: `killPoint` is awaited at each
+        /// `EngineKillPoint`, with the capture's ID. A hook that never returns stops the engine
+        /// there, as a kill would. Only a debug build, or one that sets `KNOT_FAKES`, has it.
+        public init(
+            notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
+            clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, launchID: LaunchID,
+            locations: StoreLocations, layer: any FileLayer, deadline: StoreDeadline = .standard,
+            ingest: InboxIngest? = nil, log: KnotLog = KnotLog(.capture),
+            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void
+        ) {
+            self.init(
+                notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
+                deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
+                ingest: ingest, log: log)
+            killPoints.set(killPoint)
+        }
+    #endif
+
+    /// Awaits the kill-point hook at `point`. A release build has no hook, and this does nothing.
+    private func reach(_ point: EngineKillPoint, _ capture: CaptureID) async {
+        #if DEBUG || KNOT_FAKES
+            await killPoints.reach(point, capture)
+        #endif
+    }
+
     // MARK: CaptureEngine
 
     public nonisolated func states() -> AsyncStream<CaptureState> { broadcast.subscribe() }
@@ -127,99 +189,75 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.portUnavailable
         }
         let startedAt = clock.now()
-        // Rule 15 first, so that a start it refuses writes nothing. A start that turns out not to
-        // be a retry once it holds the capture's line is decided again.
-        while case .retry(let pending) = try nextStep(for: request, besides: nil) {
-            if let state = try await retryBegin(pending, text: request.text ?? "") { return state }
+        let call = EngineCall()
+        // Rule 15 first, from the table and with no wait, so that a start it refuses writes
+        // nothing. A start that is an open capture's retry waits for that capture's line, which
+        // is its own capture's, holding nothing else; one that turns out not to be the retry
+        // once it holds the line is decided again.
+        var step = try nextStep(for: request, besides: nil)
+        while case .retry(let pending) = step {
+            if let state = try await retryBegin(pending, text: request.text ?? "", call: call) { return state }
+            step = try nextStep(for: request, besides: nil)
         }
+        // The capture this one follows, by rule 13 or 15, decided now and never again: every
+        // manifest and item of this capture names it (finding 54), and this capture ends it
+        // once it has reached disk.
+        let follows: CaptureID? = if case .end(let open) = step { open } else { nil }
         let id: CaptureID = ids.make()
         var entry = Entry(
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
             shownNote: request.shownNote, startedAt: startedAt)
+        entry.follows = follows
+        // IDs only: what this capture follows, decided as it arrives (finding 54).
+        if let follows { log.capture(id, "capture_follows", .segment(SegmentID(follows))) }
         if request.kind == .typed {
             entry.text = request.text ?? ""
             entry.revision = 1
         }
         // In the table before the first suspension, so that a start beside it sees it open.
         entries[id] = entry
-        await take(id)
-        defer { release(id) }
-        // A recording starts first: one whose microphone cannot open never starts, and ends
-        // nothing. Its request names the capture that rule 15 would end for it now, decided
-        // without waiting, so that the recorder's first manifest write carries the link. If that
-        // capture ends by itself before the planning below, the recording's later items name
-        // nothing, while that first manifest still names it: finding 54, WP-11's.
-        if request.kind == .voice {
-            if case .end(let open)? = try? nextStep(for: request, besides: id) { entries[id]?.follows = open }
-            try await startRecorder(id)
-        }
-
-        // Rule 15 ends the open capture once this one has started: on the store path in this
-        // capture's record-a-capture transaction, which places it in that capture's note;
-        // otherwise the engine ends it at this capture's start, and this capture goes the same way.
-        var handoff: CaptureID?
-        var endAfterStart: CaptureID?
-        var sameWay: ErrorCode?
-        do throws(KnotError) {
-            planning: while true {
-                switch try nextStep(for: request, besides: id) {
-                case .nothing:
-                    break planning
-                case .retry(let pending):
-                    // Another start of this kind on this surface ran while this one waited.
-                    entries[id] = nil
-                    if let state = try await retryBegin(pending, text: request.text ?? "") { return state }
-                    // That capture was answered or ended while this start waited: this start is
-                    // a capture of its own after all.
-                    entries[id] = entry
-                    continue planning
-                case .end(let open):
-                    if case .store = entries[open]?.path {
-                        log.capture(id, "start_waits_for_open_capture", .segment(SegmentID(open)))
-                        await take(open)
-                        if entries[open]?.outcome == .open, case .store = entries[open]?.path {
-                            handoff = open
-                            break planning
-                        }
-                        release(open)
-                        continue planning
-                    }
-                    if case .inbox(let code) = entries[open]?.path {
-                        sameWay = code
-                        endAfterStart = open
-                    }
-                    break planning
-                }
-            }
-        } catch {
-            await abandonStart(id)
-            throw error
-        }
-        if let sameWay { entries[id]?.path = .inbox(sameWay) }
-        // The capture this one follows, as rule 15 ended it, names it in every item written from
-        // now on.
-        entries[id]?.follows = handoff ?? endAfterStart
+        // The new capture's own line is free: taking it never waits, so the start reaches disk
+        // before it waits for anything.
         let state: CaptureState
         do throws(KnotError) {
-            state =
+            state = try await beginHeld(id, request: request, follows: follows, call: call)
+        } catch {
+            if request.kind == .typed, entries[id] != nil { entries[id]?.startFailed = true }
+            throw error
+        }
+        // Rule 15 ends the capture this one follows, now that this one has started: on the store
+        // path the record-a-capture transaction did, and the engine then only reads the row;
+        // otherwise the engine ends it at this capture's start. A start that reached no disk
+        // threw above, and the open capture goes on.
+        if let follows {
+            await reach(.beforeEndingFollowed, id)
+            await endFollowed(follows, by: id, call: call)
+        }
+        return state
+    }
+
+    /// A start's first durable write, holding its own line, which is new and never waited for.
+    private func beginHeld(
+        _ id: CaptureID, request: CaptureRequest, follows: CaptureID?, call: EngineCall
+    ) async throws(KnotError) -> CaptureState {
+        try await withLine(id, call) { () async throws(KnotError) -> CaptureState in
+            // A recording starts first: one whose microphone cannot open never starts, and ends
+            // nothing. Its request names the capture it follows, so the recorder's first manifest
+            // write carries the link that every later item carries too (finding 54).
+            if request.kind == .voice { try await startRecorder(id) }
+            // A capture that follows one on the `Inbox/` path goes the same way, so that ingest
+            // places it after that capture.
+            var sameWay: ErrorCode?
+            if let follows, case .inbox(let code) = entries[follows]?.path { sameWay = code }
+            if let sameWay { entries[id]?.path = .inbox(sameWay) }
+            let state =
                 request.kind == .typed
                 ? try await beginTyped(id, sameWay: sameWay != nil)
                 : try await recordRecording(id, sameWay: sameWay != nil)
-        } catch {
-            // The new capture reached no disk: the open one goes on.
-            if let handoff { release(handoff) }
-            throw error
+            await reach(.afterStart, id)
+            entries[id]?.answered = true
+            return state
         }
-        if let endAfterStart {
-            do throws(KnotError) {
-                _ = try await end(endAfterStart, at: startedAt)
-            } catch {
-                log.failure(error.about(capture: endAfterStart), "capture_not_ended")
-            }
-        }
-        entries[id]?.answered = true
-        if let handoff { await settle(handoff, afterStartOf: id) }
-        return state
     }
 
     /// Does the engine's old work now: ends the rows of recordings discarded while the store did
@@ -230,15 +268,19 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func retryConversions() async {
         await endPendingDiscards()
         await retryConversions(dueOnly: false)
+        // A conversion that failed again leaves its row's end pending: made now.
+        await endPendingDiscards()
     }
 
     private var housekeepingScheduled = false
 
     /// Runs the old work after the current call has returned, once at a time.
     private func scheduleHousekeeping() {
-        guard !housekeepingScheduled, !pendingDiscards.isEmpty || !pendingConversions.isEmpty else { return }
+        guard !housekeepingScheduled,
+            !pendingDiscards.isEmpty || !pendingFailures.isEmpty || !pendingConversions.isEmpty
+        else { return }
         housekeepingScheduled = true
-        Task { [weak self] in await self?.housekeeping() }
+        Task.detached { [weak self] in await self?.housekeeping() }
     }
 
     private func housekeeping() async {
@@ -252,10 +294,11 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     private func retryConversions(dueOnly: Bool) async {
         let now = clock.now()
+        let call = EngineCall()
         for (id, pending) in pendingConversions
         where !dueOnly || now.timeIntervalSince(pending.triedAt) >= Self.conversionRetryDelay {
-            await take(id)
-            if pendingConversions[id] != nil {
+            await withLine(id, call) {
+                guard pendingConversions[id] != nil else { return }
                 do throws(KnotError) {
                     try await storeRecording(id, audio: pending.audio, endedAt: pending.endedAt)
                 } catch {
@@ -263,14 +306,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 }
                 publish(id)
             }
-            release(id)
         }
-    }
-
-    /// Removes a start that rule 15 refused after its recording had started.
-    private func abandonStart(_ id: CaptureID) async {
-        if let session = entries[id]?.session { await session.discard() }
-        entries[id] = nil
     }
 
     /// Saves a typed capture's whole text so far. The engine numbers its revisions in the order
@@ -283,30 +319,57 @@ public actor StandardCaptureEngine: CaptureEngine {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
             throw KnotError.illegalTransition.about(capture: capture)
         }
-        await take(capture)
-        defer { release(capture) }
-        guard entries[capture]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: capture) }
-        entries[capture]?.revision += 1
-        entries[capture]?.text = text
-        try await saveTyped(capture, ending: nil)
-        entries[capture]?.answered = true
-        return publish(capture)
+        let call = EngineCall()
+        var firstWrite = false
+        let state = try await withLine(capture, call) { () async throws(KnotError) -> CaptureState in
+            guard entries[capture]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: capture) }
+            entries[capture]?.revision += 1
+            entries[capture]?.text = text
+            try await saveTyped(capture, ending: nil)
+            await reach(.afterSave, capture)
+            // The first write on a drive of a capture whose begin threw does what the start would
+            // have done (finding 59).
+            firstWrite = entries[capture]?.startFailed == true
+            entries[capture]?.answered = true
+            entries[capture]?.startFailed = false
+            if firstWrite {
+                log.capture(capture, "capture_started_late")
+                await startedAfterAll(capture)
+            }
+            return publish(capture)
+        }
+        if firstWrite, let follows = entries[capture]?.follows { await endFollowed(follows, by: capture, call: call) }
+        return state
     }
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
-        return try await end(capture, at: nil)
+        guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
+        let call = EngineCall()
+        var firstWrite = false
+        let state = try await withLine(capture, call) { () async throws(KnotError) -> CaptureState in
+            // The end of a capture whose begin threw is its first write on a drive: it ends where
+            // rule 15 would have ended it, at the start of the first capture that began after it.
+            firstWrite = entries[capture]?.startFailed == true
+            let at = firstWrite ? startedAfter(capture) : nil
+            let ended = try await endHeld(capture, at: at)
+            if firstWrite { log.capture(capture, "capture_started_late") }
+            entries[capture]?.startFailed = false
+            entries[capture]?.answered = true
+            return ended
+        }
+        if firstWrite, let follows = entries[capture]?.follows { await endFollowed(follows, by: capture, call: call) }
+        return state
     }
 
-    /// Ends a capture at `endedAt`, or now: rule 15 ends one at the next one's start.
-    private func end(_ capture: CaptureID, at endedAt: Date?) async throws(KnotError) -> CaptureState {
-        guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
-        await take(capture)
-        defer { release(capture) }
+    /// Ends a capture at `endedAt`, or now: rule 15 ends one at the next one's start. The
+    /// caller holds the capture's line.
+    private func endHeld(_ capture: CaptureID, at endedAt: Date?) async throws(KnotError) -> CaptureState {
         guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
         switch entry.kind {
         case .typed:
             try await saveTyped(capture, ending: endedAt ?? clock.now())
+            await reach(.afterTypedEnd, capture)
         default:
             try await endRecording(capture, at: endedAt)
         }
@@ -316,19 +379,29 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
-        await take(capture)
-        defer { release(capture) }
-        guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
-        switch entry.kind {
-        case .typed:
-            // Ended with no text, at a revision above every save, so that it wins.
-            entries[capture]?.revision += 1
-            entries[capture]?.text = ""
-            try await saveTyped(capture, ending: clock.now())
-        default:
-            try await discardRecording(capture)
+        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
+            guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
+            switch entry.kind {
+            case .typed:
+                // Ended with no text, at a revision above every save, so that it wins. A discard
+                // that reaches no disk leaves the capture with its text: the surface still holds
+                // it, and a later end, by the surface or by the next start, keeps it.
+                entries[capture]?.revision += 1
+                entries[capture]?.text = ""
+                do throws(KnotError) {
+                    try await saveTyped(capture, ending: clock.now())
+                } catch {
+                    // Its store call may still commit, at the discard's revision: the text's next
+                    // save goes above it.
+                    entries[capture]?.text = entry.text
+                    entries[capture]?.revision += 1
+                    throw error
+                }
+            default:
+                try await discardRecording(capture)
+            }
+            return publish(capture)
         }
-        return publish(capture)
     }
 
     // MARK: Typed captures
@@ -348,6 +421,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         switch answer {
         case .answered(let receipt):
             entries[id]?.noteID = receipt.noteID
+            entries[id]?.hasRow = true
             entries[id]?.durableRevision = entry.revision
             log.capture(id, "capture_began", .flag("store_path", true), .number("revision", Int(entry.revision)))
         case .refused, .timedOut:
@@ -374,41 +448,50 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// text saved at the next revision. Whether the start is that retry is decided once it holds
     /// the capture's line, not when it arrived (finding 41): a capture that a call answered as
     /// saved, or that ended, while the start waited is no longer one to retry, and `nil` says
-    /// that the start is a capture of its own.
-    private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState? {
+    /// that the start is a capture of its own. The start waits for that one line, holding none.
+    private func retryBegin(_ id: CaptureID, text: String, call: EngineCall) async throws(KnotError) -> CaptureState? {
         log.capture(id, "start_waits_to_retry")
-        await take(id)
-        defer { release(id) }
-        guard let entry = entries[id], entry.outcome == .open, !entry.answered else { return nil }
-        // The capture that rule 15 ends for it, named in the item before it ends.
-        if case .end(let open)? = try? nextStep(
-            for: CaptureRequest(kind: entry.kind, surface: entry.surface), besides: id)
-        {
-            entries[id]?.follows = open
+        let state = try await withLine(id, call) { () async throws(KnotError) -> CaptureState? in
+            guard let entry = entries[id], entry.outcome == .open, !entry.answered else { return nil }
+            entries[id]?.revision += 1
+            entries[id]?.text = text
+            try await saveTyped(id, ending: nil)
+            entries[id]?.answered = true
+            entries[id]?.startFailed = false
+            log.capture(id, "capture_begin_retried")
+            await startedAfterAll(id)
+            return publish(id)
         }
-        entries[id]?.revision += 1
-        entries[id]?.text = text
-        try await saveTyped(id, ending: nil)
-        entries[id]?.answered = true
-        log.capture(id, "capture_begin_retried")
-        // It has started now: rule 15 ends the capture it follows, as a first start does.
-        await endCapturesFollowedBy(id)
-        return publish(id)
+        guard let state else { return nil }
+        // It has started now: rule 15 ends the capture it follows, decided when it first
+        // arrived, as a first start does. Never one that began after it: that one ends this.
+        if let follows = entries[id]?.follows { await endFollowed(follows, by: id, call: call) }
+        return state
     }
 
-    /// Ends, at `id`'s start, each open capture that rule 15 ends for it, once `id` has reached
-    /// disk.
-    private func endCapturesFollowedBy(_ id: CaptureID) async {
-        guard let entry = entries[id] else { return }
-        let request = CaptureRequest(kind: entry.kind, surface: entry.surface)
-        while case .end(let open)? = try? nextStep(for: request, besides: id) {
-            do throws(KnotError) {
-                _ = try await end(open, at: entry.startedAt)
-            } catch {
-                log.failure(error.about(capture: open), "capture_not_ended")
-                return
-            }
+    /// What a start does once a capture whose begin threw reaches disk after all: by a later
+    /// call, by its retry, or by a store call that commits late. The caller holds the capture's
+    /// line. A capture that began after this one, while this one had reached no disk, ended
+    /// nothing of it then; rule 15 applies in the order the captures began, as the store applies
+    /// it to a row that arrives after a newer start, so this one ends at the start of the first
+    /// capture that began after it. An end there that reaches no disk leaves it answered and open,
+    /// for its caller to end.
+    private func startedAfterAll(_ id: CaptureID) async {
+        guard entries[id]?.outcome == .open, let next = startedAfter(id) else { return }
+        do throws(KnotError) {
+            _ = try await endHeld(id, at: next)
+            log.capture(id, "capture_ended", .flag("by_next_start", true))
+        } catch {
+            log.failure(error.about(capture: id), "capture_not_ended")
         }
+    }
+
+    /// A late row made a capture whose begin threw durable: it does what its start would have
+    /// done, holding its own line, then ends the capture it follows.
+    private func startedLate(_ id: CaptureID) async {
+        let call = EngineCall()
+        await withLine(id, call) { await startedAfterAll(id) }
+        if let follows = entries[id]?.follows { await endFollowed(follows, by: id, call: call) }
     }
 
     /// Saves a typed capture's latest text on its path: a checkpoint, or the end when
@@ -418,6 +501,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         if case .store = entry.path {
             let saved: Bool
+            /// The revision the store returned for what it holds, when the store says it.
+            var stored: Int64?
             if let ending {
                 let end = CaptureEnd(
                     captureID: id, endedAt: ending, outcome: .stored(.text(entry.text)), revision: entry.revision)
@@ -426,6 +511,16 @@ public actor StandardCaptureEngine: CaptureEngine {
                     entries[id]?.outcome = receipt.outcome
                     entries[id]?.noteID = receipt.noteID
                     saved = true
+                    // A stale end ends the capture with the content the store holds, at its own
+                    // revision: the state answers the revision the store returns, never the end's
+                    // (settled point 5). A read the store does not answer in time leaves the last
+                    // revision known.
+                    let row = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
+                    if case .answered(let read?) = row {
+                        stored = read.revision
+                    } else {
+                        stored = entries[id]?.durableRevision
+                    }
                 } else {
                     fallBack(id, answer)
                     saved = false
@@ -453,8 +548,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 }
             }
             if saved {
-                let revision = entries[id]?.revision ?? entry.revision
+                let revision = stored ?? entries[id]?.revision ?? entry.revision
                 entries[id]?.durableRevision = revision
+                if let stored, stored > entries[id]?.revision ?? 0 { entries[id]?.revision = stored }
                 if ending != nil { log.capture(id, "capture_ended", .flag("store_path", true)) }
                 return
             }
@@ -512,7 +608,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
         entries[id]?.session = session
         let events = session.events
-        Task { [weak self] in
+        Task.detached { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
         }
     }
@@ -530,6 +626,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.record(capture) }
         if case .answered(let receipt) = answer {
             entries[id]?.noteID = receipt.noteID
+            entries[id]?.hasRow = true
         } else {
             fallBack(id, answer)
         }
@@ -559,7 +656,36 @@ public actor StandardCaptureEngine: CaptureEngine {
         let audio = await session.stop()
         let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
+        if audio.frames == 0 {
+            // Frames decide, not time (settled point 4). A failed write that names its working file
+            // gives only the last length the recorder could read, which can be zero: such a
+            // recording ends failed, and its file is kept. Otherwise no frame is nothing to keep.
+            if audio.workingFile != nil, let failure = Self.failure(of: audio.ending) {
+                try await failRecording(id, endedAt: endedAt, failure.about(capture: id))
+                return
+            }
+            entries[id]?.session = nil
+            try await discardRecording(id)
+            try? await recorder.removeWorkingFile(of: id)
+            return
+        }
         try await storeRecording(id, audio: audio, endedAt: endedAt)
+    }
+
+    /// The same error, saying that the recording or the drawing is kept on the drive.
+    private static func keeping(_ error: KnotError) -> KnotError {
+        KnotError(
+            code: error.code, errorClass: error.errorClass, next: error.next, retry: error.retry,
+            written: .contentKept, exitStatus: error.exitStatus, context: error.context)
+    }
+
+    /// The error of a recording that ended because a write failed.
+    private static func failure(of ending: RecordingEnding) -> KnotError? {
+        switch ending {
+        case .diskFull: KnotError.diskFull
+        case .writeFailed: KnotError.writeFailed
+        default: nil
+        }
     }
 
     /// Converts a stopped recording, moves it into the `AssetStore` and ends its capture with
@@ -581,6 +707,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             return
         }
         pendingConversions[id] = nil
+        pendingFailures[id] = nil
+        await reach(.afterRecordingMoved, id)
         let asset = Asset(
             id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
             sha256: stored.sha256)
@@ -593,6 +721,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                 entries[id]?.outcome = receipt.outcome
                 entries[id]?.noteID = receipt.noteID
                 entries[id]?.session = nil
+                await reach(.afterRecordingEnded, id)
                 // The row points to the stored asset: the working file can go.
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
@@ -612,9 +741,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             try inbox.writeRecording(manifest)
         } catch {
             // The recording is on the drive twice, its working file and its stored asset, and
-            // recovery finds the working file at the next launch.
+            // recovery finds the working file at the next launch. The error says so: what is on
+            // the drive when the call throws, never `nothing` (finding 70).
             log.failure(error.about(capture: id), "inbox_write_failed")
-            throw error.about(capture: id)
+            throw Self.keeping(error).about(capture: id)
         }
         entries[id]?.outcome = .stored
         entries[id]?.session = nil
@@ -627,17 +757,20 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func failRecording(_ id: CaptureID, endedAt: Date, _ error: KnotError) async throws(KnotError) {
         log.failure(error, "recording_not_stored")
         entries[id]?.session = nil
+        let end = CaptureEnd(
+            captureID: id, endedAt: endedAt, outcome: .failed(error.code), revision: entries[id]?.durableRevision ?? 0)
         if case .store = entries[id]?.path {
-            let end = CaptureEnd(
-                captureID: id, endedAt: endedAt, outcome: .failed(error.code),
-                revision: entries[id]?.durableRevision ?? 0)
             let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
             if case .answered = answer {
                 entries[id]?.outcome = .failed(error.code)
+                pendingFailures[id] = nil
                 return
             }
             fallBack(id, answer)
         }
+        // A row the engine made is ended by the engine, as failed, when the store next answers;
+        // a capture with no row yet is stored by ingest, from its item, once it converts.
+        if entries[id]?.hasRow == true { pendingFailures[id] = end }
         entries[id]?.outcome = .failed(error.code)
     }
 
@@ -659,8 +792,9 @@ public actor StandardCaptureEngine: CaptureEngine {
             pendingDiscards.insert(id)
         }
         // Nothing is kept, so no item is written. A row a store call commits late is ended as
-        // empty when it arrives.
+        // empty when it arrives, and one that has arrived already is ended after this call.
         entries[id]?.discardLateRow = true
+        if entries[id]?.hasRow == true { pendingDiscards.insert(id) }
         log.capture(id, "recording_discarded", .flag("store_path", false))
     }
 
@@ -682,53 +816,99 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// What rule 15 does with the capture open on this device, besides `own`, when `request`
     /// starts. It throws a start the open capture refuses.
     private func nextStep(for request: CaptureRequest, besides own: CaptureID?) throws(KnotError) -> Step {
-        // The newest open capture: while one start ends another, two can be open for a moment.
-        let open = entries.values.filter { $0.outcome == .open && $0.id != own }
+        // The capture open on the device, as rule 15 reads it: the newest open capture that a call
+        // answered as begun, or whose start still runs. One whose start reached no disk is not
+        // open on the device: the surface was told it is not saved (findings 55 and 56). While
+        // one start ends another, two can be open for a moment, and the newest is the one.
+        let open = entries.values.filter { $0.outcome == .open && $0.id != own && !$0.startFailed }
             .max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
-        guard let open else { return .nothing }
-        let decision = OpenCaptureRule.decide(
-            open: OpenCapture(
-                captureID: open.id, noteID: open.noteID ?? NoteID(open.id), kind: open.kind, surface: open.surface),
-            start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
+        let decision: OpenCaptureDecision =
+            open.map {
+                OpenCaptureRule.decide(
+                    open: OpenCapture(
+                        captureID: $0.id, noteID: $0.noteID ?? NoteID($0.id), kind: $0.kind, surface: $0.surface),
+                    start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
+            } ?? .nothingOpen
+        // What the open capture refuses, it refuses first.
         switch decision {
-        case .nothingOpen, .leaveOpen:
-            return .nothing
-        case .continueOpen(let id) where open.kind == .typed && request.kind == .typed && !open.answered:
-            // The same kind on the same surface, and no call has answered the open capture as
-            // saved: the start is its retry, with the same ID, so a row its store call makes
-            // late and the retry are one capture (finding 1).
-            return .retry(id)
-        case .continueOpen where open.kind == .typed && request.kind == .typed:
-            // A call answered the open capture as saved: a start never replaces text that was
-            // acknowledged. It is a capture of its own, which the store's rule 15 refuses, so
-            // it goes to `Inbox/`, and the open capture keeps its text.
-            return .nothing
-        case .continueOpen(let id), .recordingPress(let id):
+        case .continueOpen(let id) where open?.kind != .typed || request.kind != .typed:
+            throw KnotError.segmentCaptureOpen.about(capture: id)
+        case .recordingPress(let id):
             throw KnotError.segmentCaptureOpen.about(capture: id)
         case .refused(let error):
             throw error
+        default:
+            break
+        }
+        // A typed start on a surface whose typed capture no call has answered as saved, its start
+        // still running or failed, is that capture's retry, with the same ID, so a row its store
+        // call makes late and the retry are one capture (finding 1). Whether it is the retry is
+        // decided once the start holds the capture's line (finding 41).
+        if request.kind == .typed,
+            let pending = entries.values.filter({
+                $0.outcome == .open && $0.id != own && $0.kind == .typed && $0.surface == request.surface
+                    && !$0.answered
+            }).max(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) })
+        {
+            return .retry(pending.id)
+        }
+        switch decision {
         case .endOpenAndAppend(let ended, _):
             return .end(ended)
+        default:
+            // Nothing open, a tool's capture, or a typed start on the surface of an open typed
+            // capture that a call answered as saved: a start never replaces text that was
+            // acknowledged, so it is a capture of its own, which the store's rule 15 refuses, and
+            // it goes to `Inbox/` while the open capture keeps its text.
+            return .nothing
         }
     }
 
-    /// After the start of `newCapture`, ends `open` if the store did not: when the new
-    /// capture's store call did not answer, or did not end it.
-    private func settle(_ open: CaptureID, afterStartOf newCapture: CaptureID) async {
-        if case .store = entries[newCapture]?.path {
-            let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(open) }
-            if case .answered(let row?) = answer, row.outcome != .open {
-                entries[open]?.outcome = row.outcome
-                release(open)
-                publish(open)
-                log.capture(open, "capture_ended", .flag("by_next_start", true))
-                return
-            }
-        }
-        release(open)
+    /// The start of the first capture that began after `id` and reached disk, or still starts.
+    private func startedAfter(_ id: CaptureID) -> Date? {
+        guard let entry = entries[id] else { return nil }
+        return entries.values.filter {
+            $0.id != id && !$0.startFailed && ($0.startedAt, $0.id) > (entry.startedAt, entry.id)
+        }.map(\.startedAt).min()
+    }
+
+    /// After the start of `newCapture` reached disk, ends `open`, the capture it follows, if
+    /// the store did not: when the new capture is off the store path, or its store call did not
+    /// end it. It waits for `open`'s line holding no other, since the new capture's line is let
+    /// go first, and it ends `open` at the new capture's start, as rule 15 ends it.
+    private func endFollowed(_ open: CaptureID, by newCapture: CaptureID, call: EngineCall) async {
+        // IDs only: rule 15 has done with the capture this one follows, however it came out.
+        defer { log.capture(newCapture, "followed_capture_settled", .segment(SegmentID(open))) }
+        guard entries[open]?.outcome == .open else { return }
+        log.capture(newCapture, "start_waits_for_open_capture", .segment(SegmentID(open)))
+        let startedAt = entries[newCapture]?.startedAt
+        let onStorePath = entries[newCapture]?.path == .store
         do throws(KnotError) {
-            // Ended at the new capture's start, as rule 15 ends it.
-            _ = try await end(open, at: entries[newCapture]?.startedAt)
+            try await withLine(open, call) { () async throws(KnotError) in
+                guard let followed = entries[open], followed.outcome == .open else { return }
+                guard !followed.startFailed else {
+                    // Its start reached no disk, and the surface keeps its text for the retry,
+                    // which is still that capture: nothing ends it (finding 55).
+                    log.capture(newCapture, "followed_capture_reached_no_disk", .segment(SegmentID(open)))
+                    return
+                }
+                // Only a capture still on the store path is ended by the store's row: one that
+                // fell back since keeps its saves in `Inbox/`, and its item must end there too,
+                // or ingest leaves it as an open item.
+                if onStorePath, entries[open]?.path == .store {
+                    let answer = await deadline.race { [notes] () async throws(KnotError) in
+                        try await notes.capture(open)
+                    }
+                    if case .answered(let row?) = answer, row.outcome != .open {
+                        entries[open]?.outcome = row.outcome
+                        publish(open)
+                        log.capture(open, "capture_ended", .flag("by_next_start", true))
+                        return
+                    }
+                }
+                _ = try await endHeld(open, at: startedAt)
+                log.capture(newCapture, "followed_capture_ended", .segment(SegmentID(open)))
+            }
         } catch {
             log.failure(error.about(capture: open), "capture_not_ended")
         }
@@ -748,7 +928,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// Follows a store call the engine stopped waiting for, which may still commit.
     private func watchLate<Value>(_ answer: StoreAnswer<Value>, of id: CaptureID) {
         guard case .timedOut(let late) = answer else { return }
-        Task { [weak self] in
+        Task.detached { [weak self] in
             let committed: Bool
             if case .success = await late.value { committed = true } else { committed = false }
             await self?.lateAnswer(of: id, committed: committed)
@@ -761,10 +941,17 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func lateAnswer(of id: CaptureID, committed: Bool) async {
         guard committed, let entry = entries[id] else { return }
         log.capture(id, "store_answered_late")
+        entries[id]?.hasRow = true
         if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
             // A begin that reached no disk: its row, with the first text, is on the drive now.
+            // The state that says so is an acknowledgement (finding 59): from now on a start on
+            // its surface is a capture of its own, and the capture is its caller's, by the ID
+            // its begin named. It has started, and does what a start does, after this answer.
             entries[id]?.durableRevision = 1
+            entries[id]?.answered = true
+            entries[id]?.startFailed = false
             publish(id)
+            Task.detached { [weak self] in await self?.startedLate(id) }
         } else if entry.discardLateRow {
             let revision = (entries[id]?.revision ?? 0) + 1
             entries[id]?.revision = revision
@@ -772,6 +959,21 @@ public actor StandardCaptureEngine: CaptureEngine {
             do throws(KnotError) {
                 _ = try await notes.end(end)
             } catch {
+                // Tried again in the engine's old work, when the store next answers.
+                pendingDiscards.insert(id)
+                log.failure(error.about(capture: id), "late_row_not_ended")
+            }
+        } else if entry.kind == .voice, case .failed(let code) = entry.outcome {
+            // A recording that would not convert, whose row arrives after it ended failed off the
+            // store path: its row ends failed too, now or when the store next answers (settled
+            // point 4).
+            let end = CaptureEnd(
+                captureID: id, endedAt: clock.now(), outcome: .failed(code), revision: entry.durableRevision)
+            do throws(KnotError) {
+                _ = try await notes.end(end)
+                pendingFailures[id] = nil
+            } catch {
+                pendingFailures[id] = end
                 log.failure(error.about(capture: id), "late_row_not_ended")
             }
         } else if entry.outcome != .open {
@@ -779,7 +981,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
     }
 
-    /// Ends as empty the rows of recordings discarded while the store did not take the end.
+    /// Ends the rows of recordings whose end the store did not take: as empty after a discard, as
+    /// failed after a conversion that failed.
     private func endPendingDiscards() async {
         for id in pendingDiscards {
             let end = CaptureEnd(
@@ -793,11 +996,42 @@ public actor StandardCaptureEngine: CaptureEngine {
             case .refused(let error) where error.code == KnotError.notFound.code:
                 // No row yet: a late record is ended when it arrives (`discardLateRow`).
                 pendingDiscards.remove(id)
+            case .refused(let error) where error.code == KnotError.captureIDConflict.code:
+                pendingDiscards.remove(id)
+                await settleRefused(id, error, event: "discard_end_settled")
             default:
                 // The store did not take it this time: the next call, or the app coming forward,
                 // tries again.
                 log.capture(id, "discard_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
             }
+        }
+        for (id, end) in pendingFailures {
+            let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
+            switch answer {
+            case .answered:
+                pendingFailures[id] = nil
+                log.capture(id, "recording_failed_row_ended")
+            case .refused(let error) where error.code == KnotError.notFound.code:
+                pendingFailures[id] = nil
+            case .refused(let error) where error.code == KnotError.captureIDConflict.code:
+                pendingFailures[id] = nil
+                await settleRefused(id, error, event: "failed_end_settled")
+            default:
+                log.capture(id, "failed_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
+            }
+        }
+    }
+
+    /// A pending end the store refuses for good, with `capture_id_conflict`, settled by reading the
+    /// row (finding 81). A row that has ended, failed or stored or discarded, needs no end: the
+    /// pending one goes, with one log line that names the capture and the code. A row still open
+    /// is another fault, and is logged as one; recovery ends it at the next launch.
+    private func settleRefused(_ id: CaptureID, _ error: KnotError, event: StaticString) async {
+        let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
+        if case .answered(let row?) = answer, row.outcome == .open {
+            log.failure(error.about(capture: id), "pending_end_refused_while_open")
+        } else {
+            log.capture(id, event, .code(error.code))
         }
     }
 
@@ -805,7 +1039,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         guard let ingest else { return }
         // Every item, in the order the captures began, so that a capture that followed another
         // on the `Inbox/` path is placed after it.
-        Task { _ = await ingest.ingestAll() }
+        Task.detached { _ = await ingest.ingestAll() }
     }
 
     // MARK: Helpers
@@ -828,15 +1062,66 @@ public actor StandardCaptureEngine: CaptureEngine {
         return state
     }
 
-    private func take(_ id: CaptureID) async {
-        guard !line.take(id) else { return }
-        // IDs only. The call is in the line once this is logged: nothing suspends between the
-        // two, so a test can order a later call after it.
-        log.capture(id, "call_waits_for_line")
-        await withCheckedContinuation { line.enqueue(id, $0) }
+    /// Runs `body` holding `id`'s line, which orders the calls of one capture across their
+    /// suspension points.
+    ///
+    /// The engine's rule: no call waits for one capture's line while it holds another's. Each
+    /// call takes one line at a time and lets it go before it takes the next, so no two calls
+    /// can each hold a line the other waits for, and every call returns once the store, the
+    /// recorder and the drive answer.
+    ///
+    /// The engine's own record of who holds what is `call`: every function that takes a line is
+    /// handed the call it serves, explicitly, so a task it starts on the call's behalf, a
+    /// detached one too, carries the record with it. A taking while the call holds a line, of
+    /// another line or of the same line, which would wait on itself, is logged as `line_nested`,
+    /// which the tests read: it never happens.
+    private func withLine<T: Sendable>(
+        _ id: CaptureID, _ call: EngineCall, _ body: () async throws(KnotError) -> T
+    ) async throws(KnotError) -> T {
+        if let held = call.held { log.capture(id, "line_nested", .segment(SegmentID(held))) }
+        if !line.take(id) {
+            // IDs only. The call is in the line once this is logged: nothing suspends between the
+            // two, so a test can order a later call after it.
+            log.capture(id, "call_waits_for_line")
+            await withCheckedContinuation { line.enqueue(id, $0) }
+        }
+        let before = call.hold(id)
+        let result: Result<T, KnotError>
+        do throws(KnotError) {
+            result = .success(try await body())
+        } catch {
+            result = .failure(error)
+        }
+        call.restore(before)
+        line.release(id)?.resume()
+        return try result.get()
     }
 
-    private func release(_ id: CaptureID) {
-        line.release(id)?.resume()
+    private func withLine(_ id: CaptureID, _ call: EngineCall, _ body: () async -> Void) async {
+        _ = try? await withLine(id, call) { () async throws(KnotError) in await body() }
     }
+}
+
+/// One call of the engine, and the line it holds: the engine's record of who holds what.
+///
+/// The record holds only if every call site passes on the call it was given. Each public entry
+/// makes one and hands it down; a helper, or a task a call starts, that is handed a fresh
+/// `EngineCall()` in its place takes the line again unseen, and no `line_nested` is logged. The
+/// suite does not catch that: a task handed a fresh call passes every test. A reader of a change
+/// checks it at the call sites.
+final class EngineCall: Sendable {
+    private let line = Mutex<CaptureID?>(nil)
+
+    /// The line the call holds now.
+    var held: CaptureID? { line.withLock { $0 } }
+
+    /// Marks `id` held, and returns what was held before.
+    func hold(_ id: CaptureID) -> CaptureID? {
+        line.withLock { held in
+            defer { held = id }
+            return held
+        }
+    }
+
+    func restore(_ before: CaptureID?) { line.withLock { $0 = before } }
 }

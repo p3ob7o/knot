@@ -164,6 +164,12 @@ public struct StoreLocations: Hashable, Sendable {
         recording.appending(path: "\(capture).\(format.fileExtension)", directoryHint: .notDirectory)
     }
 
+    /// The level peaks of a recording, in the format of `RecordingPeaks`, beside its working
+    /// file, appended while it records. They leave with the working file.
+    public func recordingPeaks(_ capture: CaptureID) -> URL {
+        recording.appending(path: "\(capture).peaks", directoryHint: .notDirectory)
+    }
+
     /// A stopped recording converted to the stored format, beside its working file, until the
     /// asset store takes it in.
     public func convertedRecording(_ capture: CaptureID) -> URL {
