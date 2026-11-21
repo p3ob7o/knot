@@ -115,7 +115,9 @@ public struct LaunchRecovery: Sendable {
     /// Ends a recovered recording's capture, so that no row of an earlier launch stays open
     /// once the store answered. Audio that converts is stored. A working file that is missing or
     /// holds no frame is a recording with no audio: its row ends discarded and empty, and its
-    /// manifest goes. Audio that will not convert ends its row as failed, and the working file
+    /// manifest goes, except that a failed row ends empty only when its working file was read
+    /// and holds no frame. A failed row whose working file is missing stays failed, and its
+    /// manifest stays. Audio that will not convert ends its row as failed, and the working file
     /// and its manifest stay for the retry: the audio a person spoke is never thrown away.
     /// Returns `nil` for a recording whose row must be made after every other row has ended.
     private func finishRecording(_ recording: RecordedAudio, cyclic: Bool, kept: [CaptureID: ErrorCode]) async
@@ -132,10 +134,18 @@ public struct LaunchRecovery: Sendable {
             default:
                 break
             }
-            let hasAudio = recording.frames > 0 && recording.workingFile.map { layer.entryKind($0) == .file } == true
+            let fileIsThere = recording.workingFile.map { layer.entryKind($0) == .file } == true
+            let hasAudio = recording.frames > 0 && fileIsThere
             guard hasAudio else {
-                // Read, and holding no frame. The row is open, or it ended failed at a launch
-                // that could not read the file: either way it ends empty, as is reported.
+                if let row, row.outcome != .open, !fileIsThere {
+                    // A failed row had audio, as one whose conversion failed: its working file
+                    // gone is not a recording with no audio. It stays failed, and nothing of it
+                    // is removed.
+                    log.capture(id, "recording_failed_without_file")
+                    return .ended(row.outcome)
+                }
+                // An open row with no audio ends empty. A failed row ends empty only when its
+                // working file was read and holds no frame, as reported.
                 if let row {
                     _ = try await notes.end(
                         CaptureEnd(

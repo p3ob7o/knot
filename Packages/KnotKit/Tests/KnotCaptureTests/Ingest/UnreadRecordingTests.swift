@@ -61,6 +61,31 @@ import Testing
         #expect(try await third.recovery.run(ingest: third.ingest)[id] == nil, "A later run finds nothing.")
     }
 
+    /// Finding 7. A recording whose conversion failed had audio, and its row ended failed. If
+    /// its working file is then gone, removed behind the recorder's back, a later launch leaves
+    /// the row failed and removes nothing: its segment stays in the stream, and the manifest
+    /// stays. Only a working file that was read and holds no frame ends a failed row empty.
+    @Test func aFailedRecordingWhoseFileIsGoneStaysFailed() async throws {
+        let r = Rig()
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let begun = try await r.beginRecording()
+        let id = begun.captureID
+        _ = try await r.engine.end(id)
+        #expect(try await r.notes.capture(id)?.outcome == Self.failed)
+        try r.layer.remove(Self.working(r, id))
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[id] == .ended(Self.failed), "Recovery reports the row as it is: failed.")
+        #expect(try await r.notes.capture(id)?.outcome == Self.failed, "The row stays failed.")
+        let segment = try #require(try await r.notes.segment(SegmentID(id)), "Its segment stays in the stream.")
+        #expect(segment.segment.state == .voice(.failed(.record, KnotError.conversionFailed.code)))
+        #expect(r.layer.entryKind(Self.manifest(r, id)) == .file, "The manifest stays.")
+        let again = next.relaunch()
+        _ = try await again.recovery.run(ingest: again.ingest)
+        #expect(try await r.notes.capture(id)?.outcome == Self.failed, "And at the launch after.")
+        #expect(r.layer.entryKind(Self.manifest(r, id)) == .file)
+    }
+
     /// Finding 6, the review's W3. `Recording/` cannot be listed, the working file cannot be
     /// read, and the row is open: a folder that cannot be listed says nothing, so the row ends
     /// failed and the files stay. Once both can be read, the recording is stored. Taking the
