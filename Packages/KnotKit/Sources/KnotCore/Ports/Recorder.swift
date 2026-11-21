@@ -36,6 +36,18 @@ public protocol Recorder: Sendable {
     /// and was never converted, or whose conversion failed, as it ended. So a failed conversion
     /// is tried again at the next launch. An orphan is returned again on each call until its
     /// working file is removed.
+    ///
+    /// The orphan is the working file. One that can be read is returned with its frames; its
+    /// ending comes from the manifest when the manifest can be read, and is `recovered` when it
+    /// cannot. A manifest that cannot be read does not hide its recording, and it is left where
+    /// it is, for the caller to deal with. A working file that is on the drive and cannot be
+    /// read, such as one protected while the device is locked or that this process may not
+    /// open, is not returned, and nothing of the recording is touched: it is returned at a later
+    /// call, once it can be read. A manifest with no working file is a recording with no audio.
+    /// An orphan is returned as holding no audio, with no frame or no working file, only in
+    /// three cases: its working file is missing; the file is shorter than its header; the file
+    /// was read and holds no frame. A working file that is there and cannot be read is never
+    /// one of them.
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio]
 
     /// Converts a stopped recording's working file to the stored format, AAC mono in `.m4a`,
@@ -131,7 +143,10 @@ public protocol RecordingSession: AnyObject, Sendable {
     /// `Recorder.removeWorkingFile(of:)`. Called again, or after the
     /// recording ended by itself, it returns the same result; called at the same time, each
     /// caller returns only once the first one's file is on the drive. Cancelling the calling task does
-    /// not cancel the stop. It never throws: a failure is the result's `ending`.
+    /// not cancel the stop. It never throws: a failure is the result's `ending`. When the
+    /// working file is there and its length cannot be read back, the ending is `write_failed`,
+    /// the working file is named, and `frames` is the last length read from the file: a
+    /// recording on the drive is never answered as one with no audio.
     func stop() async -> RecordedAudio
 
     /// Ends the recording and removes its file and manifest: the accidental press of
@@ -153,11 +168,13 @@ public enum RecordingEvent: Hashable, Sendable {
 /// A finished recording, as the file holds it.
 public struct RecordedAudio: Hashable, Sendable {
     public var captureID: CaptureID
-    /// Read from the file, never counted from what was appended.
+    /// Read from the file, never counted from what was appended. When the file is there and its
+    /// length cannot be read back, the last length read from it, with the ending `write_failed`.
     public var frames: Int64
     public var sampleRate: Double
     public var ending: RecordingEnding
-    /// The working file the recording left, or `nil` after a discard.
+    /// The working file the recording left, or `nil` after a discard or when no file is on the
+    /// drive. A working file that is there is always named, even when it could not be read.
     public var workingFile: URL?
 
     public init(

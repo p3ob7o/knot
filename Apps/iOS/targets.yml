@@ -51,6 +51,7 @@ targets:
     platform: iOS
     sources:
       - UITests
+      - ../UITestSupport
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).uitests

@@ -46,7 +46,7 @@ struct Rig {
         let locations = StoreLocations.testing(root: URL(filePath: "/tracer", directoryHint: .isDirectory))
         self.init(
             clock: clock, ids: ids, deviceID: deviceID, launchID: ids.make(), locations: locations, layer: layer,
-            notes: InMemoryNoteStore(clock: clock, ids: ids, deviceID: deviceID),
+            notes: InMemoryNoteStore(clock: clock, ids: ids, deviceID: deviceID, inbox: locations.inbox),
             recorder: ScriptedRecorder(locations: locations, layer: layer, clock: clock, audio: audio),
             transcriber: ScriptedTranscriber(), cleaner: ScriptedCleaner(), deadline: deadline, runBudget: runBudget,
             engineIngests: engineIngests, logs: RecordingSink())

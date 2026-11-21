@@ -17,15 +17,27 @@
 
         private struct State {
             var readiness: TranscriberReadiness
-            var files: [URL: [TranscriptPiece]] = [:]
+            var files: [URL: FileScript] = [:]
             var missing: Set<URL> = []
-            var unscripted: [TranscriptPiece]?
+            var unscripted: FileScript?
             var failures: [KnotError] = []
             var installFailure: KnotError?
             var runDelay: Duration = .zero
             var fileDelays: [URL: Duration] = [:]
             var liveWords: [String] = []
             var calls = 0
+        }
+
+        /// What a file holds: its phrases, and how long it lasts.
+        private struct FileScript {
+            var pieces: [TranscriptPiece]
+            /// Where the file ends: the end of its last phrase, or later when silence follows it.
+            var end: Duration
+
+            init(pieces: [TranscriptPiece], lasting length: Duration?) {
+                self.pieces = pieces
+                self.end = max(length ?? .zero, pieces.last?.range.upperBound ?? .zero)
+            }
         }
 
         private let state: Mutex<State>
@@ -40,8 +52,12 @@
 
         public func setReadiness(_ readiness: TranscriberReadiness) { state.withLock { $0.readiness = readiness } }
 
-        /// The phrases `file` holds, in its own time. A file with none is empty or silent.
-        public func script(_ file: URL, pieces: [TranscriptPiece]) { state.withLock { $0.files[file] = pieces } }
+        /// The phrases `file` holds, in its own time, and how long it lasts: by default until its
+        /// last phrase ends. Everything between the phrases is silence. A file with no phrases
+        /// is empty, or silent for `length`.
+        public func script(_ file: URL, pieces: [TranscriptPiece], lasting length: Duration? = nil) {
+            state.withLock { $0.files[file] = FileScript(pieces: pieces, lasting: length) }
+        }
 
         /// Three short synthetic phrases, for a file nobody scripted once asked for with
         /// `scriptUnscriptedFiles(pieces:)`, as the preview's builder asks.
@@ -54,9 +70,10 @@
         /// What every file nobody scripted reads as. By default nothing: such a file is
         /// `audio_unreadable`, so a test that forgets to script a file fails (finding 76). The
         /// preview's builder asks for `defaultScript` here, so that a recording made in a
-        /// preview has a transcript; `nil` turns it off again.
-        public func scriptUnscriptedFiles(pieces: [TranscriptPiece]?) {
-            state.withLock { $0.unscripted = pieces }
+        /// preview has a transcript; `nil` turns it off again. Such a file lasts `length`, by
+        /// default until its last phrase ends.
+        public func scriptUnscriptedFiles(pieces: [TranscriptPiece]?, lasting length: Duration? = nil) {
+            state.withLock { $0.unscripted = pieces.map { FileScript(pieces: $0, lasting: length) } }
         }
 
         /// A file that is not there, or cannot be read: `audio_unreadable`.
@@ -100,11 +117,11 @@
         public func transcribe(file: URL, from offset: Duration, budget: Duration?) async throws(KnotError)
             -> TranscriptionRun
         {
-            let (readiness, failure, pieces, delay) = state.withLock { state in
+            let (readiness, failure, script, delay) = state.withLock { state in
                 state.calls += 1
                 let failure = state.failures.isEmpty ? nil : state.failures.removeFirst()
-                let pieces = state.missing.contains(file) ? nil : state.files[file] ?? state.unscripted
-                return (state.readiness, failure, pieces, state.fileDelays[file] ?? state.runDelay)
+                let script = state.missing.contains(file) ? nil : state.files[file] ?? state.unscripted
+                return (state.readiness, failure, script, state.fileDelays[file] ?? state.runDelay)
             }
             switch readiness {
             case .ready: break
@@ -116,17 +133,31 @@
             }
             if Task.isCancelled { throw KnotError.cancelled }
             if let failure { throw failure }
-            guard let pieces else { throw KnotError.audioUnreadable }
-            let ahead = pieces.filter { $0.range.lowerBound >= offset }
+            guard let script else { throw KnotError.audioUnreadable }
+            let ahead = script.pieces.filter { $0.range.lowerBound >= offset }
+            guard let budget else {
+                return TranscriptionRun(startsAt: offset, pieces: ahead, resumeAt: nil, provenance: provenance)
+            }
+            // A run reads a window of its budget and ends at the last phrase finished in it.
+            // Only a first phrase still open at the window's end makes the window longer, so
+            // every run moves on; silence never does, so a window with no speech takes nothing
+            // and the next run starts after it.
+            var windowEnd = offset + budget
             var taken: [TranscriptPiece] = []
             for piece in ahead {
-                // A run ends at the last finished phrase within its budget, and always takes
-                // at least one, a first phrase longer than the budget included, so every run
-                // moves on and the runs end.
-                if let budget, !taken.isEmpty, piece.range.upperBound > offset + budget { break }
+                guard piece.range.lowerBound < windowEnd else { break }
+                if piece.range.upperBound > windowEnd {
+                    guard taken.isEmpty else { break }
+                    windowEnd = piece.range.upperBound
+                }
                 taken.append(piece)
             }
-            let resumeAt = ahead.count > taken.count ? ahead[taken.count].range.lowerBound : nil
+            let resumeAt: Duration?
+            if taken.count < ahead.count {
+                resumeAt = min(ahead[taken.count].range.lowerBound, windowEnd)
+            } else {
+                resumeAt = windowEnd < script.end ? windowEnd : nil
+            }
             return TranscriptionRun(startsAt: offset, pieces: taken, resumeAt: resumeAt, provenance: provenance)
         }
 
