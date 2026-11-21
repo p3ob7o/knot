@@ -227,6 +227,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-19 | 4 | The OpenSketch intent. Held until the keep-gate ruling. | the ruling |
 | WP-20 | 1 | The whole package | WP-02 PR 2 |
 | WP-21 | 1 | A skeleton that does not depend on the design direction: the theme layer, the view models with their tests, and the components | WP-05 |
+| WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
