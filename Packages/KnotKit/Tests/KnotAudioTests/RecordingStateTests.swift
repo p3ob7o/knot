@@ -17,6 +17,22 @@ import Testing
         try await RecordingStateStoreContract.run { DefaultsRecordingStateStore(defaults: suite.defaults) }
     }
 
+    /// A test's suite keeps its file in the test's own folder, never in the account's
+    /// Preferences folder, and once removed leaves nothing behind.
+    @Test func aRemovedSuiteLeavesNoFile() throws {
+        let suite = try TestSuite()
+        DefaultsRecordingStateStore(defaults: suite.defaults).write(
+            RecordingStateSnapshot(phase: .recording, captureID: CaptureID(uuid: UUID())))
+        suite.defaults.synchronize()
+        #expect(FileManager.default.fileExists(atPath: suite.file.path), "The suite's file is in the test's folder.")
+        let preferences = try #require(
+            FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?.appending(path: "Preferences"))
+        let named = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
+        #expect(!named.contains { $0.contains(suite.folder.lastPathComponent) }, "The suite reached Preferences.")
+        suite.remove()
+        #expect(!FileManager.default.fileExists(atPath: suite.folder.path), "The suite's folder is left.")
+    }
+
     /// One key, one value: a value under the key that is not a snapshot reads as idle.
     @Test func aValueThatCannotBeReadIsIdle() throws {
         let suite = try TestSuite()
@@ -132,11 +148,22 @@ import Testing
 }
 
 /// A defaults suite of a test's own, named for nothing of the machine or the account.
+///
+/// It is named by an absolute path, its file's in a folder of the test's own: the preferences
+/// daemon then keeps the suite's file there and nowhere else, and other processes that name the
+/// same path see the same values. A suite named by a word would leave an empty file in the
+/// account's Preferences folder, which the daemon writes a moment after the domain is removed,
+/// after any removal of the test's could run.
 final class TestSuite: Sendable {
+    /// The test's own folder, which holds the suite's file and goes with it.
+    let folder: URL
     let name: String
 
     init() throws {
-        name = "knot-test.state.\(UUID().uuidString.lowercased())"
+        folder = FileManager.default.temporaryDirectory.appending(
+            path: "KnotAudioTests-state-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        name = folder.appending(path: "state", directoryHint: .notDirectory).path
         _ = try #require(UserDefaults(suiteName: name))
     }
 
@@ -149,10 +176,16 @@ final class TestSuite: Sendable {
         return defaults
     }
 
-    /// Removes the suite and what it holds.
+    /// Removes the suite and what it holds, and the folder of its file.
     func remove() {
+        let defaults = self.defaults
         defaults.removePersistentDomain(forName: name)
+        defaults.synchronize()
+        try? FileManager.default.removeItem(at: folder)
     }
+
+    /// Where the preferences daemon keeps the suite's file: in the test's folder.
+    var file: URL { URL(fileURLWithPath: name + ".plist") }
 }
 
 /// A store that keeps every snapshot written, with the queue it was written on.

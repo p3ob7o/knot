@@ -28,7 +28,7 @@ func measureCosts(_ arguments: Arguments) async throws(HostError) {
     } else {
         state = UnavailableRecordingStateStore()
     }
-    defer { if let suite { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) } }
+    defer { if let suite { removeSuite(named: suite) } }
     let recorder = LiveRecorder(
         locations: try locations(arguments), layer: TimedSyncLayer(PosixFileLayer(), syncs),
         input: try injected(arguments, pace: .realTime, frames: Int64(rate * seconds)), state: state)

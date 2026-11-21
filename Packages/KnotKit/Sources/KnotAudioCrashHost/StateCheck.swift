@@ -9,18 +9,21 @@
     /// state read must be the state written, every field of it. Then the first child writes
     /// idle, the second reads idle, and a last child removes the suite.
     ///
-    ///     state-check [--child <crash host>] [--runner "<command> <arguments>"]
+    ///     state-check [--child <crash host>] [--runner "<command> <arguments>"] [--dir <folder>]
     ///
     /// `--runner` prefixes each child's command, for example `xcrun simctl spawn <udid>`, and
-    /// `--child` is then the crash host built for that simulator. The suite is new, named
-    /// `knot-test.state.<uuid>`, which says nothing of the machine or the account. Prints each
+    /// `--child` is then the crash host built for that simulator. The suite is new: with `--dir`,
+    /// a test's folder on the Mac, it is named by a path in it and keeps its file there; without,
+    /// as in a simulator, it is named `knot-test.state.<uuid>`. Neither says anything of the
+    /// machine or the account. Prints each
     /// child's line, `state-check write`, `read` or `clear`, then `state-check ok` or
     /// `state-check FAIL <why>`; the exit status is 0 only with `ok`.
     func stateCheck(_ arguments: Arguments) throws(HostError) -> Bool {
         guard let ownPath = Bundle.main.executableURL?.path else { throw .usage("cannot find own path") }
         let child = arguments.string("child") ?? ownPath
         let runner = (arguments.string("runner") ?? "").split(separator: " ").map(String.init)
-        let suite = "knot-test.state.\(UUID().uuidString.lowercased())"
+        let unique = "knot-test.state.\(UUID().uuidString.lowercased())"
+        let suite = arguments.string("dir").map { URL(fileURLWithPath: $0).appending(path: unique).path } ?? unique
         print("state-check suite \(suite) runner \(runner.isEmpty ? "none" : runner.joined(separator: " "))")
         var failure: String?
         defer {

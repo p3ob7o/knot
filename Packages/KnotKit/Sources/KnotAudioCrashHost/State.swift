@@ -34,12 +34,25 @@ func state(_ arguments: Arguments) throws(HostError) {
         try suite().synchronize()
         print(describe(store.read()))
     case "clear":
-        let defaults = try suite()
-        defaults.removePersistentDomain(forName: name)
-        defaults.synchronize()
+        removeSuite(named: name)
         print("state cleared")
     default:
         throw .usage("state takes --read, --write or --clear")
+    }
+}
+
+/// Removes a test's defaults suite and what it holds. A suite named by an absolute path, as a
+/// test on the Mac names it, keeps its file at that path with `.plist`, in the test's folder:
+/// that file goes too. A suite named by a word, as in a simulator, keeps it in the Preferences
+/// folder, where it goes as well, though the preferences daemon may write it again, empty.
+func removeSuite(named name: String) {
+    guard let defaults = UserDefaults(suiteName: name) else { return }
+    defaults.removePersistentDomain(forName: name)
+    defaults.synchronize()
+    if name.hasPrefix("/") {
+        try? FileManager.default.removeItem(atPath: name + ".plist")
+    } else if let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first {
+        try? FileManager.default.removeItem(at: library.appending(path: "Preferences/\(name).plist"))
     }
 }
 
