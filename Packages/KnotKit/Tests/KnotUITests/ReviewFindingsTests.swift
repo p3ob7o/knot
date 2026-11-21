@@ -116,6 +116,98 @@ import Testing
         }
         #expect(next != id)
     }
+
+    /// Finding 4. docs/architecture.md §6: replacing a segment's text takes the revision the
+    /// caller read and fails when it is stale. An edit carries the revision read when it began,
+    /// so a change that arrived meanwhile is never replaced unseen.
+    @Test func anEditBegunBeforeAChangeArrivedDoesNotReplaceIt() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("call the plumber"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        // The person starts editing. Meanwhile the command line replaces the text, and the
+        // change signal reads the note again, as `observeStore` does.
+        model.beginEditing(segment)
+        _ = try await rig.environment.notes.replaceText(
+            TextReplacement(
+                segment: segment, text: "call the plumber on Monday", origin: .edited, writer: .commandLine))
+        await model.refresh()
+        // The person ends the edit they began on "call the plumber".
+        model.editText(of: segment, to: "call the electrician")
+        await settled(model)
+        let stored = try #require(try await rig.environment.notes.segment(segment))
+        #expect(stored.text == "call the plumber on Monday", "problem \(String(describing: model.problem))")
+        // Nothing was written; the draft is kept, with what arrived.
+        #expect(
+            model.editConflict
+                == EditConflict(
+                    target: .segment(segment), draft: "call the electrician", arrived: "call the plumber on Monday"))
+        #expect(model.editConflict?.draft(of: segment) == "call the electrician")
+        #expect(model.items.first?.text == "call the plumber on Monday")
+
+        // Keep mine: the draft goes in over what arrived.
+        model.keepMyEdit()
+        await settled(model)
+        #expect(model.editConflict == nil)
+        #expect(try await rig.environment.notes.segment(segment)?.text == "call the electrician")
+    }
+
+    @Test func droppingTheDraftKeepsWhatArrived() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("call the plumber"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        model.beginEditing(segment)
+        _ = try await rig.environment.notes.replaceText(
+            TextReplacement(segment: segment, text: "call the roofer", origin: .edited, writer: .mcp))
+        await model.refresh()
+        model.editText(of: segment, to: "call the electrician")
+        await settled(model)
+        #expect(model.editConflict != nil)
+        model.dropMyEdit()
+        await settled(model)
+        #expect(model.editConflict == nil)
+        #expect(try await rig.environment.notes.segment(segment)?.text == "call the roofer")
+    }
+
+    @Test func aTitleBegunBeforeAChangeArrivedDoesNotReplaceIt() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("errands"))
+        let model = rig.open(note)
+        await model.refresh()
+        model.beginEditingTitle()
+        _ = try await rig.environment.notes.setTitle("Saturday", of: note, ifRevision: nil)
+        // The change signal reads the note again, as `observeStore` does.
+        await model.refresh()
+        model.setTitle("Shopping")
+        await settled(model)
+        #expect(try await rig.environment.notes.note(note)?.note.title == "Saturday")
+        #expect(model.editConflict == EditConflict(target: .title, draft: "Shopping", arrived: "Saturday"))
+        model.keepMyEdit()
+        await settled(model)
+        #expect(model.editConflict == nil)
+        #expect(try await rig.environment.notes.note(note)?.note.title == "Shopping")
+    }
+
+    @Test func anEditWithNoChangeElsewhereIsWritten() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("call the plumber"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        model.beginEditing(segment)
+        model.editText(of: segment, to: "call the electrician")
+        await settled(model)
+        #expect(model.editConflict == nil)
+        #expect(model.problem == nil)
+        #expect(try await rig.environment.notes.segment(segment)?.text == "call the electrician")
+    }
 }
 
 /// The real engine, whose text saves and ends can be made to fail.

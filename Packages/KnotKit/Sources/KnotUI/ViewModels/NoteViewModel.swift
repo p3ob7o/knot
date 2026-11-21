@@ -34,6 +34,34 @@ public enum UndoOffer: Hashable, Sendable {
     }
 }
 
+/// An edit that the store refused because the text changed elsewhere after the edit began
+/// (docs/architecture.md §6). Nothing was written: the person's draft is kept, and they decide.
+public struct EditConflict: Hashable, Sendable {
+    public enum Target: Hashable, Sendable {
+        case segment(SegmentID)
+        case title
+    }
+
+    public var target: Target
+    /// What the person wrote, kept. `nil` for a title they cleared.
+    public var draft: String?
+    /// What the store holds now, which arrived while they edited.
+    public var arrived: String?
+
+    public init(target: Target, draft: String?, arrived: String?) {
+        self.target = target
+        self.draft = draft
+        self.arrived = arrived
+    }
+
+    public var message: String { localized("This text changed elsewhere while you edited it.") }
+
+    /// The draft of `segment`, while this conflict is about it.
+    public func draft(of segment: SegmentID) -> String? {
+        target == .segment(segment) ? draft : nil
+    }
+}
+
 /// The view model of a note and of the capture surface: one, because with the append window
 /// open the capture surface is that note with its field focused (docs/product-spec.md §7,
 /// assumption A27). A note is a stack of segments, each edited on its own, and new text enters
@@ -76,6 +104,8 @@ public final class NoteViewModel {
     public private(set) var showingOriginal: Set<SegmentID> = []
     /// The typed capture the field is making, from its first keystroke to its end.
     public private(set) var typedCapture: CaptureID?
+    /// An edit refused as stale, waiting for the person to keep it or drop it.
+    public private(set) var editConflict: EditConflict?
 
     /// A running recording blocks typing on every capture surface (rule 15).
     public var fieldAcceptsTyping: Bool { recording == .idle }
@@ -98,6 +128,10 @@ public final class NoteViewModel {
     private var chain: Task<Void, Never>?
     private var sentText = ""
     private var recordingPress: Press?
+    /// The revision of each segment when the person began editing it, which the edit carries.
+    private var editBases: [SegmentID: StampedRevision] = [:]
+    /// The note's revision when the person began editing its title.
+    private var titleBase: StampedRevision?
     /// Follows the running recording's capture, which can end by itself.
     private var recordingWatch: Task<Void, Never>?
     private var arrivalsCleared = false
@@ -425,25 +459,91 @@ public final class NoteViewModel {
 
     // MARK: Segments and the note
 
-    /// Replaces a segment's text with the person's edit. Edits beat cleaned and raw text, and the
-    /// store refuses a stale revision.
+    /// The person began editing a segment: the edit carries the revision they read now.
+    public func beginEditing(_ segment: SegmentID) {
+        guard editBases[segment] == nil, let revision = record?.revision(of: segment) else { return }
+        editBases[segment] = revision
+    }
+
+    /// The person began editing the title: it carries the note's revision they read now.
+    public func beginEditingTitle() {
+        guard titleBase == nil else { return }
+        titleBase = record?.revision
+    }
+
+    /// Replaces a segment's text with the person's edit. Edits beat cleaned and raw text. The edit
+    /// carries the revision read when it began (`beginEditing`), so text that changed elsewhere
+    /// meanwhile is never replaced unseen: the store refuses it, nothing is written, and
+    /// `editConflict` keeps the draft for the person to decide.
     public func editText(of segment: SegmentID, to text: String) {
         enqueue { model in
             guard let record = model.record else { return }
-            let replacement = TextReplacement(
-                segment: segment, text: text, origin: .edited, writer: .app, ifRevision: record.revision(of: segment))
-            await model.storeAction { notes in _ = try await notes.replaceText(replacement) }
+            let base = model.editBases.removeValue(forKey: segment) ?? record.revision(of: segment)
+            await model.replace(segment, with: text, ifRevision: base)
         }
     }
 
-    /// Sets the note's title, or clears it with `nil` or blank text.
+    /// Sets the note's title, or clears it with `nil` or blank text, against the revision read
+    /// when the title's edit began.
     public func setTitle(_ title: String?) {
         enqueue { model in
             guard let record = model.record else { return }
-            let value = title.flatMap { CaptureText.isEmpty($0) ? nil : $0 }
-            await model.storeAction { notes in _ = try await notes.setTitle(value, of: record.note.id, ifRevision: nil)
+            let base = model.titleBase ?? record.revision
+            model.titleBase = nil
+            await model.retitle(title, ifRevision: base)
+        }
+    }
+
+    /// Commits the kept draft over what arrived.
+    public func keepMyEdit() {
+        guard let conflict = editConflict else { return }
+        enqueue { model in
+            guard model.editConflict == conflict, let record = model.record else { return }
+            model.editConflict = nil
+            switch conflict.target {
+            case .segment(let segment):
+                await model.replace(segment, with: conflict.draft ?? "", ifRevision: record.revision(of: segment))
+            case .title:
+                await model.retitle(conflict.draft, ifRevision: record.revision)
             }
         }
+    }
+
+    /// Drops the draft: the text that arrived stays.
+    public func dropMyEdit() {
+        editConflict = nil
+    }
+
+    private func replace(_ segment: SegmentID, with text: String, ifRevision: StampedRevision?) async {
+        let replacement = TextReplacement(
+            segment: segment, text: text, origin: .edited, writer: .app, ifRevision: ifRevision)
+        do {
+            _ = try await environment.notes.replaceText(replacement)
+        } catch  where error.code == KnotError.revisionStale.code {
+            await refresh()
+            editConflict = EditConflict(
+                target: .segment(segment), draft: text,
+                arrived: record?.segments.first { $0.id == segment }?.text)
+            return
+        } catch {
+            problem = .actionRefused(error.code)
+        }
+        await refresh()
+    }
+
+    private func retitle(_ title: String?, ifRevision: StampedRevision?) async {
+        guard let id = record?.note.id else { return }
+        let value = title.flatMap { CaptureText.isEmpty($0) ? nil : $0 }
+        do {
+            _ = try await environment.notes.setTitle(value, of: id, ifRevision: ifRevision)
+        } catch  where error.code == KnotError.revisionStale.code {
+            await refresh()
+            editConflict = EditConflict(target: .title, draft: value, arrived: record?.note.title)
+            return
+        } catch {
+            problem = .actionRefused(error.code)
+        }
+        await refresh()
     }
 
     /// Runs a segment's action.

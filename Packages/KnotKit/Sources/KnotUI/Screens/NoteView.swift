@@ -30,7 +30,7 @@
                     }
                     ForEach(model.items) { item in
                         SegmentView(
-                            item, text: model.displayedText(of: item),
+                            item, text: model.editConflict?.draft(of: item.id) ?? model.displayedText(of: item),
                             isShowingOriginal: model.showingOriginal.contains(item.id),
                             playback: playing == item.id ? player.state : .empty,
                             handlers: handlers(for: item))
@@ -95,6 +95,23 @@
                     .accessibilityLabel(Text("Dismiss", bundle: .module))
                 }
             }
+            if let conflict = model.editConflict {
+                // The person's draft stays in its field; they keep it or drop it. How this looks
+                // is the design round's.
+                Banner(conflict.message, symbol: "arrow.triangle.2.circlepath", role: .failed) {
+                    Button {
+                        model.keepMyEdit()
+                    } label: {
+                        Text("Keep mine", bundle: .module)
+                    }
+                    Button {
+                        model.dropMyEdit()
+                    } label: {
+                        Text("Keep the new text", bundle: .module)
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
             if let offer = model.undoOffer {
                 Banner(offer.label, symbol: "arrow.uturn.backward") {
                     Button {
@@ -119,7 +136,8 @@
                         await player.toggle(file)
                     }
                 },
-                seek: { position in Task { await player.seek(to: position) } })
+                seek: { position in Task { await player.seek(to: position) } },
+                beginEdit: { model.beginEditing(item.id) })
         }
     }
 #endif

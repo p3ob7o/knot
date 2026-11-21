@@ -7,11 +7,15 @@ public struct SegmentHandlers {
     public var action: (SegmentAction) -> Void
     public var togglePlay: () -> Void
     public var seek: (Duration) -> Void
+    /// The person began editing the text: the edit carries the revision read now.
+    public var beginEdit: () -> Void
 
     public init(
         edit: @escaping (String) -> Void, action: @escaping (SegmentAction) -> Void,
-        togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in }
+        togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in },
+        beginEdit: @escaping () -> Void = {}
     ) {
+        self.beginEdit = beginEdit
         self.edit = edit
         self.action = action
         self.togglePlay = togglePlay
@@ -53,12 +57,18 @@ public struct SegmentView: View {
             switch item.kind {
             case .voice:
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers)
-                SegmentText(item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit)
+                SegmentText(
+                    item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
+                    beginEdit: handlers.beginEdit)
             case .ink:
                 InkSegmentPlaceholder(item: item)
-                SegmentText(item: item, text: text, isShowingOriginal: false, edit: handlers.edit)
+                SegmentText(
+                    item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
+                    beginEdit: handlers.beginEdit)
             case .typed:
-                SegmentText(item: item, text: text, isShowingOriginal: false, edit: handlers.edit)
+                SegmentText(
+                    item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
+                    beginEdit: handlers.beginEdit)
             case .unknown:
                 EmptyView()
             }
@@ -133,6 +143,7 @@ struct SegmentText: View {
     let text: String
     let isShowingOriginal: Bool
     let edit: (String) -> Void
+    var beginEdit: () -> Void = {}
 
     var body: some View {
         if item.isEditable, !isShowingOriginal {
@@ -144,7 +155,7 @@ struct SegmentText: View {
             .focused($isEditing)
             .onAppear { draft = text }
             .onChange(of: text) { _, new in if !isEditing { draft = new } }
-            .onChange(of: isEditing) { _, editing in if !editing { commit() } }
+            .onChange(of: isEditing) { _, editing in if editing { beginEdit() } else { commit() } }
             .onSubmit(commit)
             .accessibilityLabel(Text(item.kind.label))
         } else if !CaptureText.isEmpty(text) {
