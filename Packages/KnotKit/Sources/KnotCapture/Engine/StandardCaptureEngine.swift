@@ -1,5 +1,6 @@
 import Foundation
 import KnotCore
+import Synchronization
 
 /// The one capture engine (docs/architecture.md §5 and §6): typed captures and recordings,
 /// through the one `NoteStore` operation for each save, with `Inbox/` behind every one of them.
@@ -175,13 +176,14 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.portUnavailable
         }
         let startedAt = clock.now()
+        let call = EngineCall()
         // Rule 15 first, from the table and with no wait, so that a start it refuses writes
         // nothing. A start that is an open capture's retry waits for that capture's line, which
         // is its own capture's, holding nothing else; one that turns out not to be the retry
         // once it holds the line is decided again.
         var step = try nextStep(for: request, besides: nil)
         while case .retry(let pending) = step {
-            if let state = try await retryBegin(pending, text: request.text ?? "") { return state }
+            if let state = try await retryBegin(pending, text: request.text ?? "", call: call) { return state }
             step = try nextStep(for: request, besides: nil)
         }
         // The capture this one follows, by rule 13 or 15, decided now and never again: every
@@ -203,7 +205,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         // before it waits for anything.
         let state: CaptureState
         do throws(KnotError) {
-            state = try await beginHeld(id, request: request, follows: follows)
+            state = try await beginHeld(id, request: request, follows: follows, call: call)
         } catch {
             if request.kind == .typed, entries[id] != nil { entries[id]?.startFailed = true }
             throw error
@@ -214,16 +216,16 @@ public actor StandardCaptureEngine: CaptureEngine {
         // threw above, and the open capture goes on.
         if let follows {
             await reach(.beforeEndingFollowed, id)
-            await endFollowed(follows, by: id)
+            await endFollowed(follows, by: id, call: call)
         }
         return state
     }
 
     /// A start's first durable write, holding its own line, which is new and never waited for.
     private func beginHeld(
-        _ id: CaptureID, request: CaptureRequest, follows: CaptureID?
+        _ id: CaptureID, request: CaptureRequest, follows: CaptureID?, call: EngineCall
     ) async throws(KnotError) -> CaptureState {
-        try await withLine(id) { () async throws(KnotError) -> CaptureState in
+        try await withLine(id, call) { () async throws(KnotError) -> CaptureState in
             // A recording starts first: one whose microphone cannot open never starts, and ends
             // nothing. Its request names the capture it follows, so the recorder's first manifest
             // write carries the link that every later item carries too (finding 54).
@@ -273,9 +275,10 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     private func retryConversions(dueOnly: Bool) async {
         let now = clock.now()
+        let call = EngineCall()
         for (id, pending) in pendingConversions
         where !dueOnly || now.timeIntervalSince(pending.triedAt) >= Self.conversionRetryDelay {
-            await withLine(id) {
+            await withLine(id, call) {
                 guard pendingConversions[id] != nil else { return }
                 do throws(KnotError) {
                     try await storeRecording(id, audio: pending.audio, endedAt: pending.endedAt)
@@ -297,7 +300,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
             throw KnotError.illegalTransition.about(capture: capture)
         }
-        return try await withLine(capture) { () async throws(KnotError) -> CaptureState in
+        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
             guard entries[capture]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: capture) }
             entries[capture]?.revision += 1
             entries[capture]?.text = text
@@ -311,7 +314,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
-        return try await withLine(capture) { () async throws(KnotError) -> CaptureState in
+        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
             try await endHeld(capture, at: nil)
         }
     }
@@ -333,7 +336,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
-        return try await withLine(capture) { () async throws(KnotError) -> CaptureState in
+        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
             guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
             switch entry.kind {
             case .typed:
@@ -403,9 +406,9 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// the capture's line, not when it arrived (finding 41): a capture that a call answered as
     /// saved, or that ended, while the start waited is no longer one to retry, and `nil` says
     /// that the start is a capture of its own. The start waits for that one line, holding none.
-    private func retryBegin(_ id: CaptureID, text: String) async throws(KnotError) -> CaptureState? {
+    private func retryBegin(_ id: CaptureID, text: String, call: EngineCall) async throws(KnotError) -> CaptureState? {
         log.capture(id, "start_waits_to_retry")
-        let state = try await withLine(id) { () async throws(KnotError) -> CaptureState? in
+        let state = try await withLine(id, call) { () async throws(KnotError) -> CaptureState? in
             guard let entry = entries[id], entry.outcome == .open, !entry.answered else { return nil }
             entries[id]?.revision += 1
             entries[id]?.text = text
@@ -432,7 +435,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         guard let state else { return nil }
         // It has started now: rule 15 ends the capture it follows, decided when it first
         // arrived, as a first start does. Never one that began after it: that one ends this.
-        if let follows = entries[id]?.follows { await endFollowed(follows, by: id) }
+        if let follows = entries[id]?.follows { await endFollowed(follows, by: id, call: call) }
         return state
     }
 
@@ -771,13 +774,13 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// the store did not: when the new capture is off the store path, or its store call did not
     /// end it. It waits for `open`'s line holding no other, since the new capture's line is let
     /// go first, and it ends `open` at the new capture's start, as rule 15 ends it.
-    private func endFollowed(_ open: CaptureID, by newCapture: CaptureID) async {
+    private func endFollowed(_ open: CaptureID, by newCapture: CaptureID, call: EngineCall) async {
         guard entries[open]?.outcome == .open else { return }
         log.capture(newCapture, "start_waits_for_open_capture", .segment(SegmentID(open)))
         let startedAt = entries[newCapture]?.startedAt
         let onStorePath = entries[newCapture]?.path == .store
         do throws(KnotError) {
-            try await withLine(open) { () async throws(KnotError) in
+            try await withLine(open, call) { () async throws(KnotError) in
                 guard let followed = entries[open], followed.outcome == .open else { return }
                 guard !followed.startFailed else {
                     // Its start reached no disk, and the surface keeps its text for the retry,
@@ -901,41 +904,60 @@ public actor StandardCaptureEngine: CaptureEngine {
         return state
     }
 
-    /// The capture whose line the current task holds, if any.
-    @TaskLocal private static var heldLine: CaptureID?
-
     /// Runs `body` holding `id`'s line, which orders the calls of one capture across their
     /// suspension points.
     ///
     /// The engine's rule: no call waits for one capture's line while it holds another's. Each
     /// call takes one line at a time and lets it go before it takes the next, so no two calls
     /// can each hold a line the other waits for, and every call returns once the store, the
-    /// recorder and the drive answer. A taking that breaks the rule is logged as
-    /// `line_nested`, which the tests read: it never happens.
+    /// recorder and the drive answer.
+    ///
+    /// The engine's own record of who holds what is `call`: every function that takes a line is
+    /// handed the call it serves, explicitly, so a task it starts on the call's behalf, a
+    /// detached one too, carries the record with it. A taking while the call holds a line, of
+    /// another line or of the same line, which would wait on itself, is logged as `line_nested`,
+    /// which the tests read: it never happens.
     private func withLine<T: Sendable>(
-        _ id: CaptureID, _ body: () async throws(KnotError) -> T
+        _ id: CaptureID, _ call: EngineCall, _ body: () async throws(KnotError) -> T
     ) async throws(KnotError) -> T {
-        if let held = Self.heldLine, held != id {
-            log.capture(id, "line_nested", .segment(SegmentID(held)))
-        }
+        if let held = call.held { log.capture(id, "line_nested", .segment(SegmentID(held))) }
         if !line.take(id) {
             // IDs only. The call is in the line once this is logged: nothing suspends between the
             // two, so a test can order a later call after it.
             log.capture(id, "call_waits_for_line")
             await withCheckedContinuation { line.enqueue(id, $0) }
         }
-        let result = await Self.$heldLine.withValue(id) { () async -> Result<T, KnotError> in
-            do throws(KnotError) {
-                return .success(try await body())
-            } catch {
-                return .failure(error)
-            }
+        let before = call.hold(id)
+        let result: Result<T, KnotError>
+        do throws(KnotError) {
+            result = .success(try await body())
+        } catch {
+            result = .failure(error)
         }
+        call.restore(before)
         line.release(id)?.resume()
         return try result.get()
     }
 
-    private func withLine(_ id: CaptureID, _ body: () async -> Void) async {
-        _ = try? await withLine(id) { () async throws(KnotError) in await body() }
+    private func withLine(_ id: CaptureID, _ call: EngineCall, _ body: () async -> Void) async {
+        _ = try? await withLine(id, call) { () async throws(KnotError) in await body() }
     }
+}
+
+/// One call of the engine, and the line it holds: the engine's record of who holds what.
+final class EngineCall: Sendable {
+    private let line = Mutex<CaptureID?>(nil)
+
+    /// The line the call holds now.
+    var held: CaptureID? { line.withLock { $0 } }
+
+    /// Marks `id` held, and returns what was held before.
+    func hold(_ id: CaptureID) -> CaptureID? {
+        line.withLock { held in
+            defer { held = id }
+            return held
+        }
+    }
+
+    func restore(_ before: CaptureID?) { line.withLock { $0 = before } }
 }
