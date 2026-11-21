@@ -105,15 +105,36 @@ struct WatchComposition: Sendable {
     }
 
     /// The Watch's device ID, which each manifest records as its origin. It is kept in the
-    /// store's folder, so that it stays the same from launch to launch. When it cannot be
-    /// kept, this launch uses a new one: recording never waits for it.
+    /// store's folder, so that it stays the same from launch to launch, and a file that is there
+    /// is never overwritten: one that cannot be read stays as it is, and this launch uses a new
+    /// ID and writes nothing. Only a missing file is written, or one that reads but holds no ID.
+    /// Recording never waits for it.
+    ///
+    /// The path is the shell's, `device-id` under the store's root, until a contract pull
+    /// request gives the device's identity a place in `StoreLocations`.
     private static func deviceID(in locations: StoreLocations, ids: any IDGenerator) -> DeviceID {
         let url = locations.storeRoot.appending(path: "device-id", directoryHint: .notDirectory)
-        if let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8),
-            let kept = DeviceID(text)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
+            return newDeviceID(at: url, in: locations, ids: ids)
+        } catch {
+            // There, and not readable now: it is left as it is.
+            let made: DeviceID = ids.make()
+            log.log(.error, "watch_device_id_unreadable")
+            return made
+        }
+        if let text = String(data: data, encoding: .utf8),
+            let kept = DeviceID(text.trimmingCharacters(in: .whitespacesAndNewlines))
         {
             return kept
         }
+        return newDeviceID(at: url, in: locations, ids: ids)
+    }
+
+    /// A new device ID, written at `url`.
+    private static func newDeviceID(at url: URL, in locations: StoreLocations, ids: any IDGenerator) -> DeviceID {
         let made: DeviceID = ids.make()
         do {
             try locations.durableFiles(layer: PosixFileLayer()).place(Data(made.description.utf8), at: url)
