@@ -60,6 +60,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// Set when a row that a store call commits late must be ended as empty: a recording
         /// discarded off the store path.
         var discardLateRow = false
+        /// True once its start threw with nothing on disk and before a call answers it as saved:
+        /// a capture the surface was told is not saved. Nothing follows it and nothing ends it,
+        /// so that the surface's retry is still this capture (findings 55 and 56).
+        var startFailed = false
         /// True once the capture has a row: its start's store call answered, or committed after the
         /// engine stopped waiting for it.
         var hasRow = false
@@ -197,7 +201,29 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id] = entry
         // The new capture's own line is free: taking it never waits, so the start reaches disk
         // before it waits for anything.
-        let state = try await withLine(id) { () async throws(KnotError) -> CaptureState in
+        let state: CaptureState
+        do throws(KnotError) {
+            state = try await beginHeld(id, request: request, follows: follows)
+        } catch {
+            if request.kind == .typed, entries[id] != nil { entries[id]?.startFailed = true }
+            throw error
+        }
+        // Rule 15 ends the capture this one follows, now that this one has started: on the store
+        // path the record-a-capture transaction did, and the engine then only reads the row;
+        // otherwise the engine ends it at this capture's start. A start that reached no disk
+        // threw above, and the open capture goes on.
+        if let follows {
+            await reach(.beforeEndingFollowed, id)
+            await endFollowed(follows, by: id)
+        }
+        return state
+    }
+
+    /// A start's first durable write, holding its own line, which is new and never waited for.
+    private func beginHeld(
+        _ id: CaptureID, request: CaptureRequest, follows: CaptureID?
+    ) async throws(KnotError) -> CaptureState {
+        try await withLine(id) { () async throws(KnotError) -> CaptureState in
             // A recording starts first: one whose microphone cannot open never starts, and ends
             // nothing. Its request names the capture it follows, so the recorder's first manifest
             // write carries the link that every later item carries too (finding 54).
@@ -215,15 +241,6 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[id]?.answered = true
             return state
         }
-        // Rule 15 ends the capture this one follows, now that this one has started: on the store
-        // path the record-a-capture transaction did, and the engine then only reads the row;
-        // otherwise the engine ends it at this capture's start. A start that reached no disk
-        // threw above, and the open capture goes on.
-        if let follows {
-            await reach(.beforeEndingFollowed, id)
-            await endFollowed(follows, by: id)
-        }
-        return state
     }
 
     /// Does the engine's old work now: ends the rows of recordings discarded while the store did
@@ -394,7 +411,22 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[id]?.text = text
             try await saveTyped(id, ending: nil)
             entries[id]?.answered = true
+            entries[id]?.startFailed = false
             log.capture(id, "capture_begin_retried")
+            // A capture that began after this one, while this one had reached no disk, ended
+            // nothing of it then. This one has started now, and rule 15 applies in the order the
+            // captures began, as the store applies it to a row that arrives after a newer start:
+            // it ends at the start of the first capture that began after it.
+            // An end that reaches no disk leaves the capture open, answered as saved, for its
+            // surface to end: the retry itself is saved, and says so.
+            if let next = startedAfter(id) {
+                do throws(KnotError) {
+                    _ = try await endHeld(id, at: next)
+                    log.capture(id, "capture_ended", .flag("by_next_start", true))
+                } catch {
+                    log.failure(error.about(capture: id), "capture_not_ended")
+                }
+            }
             return publish(id)
         }
         guard let state else { return nil }
@@ -679,45 +711,60 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// What rule 15 does with the capture open on this device, besides `own`, when `request`
     /// starts. It throws a start the open capture refuses.
     private func nextStep(for request: CaptureRequest, besides own: CaptureID?) throws(KnotError) -> Step {
-        // The newest open capture: while one start ends another, two can be open for a moment.
-        let open = entries.values.filter { $0.outcome == .open && $0.id != own }
+        // The capture open on the device, as rule 15 reads it: the newest open capture that a call
+        // answered as begun, or whose start still runs. One whose start reached no disk is not
+        // open on the device: the surface was told it is not saved (findings 55 and 56). While
+        // one start ends another, two can be open for a moment, and the newest is the one.
+        let open = entries.values.filter { $0.outcome == .open && $0.id != own && !$0.startFailed }
             .max { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) }
-        guard let open else { return .nothing }
-        let decision = OpenCaptureRule.decide(
-            open: OpenCapture(
-                captureID: open.id, noteID: open.noteID ?? NoteID(open.id), kind: open.kind, surface: open.surface),
-            start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
+        let decision: OpenCaptureDecision =
+            open.map {
+                OpenCaptureRule.decide(
+                    open: OpenCapture(
+                        captureID: $0.id, noteID: $0.noteID ?? NoteID($0.id), kind: $0.kind, surface: $0.surface),
+                    start: CaptureStart(kind: request.kind, origin: origin(request.surface)))
+            } ?? .nothingOpen
+        // What the open capture refuses, it refuses first.
         switch decision {
-        case .nothingOpen, .leaveOpen:
-            return .nothing
-        case .continueOpen(let id) where open.kind == .typed && request.kind == .typed && !open.answered:
-            // The same kind on the same surface, and no call has answered the open capture as
-            // saved: the start is its retry, with the same ID, so a row its store call makes
-            // late and the retry are one capture (finding 1).
-            return .retry(id)
-        case .continueOpen where open.kind == .typed && request.kind == .typed:
-            // A call answered the open capture as saved: a start never replaces text that was
-            // acknowledged. It is a capture of its own, which the store's rule 15 refuses, so
-            // it goes to `Inbox/`, and the open capture keeps its text.
-            return .nothing
-        case .continueOpen(let id), .recordingPress(let id):
+        case .continueOpen(let id) where open?.kind != .typed || request.kind != .typed:
+            throw KnotError.segmentCaptureOpen.about(capture: id)
+        case .recordingPress(let id):
             throw KnotError.segmentCaptureOpen.about(capture: id)
         case .refused(let error):
             throw error
-        case .endOpenAndAppend(let ended, _):
-            // An older typed capture on this surface that reached no disk is still the one the
-            // surface holds the text of: the start is its retry, which then ends what it
-            // follows. Otherwise the start follows the newest open capture.
-            if request.kind == .typed,
-                let pending = entries.values.filter({
-                    $0.outcome == .open && $0.id != own && $0.kind == .typed && $0.surface == request.surface
-                        && !$0.answered
-                }).max(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) })
-            {
-                return .retry(pending.id)
-            }
-            return .end(ended)
+        default:
+            break
         }
+        // A typed start on a surface whose typed capture no call has answered as saved, its start
+        // still running or failed, is that capture's retry, with the same ID, so a row its store
+        // call makes late and the retry are one capture (finding 1). Whether it is the retry is
+        // decided once the start holds the capture's line (finding 41).
+        if request.kind == .typed,
+            let pending = entries.values.filter({
+                $0.outcome == .open && $0.id != own && $0.kind == .typed && $0.surface == request.surface
+                    && !$0.answered
+            }).max(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) })
+        {
+            return .retry(pending.id)
+        }
+        switch decision {
+        case .endOpenAndAppend(let ended, _):
+            return .end(ended)
+        default:
+            // Nothing open, a tool's capture, or a typed start on the surface of an open typed
+            // capture that a call answered as saved: a start never replaces text that was
+            // acknowledged, so it is a capture of its own, which the store's rule 15 refuses, and
+            // it goes to `Inbox/` while the open capture keeps its text.
+            return .nothing
+        }
+    }
+
+    /// The start of the first capture that began after `id` and reached disk, or still starts.
+    private func startedAfter(_ id: CaptureID) -> Date? {
+        guard let entry = entries[id] else { return nil }
+        return entries.values.filter {
+            $0.id != id && !$0.startFailed && ($0.startedAt, $0.id) > (entry.startedAt, entry.id)
+        }.map(\.startedAt).min()
     }
 
     /// After the start of `newCapture` reached disk, ends `open`, the capture it follows, if
@@ -731,7 +778,13 @@ public actor StandardCaptureEngine: CaptureEngine {
         let onStorePath = entries[newCapture]?.path == .store
         do throws(KnotError) {
             try await withLine(open) { () async throws(KnotError) in
-                guard entries[open]?.outcome == .open else { return }
+                guard let followed = entries[open], followed.outcome == .open else { return }
+                guard !followed.startFailed else {
+                    // Its start reached no disk, and the surface keeps its text for the retry,
+                    // which is still that capture: nothing ends it (finding 55).
+                    log.capture(newCapture, "followed_capture_reached_no_disk", .segment(SegmentID(open)))
+                    return
+                }
                 // Only a capture still on the store path is ended by the store's row: one that
                 // fell back since keeps its saves in `Inbox/`, and its item must end there too,
                 // or ingest leaves it as an open item.
