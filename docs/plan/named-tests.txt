@@ -75,7 +75,7 @@ WP-10	move-refused-segment-alone-in-note-real	A move is refused for a segment al
 WP-10	return-refused-note-left-is-deleted-real	A return is refused when the note it left is deleted.
 WP-10	dropped-title-put-back-by-return-real	A dropped title that a return puts back.
 WP-10	restore-of-copy-older-than-purge	WP-10 tests a restore of a copy older than a purge.
-WP-11	soak-kill-points-capture-engine	WP-11 PR 2 adds one file of kill points to the soak, and the soak is among its merge criteria.
+WP-11 PR 3	soak-kill-points-capture-engine	WP-11 PR 3 adds one file of kill points to the soak, and the soak is among its merge criteria.
 WP-11	late-draft-save-must-not-replace-newer-text	A late draft save that must not replace newer text.
 WP-11	capture-before-open-migration-or-write-lock-engine	A capture begun before the store is open, during a migration and while another process holds the write lock.
 WP-11	disk-fills-during-draft-save	A disk that fills during a draft save.
@@ -138,6 +138,7 @@ WP-22	gates-listed-for-each-milestone-level	A test lists the gates for each leve
 WP-30 PR 1	live-smoke-type-kill-relaunch-read-iphone	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
 WP-30	ui-late-capture-through-preview-iphone	A UI test that injects a late capture through `.preview`.
 WP-30	ui-smoke-move-segment-and-undo-iphone	The UI smoke test on the iPhone moves a segment and undoes the move.
+WP-32 PR 1	live-smoke-record-saved-watch	The Watch app's real composition, on injected audio and a temporary store: press, wait over a second, press, "Saved" is on the screen, and the recorder, the link and the outbox it wired are read back.
 WP-33	hotkey-release-that-never-arrives	A hotkey release that never arrives.
 WP-33 PR 1	live-smoke-type-kill-relaunch-read-mac	One UI smoke test on each platform runs the app on `.live` with a temporary store: type, kill, relaunch, read.
 WP-33	ui-drag-note-onto-text-field	A UI test drags a note onto a text field.
