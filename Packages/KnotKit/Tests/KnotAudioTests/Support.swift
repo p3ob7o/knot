@@ -37,6 +37,8 @@ struct ScratchFolder: ~Copyable {
 
     var locations: StoreLocations { StoreLocations.testing(root: url) }
 
+    func file(_ name: String) -> URL { url.appendingPathComponent(name) }
+
     deinit { try? FileManager.default.removeItem(at: url) }
 }
 

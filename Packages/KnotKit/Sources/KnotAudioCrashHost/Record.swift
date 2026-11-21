@@ -13,28 +13,40 @@ func locations(_ arguments: Arguments) throws(HostError) -> StoreLocations {
 }
 
 /// The injected audio a command records: the synthetic signal, in 100 ms buffers, at `--rate`.
+/// With `ends`, the input ends by itself, as lost, once its frames are delivered.
 func injected(
-    _ arguments: Arguments, pace: InjectedAudio.Pace, frames: Int64?, delivered: (@Sendable (Int64) -> Void)? = nil
+    _ arguments: Arguments, pace: InjectedAudio.Pace, frames: Int64?, ends: Bool = false,
+    delivered: (@Sendable (Int64) -> Void)? = nil
 ) throws(HostError) -> InjectedAudio {
     let rate = try arguments.double("rate", default: 16_000)
     return InjectedAudio(
-        sampleRate: rate, framesPerBuffer: Int(rate / 10), pace: pace, frames: frames, delivered: delivered)
+        sampleRate: rate, framesPerBuffer: Int(rate / 10), pace: pace, frames: frames,
+        ending: ends ? .ends(.lost) : .runsDry, delivered: delivered)
 }
+
+/// The status of `record` when the recording ended before it was stopped.
+let endedEarlyStatus: Int32 = 3
 
 /// `record`: records injected audio with the live recorder, at the pace of real time, until
 /// `--seconds` of audio or a kill, reporting each step on standard output and in a witness file.
 ///
 ///     record --dir <folder> --witness <file> [--rate 16000] [--seconds 60] [--sync-ms 1000]
+///            [--ends-after <frames>]
 ///
 /// Prints `pid <n>`, then `capture <id>`, `live` once the start has returned, `durable <frames>`
-/// after each sync, and at the end `stopped frames <n> ending <ending>`.
+/// after each sync, and at the end `stopped frames <n> ending <ending>`. A recording that ends
+/// before it is stopped, by itself or because its input ends after `--ends-after` frames, ends
+/// the command at once with `ended-early frames <n> ending <ending>`, and status 3.
 func record(_ arguments: Arguments) async throws(HostError) {
     let witness = try Witness(url: try arguments.url("witness"))
     let rate = try arguments.double("rate", default: 16_000)
-    let total = Int64(rate * (try arguments.double("seconds", default: 60)))
+    let endsAfter = arguments.string("ends-after").flatMap { Int64($0) }
+    let seconds = try arguments.double("seconds", default: 60)
+    let total = endsAfter ?? Int64(rate * seconds)
     let interval = Duration.milliseconds(try arguments.int("sync-ms", default: 1000))
     let taken = Counter()
-    let input = try injected(arguments, pace: .realTime, frames: total) { frames in
+    let ended = Counter()
+    let input = try injected(arguments, pace: .realTime, frames: total, ends: endsAfter != nil) { frames in
         witness.taken(frames)
         taken.set(frames)
     }
@@ -54,17 +66,28 @@ func record(_ arguments: Arguments) async throws(HostError) {
         throw .knot(error)
     }
     print("live")
-    // Stops once the injected audio has all been taken, unless a kill comes first.
+    // Stops once the injected audio has all been taken, unless a kill comes first, or the
+    // recording ends before that by itself.
     let stopping = Task {
-        while taken.value < total { try? await Task.sleep(for: .milliseconds(20)) }
+        while taken.value < total, ended.value == 0 { try? await Task.sleep(for: .milliseconds(20)) }
         return await session.stop()
     }
     for await event in session.events {
-        guard case .durable(let frames) = event else { continue }
-        witness.durable(frames)
-        print("durable \(frames)")
+        switch event {
+        case .durable(let frames):
+            witness.durable(frames)
+            print("durable \(frames)")
+        case .ended(let audio):
+            if audio.ending.endedByItself { ended.set(1) }
+        case .level:
+            break
+        }
     }
     let audio = await stopping.value
+    guard !audio.ending.endedByItself else {
+        print("ended-early frames \(audio.frames) ending \(audio.ending.rawValue)")
+        exit(endedEarlyStatus)
+    }
     print("stopped frames \(audio.frames) ending \(audio.ending.rawValue)")
 }
 
