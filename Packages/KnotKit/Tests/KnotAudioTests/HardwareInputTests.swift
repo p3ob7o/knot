@@ -114,6 +114,55 @@ import Testing
         #expect(Self.mix([interleaved], channelsPerBuffer: 2, frames: 5) == nil, "Four frames are not five.")
     }
 
+    /// An interleaved stereo buffer, made the way a tap's is, goes through `Downmix.mono` and
+    /// mixes to the mean. Each step is checked on the way and its count of right frames printed:
+    /// the samples written into the buffer, the system's read-only copy of it, the mix. Where the
+    /// system's copy does not hold what it was given, that is recorded as a known issue of that
+    /// system, by its version, and the mix is not judged on it. Where the copy is whole and the mix
+    /// is wrong, the test fails.
+    @Test(arguments: [16_000.0, 44_100.0, 48_000.0])
+    func anInterleavedTapBufferIsMixedDown(rate: Double) throws {
+        let stereo = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: true))
+        let mono = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 4))
+        buffer.frameLength = 4
+        let written = zip(Self.left, Self.right).flatMap { [$0, $1] }
+        let data = try #require(buffer.mutableAudioBufferList.pointee.mBuffers.mData)
+            .assumingMemoryBound(to: Float.self)
+        for (index, sample) in written.enumerated() { data[index] = sample }
+        let source = Self.rightFrames(Array(UnsafeBufferPointer(start: data, count: written.count)), written)
+        let copy = AVReadOnlyAudioPCMBuffer(copying: buffer)
+        let copied = copy.withUnsafeAudioBufferList { list -> [Float] in
+            guard list.pointee.mNumberBuffers == 1, let bytes = list.pointee.mBuffers.mData else { return [] }
+            let count = min(Int(list.pointee.mBuffers.mDataByteSize) / MemoryLayout<Float>.size, written.count)
+            return Array(UnsafeBufferPointer(start: bytes.assumingMemoryBound(to: Float.self), count: count))
+        }
+        let inCopy = Self.rightFrames(copied, written)
+        let mixed = Downmix.mono(copy, into: mono).map(Levels.floats(of:)) ?? []
+        let inMix = zip(mixed, Self.mean).filter { $0 == $1 }.count
+        let system = ProcessInfo.processInfo.operatingSystemVersionString
+        print(
+            "interleaved-copy rate \(Int(rate)) on \(system): frames right, source \(source)/4, copy \(inCopy)/4, mix \(inMix)/4"
+        )
+        #expect(source == 4, "The buffer holds what was written into it.")
+        guard inCopy == 4 else {
+            withKnownIssue("On \(system) the system's copy of an interleaved buffer holds \(inCopy) of 4 frames.") {
+                Issue.record("The copy lost frames before the mix-down: \(inCopy) of 4 are right.")
+            }
+            return
+        }
+        #expect(mixed == Self.mean, "The copy is whole and the mix-down is wrong: \(inMix) of 4 frames are right.")
+    }
+
+    /// How many of the frames of an interleaved stereo `found` equal those of `expected`.
+    static func rightFrames(_ found: [Float], _ expected: [Float]) -> Int {
+        stride(from: 0, to: expected.count, by: 2).filter { start in
+            start + 1 < found.count && found[start] == expected[start] && found[start + 1] == expected[start + 1]
+        }.count
+    }
+
     static let left: [Float] = [0.5, -0.5, 1, 0]
     static let right: [Float] = [0.25, 0.5, -1, 0.75]
     static let mean: [Float] = [0.375, 0, 0, 0.375]
