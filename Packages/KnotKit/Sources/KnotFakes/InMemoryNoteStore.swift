@@ -79,6 +79,9 @@
             var savedRevisions: [CaptureID: [SegmentID: Int64]] = [:]
             /// The revision of the late save each capture keeps as a conflict copy.
             var keptRevision: [CaptureID: Int64] = [:]
+            /// The names of the files `Inbox/` keeps for each kept item, as its latest
+            /// `recordKeptItem` named them.
+            var keptFiles: [CaptureID: [String]] = [:]
         }
 
         /// What a save brings: new content, an end with nothing to keep, a failed save, or
@@ -102,6 +105,8 @@
         public nonisolated let deviceID: DeviceID
         private let clock: any WallClock
         private let ids: any IDGenerator
+        /// The `Inbox/` that a kept item's file names are resolved against.
+        private let inbox: URL
         private let secret: StoreSecret
         private let faults: Faults
         private var window: AppendWindow
@@ -113,11 +118,15 @@
         /// - Parameters:
         ///   - seed: notes with their segments that the store holds from the start, such as
         ///     conflict copies and generated titles, which only sync and the queue make.
+        /// - Parameter inbox: the `Inbox/` against which `keptFiles(of:)` resolves the names of a
+        ///   kept item's files; a folder of the temporary directory when none is given.
         public init(
             clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, window: AppendWindow = .default,
             storeID: StoreID? = nil, generation: StoreGeneration = 0, seed: [NoteRecord] = [],
-            faults: Faults = []
+            faults: Faults = [], inbox: URL? = nil
         ) {
+            let temporary = FileManager.default.temporaryDirectory
+            self.inbox = inbox ?? temporary.appending(path: "knot-in-memory/Inbox", directoryHint: .isDirectory)
             self.clock = clock
             self.ids = ids
             self.deviceID = deviceID
@@ -218,6 +227,9 @@
             try check(capture, ingesting: true)
             guard let endedAt = capture.endedAt else { throw KnotError.inboxItemUnreadable.about(capture: capture.id) }
             var next = state
+            if let row = next.captures[capture.id], row.kind == .keptInboxItem {
+                adoptKeptRow(row, as: capture, in: &next)
+            }
             if next.captures[capture.id] == nil {
                 let receipt = try place(capture, ingesting: true, in: &next)
                 commit(next)
@@ -231,11 +243,85 @@
             }
             let applied = try save(
                 capture.id, incoming, revision: capture.revision, endingAt: endedAt, mode: .ingest, in: &next)
+            if next.captures[capture.id]?.outcome == .stored { next.keptFiles[capture.id] = nil }
             commit(next)
             guard let receipt = next.receipts[capture.id], let row = next.captures[capture.id] else {
                 throw KnotError.notFound
             }
             return IngestResult(receipt: receipt, storedRevision: row.revision, applied: applied)
+        }
+
+        public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+            await waitIfHeld()
+            try failIfScripted(item.captureID)
+            guard KeptInboxItem.reasons.contains(item.reason), !item.fileNames.isEmpty,
+                item.fileNames.allSatisfy({ KeptInboxItem.isFileName($0, of: item.captureID) })
+            else { throw KnotError.captureInvalid.about(capture: item.captureID) }
+            var next = state
+            if let row = next.captures[item.captureID] {
+                // The same item again: only the record of its files changes.
+                guard row.kind == .keptInboxItem, let receipt = next.receipts[item.captureID] else {
+                    throw KnotError.captureIDConflict.about(capture: item.captureID)
+                }
+                next.keptFiles[item.captureID] = item.fileNames
+                state = next
+                return receipt
+            }
+            // A new note dated when found, which closes no other note: the item's own time and
+            // placement are not known.
+            let found = NewCapture(
+                id: item.captureID, kind: .keptInboxItem,
+                origin: CaptureOrigin(source: .device(deviceID), surface: CaptureSurface(rawValue: "inbox")),
+                launchID: ids.make(), placement: .newNote, arrival: .late, startedAt: item.foundAt,
+                endedAt: item.foundAt, body: .none, revision: 0)
+            var receipt = try place(found, ingesting: true, in: &next)
+            for segmentID in receipt.segmentIDs {
+                next.segments[segmentID]?.state = .keptInboxItem(item.reason)
+                // Found, not arrived: it carries no arrival mark.
+                next.segments[segmentID]?.arrivedAt = nil
+            }
+            next.captures[item.captureID]?.outcome = .failed(item.reason)
+            next.captures[item.captureID]?.lastSavedAt = nil
+            receipt.outcome = .failed(item.reason)
+            next.receipts[item.captureID] = receipt
+            next.keptFiles[item.captureID] = item.fileNames
+            commit(next)
+            return receipt
+        }
+
+        /// A kept item's row, met by the item's own `ingest`, readable now: it takes the item's
+        /// kind and what its manifest says, and stays failed in its note, where its segment is,
+        /// so that the failed-row path stores it there.
+        private func adoptKeptRow(_ row: Capture, as item: NewCapture, in next: inout State) {
+            guard case .failed(let reason) = row.outcome else { return }
+            var adopted = row
+            adopted.kind = item.kind
+            adopted.origin = item.origin
+            adopted.startedAt = item.startedAt
+            adopted.launchID = item.launchID
+            adopted.placement = item.placement
+            adopted.shownNoteID = item.shownNote
+            next.captures[row.id] = adopted
+            let first = SegmentID(row.id)
+            guard var segment = next.segments[first] else { return }
+            segment.kind = item.kind
+            segment.origin = item.origin.source
+            segment.startedAt = item.startedAt
+            switch item.kind {
+            case .typed:
+                segment.textOrigin = .typed
+                segment.state = .typed(.failed)
+            case .voice:
+                segment.textOrigin = .rawTranscript
+                segment.processingOwner = item.origin.source.isTool ? nil : deviceID
+                segment.state = .voice(.failed(.record, reason))
+            default:
+                segment.textOrigin = .recognised
+                segment.state = .ink(.failed(reason))
+            }
+            next.segments[first] = segment
+            // The placeholder's text is the stored text, which no person replaced.
+            next.savedRevisions[row.id] = [first: segment.revision]
         }
 
         public func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
@@ -296,6 +382,10 @@
         // MARK: Reading
 
         public func note(_ id: NoteID) throws(KnotError) -> NoteRecord? { record(id, in: state) }
+
+        public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
+            (state.keptFiles[capture] ?? []).map { KeptFile(name: $0, in: inbox) }
+        }
 
         public func segment(_ id: SegmentID) throws(KnotError) -> SegmentRead? {
             state.segments[id].map(read)
@@ -686,7 +776,7 @@
                 textReplaced: textReplaced, titleSet: titleSet)
         }
 
-        public func applyRecognition(_ recognition: InkRecognition, to segmentID: SegmentID) throws(KnotError)
+        public func applyRecognition(_ recognition: InkRecognition, to segmentID: SegmentID) async throws(KnotError)
             -> SegmentRead
         {
             guard var segment = state.segments[segmentID] else {
@@ -1099,7 +1189,8 @@
                     }
                 case .discard:
                     switch row.outcome {
-                    case .open:
+                    case .open, .failed:
+                        // A failed one too: a recording read at last that holds no frame.
                         discard(id, touched: &touched, from: &next)
                         receipt.segmentIDs = []
                         row.outcome = .discardedEmpty
@@ -1286,7 +1377,8 @@
                 namedDeletedAt = named.deletedAt ?? (hasLiveSegment(note, in: next) ? nil : named.updatedAt)
             }
             let priors: [PriorCapture] = next.segments.values.compactMap { segment in
-                guard let note = next.notes[segment.noteID] else { return nil }
+                // A kept item's segment is no capture: the time it was found is not a start.
+                guard segment.kind != .keptInboxItem, let note = next.notes[segment.noteID] else { return nil }
                 return PriorCapture(segment, in: note, noteHasLiveSegment: hasLiveSegment(note.id, in: next))
             }
             let openPrior = openOnDevice(in: next).flatMap { capture -> PriorCapture? in

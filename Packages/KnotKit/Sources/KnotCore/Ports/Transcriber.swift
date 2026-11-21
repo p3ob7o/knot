@@ -21,10 +21,16 @@ public protocol Transcriber: Sendable {
     /// Transcribes `file` from `offset`. With a budget, it reads at most that much audio and
     /// ends at the last finished phrase, so no word is split between two runs. A first phrase
     /// longer than the budget is taken whole, so every run that is not the last moves on, and
-    /// the runs together cover the file and end.
+    /// the runs together cover the file and end. Only a phrase still open at the end of the
+    /// window makes the run read more than its budget.
     ///
-    /// A file with no frames, or with no words, gives no pieces and no resume time: it is
-    /// ready with empty text, which is not an error. Errors: a deferral while the model is
+    /// Silence is not a phrase. A window that holds no speech is a run with no pieces, whose
+    /// resume time is after the window, or `nil` at the end of the file: silence never makes a
+    /// run read more than its budget, so a long silence is read in runs of the budget, and
+    /// each of them moves on.
+    ///
+    /// A file with no frames, or with no words, gives no pieces: read to its end, it is ready
+    /// with empty text, which is not an error. Errors: a deferral while the model is
     /// not installed or installing, or the system's resources are limited; an attempt when
     /// the audio cannot be read or the engine fails, with its code in `context.engineCode`;
     /// final when speech is unavailable here. Cancelling the calling task throws

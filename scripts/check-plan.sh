@@ -357,6 +357,14 @@ else:
             fail("%s:%d: a line holds three fields separated by tabs: owner, slug, test" % (NAMED_TESTS, number))
             continue
         owner, slug, sentence = (field.strip() for field in fields)
+        # The owner is a package, or one of its pull requests, as in "WP-11 PR 1": the gate
+        # then requires the test once that pull request has merged.
+        given = re.fullmatch(r"((?:WP|SP)-\d+)\s+PR\s+(\w+)", owner)
+        if given:
+            owner, pr = given.group(1), given.group(2)
+            if owner in briefs and briefs[owner].ok and pr not in [label for label, _, _ in briefs[owner].rows]:
+                fail("%s:%d: %s has no pull request %s in its 'Starts after' table" % (NAMED_TESTS, number, owner, pr))
+                continue
         if owner not in tests:
             fail("%s:%d: '%s' is not a package" % (NAMED_TESTS, number, owner))
             continue
