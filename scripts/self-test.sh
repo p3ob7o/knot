@@ -1125,11 +1125,18 @@ for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("xcb", 'cat "$KNO
     start = text.index(name + "() {")
     end = text.index("\n}\n", start) + 3
     text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
-old = '    knot_generate_project\n    ui_tests "The Mac UI tests"'
-assert old in text, old
-text = text.replace(old, '    ui_tests "The Mac UI tests"')
+for old, new in (
+    ('    knot_generate_project\n    ui_tests "The Mac UI tests"', '    ui_tests "The Mac UI tests"'),
+    ('    knot_generate_project\n    knot_run_limited "The hosted iOS tests"', '    knot_run_limited "The hosted iOS tests"'),
+    ("export KNOT_VERIFY_TIER=$TIER", "export KNOT_VERIFY_TIER=${KNOT_UI_TIER:-$TIER}"),
+):
+    assert old in text, old
+    text = text.replace(old, new)
 open(path, "w").write(text)
 PY
+# The hosted step's simulators: a stand-in that names one and boots nothing.
+printf '#!/bin/sh\n[ "$1" = udid ] && echo SELF-TEST-UDID\nexit 0\n' >"$ul/scripts/sim.sh"
+chmod +x "$ul/scripts/sim.sh"
 printf '#!/bin/sh\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><false/></dict></plist>\\n"\n' >"$ul/stub/ioreg"
 chmod +x "$ul/stub/ioreg"
 cat >"$ul/run.log" <<'LOG'
@@ -1148,6 +1155,40 @@ if [[ $ui_status != 0 && $ui_step_log == *"AccessibilityAudit.swift:53: error: "
     pass "a failed UI test's error lines are in the step's log and the run's failure, and the longer log is named"
 else
     fail "a failed UI test through verify's loop, status $ui_status: the step's log: $ui_step_log"
+fi
+
+# A skipped XCTest case, or a skipped test in the hosted run, is counted as skipped, and at
+# the gate it fails the step, as the package's tests do: in the Mac UI step one case passed
+# and one was skipped, and in the hosted iOS run one test passed and one was skipped. At the
+# quick tier both steps pass, and the summary counts the skipped one.
+cat >"$ul/ui-skip.log" <<'LOG'
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' passed (5.702 seconds).
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testNeedsAnotherMac]' skipped (0.001 seconds).
+** TEST SUCCEEDED **
+LOG
+cat >"$ul/hosted-skip.log" <<'LOG'
+􁁛  Test aHostedTest() passed after 0.001 seconds.
+􀙟  Test aHostedTestWithoutItsModel() skipped: "the model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+** TEST SUCCEEDED **
+LOG
+skip_step() { # skip_step <step> <run log> <tier>: status, the step's line and the summary's tests
+    local status=0 run="$ul/skip-$1-$3"
+    mkdir -p "$run/slots"
+    env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$2" KNOT_UI_TIER="$3" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$ul/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
+    printf '%s %s · %s' "$status" "$(sed -n -E "s/^verify: (ok|FAIL) +$1 .*/\1/p" "$run/out")" \
+        "$(grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" || true)"
+}
+ui_gate="$(skip_step mac-ui "$ul/ui-skip.log" gate)"
+ui_quick="$(skip_step mac-ui "$ul/ui-skip.log" quick)"
+hosted_gate="$(skip_step ios-hosted "$ul/hosted-skip.log" gate)"
+hosted_quick="$(skip_step ios-hosted "$ul/hosted-skip.log" quick)"
+if [[ $ui_gate == "1 FAIL · tests 1 passed, 0 failed, 1 skipped" && $ui_quick == "0 ok · tests 1 passed, 0 failed, 1 skipped" &&
+    $hosted_gate == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" && $hosted_quick == "0 ok · tests 2 passed, 0 failed, 1 skipped" ]]; then
+    pass "a skipped XCTest case or hosted test is counted, and fails the Mac UI and hosted steps at the gate"
+else
+    fail "skipped UI and hosted tests through verify's loop: Mac UI at the gate '$ui_gate', at the quick tier '$ui_quick'; hosted at the gate '$hosted_gate', at the quick tier '$hosted_quick'"
 fi
 
 # sdk-path.sh finds a framework of the SDK, and one that the platform keeps outside it, as

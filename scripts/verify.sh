@@ -156,6 +156,23 @@ products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
     -maximum-test-execution-time-allowance 300)
 
+# report_skips <what> <log>: the skipped or cancelled tests of a test log that is not the
+# step's own, as XCTest's and the hosted run's are (knot_skipped_tests, which reads XCTest's
+# "Test Case '…' skipped" too). It prints their lines once, as they are, so that the summary,
+# which reads the step's log, counts them; and at the gate it fails, since the gate requires
+# every test to run, as it does for the package's tests.
+report_skips() {
+    local skipped
+    skipped="$(knot_skipped_tests "$2")"
+    [[ -n $skipped ]] || return 0
+    echo "$1: skipped or cancelled:"
+    printf '%s\n' "$skipped"
+    if [[ $TIER == gate ]]; then
+        echo "$1: the gate requires every test to run."
+        return 1
+    fi
+}
+
 # ui_tests <what> <log> [destination name…] -- <xcodebuild arguments…>
 # Runs one UI test bundle, which the arguments name with -only-testing. xcodebuild's own test
 # limits are on, so a case that hangs fails after its allowance, and an outer limit round the
@@ -180,6 +197,7 @@ ui_tests() {
         knot_xctest_failures "$log"
         return 1
     fi
+    report_skips "$what" "$log" || return 1
     if ((status != 0)); then
         echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
         return 1
@@ -589,6 +607,7 @@ step_ios_hosted() {
         echo "No hosted test ran."
         return 1
     }
+    report_skips "The hosted iOS tests" "$log" || return 1
     if ((status != 0)); then
         echo "The hosted iOS tests: xcodebuild exited with $status after the tests above. Its log is $log."
         return 1

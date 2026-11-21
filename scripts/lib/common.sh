@@ -670,18 +670,20 @@ knot_xctest_failures() {
 }
 
 # Judges the log of an xcodebuild test run of XCTest cases, such as UI tests. Prints one line,
-# "xctest: N passed, M failed", and returns 1 when no case passed, when a case failed, or
+# "xctest: N passed, M failed, K skipped", and returns 1 when no case passed, when a case failed, or
 # when a destination named after the log has no passed case: a run that executed 0 tests is
 # a failure, not a pass. A run on several destinations writes "passed on '<name> - …'".
 #   knot_xctest_result <log> [destination name…]
 knot_xctest_result() {
-    local log=$1 passed failed destination missing=""
+    local log=$1 passed failed skipped destination missing=""
     shift
     passed=$(grep -a -c -E "Test [Cc]ase '[^']+' passed" "$log" || true)
     failed=$(grep -a -c -E "Test [Cc]ase '[^']+' failed" "$log" || true)
+    # A skipped case is no pass and no failure; the step reports it (report_skips in verify.sh).
+    skipped=$(grep -a -c -E "^Test [Cc]ase '[^']+' skipped" "$log" || true)
     for destination in "$@"; do
         grep -a -F -e "passed on '$destination" "$log" >/dev/null || missing="$missing $destination"
     done
-    echo "xctest: $passed passed, $failed failed${missing:+, none passed on:$missing}"
+    echo "xctest: $passed passed, $failed failed, $skipped skipped${missing:+, none passed on:$missing}"
     ((passed > 0 && failed == 0)) && [[ -z $missing ]]
 }
