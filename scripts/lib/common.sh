@@ -173,9 +173,15 @@ knot_select_xcode() {
     export DEVELOPER_DIR="$app/Contents/Developer"
     KNOT_XCODE_VERSION="${identity% *}"
     KNOT_XCODE_BUILD="${identity#* }"
-    # Check that the tools answer as the version the files claim.
-    local reported
-    reported="$(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
+    # Check that the tools answer as the version the files claim, within a limit: a dialog,
+    # such as Xcode's licence or a component to install, can hold xcodebuild's first start.
+    local reported status=0 limit=${KNOT_XCODE_ANSWER_LIMIT:-120}
+    reported="$(knot_limit "$limit" xcodebuild -version 2>/dev/null)" || status=$?
+    if ((status == 124)); then
+        knot_fail "infra-xcode-silent" "xcodebuild -version in $DEVELOPER_DIR did not answer within ${limit}s. A system dialog, such as Xcode's licence or a component to install, may be waiting for the owner on this Mac; no agent answers it." \
+            "Ask him to look at the screen, or to run the Xcode once." "safe" "nothing"
+    fi
+    reported="$(tr '\n' ' ' <<<"$reported")"
     if [[ $reported != "Xcode $KNOT_XCODE_VERSION Build version $KNOT_XCODE_BUILD " ]]; then
         knot_fail "infra-xcode-mismatch" "xcodebuild in $DEVELOPER_DIR reports '$reported', not Xcode $identity." \
             "Run the Xcode once to finish its installation (xcodebuild -runFirstLaunch), or reinstall it." \
@@ -388,16 +394,22 @@ knot_swift_test_limited() {
 # with Fake, such as KnotLink.FakeLinkSystem, which is how a fake outside KnotFakes is named
 # (docs/architecture.md §17). The types are matched in the demangled symbols and strings,
 # because Swift abbreviates repeated words in a mangled name (FakeLinkSystem in KnotLink is
-# 04FakeB6System). A symbol's debug-map path, such as Sources/KnotFakes/, is none of these.
-# An internal type that an optimised, stripped build keeps no symbol for can still go
-# unseen here; the lint is what catches a fake whose guard was lost (fake-unguarded).
+# 04FakeB6System), in each form a fake's name takes there: KnotLink.FakeX and
+# KnotLink.Outer.FakeX; KnotLink.(FakeX in _…) for a private or fileprivate type; FakeX #1 in
+# KnotLink.f() for a local type; (extension in KnotLink):Swift.Array.FakeX for a type nested
+# in an extension of a type from elsewhere; and a mangled name kept as a string, such as
+# 8KnotLink15FakeFilePrivate…. A symbol's debug-map path, such as Sources/KnotFakes/, is none
+# of these. An optimised build can keep no symbol of a type at all, a private or local one
+# above all, or keep its bare name with no module, which this scan does not count; the lint
+# is what catches a fake whose guard was lost (fake-unguarded).
 #   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
     local file=$1 symbols strings found
     symbols="$(nm -a "$file" 2>/dev/null || true)"
     strings="$(strings -a "$file" 2>/dev/null || true)"
     found="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle |
-        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.Fake[A-Za-z0-9_]*' | sort -u || true)"
+        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' |
+        sort -u || true)"
     if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
         found="${found:+$found$'\n'}the module KnotFakes"
     fi
@@ -410,6 +422,54 @@ knot_fakes_in() {
 # clone ran every step in under 10 minutes; codesign asking for a keychain is what could
 # hold one for ever. It stays under the hour another run waits for a build slot.
 KNOT_BUILD_LIMIT=${KNOT_BUILD_LIMIT:-2400}
+
+# Whether this Mac's screen is locked, from the console's IOConsoleLocked, which ioreg gives
+# without a prompt: prints locked, unlocked, or unknown when the read says nothing or does not
+# answer within KNOT_CONSOLE_READ_LIMIT seconds (10).
+knot_console_state() {
+    local listing status=0 value
+    listing="$(knot_limit "${KNOT_CONSOLE_READ_LIMIT:-10}" ioreg -n Root -d1 -a 2>/dev/null)" || status=$?
+    value="$( ((status == 0)) && plutil -p - <<<"$listing" 2>/dev/null |
+        sed -n -E 's/^ *"IOConsoleLocked" => (true|false)$/\1/p' | head -n 1 || true)"
+    case $value in
+        true) echo locked ;;
+        false) echo unlocked ;;
+        *) echo unknown ;;
+    esac
+}
+
+# The Mac UI tests need the screen unlocked: on a locked screen their app cannot come to the
+# front, and the test waits a minute and fails with a message that names neither the lock nor
+# what to do. verify.sh reads the state once, before the step, and on a locked screen runs
+# this in the step's place: it says so and fails, and reads nothing again, so that no second
+# read can let a step that did not run pass.
+knot_mac_ui_locked() {
+    echo "mac-ui: the screen of this Mac is locked, so the Mac UI tests cannot bring their app to the front. The owner has to unlock the Mac; no agent does. Then run the step again."
+    return 1
+}
+
+# Makes this tree's audio when it lacks it or it is stale, and stamps it: verify.sh's
+# fixtures-audio, under the audio's lock in the tree's .build/, so that two runs never speak
+# at once (KNOT_FIXTURES_LOCK_WAIT, 30 minutes, for the lock). The fixtures step and
+# bootstrap.sh both make the audio here, and nowhere else.
+knot_make_audio() {
+    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
+    mkdir -p "$KNOT_BUILD"
+    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
+    if ((status == 75)); then
+        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
+        return 1
+    fi
+    return "$status"
+}
+
+# Prints the lines of a test log that report a test that did not run its body: skipped by a
+# trait ("Test x() skipped: …") or cancelled at run time ("Test x() was cancelled after …"),
+# each line once. The summary counts them as skipped, and the gate fails on any.
+#   knot_skipped_tests <log>
+knot_skipped_tests() {
+    grep -E 'Test .* (skipped|was cancelled after)' "$1" || true
+}
 
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
@@ -432,19 +492,22 @@ knot_sim_call() {
 # Starts an app that Knot built and waits up to <seconds> for its first window, which the
 # probe finds: the probe is called with the app's process ID appended, and prints the
 # windows it sees, or nothing. Then it ends the app and everything the app started. What the
-# app writes to standard error goes to the step's log. Prints "windows: …" and returns 0
+# app writes to standard error goes to a file that is printed to standard error when the start
+# ends, so that a process the app starts that leaves its family holds no pipe of the caller's
+# open. Prints "windows: …" and returns 0
 # when a window came. Fails when the app exited first; when the probe itself failed or did
 # not answer, saying so; and when no window came in time although the probe ran, which on
 # this Mac most likely means a system dialog holds the start.
 #   knot_start_app <seconds> <app executable> <probe…>
 knot_start_app() {
-    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors pid probe_status probe_note=""
+    local seconds=$1 app=$2 found="" deadline status=0 exited=0 out errors app_errors pid probe_status probe_note="" probe_limit
     shift 2
     out="$(mktemp)"
     errors="$(mktemp)"
-    # The app's standard error is the step's. It is started directly and waited for: a
-    # version that ran it in a disowned subshell hung the self-test on a hosted runner.
-    "$app" >/dev/null &
+    app_errors="$(mktemp)"
+    # The app is started directly and waited for: a version that ran it in a disowned
+    # subshell hung the self-test on a hosted runner.
+    "$app" >/dev/null 2>"$app_errors" &
     pid=$!
     deadline=$(($(knot_now) + seconds))
     while (($(knot_now) < deadline)); do
@@ -452,12 +515,17 @@ knot_start_app() {
             exited=1
             break
         fi
+        # Each probe has 15 seconds at most, and never more than the time left, so that the
+        # start keeps to its own limit.
         probe_status=0
-        knot_limit 15 "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
+        probe_limit=$((deadline - $(knot_now)))
+        ((probe_limit > 15)) && probe_limit=15
+        ((probe_limit < 1)) && probe_limit=1
+        knot_limit "$probe_limit" "$@" "$pid" >"$out" 2>"$errors" || probe_status=$?
         found="$(cat "$out")"
         [[ -n $found ]] && break
         if ((KNOT_LIMIT_HIT)); then
-            probe_note="the window probe did not answer within 15s"
+            probe_note="the window probe did not answer within ${probe_limit}s"
         elif ((probe_status != 0)); then
             probe_note="the window probe failed with status $probe_status: $(tail -n 1 "$errors")"
         else
@@ -471,7 +539,8 @@ knot_start_app() {
         knot_end_process "$pid"
         wait "$pid" 2>/dev/null || true
     fi
-    rm -f "$out" "$errors"
+    cat "$app_errors" >&2
+    rm -f "$out" "$errors" "$app_errors"
     if [[ -n $found ]]; then
         echo "windows: $found"
         return 0
