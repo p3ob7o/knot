@@ -152,7 +152,9 @@ private struct SurfaceModel: Sendable {
     mutating func run(steps: Int, engine: BoundedEngine, ledger: Ledger) async {
         for _ in 0..<steps {
             for _ in 0..<Int.random(in: 0...3, using: &random) { await Task.yield() }
-            if current == nil || !begun {
+            // A capture whose begin threw is the surface's, by the ID the begin named: the surface
+            // starts it again by a begin, its retry, or carries on with it as begun (finding 59).
+            if current == nil || !begun && Int.random(in: 0..<100, using: &random) < 50 {
                 await start(engine: engine, ledger: ledger)
                 continue
             }
@@ -169,13 +171,8 @@ private struct SurfaceModel: Sendable {
 
     /// Ends what the surface holds, once the store answers again.
     mutating func finish(engine: BoundedEngine, ledger: Ledger) async {
-        for _ in 0..<6 where current != nil {
-            if !begun, kind == .typed {
-                await start(engine: engine, ledger: ledger)
-                continue
-            }
-            await end(engine: engine, ledger: ledger)
-        }
+        // A capture whose begin threw is ended by its ID, as one that began is (finding 59).
+        for _ in 0..<6 where current != nil { await end(engine: engine, ledger: ledger) }
         if let current { Issue.record("\(surface) could not end \(current)") }
     }
 
@@ -188,8 +185,15 @@ private struct SurfaceModel: Sendable {
             text = voice ? "" : nextWord()
         }
         let request = CaptureRequest(kind: kind, surface: surface, text: kind == .typed ? text : nil)
+        let held = begun ? nil : current
         do throws(KnotError) {
             let state = try await engine.begin(request)
+            if let held, held != state.captureID {
+                // The capture it held was acknowledged meanwhile, by a late row, so the begin is a
+                // capture of its own: the surface ends the one it held, which is still its own.
+                ledger.note("\(surface) begin was not the retry of \(held)")
+                await endHeld(held, engine: engine, ledger: ledger)
+            }
             current = state.captureID
             begun = true
             ledger.note("\(surface) begin \(kind) -> \(state.captureID) \(state.path)")
@@ -198,9 +202,10 @@ private struct SurfaceModel: Sendable {
             if error.code == KnotError.segmentCaptureOpen.code || error.code == KnotError.captureBlockedByRecording.code
                 || kind == .voice
             {
-                // Refused by rule 15, or a recording that never started: nothing began.
+                // Refused by rule 15, or a recording that never started: nothing began. A capture
+                // the surface holds from a begin that threw stays its own.
                 ledger.note("\(surface) begin \(kind) refused \(error.code)")
-                current = nil
+                current = held
                 begun = false
                 return
             }
@@ -212,12 +217,27 @@ private struct SurfaceModel: Sendable {
         }
     }
 
+    /// Ends a capture the surface no longer types into, until it is ended.
+    private func endHeld(_ id: CaptureID, engine: BoundedEngine, ledger: Ledger) async {
+        for _ in 0..<6 {
+            do throws(KnotError) {
+                let state = try await engine.end(id)
+                ledger.note("\(surface) end \(id) -> \(state.outcome) \(state.path)")
+                return
+            } catch {
+                ledger.note("\(surface) end \(id) failed \(error.code)")
+            }
+        }
+        Issue.record("\(surface) could not end \(id)")
+    }
+
     private mutating func update(engine: BoundedEngine, ledger: Ledger) async {
         guard let id = current else { return }
         text += " " + nextWord()
         ledger.send(id, text)
         do throws(KnotError) {
             _ = try await engine.update(id, with: .text(text))
+            begun = true
             ledger.acknowledge(id, .text(text), sent: text)
             ledger.note("\(surface) update \(id) ok")
         } catch {

@@ -29,9 +29,19 @@ import Synchronization
 ///
 /// When neither path takes a save, the call throws its error and nothing of that save is
 /// acknowledged: the surface keeps the text and says that it could not save
-/// (docs/product-spec.md §4.4), and the next save tries again with the whole text. A begin
-/// that reached no disk starts nothing, and ends nothing: its next begin on the surface is
-/// its retry, with the same ID. A discard that reached no disk leaves the text as it was.
+/// (docs/product-spec.md §4.4), and the next save tries again with the whole text. An end, the
+/// surface's or rule 15's, saves the latest text the engine was given, also one whose save it
+/// answered with an error (finding 62). A discard that reached no disk leaves the text as it
+/// was.
+///
+/// A begin that throws names its capture in the error, and from then on that capture is the
+/// caller's: `update`, `end` and `discard` take it (finding 59). It starts nothing and ends
+/// nothing, and nothing follows it or ends it (findings 55 and 56). Its first write on a drive,
+/// by one of those calls, by its retry or by a store call that commits late, does what the start
+/// would have done: it ends at the start of a capture that began after it, if one did, and ends
+/// the capture it follows. A begin on its surface is its retry, with the same ID, only while
+/// nothing of it is acknowledged: a state that names a durable revision is an acknowledgement,
+/// whatever call or late answer published it, and after one a begin is a capture of its own.
 ///
 /// Rule 15 (docs/product-spec.md §3). A start that the open capture refuses, anything while a
 /// recording runs, throws, and nothing is written. A typed start on the surface of an open
@@ -300,23 +310,43 @@ public actor StandardCaptureEngine: CaptureEngine {
             // A recording takes no update, and a drawing's saves are not in the contract yet.
             throw KnotError.illegalTransition.about(capture: capture)
         }
-        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
+        let call = EngineCall()
+        var firstWrite = false
+        let state = try await withLine(capture, call) { () async throws(KnotError) -> CaptureState in
             guard entries[capture]?.outcome == .open else { throw KnotError.illegalTransition.about(capture: capture) }
             entries[capture]?.revision += 1
             entries[capture]?.text = text
             try await saveTyped(capture, ending: nil)
             await reach(.afterSave, capture)
+            // The first write on a drive of a capture whose begin threw does what the start would
+            // have done (finding 59).
+            firstWrite = entries[capture]?.startFailed == true
             entries[capture]?.answered = true
+            entries[capture]?.startFailed = false
+            if firstWrite { await startedAfterAll(capture) }
             return publish(capture)
         }
+        if firstWrite, let follows = entries[capture]?.follows { await endFollowed(follows, by: capture, call: call) }
+        return state
     }
 
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
-        return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
-            try await endHeld(capture, at: nil)
+        let call = EngineCall()
+        var firstWrite = false
+        let state = try await withLine(capture, call) { () async throws(KnotError) -> CaptureState in
+            // The end of a capture whose begin threw is its first write on a drive: it ends where
+            // rule 15 would have ended it, at the start of the first capture that began after it.
+            firstWrite = entries[capture]?.startFailed == true
+            let at = firstWrite ? startedAfter(capture) : nil
+            let ended = try await endHeld(capture, at: at)
+            entries[capture]?.startFailed = false
+            entries[capture]?.answered = true
+            return ended
         }
+        if firstWrite, let follows = entries[capture]?.follows { await endFollowed(follows, by: capture, call: call) }
+        return state
     }
 
     /// Ends a capture at `endedAt`, or now: rule 15 ends one at the next one's start. The
@@ -416,20 +446,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[id]?.answered = true
             entries[id]?.startFailed = false
             log.capture(id, "capture_begin_retried")
-            // A capture that began after this one, while this one had reached no disk, ended
-            // nothing of it then. This one has started now, and rule 15 applies in the order the
-            // captures began, as the store applies it to a row that arrives after a newer start:
-            // it ends at the start of the first capture that began after it.
-            // An end that reaches no disk leaves the capture open, answered as saved, for its
-            // surface to end: the retry itself is saved, and says so.
-            if let next = startedAfter(id) {
-                do throws(KnotError) {
-                    _ = try await endHeld(id, at: next)
-                    log.capture(id, "capture_ended", .flag("by_next_start", true))
-                } catch {
-                    log.failure(error.about(capture: id), "capture_not_ended")
-                }
-            }
+            await startedAfterAll(id)
             return publish(id)
         }
         guard let state else { return nil }
@@ -437,6 +454,31 @@ public actor StandardCaptureEngine: CaptureEngine {
         // arrived, as a first start does. Never one that began after it: that one ends this.
         if let follows = entries[id]?.follows { await endFollowed(follows, by: id, call: call) }
         return state
+    }
+
+    /// What a start does once a capture whose begin threw reaches disk after all: by a later
+    /// call, by its retry, or by a store call that commits late. The caller holds the capture's
+    /// line. A capture that began after this one, while this one had reached no disk, ended
+    /// nothing of it then; rule 15 applies in the order the captures began, as the store applies
+    /// it to a row that arrives after a newer start, so this one ends at the start of the first
+    /// capture that began after it. An end there that reaches no disk leaves it answered and open,
+    /// for its caller to end.
+    private func startedAfterAll(_ id: CaptureID) async {
+        guard entries[id]?.outcome == .open, let next = startedAfter(id) else { return }
+        do throws(KnotError) {
+            _ = try await endHeld(id, at: next)
+            log.capture(id, "capture_ended", .flag("by_next_start", true))
+        } catch {
+            log.failure(error.about(capture: id), "capture_not_ended")
+        }
+    }
+
+    /// A late row made a capture whose begin threw durable: it does what its start would have
+    /// done, holding its own line, then ends the capture it follows.
+    private func startedLate(_ id: CaptureID) async {
+        let call = EngineCall()
+        await withLine(id, call) { await startedAfterAll(id) }
+        if let follows = entries[id]?.follows { await endFollowed(follows, by: id, call: call) }
     }
 
     /// Saves a typed capture's latest text on its path: a checkpoint, or the end when
@@ -839,8 +881,14 @@ public actor StandardCaptureEngine: CaptureEngine {
         entries[id]?.hasRow = true
         if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
             // A begin that reached no disk: its row, with the first text, is on the drive now.
+            // The state that says so is an acknowledgement (finding 59): from now on a start on
+            // its surface is a capture of its own, and the capture is its caller's, by the ID
+            // its begin named. It has started, and does what a start does, after this answer.
             entries[id]?.durableRevision = 1
+            entries[id]?.answered = true
+            entries[id]?.startFailed = false
             publish(id)
+            Task.detached { [weak self] in await self?.startedLate(id) }
         } else if entry.discardLateRow {
             let revision = (entries[id]?.revision ?? 0) + 1
             entries[id]?.revision = revision
