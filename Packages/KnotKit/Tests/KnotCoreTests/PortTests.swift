@@ -59,6 +59,13 @@ import Testing
         #expect(await states.next() == nil, "No capture state is published.")
         var liveView = environment.engine.live(capture).makeAsyncIterator()
         #expect(await liveView.next() == nil, "An engine with no live view ends its stream at once.")
+        for kind in [PressKind.tap, .holdStart, .holdRelease] {
+            await #expect(throws: KnotError.portUnavailable) {
+                try await environment.engine.press(
+                    Press(kind, at: Date(timeIntervalSince1970: 0)),
+                    recording: CaptureRequest(kind: .voice, surface: .app))
+            }
+        }
 
         await #expect(throws: KnotError.portUnavailable) { try await environment.queue.resume() }
         await #expect(throws: KnotError.portUnavailable.with(.init(segmentID: segment))) {

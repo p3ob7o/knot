@@ -63,11 +63,48 @@ public protocol CaptureEngine: Sendable {
     /// text does. Whether live text goes on after the last consumer has gone is the engine's
     /// choice: a consumer relies on nothing about it.
     func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent>
+
+    /// A press of a record control in this process: the record button, a recording intent, the
+    /// Mac's hotkey, or a control's press handed over from another process. The engine decides
+    /// it by `RecordingPressRule` against its own recordings, which are the truth here, and the
+    /// saved state that `RecordingStateStore` holds, mapped by `SavedRecordingState.init(_:)`.
+    /// A start begins `request` as `begin` does and throws as it throws. A stop ends or
+    /// discards the recording, as `end` and `discard` do, and throws as they throw; `request`
+    /// is used by a start only.
+    ///
+    /// A saved state with no recording here is an orphan: the new recording starts at once, and
+    /// the orphan is recovered beside it, by launch recovery, which never touches the current
+    /// launch. The start never waits for that recovery.
+    ///
+    /// The engine gives the cues that are the recorder's caller's: `saved` and `discarded`, and
+    /// `couldNotStart` only when it could not call the recorder's `start`. A surface gives
+    /// `couldNotStart` only when it could not call `press`. The Watch, which has no engine,
+    /// applies the rule in its coordinator, through the same mapping.
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome
 }
 
 extension CaptureEngine {
     /// Unavailable until the engine implements it: a stream that ends at once.
     public func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> { AsyncStream { $0.finish() } }
+
+    /// Unavailable until the engine implements it: every press throws `port_unavailable`.
+    public func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+        -> RecordingPressOutcome
+    {
+        throw KnotError.portUnavailable
+    }
+}
+
+/// What a press of a record control did, as the engine decided it
+/// (`CaptureEngine.press(_:recording:)`).
+public enum RecordingPressOutcome: Hashable, Sendable {
+    /// The press started a recording.
+    case started(CaptureState)
+    /// The press stopped the recording: kept, or discarded as an accidental press. The state's
+    /// outcome says which.
+    case stopped(CaptureState)
+    /// The press did nothing: the recording was starting or stopping, or a release ended no hold.
+    case ignored
 }
 
 /// What the live view of an open recording shows (`CaptureEngine.live(_:)`).
