@@ -220,7 +220,27 @@ step_seven() {
     # expect: unbounded
     env -S 'xcodebuild -version'
 }
-for step in five six seven; do "step_${step}"; done
+# The forms of the review of pull request 63 at d9e4ffa3 (finding 54), and what is near them.
+step_eight() {
+    # expect: unbounded
+    for builder in xcodebuild; do "$builder" -version; done
+    # expect: nothing
+    for runner in swift xcodebuild; do
+        # expect: unbounded
+        "$runner" -list
+    done
+    # expect: nothing
+    for name in alpha beta; do echo "$name"; done
+    # expect: unbounded
+    args=(); args+=(xcrun simctl list); "${args[@]}"
+    # expect: nothing
+    flags=(); flags+=(-quiet); echo "${flags[@]}"
+    # expect: nothing
+    knot_limit 10 "${args[@]}"
+    # expect: unbounded
+    stdbuf -o0 xcodebuild -list
+}
+for step in five six seven eight; do "step_${step}"; done
 xcb() {
     # expect: nothing
     xcodebuild -project x "$@" 2>&1 | cat >>"$log" # limit: xcb

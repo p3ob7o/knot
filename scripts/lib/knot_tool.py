@@ -947,7 +947,7 @@ OTHER_PARTS = ("soak",)
 RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
                   "time", "case", "esac", "in", "function", "select", "for"}
 PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs",
-                "coproc"}
+                "coproc", "stdbuf"}
 # The options of a prefix that take the next word as their value.
 PREFIX_VALUE_OPTIONS = ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-a")
 # A parameter expansion with a default, as in "${XCODEBUILD:-xcodebuild}": the default is the
@@ -1304,12 +1304,21 @@ def cmd_unbounded_calls(files):
         markers = {n: m.group(1) for n, line in enumerate(raw, 1) if (m := LIMIT_MARKER.search(line))}
         others = [part_markers(text, name) for name in OTHER_PARTS]
         segments = shell_segments("\n".join(lines))
-        # Simple assignments of a word or an array, for a command word held in a variable.
+        # Simple assignments of a word or an array, for a command word held in a variable. An
+        # array may be built by `+=`. A `for` loop's variable is held as the value of its list
+        # that is a start, if one is, so that `for tool in xcodebuild; do "$tool" …` is read.
         scalars, arrays = {}, {}
         for _, _, segment in segments:
-            assign = re.match(r"^(?:(?:local|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=\((.*)\)$", segment)
+            assign = re.match(r"^(?:(?:local|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)(\+?)=\((.*)\)$", segment)
             if assign:
-                arrays[assign.group(1)] = shell_words(assign.group(2))
+                held = arrays.get(assign.group(1), []) if assign.group(2) else []
+                arrays[assign.group(1)] = held + shell_words(assign.group(3))
+                continue
+            loop = re.match(r"^for\s+([A-Za-z_]\w*)\s+in\s+(.*)$", segment)
+            if loop:
+                values = shell_words(loop.group(2))
+                if values:
+                    scalars[loop.group(1)] = next((v for v in values if limited_call(v.split())), values[0])
                 continue
             for word in shell_words(segment):
                 assign = re.match(r"^([A-Za-z_]\w*)=([\w./ -]+)$", word)
