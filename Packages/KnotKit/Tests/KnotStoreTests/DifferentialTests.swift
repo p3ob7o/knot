@@ -90,12 +90,11 @@ private actor Driver {
     var cursorsSeen: (fake: StoreCursor?, real: StoreCursor?) = (nil, nil)
 
     /// The synced fields of each record the in-memory store shows, a note once it has held a
-    /// segment that is not in progress, a segment once it is not; the notes that have; the rows
-    /// `change_log` should hold; and every record the driver has seen, in any state.
+    /// segment that is not in progress, a segment once it is not; the notes that have; and the
+    /// rows `change_log` should hold.
     var synced: [String: String] = [:]
     var sendable: Set<NoteID> = []
     var expectedLog: Set<String> = []
-    var seen: Set<String> = []
     /// Whether the burst that fills a purge batch has run.
     var burst = false
     /// The operations since the last comparison, which a mismatch names.
@@ -545,16 +544,22 @@ private actor Driver {
     }
 
     /// The real store's `change_log` holds a row for each record whose synced fields changed,
-    /// as the in-memory store shows them, and for no other record the driver has seen.
+    /// as the in-memory store shows them, and no other row: one for a record the driver does not
+    /// know is a row too many.
     func compareChangeLog() async {
+        // The notes the driver's captures are in now, their conflict copies' too: a save that
+        // finds a capture's note gone gives it a new one, which no answer names.
+        for capture in captures {
+            for id in [SegmentID(capture.id), SegmentID.keptSave(of: capture.id)] {
+                if let note = try? await fake.segment(id)?.noteID, !notes.contains(note) { notes.append(note) }
+            }
+        }
         var current: [String: String] = [:]
         for note in notes {
             guard let record = try? await fake.note(note) else { continue }
-            seen.insert("note \(note)")
             if record.segments.contains(where: { !Self.inProgress($0.state) }) { sendable.insert(note) }
             if sendable.contains(note) { current["note \(note)"] = Self.syncedFields(of: record.note) }
             for segment in record.segments {
-                seen.insert("segment \(segment.id)")
                 if !Self.inProgress(segment.state) { current["segment \(segment.id)"] = Self.syncedFields(of: segment) }
             }
         }
@@ -572,8 +577,8 @@ private actor Driver {
             Issue.record("change_log did not read, seed \(seed): \(error)")
             return
         }
-        let logged = Set(rows).intersection(seen)
-        let expected = expectedLog.intersection(seen)
+        let logged = Set(rows)
+        let expected = expectedLog
         if logged != expected {
             Issue.record(
                 """

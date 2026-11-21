@@ -356,7 +356,11 @@ import Testing
             Issue.record("The move moves.")
             return
         }
-        #expect(Set(try await rows()).isSuperset(of: ["segment \(segment)", "note \(moved.to.id)"]), "A move.")
+        let movedRows = Set(try await rows())
+        #expect(movedRows.isSuperset(of: ["segment \(segment)", "note \(moved.to.id)"]), "A move.")
+        #expect(
+            movedRows.subtracting(["segment \(segment)", "note \(moved.to.id)", "note \(first.noteID)"]).isEmpty,
+            "A move leaves no other row: \(movedRows)")
         try await clear()
         // Calls that change nothing, or roll back, leave no row.
         _ = try await notes.move(segment, from: first.noteID)
