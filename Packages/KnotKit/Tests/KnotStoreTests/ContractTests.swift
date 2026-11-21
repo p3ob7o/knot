@@ -69,6 +69,39 @@ private func check(_ name: String) async throws {
         arguments: ["kept-item", "kept-item-again", "kept-item-ingested", "kept-item-refused", "kept-item-window"])
     func theKeptItemChecks(name: String) async throws { try await check(name) }
 
+    /// A failed recording that a later launch reads and finds to hold no frame ends
+    /// `discarded_empty`, as an open one does (pull request 61), by its name.
+    @Test(.tags(.contract)) func aFailedRecordingThatHoldsNoFrameEndsEmpty() async throws {
+        try await check("failed-recording-empty")
+    }
+
+    /// The same for a drawing, which the port names with a recording: its failed segment goes,
+    /// and the same end again changes nothing.
+    @Test func aFailedDrawingEndedEmptyIsDiscarded() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 98, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let store = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        let id: CaptureID = ids.make()
+        _ = try await store.record(
+            NewCapture(
+                id: id, kind: .ink, origin: CaptureOrigin(source: .device(database.deviceID), surface: .app),
+                launchID: captures.launch, placement: .window, startedAt: captures.at(0), body: .none))
+        _ = try await store.end(
+            CaptureEnd(
+                captureID: id, endedAt: captures.at(1), outcome: .failed(KnotError.conversionFailed.code), revision: 0))
+        let empty = CaptureEnd(captureID: id, endedAt: captures.at(1), outcome: .discardedEmpty, revision: 0)
+        #expect(try await store.end(empty).outcome == .discardedEmpty)
+        #expect(try await store.segment(SegmentID(id)) == nil, "Its failed segment goes.")
+        #expect(try await store.end(empty).outcome == .discardedEmpty, "The same end again changes nothing.")
+        #expect(try await store.openCaptures().isEmpty)
+        expectConsistent(database)
+        try database.close()
+    }
+
     /// Held by its own type, as the app holds it, the store answers each operation that
     /// `NoteStore` gives a default with its own method, as it does held as `any NoteStore`, and
     /// never with the default's `port_unavailable`.

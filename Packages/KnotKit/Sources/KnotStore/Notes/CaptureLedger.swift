@@ -510,7 +510,9 @@ extension StoreTransaction {
                 }
             case .discard:
                 switch row.outcome {
-                case .open:
+                case .open, .failed:
+                    // A failed one too: a recording that launch recovery reads at last and finds
+                    // to hold no frame.
                     try discard(id, touched: &touched)
                     stored.receiptSegments = []
                     row.outcome = .discardedEmpty
