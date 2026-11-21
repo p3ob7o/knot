@@ -17,10 +17,23 @@ public final class LiveRecorder: Recorder {
         /// How many stretches of live audio wait for a consumer that falls behind. Older ones
         /// are dropped: the file never waits for the live text.
         public var liveAudioChunksKept: Int
+        /// How much audio, at the input's rate, the volume must have room for before a recording
+        /// starts: with less, the start is refused with `too_little_space` and nothing is written
+        /// (docs/product-spec.md §4).
+        public var spaceToStart: Duration
+        /// Below this many free bytes the volume is full: a write or a sync that fails then ends
+        /// the recording as `disk_full`, and otherwise as `write_failed`, because the audio file's
+        /// error does not say which.
+        public var fullBelowBytes: Int64
 
-        public init(syncInterval: Duration = .seconds(1), liveAudioChunksKept: Int = 32) {
+        public init(
+            syncInterval: Duration = .seconds(1), liveAudioChunksKept: Int = 32, spaceToStart: Duration = .seconds(60),
+            fullBelowBytes: Int64 = 1 << 20
+        ) {
             self.syncInterval = syncInterval
             self.liveAudioChunksKept = liveAudioChunksKept
+            self.spaceToStart = spaceToStart
+            self.fullBelowBytes = fullBelowBytes
         }
     }
 
@@ -31,6 +44,8 @@ public final class LiveRecorder: Recorder {
     let input: any AudioInput
     private let settings: Settings
     private let log: KnotLog
+    private let freeSpace: any FreeSpaceProbe
+    private let workingFiles: WorkingFileMaker
     /// The recordings of this process, from the start's first write to the end: a start
     /// reserves its capture before it writes anything.
     private let sessions = Mutex<[CaptureID: Entry]>([:])
@@ -42,9 +57,27 @@ public final class LiveRecorder: Recorder {
         case live(LiveSession)
     }
 
-    public init(
+    /// A recorder that writes in `locations`. `freeSpace` reads the volume's free space, to
+    /// refuse a start with too little and to tell a full disk.
+    public convenience init(
         locations: StoreLocations, layer: any FileLayer = PosixFileLayer(), clock: any WallClock = SystemWallClock(),
-        input: any AudioInput, settings: Settings = Settings(), log: KnotLog = KnotLog(.audio)
+        input: any AudioInput, settings: Settings = Settings(), freeSpace: any FreeSpaceProbe = SystemFreeSpaceProbe(),
+        log: KnotLog = KnotLog(.audio)
+    ) {
+        self.init(
+            locations: locations, layer: layer, clock: clock, input: input, settings: settings, freeSpace: freeSpace,
+            log: log
+        ) { url, rate, format, layer throws(KnotError) in
+            try WorkingFile.create(at: url, sampleRate: rate, commonFormat: format, layer: layer)
+        }
+    }
+
+    /// The same, with the working files made by `workingFiles`: a test's, which fail as a full
+    /// drive does.
+    init(
+        locations: StoreLocations, layer: any FileLayer = PosixFileLayer(), clock: any WallClock = SystemWallClock(),
+        input: any AudioInput, settings: Settings = Settings(), freeSpace: any FreeSpaceProbe = SystemFreeSpaceProbe(),
+        log: KnotLog = KnotLog(.audio), workingFiles: @escaping WorkingFileMaker
     ) {
         self.locations = locations
         self.layer = layer
@@ -52,7 +85,9 @@ public final class LiveRecorder: Recorder {
         self.clock = clock
         self.input = input
         self.settings = settings
+        self.freeSpace = freeSpace
         self.log = log
+        self.workingFiles = workingFiles
     }
 
     // MARK: Prepare and start
@@ -87,6 +122,13 @@ public final class LiveRecorder: Recorder {
             sessions.withLock { _ = $0.removeValue(forKey: id) }
             return failed(error, id)
         }
+        // With too little room for the start's minute of audio, nothing is written.
+        let needed = Int64(Double(settings.spaceToStart.components.seconds) * opened.sampleRate) * 2
+        if let free = freeSpace.availableBytes(forVolumeAt: locations.recording), free < needed {
+            await opened.stop()
+            sessions.withLock { _ = $0.removeValue(forKey: id) }
+            return failed(KnotError.tooLittleSpace.with(ErrorContext(captureID: id)), id)
+        }
         var wrote = false
         do throws(KnotError) {
             try store.makeFolder(locations.recording)
@@ -94,13 +136,12 @@ public final class LiveRecorder: Recorder {
             let manifest = request.manifest(startedAt: clock.now())
             wrote = true
             try store.place(try manifest.encoded(), at: files.manifest)
-            let file = try WorkingFile.create(
-                at: files.workingFile, sampleRate: opened.sampleRate, commonFormat: opened.commonFormat, layer: layer)
+            let file = try workingFiles(files.workingFile, opened.sampleRate, opened.commonFormat, layer)
             // The working file's name is on the drive before the recording is live.
             try layer.syncFolder(locations.recording)
             let session = LiveSession(
                 request: request, manifest: manifest, input: opened, file: file, files: files, clock: clock,
-                settings: settings, log: log
+                settings: settings, freeSpace: freeSpace, log: log
             ) { [weak self] audio in self?.ended(audio) }
             sessions.withLock { $0[id] = .live(session) }
             do {

@@ -31,6 +31,7 @@ final class LiveSession: RecordingSession {
     private let manifest: CaptureManifest
     private let clock: any WallClock
     private let settings: LiveRecorder.Settings
+    private let freeSpace: any FreeSpaceProbe
     private let log: KnotLog
     private let sampleRate: Double
     /// The session's syncs and its ending, one at a time.
@@ -45,7 +46,7 @@ final class LiveSession: RecordingSession {
     /// The working file and what has been written to it.
     private struct Writer {
         /// The open file, `nil` once it is closed.
-        var file: AVAudioFile?
+        var file: (any WorkingFileWriter)?
         /// Frames written to the file.
         var written: Int64 = 0
         /// Frames the last sync made durable, which `.durable` has reported.
@@ -59,8 +60,9 @@ final class LiveSession: RecordingSession {
     }
 
     init(
-        request: RecordingRequest, manifest: CaptureManifest, input: any OpenAudioInput, file: AVAudioFile,
-        files: SessionFiles, clock: any WallClock, settings: LiveRecorder.Settings, log: KnotLog,
+        request: RecordingRequest, manifest: CaptureManifest, input: any OpenAudioInput, file: any WorkingFileWriter,
+        files: SessionFiles, clock: any WallClock, settings: LiveRecorder.Settings, freeSpace: any FreeSpaceProbe,
+        log: KnotLog,
         ended: @escaping @Sendable (RecordedAudio) -> Void
     ) {
         captureID = request.captureID
@@ -70,6 +72,7 @@ final class LiveSession: RecordingSession {
         self.files = files
         self.clock = clock
         self.settings = settings
+        self.freeSpace = freeSpace
         self.log = log
         self.ended = ended
         sampleRate = file.processingFormat.sampleRate
@@ -164,9 +167,7 @@ final class LiveSession: RecordingSession {
                     state.full = true
                     let failure = AudioFileError.knotError(error).about(capture: captureID)
                     log.failure(failure, "recording_write_failed")
-                    // A full volume often fails a write with -40, which says nothing of space:
-                    // WP-12's second pull request tells it by the volume's free space.
-                    return failure.code == KnotError.diskFull.code ? .diskFull : .writeFailed
+                    return ending(after: failure)
                 }
                 state.written += taken
                 // Told while the lock is held, so that nothing is told after the ending.
@@ -179,6 +180,19 @@ final class LiveSession: RecordingSession {
             return .limitReached
         }
         if let reason { end(reason) }
+    }
+
+    /// The ending of a recording whose write or sync failed with `failure`: `disk_full` when the
+    /// system said so or the volume has less than `fullBelowBytes` free, as a full volume does
+    /// that fails a write with -40, which says nothing of space; `write_failed` otherwise.
+    private func ending(after failure: KnotError) -> RecordingEnding {
+        if failure.code == KnotError.diskFull.code { return .diskFull }
+        let folder = files.workingFile.deletingLastPathComponent()
+        guard let free = freeSpace.availableBytes(forVolumeAt: folder), free < settings.fullBelowBytes else {
+            return .writeFailed
+        }
+        log.capture(captureID, "recording_volume_full", .number("free_kib", Int(free / 1024)), level: .error)
+        return .diskFull
     }
 
     /// The first `frames` frames of `buffer`, for the last write before the limit.
@@ -203,7 +217,7 @@ final class LiveSession: RecordingSession {
         } catch {
             log.failure(error.about(capture: captureID), "recording_sync_failed")
             writer.withLock { $0.full = true }
-            end(error.code == KnotError.diskFull.code ? .diskFull : .writeFailed)
+            end(ending(after: error))
             return
         }
         // Every frame counted here was written before the sync began. The length the file holds
@@ -271,7 +285,7 @@ final class LiveSession: RecordingSession {
             // the failure is the result's ending, as the periodic sync tells it.
             log.failure(error.about(capture: captureID), "recording_sync_failed")
             synced = false
-            ending = Self.failed(ending, error.code == KnotError.diskFull.code ? .diskFull : .writeFailed)
+            ending = Self.failed(ending, self.ending(after: error))
         }
         // The length is read from the file, never counted from what was written. Only a file
         // that is not there, or one that was read, says how much audio the recording holds: a
