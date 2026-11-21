@@ -117,6 +117,9 @@ extension RecordScreenTests {
 /// The smoke test on the real composition: the live recorder, the coordinator and the outbox,
 /// on injected audio and a temporary store, since a simulator refuses the microphone
 /// (docs/architecture.md §8). Press, wait over a second, press, and "Saved" is on the screen.
+/// The screen of that launch says what the composition wired, and the test reads it before the
+/// first press and after "Saved", so that it fails when another recorder, link or store is
+/// composed.
 final class RealCompositionSmokeTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -127,7 +130,9 @@ final class RealCompositionSmokeTests: XCTestCase {
         let app = XCUIApplication.launchedWatch([WatchLaunch.injectedAudioArgument])
         let record = app.buttons["knot.record"]
         let status = app.staticTexts["knot.status"]
+        let composition = app.staticTexts["knot.composition"]
         XCTAssertTrue(record.waitForExistence(timeout: 30))
+        XCTAssertTrue(waitForLabel(composition, Self.composed(outbox: 0)), composition.label)
         record.tap()
         XCTAssertTrue(waitForLabel(record, "Stop recording"))
         XCTAssertTrue(waitForLabel(status, "Recording"))
@@ -140,7 +145,14 @@ final class RealCompositionSmokeTests: XCTestCase {
         record.tap()
         XCTAssertTrue(waitForLabel(status, "Saved"))
         XCTAssertTrue(waitForLabel(record, "Start recording"))
+        XCTAssertTrue(waitForLabel(composition, Self.composed(outbox: 1)), composition.label)
         try app.auditAccessibility()
+    }
+
+    /// The live recorder, the link over the stand-in for an iPhone out of reach, the outbox
+    /// holding `outbox` items, under the system's temporary folder.
+    static func composed(outbox: Int) -> String {
+        "LiveRecorder; OutboxLink over UnreachableIPhoneTransport; outbox \(outbox); temporary store yes"
     }
 
     @MainActor

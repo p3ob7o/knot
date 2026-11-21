@@ -22,6 +22,25 @@ struct RecordScreen: View {
     let model: RecordScreenModel
 
     var body: some View {
+        #if DEBUG
+            if let report = model.compositionText {
+                // The launch on injected audio says what it wired, for the smoke test. It is
+                // longer than the screen, so the screen scrolls.
+                ScrollView {
+                    control
+                    Text(report)
+                        .font(.caption2)
+                        .accessibilityIdentifier("knot.composition")
+                }
+            } else {
+                control
+            }
+        #else
+            control
+        #endif
+    }
+
+    private var control: some View {
         VStack(spacing: 8) {
             RecordButton(phase: model.controlPhase, action: model.press)
                 .disabled(model.controlDisabled)

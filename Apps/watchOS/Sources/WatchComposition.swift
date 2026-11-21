@@ -19,6 +19,11 @@ struct WatchComposition: Sendable {
     var problem: KnotError?
     /// Where each press takes its date.
     var pressClock: PressClock
+    #if DEBUG
+        /// What the composition wired, for the smoke test on the real composition. Only the
+        /// launch on injected audio makes one.
+        var report: CompositionReport? = nil
+    #endif
 
     /// The composition for `launch`.
     static func make(_ launch: WatchLaunch) -> WatchComposition {
@@ -27,7 +32,9 @@ struct WatchComposition: Sendable {
             return live(input: MicrophoneInput(), appContainer: URL.applicationSupportDirectory, own: true)
         case .injectedAudio:
             #if DEBUG
-                return live(input: InjectedAudio(), appContainer: temporaryFolder("KnotWatchInjected"), own: false)
+                return live(
+                    input: InjectedAudio(), appContainer: temporaryFolder("KnotWatchInjected"), own: false,
+                    reported: true)
             #else
                 return live(input: MicrophoneInput(), appContainer: URL.applicationSupportDirectory, own: true)
             #endif
@@ -45,7 +52,9 @@ struct WatchComposition: Sendable {
     /// The live recorder on `input`, writing where `StoreLocations` puts the Watch's files in
     /// `appContainer`: the Watch app's own folders when `own`, or a temporary folder of a debug
     /// build, which has no app group.
-    private static func live(input: any AudioInput, appContainer: URL, own: Bool) -> WatchComposition {
+    private static func live(input: any AudioInput, appContainer: URL, own: Bool, reported: Bool = false)
+        -> WatchComposition
+    {
         var environment = AppEnvironment.unavailable
         let clock = PressClock(clock: environment.clock)
         let locations: StoreLocations
@@ -63,7 +72,8 @@ struct WatchComposition: Sendable {
         // The Watch's link, with its outbox in the Watch's own folder. Until WP-17's second pull
         // request brings the session, no iPhone is in reach: a recording waits in the outbox.
         environment = KnotLinkLive.wire(environment, locations: locations)
-        return coordinated(environment, device: deviceID(in: locations, ids: environment.ids), pressClock: clock)
+        return coordinated(
+            environment, device: deviceID(in: locations, ids: environment.ids), pressClock: clock, reported: reported)
     }
 
     /// The Watch's own folders, from its Info.plist: its flavour, and its app group, which only
@@ -110,15 +120,22 @@ struct WatchComposition: Sendable {
     }
 
     /// The coordinator over `environment`'s recorder and link, or the reason there is none.
-    private static func coordinated(_ environment: AppEnvironment, device: DeviceID, pressClock: PressClock)
-        -> WatchComposition
-    {
+    /// When `reported`, in a debug build, the composition says what it wired.
+    private static func coordinated(
+        _ environment: AppEnvironment, device: DeviceID, pressClock: PressClock, reported: Bool = false
+    ) -> WatchComposition {
         let launchID: LaunchID = environment.ids.make()
+        var composition = WatchComposition(coordinator: nil, problem: nil, pressClock: pressClock)
+        #if DEBUG
+            if reported { composition.report = CompositionReport(environment) }
+        #endif
         guard let coordinator = KnotLinkLive.coordinator(for: environment, launchID: launchID, device: device) else {
             log.log(.error, "watch_coordinator_unavailable")
-            return WatchComposition(coordinator: nil, problem: KnotError.portUnavailable, pressClock: pressClock)
+            composition.problem = KnotError.portUnavailable
+            return composition
         }
-        return WatchComposition(coordinator: coordinator, problem: nil, pressClock: pressClock)
+        composition.coordinator = coordinator
+        return composition
     }
 
     private static let log = KnotLog(.app)

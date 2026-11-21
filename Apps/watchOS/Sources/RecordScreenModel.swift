@@ -140,6 +140,10 @@ final class RecordScreenModel {
     /// Where the record control stands.
     private(set) var phase: KnotUI.RecordingPhase = .idle
     private(set) var status: RecordStatus = .ready
+    #if DEBUG
+        /// What the composition wired, when it says so: only the launch on injected audio.
+        private(set) var compositionText: String?
+    #endif
 
     @ObservationIgnored private let composition: WatchComposition
     @ObservationIgnored private let announcer: any Announcer
@@ -153,6 +157,7 @@ final class RecordScreenModel {
     init(composition: WatchComposition, announcer: any Announcer = VoiceOverAnnouncer()) {
         self.composition = composition
         self.announcer = announcer
+        refreshReport()
         if let endings = composition.coordinator?.endings() {
             Task { [weak self] in
                 for await ended in endings {
@@ -204,11 +209,19 @@ final class RecordScreenModel {
         }
     }
 
+    /// Reads the composition's report again, as the outbox changes. Debug builds only.
+    private func refreshReport() {
+        #if DEBUG
+            compositionText = composition.report?.text
+        #endif
+    }
+
     /// Says what came of a press. `before` is the phase the press moved the control from, if it
     /// moved it.
     private func apply(
         _ outcome: WatchCoordinator.PressOutcome, from coordinator: WatchCoordinator, before: KnotUI.RecordingPhase?
     ) async {
+        defer { refreshReport() }
         switch outcome {
         case .started(let capture):
             // It may have ended by itself already, and said so.
@@ -251,6 +264,7 @@ final class RecordScreenModel {
     /// press is on its way. When another recording is live, the control stays that recording's,
     /// and the words say that Knot is recording, and then what became of the one before.
     private func ended(_ ended: WatchCoordinator.RecordingEndedByItself) {
+        defer { refreshReport() }
         endedByThemselves.insert(ended.captureID)
         let reason = EarlyStop(ended.ending)
         let fate = RecordFate(ended.outcome)
