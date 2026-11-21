@@ -1,0 +1,194 @@
+import Foundation
+import KnotAudio
+import KnotFakes
+import KnotSpeech
+import KnotTestSupport
+import Testing
+
+@testable import KnotApp
+@testable import KnotCore
+
+@Suite("The live environment")
+struct EnvironmentTests {
+    @Test("unavailable-ports-of-live-match-allowed-list", .tags(.named))
+    func unavailablePortsMatchTheAllowedList() {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        // `.live` as the app composes it, KnotSpeech's transcriber included. Nothing is opened.
+        let composition = folder.compose(seams: LiveComposition.Seams(installSpeechModel: false))
+        let unavailable = UnavailablePorts.of(composition.environment)
+        let allowed = UnavailablePorts.allowed(at: UnavailablePorts.comingMilestone, on: .macOS)
+        #expect(
+            unavailable.sorted() == allowed.sorted(),
+            "unavailable but not allowed: \(unavailable.subtracting(allowed).sorted()); allowed but filled: \(allowed.subtracting(unavailable).sorted())"
+        )
+        // What M1 needs is there.
+        for port: EnvironmentPort in [
+            .notes, .assets, .settings, .fetcher, .recorder, .transcriber, .engine, .queue, .gates,
+        ] {
+            #expect(!unavailable.contains(port), "\(port) is unavailable")
+        }
+    }
+
+    @Test("The ports a shell brings are in .live, set before the modules are wired")
+    func shellPortsAreInTheEnvironment() {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let cues = RecordingCueEmitter()
+        let surfaces = RecordingSurfaceRouter()
+        let composition = folder.compose(shell: ShellPorts(cues: cues, surfaces: surfaces))
+        #expect((composition.environment.cues as? RecordingCueEmitter) === cues)
+        #expect((composition.environment.surfaces as? RecordingSurfaceRouter) === surfaces)
+        let unavailable = UnavailablePorts.of(composition.environment)
+        #expect(!unavailable.contains(.cues) && !unavailable.contains(.surfaces))
+    }
+
+    @Test(
+        "The allowed list only shrinks from one milestone to the next, and holds only the Watch's link and the Mac's Live Activity at M7"
+    )
+    func allowedListShrinks() {
+        for platform: StoreLocations.Platform in [.iOS, .macOS] {
+            var previous: Set<EnvironmentPort>?
+            for level in MilestoneLevel.allCases {
+                let allowed = UnavailablePorts.allowed(at: level, on: platform)
+                if let previous { #expect(allowed.isSubset(of: previous), "\(level) on \(platform)") }
+                #expect(!allowed.contains(.notes) && !allowed.contains(.engine) && !allowed.contains(.clock))
+                previous = allowed
+            }
+            let last = UnavailablePorts.allowed(at: .m7, on: platform)
+            #expect(last == (platform == .macOS ? [.watchLink, .recordingActivity] : [.watchLink]))
+        }
+    }
+
+    @Test("A port that the unavailable environment holds is reported as unavailable")
+    func everyUnavailablePortIsSeen() {
+        let all = Set(EnvironmentPort.allCases).subtracting([.clock, .ids])
+        #expect(UnavailablePorts.of(.unavailable) == all)
+    }
+
+    /// The gates of each level, as the plan lists them: sync and the command line open at M4,
+    /// ink at M5. A development build has no level and every gate open.
+    @Test("gates-listed-for-each-milestone-level", .tags(.named))
+    func gatesForEachLevel() {
+        let open: [MilestoneLevel?: Set<Feature>] = [
+            nil: [.sync, .commandLine, .ink],
+            .m1: [],
+            .m2: [],
+            .m3: [],
+            .m4: [.sync, .commandLine],
+            .m5: [.sync, .commandLine, .ink],
+            .m6: [.sync, .commandLine, .ink],
+            .m7: [.sync, .commandLine, .ink],
+        ]
+        #expect(open.count == MilestoneLevel.allCases.count + 1)
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        for (level, expected) in open {
+            let gates = folder.compose(level: level).environment.gates
+            let opened = Set(Feature.allCases.filter { gates.isOpen($0) })
+            #expect(opened == expected, "level \(level?.infoValue ?? "none")")
+        }
+    }
+
+    @Test("Only a debug build honours the launch arguments for .preview and a temporary store")
+    func launchArguments() {
+        #expect(LiveConfiguration.selectsPreview(["Knot", "-KnotPreview"]))
+        #expect(!LiveConfiguration.selectsPreview(["Knot"]))
+        #expect(LiveConfiguration.temporaryStoreName(in: ["Knot", "-KnotTemporaryStore", "smoke-1"]) == "smoke-1")
+        for refused in ["../up", ".hidden", "", "a/b", String(repeating: "x", count: 65), "é"] {
+            #expect(LiveConfiguration.temporaryStoreName(in: ["-KnotTemporaryStore", refused]) == nil, "\(refused)")
+        }
+        #expect(LiveConfiguration.temporaryStoreName(in: ["-KnotTemporaryStore"]) == nil)
+    }
+
+    /// The app a UI test starts through `KnotLauncher` (Apps/UITestSupport) carries the mark
+    /// `KNOT_AGENT=1` and nothing else of a test: no test bundle, no runner's variables, no
+    /// simulator on the Mac. Such a process refuses the hardware input and a model install.
+    @Test("An app launched with the UI test launcher's mark refuses the hardware input and a model install")
+    func launcherMarkRefusesHardwareInput() {
+        let mark = ["KNOT_AGENT": "1"]
+        let launched = HardwareInputPolicy.Process(
+            environment: mark, bundlePaths: ["/Applications/Knot Dev.app"], processName: "Knot", isSimulator: false)
+        #expect(HardwareInputPolicy.refusal(for: launched) == .agent)
+        var unmarked = launched
+        unmarked.environment = [:]
+        #expect(HardwareInputPolicy.refusal(for: unmarked) == nil)
+        let installing = SpeechInstallPolicy.Process(
+            environment: mark, bundlePaths: ["/Applications/Knot Dev.app"], processName: "Knot")
+        #expect(SpeechInstallPolicy.refusal(for: installing) != nil)
+    }
+
+    @Test("An agent's process never opens the milestone store")
+    func agentRefusedTheMilestoneStore() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var configuration = folder.configuration(level: .m1)
+        configuration.flavour = .milestone
+        let composition = LiveComposition(configuration: configuration, seams: .forTests)
+        #expect(composition.locations == nil)
+        #expect(composition.locationsError == KnotError.agentRefusedMilestoneStore)
+    }
+}
+
+@Suite("The diagnostics export")
+struct DiagnosticsTests {
+    /// A made-up word, which must reach no field of the file.
+    static let canary = "quorvantine"
+
+    @Test("The diagnostics file holds capture rows, job rows, counts and timings, and no note text")
+    func exportHoldsNoText() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let composition = folder.compose()
+        _ = try #require(await launch(composition))
+        let state = try await typeLine("a synthetic \(Self.canary) line", in: composition)
+        _ = try await composition.environment.engine.end(state.captureID)
+        _ = try await composition.environment.notes.search(Self.canary, limit: 10)
+
+        let data = await composition.diagnostics.exportData()
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(!json.lowercased().contains(Self.canary))
+        let file = try JSONDecoder.iso8601.decode(DiagnosticsFile.self, from: data)
+        #expect(file.store.open)
+        #expect(file.store.consistencyProblems.isEmpty)
+        #expect(file.captures.map(\.id) == [state.captureID.description])
+        #expect(file.captures.first?.outcome == "stored")
+        #expect(file.captures.first?.kind == "typed")
+        #expect(file.launch?.steps.count == 4)
+        #expect(file.timings[MeasuredMoment.typedTextOnDisk.rawValue]?.count ?? 0 >= 1)
+        #expect(file.timings[MeasuredMoment.searchResults.rawValue]?.count == 1)
+        #expect(file.timings[MeasuredMoment.launchOpenStore.rawValue]?.count == 1)
+        let today = file.weekCounts.values.reduce(0) { $0 + ($1["captures_typed"] ?? 0) }
+        #expect(today == 1)
+        // The content hash of a capture stays out of the file, by its name or its value.
+        #expect(!json.contains("contentHash") && !json.contains("content_hash"))
+        #expect(!json.contains(folder.container.path))
+    }
+
+    @Test("A store that will not open still exports, with its code")
+    func exportWithoutAStore() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let composition = folder.compose()
+        let file = await composition.diagnostics.export()
+        #expect(!file.store.open)
+        #expect(file.store.problem == KnotError.storeNotOpen.code)
+        #expect(file.captures.isEmpty)
+    }
+
+    @Test("The suggested file name is the time alone")
+    func fileName() {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let name = folder.compose().diagnostics.suggestedFileName(at: Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(name == "knot-diagnostics-20270115T080000Z.json")
+    }
+}
+
+extension JSONDecoder {
+    static var iso8601: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+}

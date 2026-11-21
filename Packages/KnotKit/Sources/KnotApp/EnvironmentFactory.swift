@@ -1,62 +1,92 @@
-import KnotAudio
-import KnotCapture
-import KnotCleanup
+import Foundation
 import KnotCore
-import KnotExport
-import KnotInk
-import KnotIntents
-import KnotSpeech
-import KnotStore
-import KnotSync
 import KnotUI
+import Synchronization
 
-#if os(iOS)
-    import KnotLink
-#endif
-#if os(macOS)
-    import KnotAgent
-#endif
 #if DEBUG
     import KnotFakes
 #endif
 
 /// The one place where the app shells get their environment (docs/architecture.md §3).
+///
+/// A shell calls `EnvironmentFactory.app(shell:)` once, with the ports it implements, gives
+/// `app.environment` to its views, and starts the launch sequence with
+/// `await app.runLaunchSequence()` once its capture surface is on screen, for instance in the
+/// `.task` of its root view:
+///
+/// ```swift
+/// private let app = EnvironmentFactory.app(shell: ShellPorts(cues: MyCues()))
+/// // …
+/// RootView(environment: app.environment, context: app.context)
+///     .task { _ = await app.runLaunchSequence() }
+/// ```
+///
+/// The shell's ports are in the environment before any module is wired. The first call builds
+/// the app of the process, and every later call, `app` included, returns that one.
+///
+/// Every build runs on `.live`. A debug build launched with `-KnotPreview` runs on `.preview`
+/// instead, as the UI tests other than the `.live` smoke tests do, and one launched with
+/// `-KnotTemporaryStore <name>` runs `.live` on a temporary store of that name
+/// (`LiveConfiguration`). A release build honours neither argument.
 public enum EnvironmentFactory {
-    /// The environment an app shell runs on.
-    ///
-    /// A debug build asks KnotFakes for the preview environment, which is `.unavailable`
-    /// until WP-05 fills it in. A release build gets `.unavailable`. The first PR of WP-22
-    /// makes this return `live`.
-    public static func make() -> AppEnvironment {
-        #if DEBUG
-            return .preview
-        #else
-            return .unavailable
-        #endif
+    private static let built = Mutex<AppComposition?>(nil)
+
+    /// This process's app, built on the first call with `shell`'s ports.
+    public static func app(shell: ShellPorts) -> AppComposition {
+        built.withLock { built in
+            if let built { return built }
+            let app = makeApp(shell: shell)
+            built = app
+            return app
+        }
     }
 
-    /// Every module's live entry point, applied in turn to the unavailable environment.
-    ///
-    /// A port that no package has filled in yet stays unavailable. A package that lands
-    /// later fills its own module's entry point and does not edit this file.
+    /// This process's app, as `app(shell:)` built it, or built now with no port of a shell.
+    public static var app: AppComposition { app(shell: ShellPorts()) }
+
+    /// The environment an app shell runs on: `app.environment`.
+    public static func make() -> AppEnvironment {
+        app.environment
+    }
+
+    /// The live environment of this process, whatever the launch arguments select.
     public static var live: AppEnvironment {
-        var environment = AppEnvironment.unavailable
-        environment = KnotStoreLive.wire(environment)
-        environment = KnotAudioLive.wire(environment)
-        environment = KnotCaptureLive.wire(environment)
-        environment = KnotSpeechLive.wire(environment)
-        environment = KnotCleanupLive.wire(environment)
-        environment = KnotInkLive.wire(environment)
-        environment = KnotSyncLive.wire(environment)
-        environment = KnotIntentsLive.wire(environment)
-        environment = KnotExportLive.wire(environment)
-        environment = KnotUILive.wire(environment)
-        #if os(iOS)
-            environment = KnotLinkLive.wire(environment)
+        if let live = app.live { return live.environment }
+        return LiveComposition(configuration: .current()).environment
+    }
+
+    private static func makeApp(shell: ShellPorts) -> AppComposition {
+        #if DEBUG
+            if LiveConfiguration.selectsPreview(ProcessInfo.processInfo.arguments) {
+                let environment = shell.apply(to: .preview)
+                return AppComposition(
+                    environment: environment, live: nil,
+                    context: UIContext(thisDevice: environment.ids.make(), sync: .notInThisBuild))
+            }
         #endif
-        #if os(macOS)
-            environment = KnotAgentLive.wire(environment)
-        #endif
-        return environment
+        let live = LiveComposition(configuration: .current(), shell: shell)
+        return AppComposition(environment: live.environment, live: live, context: live.uiContext)
+    }
+}
+
+/// What a shell holds: the environment it runs on and, on `.live`, the composition whose launch
+/// sequence it starts.
+public struct AppComposition: Sendable {
+    public let environment: AppEnvironment
+    /// The live composition, `nil` on `.preview`.
+    public let live: LiveComposition?
+    /// The context the view models take: on `.live`, this device's ID as the engine stamps it,
+    /// kept across launches, and whether the build can sync. On `.preview`, an ID of the process.
+    public let context: UIContext
+
+    /// Runs the launch sequence once the capture surface is on screen, and returns its report:
+    /// `nil` on `.preview`, which has no launch. A second call waits for the first.
+    public func runLaunchSequence() async -> LaunchReport? {
+        await live?.runLaunchSequence()
+    }
+
+    /// The diagnostics file, for the entry in About of a test build. `nil` on `.preview`.
+    public func diagnosticsData() async -> Data? {
+        await live?.diagnostics.exportData()
     }
 }
