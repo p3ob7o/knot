@@ -365,6 +365,26 @@ import Testing
         #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
     }
 
+    /// No delivery begins once the input is finishing. A buffer that the tap hands over from
+    /// inside the teardown, the stop begun and the tap still installed, and one that the removed
+    /// tap hands over once the stop has returned, as a callback late on the engine's thread would,
+    /// never reach the handler. One before the stop does. After finding 32.
+    @Test func noDeliveryBeginsOnceTheInputIsFinishing() async throws {
+        let (opened, engine, _) = try await Self.openStandIn()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(Self.silence(format))
+        let deliveries = Mutex(0)
+        engine.whenAt(.stopping) { engine in engine.deliver(buffer) }
+        try await Self.startOffThePool(opened, format: format) { _ in deliveries.withLock { $0 += 1 } }
+        engine.deliver(buffer)
+        #expect(deliveries.withLock { $0 } == 1, "A buffer before the stop reaches the handler.")
+        await opened.stop()
+        #expect(deliveries.withLock { $0 } == 1, "A buffer the tap handed over inside the teardown was delivered.")
+        engine.deliverLate(buffer)
+        #expect(deliveries.withLock { $0 } == 1, "A buffer handed over after the stop was delivered.")
+        #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
+    }
+
     /// A stop returns only once a delivery under way has ended: here the configuration
     /// change's, which asks for the stop and runs on after it. The delivery holds until the stop
     /// waits for it, or returns. After finding 23.
@@ -535,6 +555,8 @@ final class StandInEngine: InputEngine {
     private let state = Mutex<(calls: [String], tap: (@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?)>(([], nil))
     private let hooks = Mutex<[Point: @Sendable (StandInEngine) -> Void]>([:])
     private let changes = AsyncStream<Void>.makeStream()
+    /// The last tap installed, kept after its removal.
+    private let lastTap = Mutex<(@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?>(nil)
 
     init(tap: InputShape, hardware: InputShape? = nil) {
         self.tap = tap
@@ -557,6 +579,13 @@ final class StandInEngine: InputEngine {
         tap?(buffer)
     }
 
+    /// Hands the last tap installed a buffer, even once it is removed, as a callback still on its
+    /// way on the engine's thread would.
+    func deliverLate(_ buffer: AVReadOnlyAudioPCMBuffer) {
+        let tap = lastTap.withLock { $0 }
+        tap?(buffer)
+    }
+
     func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
         throws(KnotError)
     {
@@ -564,6 +593,7 @@ final class StandInEngine: InputEngine {
             $0.calls.append("installTap")
             $0.tap = tap
         }
+        lastTap.withLock { $0 = tap }
         run(at: .installingTheTap)
     }
 
