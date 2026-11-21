@@ -186,6 +186,26 @@ struct SoakWitness {
             }
         }
 
+        // What the person can get back: the store's own stream, every page of it. A capture that
+        // was kept is there, in a note the stream shows, with every piece of its text.
+        var shown: [CaptureID: [Segment]] = [:]
+        var position: StreamPosition?
+        var pagesRead = 0
+        repeat {
+            let page = try await notes.stream(after: position, limit: 100)
+            for record in page.notes where record.isShown {
+                for segment in record.liveSegments where segment.conflictOf == nil {
+                    shown[CaptureID(segment.pieceOf ?? segment.id), default: []].append(segment)
+                }
+            }
+            pagesRead += 1
+            if (page.next != nil && page.next == position) || pagesRead > 10_000 {
+                problems.append(Problem(code: "stream_does_not_end", ids: []))
+                break
+            }
+            position = page.next
+        } while position != nil
+
         // The captures of each capture of the script: those the child acknowledged, and those
         // whose stored text carries the script's token for it.
         let tokens = Dictionary(
@@ -198,6 +218,13 @@ struct SoakWitness {
         for segment in segments where segment.origin == device && segment.piece == 0 && segment.conflictOf == nil {
             guard let capture = segment.capture, let token = segment.token, let index = tokens[token] else { continue }
             captures[index, default: []].insert(capture)
+        }
+
+        // Nothing the stream shows from this device is a capture the script does not account for.
+        let accounted = captures.values.reduce(into: Set<CaptureID>()) { $0.formUnion($1) }
+        for (capture, segments) in shown.sorted(by: { $0.key < $1.key })
+        where segments.contains(where: { $0.origin == device }) && !accounted.contains(capture) {
+            problems.append(Problem(code: "segment_of_no_capture_of_the_script", ids: [capture.description]))
         }
 
         for (index, ids) in captures.sorted(by: { $0.key < $1.key }) {
@@ -213,7 +240,7 @@ struct SoakWitness {
                 }
                 let found = try await expectation(
                     capture, index: index, planned: planned, saves: saves, pieces: pieces[capture] ?? [],
-                    notes: notes)
+                    shown: shown[capture] ?? [], notes: notes)
                 problems += found.problems
                 if found.stored { stored.append(capture) }
             }
@@ -237,7 +264,7 @@ struct SoakWitness {
     /// acknowledged.
     private func expectation(
         _ capture: CaptureID, index: Int, planned: SoakScript.Capture, saves: [Acknowledgement],
-        pieces: [SegmentRow], notes: NoteRepository
+        pieces: [SegmentRow], shown: [Segment], notes: NoteRepository
     ) async throws -> (problems: [Problem], stored: Bool) {
         var problems: [Problem] = []
         let latest = saves.max { ($0.save, $0.revision) < ($1.save, $1.revision) }
@@ -279,16 +306,23 @@ struct SoakWitness {
                 problem("acknowledged_discard_stored")
                 return (problems, true)
             }
-            // Every piece, read in order: each the piece its position names, with no gap.
-            guard !pieces.isEmpty else {
-                problem("stored_capture_without_text")
+            // Every piece, read in order through the stream: each the piece its position names,
+            // with no gap, all in one note the stream shows.
+            guard !shown.isEmpty else {
+                problem(pieces.isEmpty ? "stored_capture_without_text" : "stored_capture_not_in_stream")
                 return (problems, true)
             }
-            for (position, piece) in pieces.enumerated()
-            where piece.piece != position || piece.id != SegmentID.piece(position, of: capture).description {
+            let ordered = shown.sorted { $0.piece < $1.piece }
+            for (position, piece) in ordered.enumerated()
+            where piece.piece != position || piece.id != SegmentID.piece(position, of: capture) {
                 problem("pieces_out_of_order", ["piece=\(piece.piece)", "position=\(position)"])
             }
-            let text = pieces.map(\.text).joined()
+            if Set(ordered.map(\.noteID)).count != 1 { problem("pieces_in_several_notes") }
+            let text = ordered.map(\.text).joined()
+            // The pieces its text needs, and no more.
+            if ordered.count != TextPieces.split(text).count {
+                problem("pieces_not_as_the_text_needs", ["pieces=\(ordered.count)"])
+            }
             // The texts the store may hold: from the last acknowledged save on, or only the
             // last once the end was acknowledged.
             let first = endAcknowledged ? planned.texts.count - 1 : min(latest?.save ?? 0, planned.texts.count - 1)
