@@ -127,6 +127,19 @@ final class StoreTransaction {
     /// Writes a segment's own fields, keeping its owner and saved revision.
     func put(_ segment: Segment) throws { try SegmentRows.upsert(segment, in: db) }
 
+    /// The level peaks kept with a segment's recording, or `nil`.
+    func peaks(of segment: SegmentID) throws -> Data? {
+        try Data.fetchOne(
+            db, sql: "SELECT recording_peaks FROM segment WHERE id = ?", arguments: [segment.description])
+    }
+
+    /// Keeps `peaks` with a segment's recording, or clears them. A segment's row holds them, so
+    /// they go with the row.
+    func setPeaks(_ peaks: Data?, of segment: SegmentID) throws {
+        try db.execute(
+            sql: "UPDATE segment SET recording_peaks = ? WHERE id = ?", arguments: [peaks, segment.description])
+    }
+
     /// The capture whose own piece the segment is, if it is one: a conflict copy, or a segment
     /// that sync or a seed made, has none.
     func owner(of segment: SegmentID) throws -> CaptureID? {
