@@ -1139,6 +1139,20 @@ else
     fail "a failed UI test through verify's loop, status $ui_status: the step's log: $ui_step_log"
 fi
 
+# sdk-path.sh finds a framework of the SDK, and one that the platform keeps outside it, as
+# XCUIAutomation, which UI tests import, and XCTest are, under the platform's
+# Developer/Library/Frameworks: each by its Swift interfaces, in the pinned Xcode.
+sdk_sdk="$("$KNOT_SCRIPTS/sdk-path.sh" macos Foundation 2>&1 || true)"
+sdk_ui="$("$KNOT_SCRIPTS/sdk-path.sh" macos XCUIAutomation 2>&1 || true)"
+sdk_ios_ui="$("$KNOT_SCRIPTS/sdk-path.sh" ios-simulator XCUIAutomation 2>&1 || true)"
+if [[ $sdk_sdk == */SDKs/*/Foundation.framework/* &&
+    $sdk_ui == */MacOSX.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Modules/XCUIAutomation.swiftmodule &&
+    $sdk_ios_ui == */iPhoneSimulator.platform/Developer/Library/Frameworks/XCUIAutomation.framework/* ]]; then
+    pass "sdk-path.sh finds a framework in the SDK and XCUIAutomation in the platform's own frameworks"
+else
+    fail "sdk-path.sh: Foundation '$sdk_sdk', XCUIAutomation on the Mac '$sdk_ui', on the iOS simulator '$sdk_ios_ui'"
+fi
+
 # XcodeGen is chosen by the scripts, not by PATH (docs/dev-setup.md): KNOT_XCODEGEN, else the
 # pinned release under the build folder's tools/, else xcodegen on PATH, and its version is
 # checked again just before it generates. The stubs answer --version from a file beside them

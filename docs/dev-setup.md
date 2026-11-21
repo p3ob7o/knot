@@ -22,7 +22,7 @@ GRDB, the one third-party library, comes through Swift Package Manager. Its vers
 - To pin a newly installed release Xcode: `scripts/bootstrap.sh --pin-xcode /Applications/Xcode.app`. It refuses a beta.
 - To use another Xcode, such as the beta, name it: `KNOT_XCODE=/Applications/Xcode-beta.app scripts/verify.sh --quick`. The summary line then says that the run did not use the pinned Xcode.
 - After pinning, `scripts/sdk-facts.sh` checks the rows of `docs/architecture.md` §20 marked "SDK" against the new SDK.
-- `scripts/sdk-path.sh <platform> <framework>` prints where a framework's Swift interfaces are, for reading a declaration before using an OS 26 or OS 27 API (`docs/architecture.md` §21).
+- `scripts/sdk-path.sh <platform> <framework>` prints where a framework's Swift interfaces are, for reading a declaration before using an OS 26 or OS 27 API (`docs/architecture.md` §21). It looks in the SDK, then in the platform's own `Developer/Library/Frameworks`, where XCUIAutomation, which UI tests import, and XCTest are.
 
 Until the owner installs the release Xcode at gate G1, `.xcode-version` reads `pending` and every script asks for `KNOT_XCODE`.
 

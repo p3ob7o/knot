@@ -2,7 +2,9 @@
 # Prints where the Swift interfaces of a framework are, in the SDK of the Xcode that
 # .xcode-version pins (docs/architecture.md §21). Read the declaration there before you
 # use an OS 26 or OS 27 API: code must compile against this SDK, so a symbol found only in
-# a beta's SDK is not usable.
+# a beta's SDK is not usable. A framework that the platform keeps outside its SDK, such as
+# XCUIAutomation, which UI tests import, and XCTest, is found under the platform's own
+# Developer/Library/Frameworks.
 #
 #   scripts/sdk-path.sh <platform> <framework>
 #
@@ -12,7 +14,7 @@
 source "$(dirname "$0")/lib/common.sh"
 
 case ${1:-} in
-    -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 if [[ $# -ne 2 ]]; then
     knot_fail "sdk-path-usage" "scripts/sdk-path.sh takes a platform and a framework, and was given $# arguments." \
@@ -29,8 +31,11 @@ case $1 in
 esac
 knot_select_xcode
 root="$(xcrun --sdk "$sdk" --show-sdk-path)/System/Library/Frameworks/$2.framework"
+if [[ ! -d $root ]]; then
+    root="$(xcrun --sdk "$sdk" --show-sdk-platform-path)/Developer/Library/Frameworks/$2.framework"
+fi
 [[ -d $root ]] ||
-    knot_fail "sdk-path-missing" "$2 is not in the $sdk SDK of $(knot_xcode_label)." \
+    knot_fail "sdk-path-missing" "$2 is in neither the $sdk SDK of $(knot_xcode_label) nor its platform's own frameworks." \
         "Check the framework's name, or whether it exists on this platform." "safe" "nothing"
 if [[ -d $root/Modules/$2.swiftmodule ]]; then
     echo "$root/Modules/$2.swiftmodule"
