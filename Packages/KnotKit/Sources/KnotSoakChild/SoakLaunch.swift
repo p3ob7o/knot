@@ -90,10 +90,12 @@
             recovery = LaunchRecovery(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, launchID: launchID,
                 locations: locations, layer: layer, log: log)
+            let arming = arming
             engine = StandardCaptureEngine(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: database.deviceID, launchID: launchID, locations: locations, layer: layer,
-                deadline: .standard, ingest: ingest, log: log)
+                deadline: .standard, ingest: ingest, log: log,
+                killPoint: { point, _ in await arming.reach("engine:\(point.rawValue)") })
         }
 
         func run() async {

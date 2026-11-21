@@ -46,6 +46,9 @@ import Foundation
             let to = values["to"].flatMap(Int.init), let count = values["count"].flatMap(Int.init),
             0 <= from, from <= to, to <= count
         else { Say.fail("usage") }
+        if let point = values["kill"], point != "none", !KillPointNames.isKnown(point) {
+            Say.fail("unknown kill point \(point)")
+        }
         var fault: InjectedFault?
         if let name = values["fault"] {
             guard let known = InjectedFault(rawValue: name) else { Say.fail("unknown fault") }

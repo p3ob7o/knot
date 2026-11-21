@@ -1,5 +1,6 @@
 #if DEBUG || KNOT_FAKES
     import Foundation
+    import KnotCapture
     import KnotCore
     import KnotStore
     import Synchronization
@@ -17,15 +18,36 @@
         }
     }
 
-    /// The one kill point a launch is armed with, and how many times the child passes it before
-    /// it stops there. A kill point is named in one of three forms, so that a package that adds
-    /// kill points to the soak can name points of its own without a change here:
+    /// The names of the points the child can stop at. A name the child does not know is refused,
+    /// at once, at any size of run: a point that matches nothing would never kill.
     ///
     /// - `store:<point>`: a `StoreKillPoint`, inside the store's transaction (`StoreHooks`).
-    /// - `log:<event>`: the moment a module of the child writes that log event, on any of the
-    ///   logs the child gives its parts.
+    /// - `engine:<point>`: an `EngineKillPoint`, which the capture engine awaits with the
+    ///   capture's ID. A package that adds the engine's kill points to the soak needs only a file
+    ///   of its own in Tests/KnotSoak/.
+    /// - `log:<event>`: the moment a part of the child writes that log event, on any of the logs
+    ///   the child gives its parts. Only the events listed here.
     /// - `step:<name>`: a moment of the child's own script: `after_begin`, `after_checkpoint`,
     ///   `after_end`.
+    enum KillPointNames {
+        static let steps: Set<String> = ["after_begin", "after_checkpoint", "after_end"]
+        /// The log events of the engine, ingest and recovery that a kill point may name.
+        static let logEvents: Set<String> = [
+            "capture_began", "capture_ended", "capture_fell_back", "store_answered_late", "inbox_item_stored",
+            "inbox_item_kept", "capture_recovered", "start_waits_for_open_capture",
+        ]
+
+        static var all: [String] {
+            StoreKillPoint.allCases.map { "store:\($0.rawValue)" }
+                + EngineKillPoint.allCases.map { "engine:\($0.rawValue)" }
+                + logEvents.sorted().map { "log:\($0)" } + steps.sorted().map { "step:\($0)" }
+        }
+
+        static func isKnown(_ name: String) -> Bool { all.contains(name) }
+    }
+
+    /// The one kill point a launch is armed with, and how many times the child passes it before
+    /// it stops there (`KillPointNames`).
     ///
     /// At its count the child says `stopped <point>` and waits there to be killed, holding the
     /// thread it stopped on: the store's writer inside its transaction, or the thread that wrote
@@ -66,11 +88,17 @@
 
         /// Passes one of the script's own steps, which wait without holding a thread.
         func step(_ name: String) async {
-            guard isTheStop("step:\(name)") else { return }
-            Say.line("stopped step:\(name)")
+            await reach("step:\(name)")
+        }
+
+        /// Passes a point that is reached in async code, the engine's or the script's: the stop
+        /// waits without holding a thread.
+        func reach(_ name: String) async {
+            guard isTheStop(name) else { return }
+            Say.line("stopped \(name)")
             let until = Date().addingTimeInterval(Self.stopLimit)
             while Date() < until { try? await Task.sleep(for: .seconds(1)) }
-            Say.fail("waited \(Int(Self.stopLimit)) s at step:\(name) and no parent killed it")
+            Say.fail("waited \(Int(Self.stopLimit)) s at \(name) and no parent killed it")
         }
 
         /// The store's seams, which pass each `StoreKillPoint` the store reaches.

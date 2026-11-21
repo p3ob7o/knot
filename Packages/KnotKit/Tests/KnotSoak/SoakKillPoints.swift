@@ -1,13 +1,16 @@
+import KnotCapture
 import KnotStore
 
 /// A named point where the soak kills its child (docs/architecture.md §17). The seed chooses,
 /// for each launch, one point of the run's list and how many times the child passes it first.
 ///
-/// The child stops at three kinds of point by their names alone (KnotSoakChild's
-/// KillPoints.swift), so a package adds kill points in a file of its own here, as an extension of
-/// this type, without a change to the harness:
+/// The child stops at four kinds of point by their names alone (KnotSoakChild's
+/// KillPoints.swift, `KillPointNames`), so a package adds kill points in a file of its own here,
+/// as an extension of this type with a test that runs the soak on them, without a change to the
+/// harness:
 ///
 /// - `.store(_:)`: a `StoreKillPoint`, inside the store's transaction;
+/// - `.engine(_:)`: an `EngineKillPoint`, which the capture engine awaits;
 /// - `.log(_:)`: the moment a part of the child writes that log event, such as the engine's
 ///   `capture_fell_back`;
 /// - `.step(_:)`: a step of the child's script: `after_begin`, `after_checkpoint`, `after_end`;
@@ -28,6 +31,10 @@ struct SoakKillPoint: Hashable, Sendable, CustomStringConvertible {
 
     static func store(_ point: StoreKillPoint, passes: ClosedRange<Int>) -> SoakKillPoint {
         SoakKillPoint(trigger: .child("store:\(point.rawValue)"), passes: passes)
+    }
+
+    static func engine(_ point: EngineKillPoint, passes: ClosedRange<Int>) -> SoakKillPoint {
+        SoakKillPoint(trigger: .child("engine:\(point.rawValue)"), passes: passes)
     }
 
     static func log(_ event: String, passes: ClosedRange<Int>) -> SoakKillPoint {
