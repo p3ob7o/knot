@@ -197,9 +197,14 @@ public final class LiveRecorder: Recorder {
                 file.close()
                 throw error
             }
-            log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
-            publisher.recording(id, since: manifest.startedAt)
-            give(.recordingLive)
+            // Live, unless its ending has begun inside the start: then no live cue and no
+            // "recording", and its ending's cue and state are the only ones.
+            if session.goLive({ give(.recordingLive) }) {
+                log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
+                publisher.recording(id, since: manifest.startedAt)
+            } else {
+                log.capture(id, "recording_ended_while_starting")
+            }
             return .success(session)
         } catch {
             // Nothing is left: no file, and no manifest that recovery would end as a recording

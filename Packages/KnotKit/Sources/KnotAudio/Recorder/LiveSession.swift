@@ -113,6 +113,17 @@ final class LiveSession: RecordingSession {
         }
     }
 
+    /// Runs `live`, the live cue, unless the recording's ending has begun, under the lock that the
+    /// ending takes as it begins: so no ending's cue can come before the live cue, and no live cue
+    /// follows an ending. False when the ending had begun.
+    func goLive(_ live: () -> Void) -> Bool {
+        ending.withLock { ending in
+            guard ending == nil else { return false }
+            live()
+            return true
+        }
+    }
+
     // MARK: The port
 
     func stop() async -> RecordedAudio {

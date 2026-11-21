@@ -162,6 +162,37 @@ import Testing
         #expect(cues.played.allSatisfy { $0.queue == "knot.audio.cues" }, "\(cues.played)")
     }
 
+    /// An ending that begins inside the start, here a buffer the file cannot take, handed over by
+    /// the tap while the engine starts: the start gives no live cue and publishes no "recording",
+    /// the phases never step back, and the stopped-early cue is the recording's one cue (finding
+    /// 10 of the review). The hook hands the buffer over inside the engine's start, so the order
+    /// rests on no time.
+    @Test func anEndingInsideTheStartIsNeverLive() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let cues = RecordingCueEmitter()
+        let (input, engine, _) = InterruptionTests.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
+        let wrongRate = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))
+        let buffer = try #require(HardwareInputTests.silence(wrongRate))
+        engine.whenAt(.starting) { engine in engine.deliver(buffer) }
+        let folder = try ScratchFolder()
+        let live = LiveRecorder(
+            locations: folder.locations, input: input, settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)),
+            cues: cues, state: store)
+        let session = try await live.start(request())
+        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
+            Issue.record("The recording did not end by itself.")
+            return
+        }
+        #expect(audio.ending == .inputLost, "\(audio)")
+        #expect(await SuiteWait.until("the recording's cue", limit: .seconds(10)) { !cues.cues.isEmpty })
+        #expect(cues.cues == [.stoppedEarly])
+        #expect(await SuiteWait.until("the idle state", limit: .seconds(10)) { store.read() == .idle })
+        #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
+    }
+
     /// A stop whose last sync fails ends as a failed write, and the recorder gives the
     /// stopped-early cue for it: the caller gives no `saved`.
     @Test func aStopWhoseLastSyncFailsStoppedEarly() async throws {

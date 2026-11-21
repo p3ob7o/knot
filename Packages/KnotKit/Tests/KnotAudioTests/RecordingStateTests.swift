@@ -103,6 +103,22 @@ import Testing
         #expect(store.phases.suffix(4) == [.starting, .recording, .stopping, .idle], "\(store.phases)")
     }
 
+    /// The published phases only go forward: once a recording is stopping, a late "recording"
+    /// changes nothing, and a stop's phase comes after the start's (finding 10 of the review).
+    @Test func thePhasesOnlyGoForward() throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let publisher = RecordingStatePublisher(store: store, clock: SystemWallClock(), interval: .seconds(60))
+        let request = request()
+        publisher.starting(request)
+        publisher.stopping(request.captureID)
+        publisher.recording(request.captureID, since: Date())
+        #expect(store.read().phase == .stopping)
+        publisher.ended(request.captureID)
+        #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
+    }
+
     /// A second start of a capture that is recording is refused, and the state stays that
     /// recording's.
     @Test func aRefusedSecondStartLeavesTheStateAlone() async throws {

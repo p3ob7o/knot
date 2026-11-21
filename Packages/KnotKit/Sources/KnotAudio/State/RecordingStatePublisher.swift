@@ -9,8 +9,9 @@ import Synchronization
 ///
 /// The heartbeat is written from a queue of its own, never the audio's and never the sync's.
 /// Every write, a phase's or a heartbeat's, is made under one lock, so that a heartbeat never
-/// writes back a phase that has changed. When the recording ends, however it ends, the state is
-/// idle.
+/// writes back a phase that has changed. The phases only go forward: recording only from
+/// starting, stopping from either, so an ending that begins inside the start is never followed by
+/// "recording". When the recording ends, however it ends, the state is idle.
 final class RecordingStatePublisher: Sendable {
     private let store: any RecordingStateStore
     private let clock: any WallClock
@@ -52,7 +53,7 @@ final class RecordingStatePublisher: Sendable {
 
     /// The recording of `capture` is live since `startedAt`.
     func recording(_ capture: CaptureID, since startedAt: Date) {
-        change(capture) { snapshot in
+        change(capture, from: [.starting]) { snapshot in
             snapshot.phase = .recording
             snapshot.startedAt = startedAt
         }
@@ -60,7 +61,7 @@ final class RecordingStatePublisher: Sendable {
 
     /// The recording of `capture` is ending.
     func stopping(_ capture: CaptureID) {
-        change(capture) { $0.phase = .stopping }
+        change(capture, from: [.starting, .recording]) { $0.phase = .stopping }
     }
 
     /// The recording of `capture` ended, or never started: idle, and no more heartbeat.
@@ -88,10 +89,15 @@ final class RecordingStatePublisher: Sendable {
         }
     }
 
-    private func change(_ capture: CaptureID, _ body: (inout RecordingStateSnapshot) -> Void) {
+    /// Changes the state of `capture`, when it stands in one of `phases`.
+    private func change(
+        _ capture: CaptureID, from phases: Set<RecordingPhase>, _ body: (inout RecordingStateSnapshot) -> Void
+    ) {
         let now = clock.now()
         state.withLock { state in
-            guard var snapshot = state.snapshot, snapshot.captureID == capture else { return }
+            guard var snapshot = state.snapshot, snapshot.captureID == capture, phases.contains(snapshot.phase) else {
+                return
+            }
             body(&snapshot)
             snapshot.heartbeat = now
             state.snapshot = snapshot
