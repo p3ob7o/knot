@@ -524,11 +524,10 @@ import Testing
         let left = try FileManager.default.contentsOfDirectory(atPath: StoreCopies.folder(locations).path)
         #expect(left.isEmpty, "Nothing is left of it: \(left)")
         try database.close()
-        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
         await expectFailure(.storeDamaged) {
-            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [v2])
+            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [extraMigration])
         }
-        #expect(try version(of: locations) == 1, "No checked copy, no migration.")
+        #expect(try version(of: locations) == StoreSchema.currentVersion, "No checked copy, no migration.")
         #expect(StoreCopies.copies(locations, prefix: "pre-migration-").isEmpty)
     }
 
@@ -585,20 +584,24 @@ import Testing
         defer { folders.removeAll() }
         let root = folders.make()
         try openStore(in: root).close()
-        let v2 = StoreSchema.Migration(version: 2) {
+        let current = StoreSchema.currentVersion
+        let adding = StoreSchema.Migration(version: current + 1) {
             try $0.execute(sql: "CREATE TABLE synthetic_extra (value TEXT); INSERT INTO synthetic_extra VALUES ('one')")
         }
-        let v3 = StoreSchema.Migration(version: 3) { try $0.execute(sql: "CREATE TABLE synthetic_v3 (value TEXT)") }
+        let after = StoreSchema.Migration(version: current + 2) {
+            try $0.execute(sql: "CREATE TABLE synthetic_after (value TEXT)")
+        }
         let spoil = StoreHooks(copyWritten: { url in
-            guard url.lastPathComponent.contains("pre-migration-v2"), let queue = try? DatabaseQueue(path: url.path)
+            guard url.lastPathComponent.contains("pre-migration-v\(current + 1)."),
+                let queue = try? DatabaseQueue(path: url.path)
             else { return }
             try? queue.write { try $0.execute(sql: "DELETE FROM synthetic_extra") }
             try? queue.close()
         })
         await expectFailure(.storeDamaged) {
-            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [v2, v3])
+            try openStore(in: root, hooks: spoil, migrations: StoreSchema.migrations + [adding, after])
         }
-        #expect(try version(of: StoreLocations.testing(root: root)) == 2, "No checked copy, no migration.")
+        #expect(try version(of: StoreLocations.testing(root: root)) == current + 1, "No checked copy, no migration.")
     }
 
     /// An open of the store never removes the partial file of a copy that is being written: a
