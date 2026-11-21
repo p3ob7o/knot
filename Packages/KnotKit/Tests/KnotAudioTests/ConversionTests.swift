@@ -32,6 +32,24 @@ import Testing
             names == ["\(request.captureID).caf", "\(request.captureID).json", "\(request.captureID).m4a"], "\(names)")
     }
 
+    /// A working file closed and then cut short converts what it holds: the copy holds the
+    /// frames on the drive, and the length the conversion reports is theirs. The conversion of
+    /// the header's count failed, and failed again at every launch. After finding 19.
+    @Test func aClosedFileCutShortConverts() async throws {
+        let folder = try ScratchFolder()
+        let request = request()
+        try writeManifest(folder.locations, request)
+        let working = folder.locations.recordingAudio(request.captureID, format: .caf)
+        _ = try writeWorkingFile(at: working, frames: 12_345)
+        try cut(working, insideFrame: 10_001)
+        let recorder = recorder(folder.locations, input: injected())
+        let orphan = try #require(try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID())).first)
+        #expect(orphan.frames == 10_000)
+        let converted = try await recorder.convert(orphan)
+        #expect(converted.duration == orphan.duration, "\(converted.duration) for \(orphan.duration)")
+        #expect(try AVAudioFile(forReading: converted.file).length == 10_000)
+    }
+
     /// A recording with no frame converts to a copy with none.
     @Test func aRecordingWithNoFrameConvertsToAnEmptyCopy() async throws {
         let folder = try ScratchFolder()

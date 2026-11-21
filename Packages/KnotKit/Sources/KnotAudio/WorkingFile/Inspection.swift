@@ -18,7 +18,7 @@ extension WorkingFileReader {
         case missing
         /// The file ends before its header does, so it holds no audio.
         case shorterThanItsHeader
-        /// The file was read: it holds these frames at this rate, perhaps none.
+        /// The file was read: it holds these frames on the drive at this rate, perhaps none.
         case read(Contents)
         /// The file is there and could not be read now.
         case unreadable(Unreadable)
@@ -52,7 +52,7 @@ extension WorkingFileReader {
 
     /// Reads the working file at `url` back and says what it found, by what the system answers:
     /// an open that fails because the file is not there, a size below its header's, a read that
-    /// gives no frame.
+    /// gives no frame. The frames it answers are those on the drive (`framesOnTheDrive`).
     public static func inspect(_ url: URL) -> Inspection {
         let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
             guard let path else { return -1 }
@@ -63,11 +63,13 @@ extension WorkingFileReader {
             return number == ENOENT ? .missing : .unreadable(.cannotOpen(posixError: number))
         }
         defer { close(descriptor) }
+        let audioBytes: Int64
         switch CAFHeader.read(descriptor) {
         case .failed(let number): return .unreadable(.cannotOpen(posixError: number))
         case .notCAF: return .unreadable(.notAudio(engineCode: nil))
         case .shorterThanItsHeader: return .shorterThanItsHeader
-        case .whole: break
+        case .whole(let dataStart, let dataBytes, let size):
+            audioBytes = CAFHeader.audioBytes(dataStart: dataStart, dataBytes: dataBytes, size: size)
         }
         let file: AVAudioFile
         do {
@@ -76,7 +78,37 @@ extension WorkingFileReader {
             return .unreadable(.notAudio(engineCode: (error as NSError).code))
         }
         guard file.processingFormat.channelCount == 1 else { return .unreadable(.notAudio(engineCode: nil)) }
-        return .read(Contents(frames: max(file.length, 0), sampleRate: file.processingFormat.sampleRate))
+        return .read(
+            Contents(
+                frames: framesOnTheDrive(of: file, audioBytes: audioBytes), sampleRate: file.processingFormat.sampleRate
+            ))
+    }
+
+    /// The frames `file` holds on the drive: the smaller of the length it announces and the whole
+    /// frames in `audioBytes`, the bytes of audio after its header. A file closed whole and then
+    /// cut short, as a power cut between its close and its final sync can leave it, announces
+    /// frames it no longer holds, and only those it holds can be read.
+    static func framesOnTheDrive(of file: AVAudioFile, audioBytes: Int64) -> Int64 {
+        let announced = max(file.length, 0)
+        let bytesPerFrame = Int64(file.fileFormat.streamDescription.pointee.mBytesPerFrame)
+        guard bytesPerFrame > 0 else { return announced }
+        return min(announced, audioBytes / bytesPerFrame)
+    }
+
+    /// The frames that `file`, opened from `url`, holds on the drive (`framesOnTheDrive`). A file
+    /// that is not a CAF file, such as the stored copy, answers the length it announces.
+    static func framesOnTheDrive(of file: AVAudioFile, at url: URL) -> Int64 {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return open(path, O_RDONLY | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else { return max(file.length, 0) }
+        defer { close(descriptor) }
+        guard case .whole(let dataStart, let dataBytes, let size) = CAFHeader.read(descriptor) else {
+            return max(file.length, 0)
+        }
+        return framesOnTheDrive(
+            of: file, audioBytes: CAFHeader.audioBytes(dataStart: dataStart, dataBytes: dataBytes, size: size))
     }
 
     /// The frames that the open working file at `url` holds by its size, which a recording in
@@ -90,9 +122,7 @@ extension WorkingFileReader {
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
         guard case .whole(let dataStart, let dataBytes, let size) = CAFHeader.read(descriptor) else { return nil }
-        let available = size - dataStart
-        let bytes = dataBytes.map { min($0, available) } ?? available
-        return max(bytes, 0) / 2
+        return CAFHeader.audioBytes(dataStart: dataStart, dataBytes: dataBytes, size: size) / 2
     }
 }
 
@@ -112,6 +142,13 @@ enum CAFHeader {
         case notCAF
         /// A read failed with this error number.
         case failed(Int32)
+    }
+
+    /// The bytes of audio that a whole header leaves: what its `data` chunk gives, or the rest of
+    /// the file while it is written, never past the end of the file.
+    static func audioBytes(dataStart: Int64, dataBytes: Int64?, size: Int64) -> Int64 {
+        let available = max(size - dataStart, 0)
+        return dataBytes.map { min($0, available) } ?? available
     }
 
     /// The most bytes of chunks read before the `data` chunk: far more than a working file's header.

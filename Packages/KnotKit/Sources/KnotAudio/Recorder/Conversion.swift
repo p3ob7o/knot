@@ -23,9 +23,12 @@ enum Conversion {
     ///
     /// A working file that cannot be opened now is `conversion_failed`, which is tried again with
     /// the file kept. Only one that opens and is not audio is `audio_unreadable`, which is final.
+    /// The frames converted, and checked in the copy, are those the working file holds on the
+    /// drive: a file cut short after its close converts what it holds.
     static func run(from working: URL, to staging: URL, destination: URL, store: StoreFiles) throws(KnotError) -> Made {
+        let frames: Int64
         switch WorkingFileReader.inspect(working) {
-        case .read: break
+        case .read(let contents): frames = contents.frames
         case .missing:
             throw KnotError.conversionFailed.with(ErrorContext(posixError: ENOENT))
         case .unreadable(.cannotOpen(let number)):
@@ -40,7 +43,6 @@ enum Conversion {
             throw KnotError.audioUnreadable.with(ErrorContext(engineCode: (error as NSError).code))
         }
         let rate = source.processingFormat.sampleRate
-        let frames = source.length
         guard source.processingFormat.channelCount == 1, rate > 0, frames >= 0 else {
             throw KnotError.audioUnreadable
         }
@@ -49,7 +51,7 @@ enum Conversion {
         let made: Made
         do {
             try encode(source, frames: frames, into: staging)
-            // Verified: the copy announces as many frames as the working file, at its rate.
+            // Verified: the copy announces as many frames as the working file holds, at its rate.
             let copy = try AVAudioFile(forReading: staging)
             guard copy.length == frames, copy.fileFormat.sampleRate == rate, copy.fileFormat.channelCount == 1 else {
                 throw KnotError.conversionFailed

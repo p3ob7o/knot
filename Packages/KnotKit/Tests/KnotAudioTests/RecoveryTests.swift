@@ -48,6 +48,27 @@ import Testing
         #expect(WorkingFileReader.samples(of: working) == synthetic(12_345))
     }
 
+    /// A working file closed whole and then cut short, as a power cut between its close and its
+    /// final sync can leave it, is read to the last complete frame on the drive, whatever its
+    /// header says: every reader answers the frames the file holds, every one of them the audio
+    /// written, and recovery returns those. After finding 19.
+    @Test func aClosedFileCutShortIsReadToWhatTheDriveHolds() async throws {
+        let folder = try ScratchFolder()
+        let request = request()
+        try writeManifest(folder.locations, request)
+        let working = folder.locations.recordingAudio(request.captureID, format: .caf)
+        _ = try writeWorkingFile(at: working, frames: 12_345)
+        try cut(working, insideFrame: 10_001)
+        #expect(WorkingFileReader.inspect(working) == .read(.init(frames: 10_000, sampleRate: 16_000)))
+        #expect(WorkingFileReader.contents(of: working)?.frames == 10_000)
+        #expect(WorkingFileReader.samples(of: working) == synthetic(10_000))
+        let recorder = recorder(folder.locations, input: injected())
+        for _ in 1...2 {
+            let orphans = try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+            #expect(orphans.map(\.frames) == [10_000] && orphans.first?.workingFile == working, "\(orphans)")
+        }
+    }
+
     /// A manifest whose audio is missing, cut inside its header, or only a header is a
     /// recording with no audio: it comes back, so that its capture ends and its manifest goes.
     @Test(arguments: [AudioLeft.none, .cutInsideItsHeader, .headerOnly])

@@ -140,3 +140,19 @@ func writeManifest(_ locations: StoreLocations, _ request: RecordingRequest, end
     try FileManager.default.createDirectory(at: locations.recording, withIntermediateDirectories: true)
     try manifest.encoded().write(to: locations.recordingManifest(request.captureID))
 }
+
+/// Cuts the closed working file at `url` inside frame `frame`, counted from 1, as a power cut
+/// between its close and its final sync can leave it: its header still gives every frame it was
+/// closed with, and the drive holds `frame` - 1 of them and half of the next.
+func cut(_ url: URL, insideFrame frame: Int64) throws {
+    let descriptor = open(url.path, O_RDONLY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw CocoaError(.fileReadNoPermission) }
+    let reading = CAFHeader.read(descriptor)
+    close(descriptor)
+    guard case .whole(let dataStart, let dataBytes, _) = reading, dataBytes != nil else {
+        throw CocoaError(.fileReadCorruptFile)
+    }
+    let handle = try FileHandle(forWritingTo: url)
+    try handle.truncate(atOffset: UInt64(dataStart + (frame - 1) * 2 + 1))
+    try handle.close()
+}

@@ -51,14 +51,14 @@ public enum WorkingFileReader {
         public let sampleRate: Double
     }
 
-    /// How many frames the file at `url` holds and at what rate, or `nil` when it cannot be read
-    /// as audio: missing, or cut inside its header. A file holding only its header reads as zero
-    /// frames, and so does one ending in part of its first frame.
+    /// How many frames the file at `url` holds on the drive and at what rate, or `nil` when it
+    /// cannot be read as audio: missing, or cut inside its header. A file holding only its header
+    /// reads as zero frames, and so does one ending in part of its first frame.
     public static func contents(of url: URL) -> Contents? {
         guard let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true),
             file.processingFormat.channelCount == 1
         else { return nil }
-        return Contents(frames: max(file.length, 0), sampleRate: file.processingFormat.sampleRate)
+        return Contents(frames: framesOnTheDrive(of: file, at: url), sampleRate: file.processingFormat.sampleRate)
     }
 
     /// Every sample of the file at `url`, as 16-bit integers, for the tests and the crash host
@@ -67,10 +67,10 @@ public enum WorkingFileReader {
         guard let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatInt16, interleaved: true),
             file.processingFormat.channelCount == 1
         else { return nil }
-        let length = file.length
+        let length = framesOnTheDrive(of: file, at: url)
         var samples: [Int16] = []
         samples.reserveCapacity(Int(max(length, 0)))
-        // From OS 27 a read past the end throws, so never ask for more than the file announced.
+        // From OS 27 a read past the end throws, so never ask for more than the file holds.
         while file.framePosition < length {
             let wanted = AVAudioFrameCount(min(Int64(16_384), length - file.framePosition))
             guard let buffer = try? file.read(frameCount: wanted), buffer.frameLength > 0 else { break }
