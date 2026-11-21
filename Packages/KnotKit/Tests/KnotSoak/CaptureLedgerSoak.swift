@@ -4,6 +4,8 @@
     import KnotStore
     import KnotTestSupport
 
+    @testable import KnotSoakChild
+
     /// The capture ledger soak (docs/architecture.md §17, docs/plan/WP-06.md).
     ///
     /// The parent makes a store in a temporary folder and starts the child, `KnotSoakChild`, over
@@ -194,7 +196,8 @@
                     problems.append(SoakWitness.Problem(code: "child_failed", ids: ["launch=\(last.number)"]))
                 }
                 if lastProblems.isEmpty, last.ending == .quit {
-                    problems += try await witness.check(locations, seed: configuration.seed)
+                    problems += try await witness.check(
+                        locations, script: SoakScript(seed: configuration.seed, count: configuration.captures))
                 }
             }
             return Verdict(

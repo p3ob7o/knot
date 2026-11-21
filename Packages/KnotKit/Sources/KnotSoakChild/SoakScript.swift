@@ -2,8 +2,7 @@
     import Foundation
     import KnotCore
 
-    /// A random generator that a seed fixes: SplitMix64. The parent has its own copy, so the
-    /// child and the parent never share a sequence.
+    /// A random generator that a seed fixes: SplitMix64.
     struct SeededRandom: RandomNumberGenerator {
         private var state: UInt64
 
@@ -25,13 +24,14 @@
     }
 
     /// The soak's captures, all of them typed for now, as the seed makes them. Every launch of
-    /// the child makes the same script from the same seed and runs the part its parent names, so
-    /// a relaunch goes on where the killed launch stopped.
+    /// the child makes the same script from the same seed and runs the part its parent names,
+    /// so a relaunch goes on where the killed launch stopped. The parent makes the same script
+    /// too, and knows every text the child sends at every save: it checks the store against it
+    /// exactly, and never sees a text through the pipe.
     ///
-    /// The text is synthetic: a token that names the capture, `s<seed>c<index>`, then words of
-    /// a made-up list. A save only ever adds to the text, so every save's text begins with the
-    /// text of each save before it: the parent checks a stored text against an acknowledged
-    /// save by the hash of the stored text's first bytes, and never sees the text itself.
+    /// The text is synthetic. It begins with a token that names the capture,
+    /// `s<seed>c<index>`, which no save changes. A save may add a word, replace the last word
+    /// or one in the middle, or take the last word away.
     struct SoakScript {
         /// When the script's clock starts.
         static let base = Date(timeIntervalSince1970: 1_795_000_000)
@@ -57,16 +57,19 @@
 
             /// How long the capture lasts.
             var length: TimeInterval { pauses.reduce(0, +) }
+
+            /// The token its text begins with, or none for a blank capture.
+            var token: String? { blank ? nil : texts[0].split(separator: " ", maxSplits: 1).first.map(String.init) }
         }
 
-        enum Ending {
+        enum Ending: String {
             /// Ended by its surface.
             case end
             /// Discarded: the accidental press.
             case discard
             /// Left open: the next capture begins on the other surface, and rule 15 ends this one
             /// (docs/product-spec.md §3).
-            case leftOpen
+            case leftOpen = "left_open"
         }
 
         /// What the store does to the save at `save`: 0 is the begin, then each update, then
@@ -83,7 +86,8 @@
             let save: Int
         }
 
-        private static let words = [
+        /// The words the saves add and replace.
+        static let words = [
             "amber", "basil", "cedar", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper",
             "kelp", "lumen", "mosaic", "nectar", "orchid", "pebble", "quartz", "russet", "saffron", "tundra",
             "umber", "velvet", "willow", "xenon", "yarrow", "zephyr",
@@ -113,15 +117,10 @@
                 let placement: CapturePlacement = Int.random(in: 0..<10, using: &random) == 0 ? .newNote : .window
                 let blank = Int.random(in: 0..<14, using: &random) == 0
                 let updates = Int.random(in: 0...6, using: &random)
-                var texts: [String] = []
-                var text = blank ? " " : "s\(seed)c\(index)"
-                texts.append(text)
-                for _ in 0..<updates {
-                    text +=
-                        blank
-                        ? [" ", "\n"].randomElement(using: &random)! : " " + Self.words.randomElement(using: &random)!
-                    texts.append(text)
-                }
+                let texts =
+                    blank
+                    ? Self.blankTexts(updates: updates, random: &random)
+                    : Self.texts(token: "s\(seed)c\(index)", updates: updates, random: &random)
                 let pauses = (0...updates).map { _ in [0.2, 0.6, 1.5, 4].randomElement(using: &random)! }
                 let roll = Int.random(in: 0..<100, using: &random)
                 let ending: Ending =
@@ -140,6 +139,41 @@
                 previous = capture
             }
             self.captures = captures
+        }
+
+        private static func blankTexts(updates: Int, random: inout SeededRandom) -> [String] {
+            var text = " "
+            var texts = [text]
+            for _ in 0..<updates {
+                text += [" ", "\n"].randomElement(using: &random)!
+                texts.append(text)
+            }
+            return texts
+        }
+
+        /// The texts of a capture's saves: the token, then words that the saves add, replace and
+        /// take away. The token is never touched.
+        private static func texts(token: String, updates: Int, random: inout SeededRandom) -> [String] {
+            let head = token
+            var tail: [String] = [words.randomElement(using: &random)!]
+            func text() -> String { ([head] + tail).joined(separator: " ") }
+            var texts = [text()]
+            for _ in 0..<updates {
+                switch Int.random(in: 0..<10, using: &random) {
+                case 0..<5:
+                    tail.append(words.randomElement(using: &random)!)
+                case 5..<7 where !tail.isEmpty:
+                    tail[tail.count - 1] = words.randomElement(using: &random)!
+                case 7 where tail.count > 1:
+                    tail[Int.random(in: 0..<tail.count, using: &random)] = words.randomElement(using: &random)!
+                case 8..<10 where !tail.isEmpty:
+                    tail.removeLast()
+                default:
+                    tail.append(words.randomElement(using: &random)!)
+                }
+                texts.append(text())
+            }
+            return texts
         }
     }
 #endif

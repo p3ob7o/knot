@@ -159,7 +159,7 @@
             // save stands.
             leftOpen = nil
             let id = begun.captureID
-            acknowledge(index, begun, text: capture.texts[0], state: "open")
+            acknowledge(index, save: 0, begun, text: capture.texts[0], state: "open")
             await arming.step("after_begin")
             for save in capture.texts.indices.dropFirst() {
                 clock.advance(by: capture.pauses[save - 1])
@@ -169,7 +169,7 @@
                     let state = try await disturbed(capture, save: save) { () async throws(KnotError) -> CaptureState in
                         try await self.update(id, text: text, isLastBeforeEnd: isLast)
                     }
-                    acknowledge(index, state, text: text, state: "open")
+                    acknowledge(index, save: save, state, text: text, state: "open")
                 } catch {
                     Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
                 }
@@ -201,7 +201,9 @@
                     return discard ? try await self.engine.discard(id) : try await self.engine.end(id)
                 }
                 let discarded = state.outcome == .discardedEmpty
-                acknowledge(index, state, text: discarded ? "" : text, state: discarded ? "discarded" : "ended")
+                acknowledge(
+                    index, save: capture.texts.count, state, text: discarded ? "" : text,
+                    state: discarded ? "discarded" : "ended")
                 if state.outcome == .stored { await injectAfterStore(index, id, text: text) }
             } catch {
                 Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
@@ -273,7 +275,7 @@
             }
         }
 
-        private func acknowledge(_ index: Int, _ state: CaptureState, text: String, state name: String) {
+        private func acknowledge(_ index: Int, save: Int, _ state: CaptureState, text: String, state name: String) {
             guard state.durableRevision > 0 || name != "open" else { return }
             durable[state.captureID] = max(durable[state.captureID] ?? 0, state.durableRevision)
             let bytes = Data(text.utf8)
@@ -281,7 +283,8 @@
             Say.line(
                 SoakLine.ack(
                     SoakLine.Acknowledgement(
-                        index: index, capture: state.captureID, revision: state.durableRevision, bytes: bytes.count,
+                        index: index, save: save, capture: state.captureID, revision: state.durableRevision,
+                        bytes: bytes.count,
                         digest: digest, state: SoakLine.Acknowledgement.State(rawValue: name) ?? .open,
                         blank: text.allSatisfy { $0 == " " || $0 == "\n" })
                 ).rendered)

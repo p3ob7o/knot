@@ -31,6 +31,9 @@
             }
 
             let index: Int
+            /// Which save of the script it answers: 0 the begin, then each update, then the end
+            /// (`SoakScript.Capture.texts.count`).
+            let save: Int
             let capture: CaptureID
             let revision: Int64
             /// The UTF-8 length and SHA-256 of the capture's whole text at that save.
@@ -47,7 +50,7 @@
             case .recovered(let count): "recovered \(count)"
             case .intent(let index): "intent \(index)"
             case .ack(let a):
-                "ack \(a.index) \(a.capture) \(a.revision) \(a.bytes) \(a.digest) \(a.state.rawValue) \(a.blank ? 1 : 0)"
+                "ack \(a.index) \(a.save) \(a.capture) \(a.revision) \(a.bytes) \(a.digest) \(a.state.rawValue) \(a.blank ? 1 : 0)"
             case .discarding(let index, let capture): "discarding \(index) \(capture)"
             case .refused(let index, let code): "refused \(index) \(code)"
             case .stopped(let point): "stopped \(point)"
@@ -64,15 +67,15 @@
             case "recovered": return fields.count == 2 ? int(1).map(SoakLine.recovered) : nil
             case "intent": return fields.count == 2 ? int(1).map(SoakLine.intent) : nil
             case "ack":
-                guard fields.count == 8, let index = int(1), let capture = CaptureID(fields[2]),
-                    let revision = Int64(fields[3]), let bytes = int(4), fields[5].count == 64,
-                    fields[5].allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
-                    let state = Acknowledgement.State(rawValue: fields[6]), fields[7] == "0" || fields[7] == "1"
+                guard fields.count == 9, let index = int(1), let save = int(2), let capture = CaptureID(fields[3]),
+                    let revision = Int64(fields[4]), let bytes = int(5), fields[6].count == 64,
+                    fields[6].allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
+                    let state = Acknowledgement.State(rawValue: fields[7]), fields[8] == "0" || fields[8] == "1"
                 else { return nil }
                 return .ack(
                     Acknowledgement(
-                        index: index, capture: capture, revision: revision, bytes: bytes, digest: fields[5],
-                        state: state, blank: fields[7] == "1"))
+                        index: index, save: save, capture: capture, revision: revision, bytes: bytes,
+                        digest: fields[6], state: state, blank: fields[8] == "1"))
             case "discarding":
                 guard fields.count == 3, let index = int(1), let capture = CaptureID(fields[2]) else { return nil }
                 return .discarding(index: index, capture: capture)

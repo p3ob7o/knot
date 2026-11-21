@@ -27,6 +27,8 @@ struct SoakWitness {
         let blank: Bool
         /// The launch that acknowledged it.
         let launch: Int
+        /// Which save of the script it answers.
+        let save: Int
     }
 
     /// One thing the soak found wrong: a code, and the IDs and indexes it concerns, never text.
@@ -93,7 +95,7 @@ struct SoakWitness {
                 acknowledgements[a.capture, default: []].append(
                     Acknowledgement(
                         index: a.index, capture: a.capture, revision: a.revision, bytes: a.bytes, digest: a.digest,
-                        state: State(rawValue: a.state.rawValue) ?? .open, blank: a.blank, launch: launch))
+                        state: a.state, blank: a.blank, launch: launch, save: a.save))
                 acknowledged += 1
                 if !intents.contains(a.index) { problem("acknowledged_without_intent", "index=\(a.index)") }
             case .stopped(let point):
@@ -122,8 +124,9 @@ struct SoakWitness {
     }
 
     /// Every check of the run, on the store as the last recovery left it: the store's own
-    /// consistency check, then the soak's three assertions, then the witness's list.
-    func check(_ locations: StoreLocations, seed: UInt64) async throws -> [Problem] {
+    /// consistency check, then the soak's three assertions, then the witness's list. The script
+    /// is the one the child ran: the parent knows every text of every save.
+    func check(_ locations: StoreLocations, script: SoakScript) async throws -> [Problem] {
         var problems: [Problem] = []
         let database = try StoreDatabase.open(locations: locations, role: .app)
         defer { try? database.close() }
@@ -152,71 +155,41 @@ struct SoakWitness {
             }
         }
 
-        // 3. Every acknowledged capture is in the store, at least at the revision the engine
-        // reported as saved, with the text it acknowledged.
-        for (capture, saves) in acknowledgements.sorted(by: { $0.key.description < $1.key.description }) {
-            // The highest revision, and at a tie the end, which names how the capture ended.
-            func rank(_ save: Acknowledgement) -> (Int64, Int) { (save.revision, save.state == .open ? 0 : 1) }
-            guard let latest = saves.max(by: { rank($0) < rank($1) }) else { continue }
-            let ids = [capture.description, "index=\(latest.index)"]
-            guard let row = try await notes.capture(capture) else {
-                problems.append(Problem(code: "acknowledged_capture_missing", ids: ids, launch: latest.launch))
-                continue
-            }
-            if row.revision < latest.revision {
-                problems.append(
-                    Problem(
-                        code: "revision_below_acknowledged",
-                        ids: ids + ["stored=\(row.revision)", "acknowledged=\(latest.revision)"], launch: latest.launch)
-                )
-            }
-            switch row.outcome {
-            case .open:
-                continue  // reported above
-            case .discardedEmpty:
-                if !discarding.contains(capture), saves.contains(where: { !$0.blank && $0.state != .discarded }) {
-                    problems.append(
-                        Problem(code: "acknowledged_text_discarded", ids: ids, launch: latest.launch))
-                }
-            case .failed(let code):
-                problems.append(
-                    Problem(code: "acknowledged_capture_failed", ids: ids + [code.rawValue], launch: latest.launch))
-            case .stored:
-                if latest.state == .discarded {
-                    problems.append(Problem(code: "acknowledged_discard_stored", ids: ids, launch: latest.launch))
-                    continue
-                }
-                let text = try await notes.segment(SegmentID(capture))?.text
-                guard let text else {
-                    problems.append(Problem(code: "stored_capture_without_text", ids: ids, launch: latest.launch))
-                    continue
-                }
-                // A later save only adds to the text, so the stored text begins with the text of
-                // every acknowledged save.
-                for save in saves where save.state != .discarded && !Self.begins(text, with: save) {
-                    problems.append(
-                        Problem(
-                            code: "acknowledged_text_not_stored",
-                            ids: [capture.description, "index=\(save.index)", "revision=\(save.revision)"],
-                            launch: save.launch))
-                }
-            }
+        // The captures of each capture of the script: those the child acknowledged, and those
+        // whose stored text carries the script's token for it.
+        let tokens = Dictionary(
+            script.captures.compactMap { capture in capture.token.map { ($0, capture.index) } },
+            uniquingKeysWith: { first, _ in first })
+        var captures: [Int: Set<CaptureID>] = [:]
+        for (capture, saves) in acknowledgements {
+            for save in saves { captures[save.index, default: []].insert(capture) }
+        }
+        for segment in segments where segment.origin == device && segment.piece == 0 && segment.conflictOf == nil {
+            guard let capture = segment.capture, let token = segment.token, let index = tokens[token] else { continue }
+            captures[index, default: []].insert(capture)
         }
 
-        // No capture is stored twice: each capture of the script is in at most one stored
-        // capture. A script's text begins with a token that names its capture.
-        var holders: [String: [String]] = [:]
-        for segment in segments where segment.origin == device && segment.piece == 0 && segment.conflictOf == nil {
-            guard let capture = segment.capture, let row = try await notes.capture(capture), row.outcome == .stored,
-                let token = segment.token, token.hasPrefix("s\(seed)c")
-            else { continue }
-            holders[token, default: []].append(capture.description)
-        }
-        for (token, captures) in holders.sorted(by: { $0.key < $1.key }) where captures.count > 1 {
-            problems.append(
-                Problem(
-                    code: "capture_stored_twice",
-                    ids: [token.dropFirst("s\(seed)".count).description] + captures.sorted()))
+        for (index, ids) in captures.sorted(by: { $0.key < $1.key }) {
+            let planned = script.captures[index]
+            var stored: [CaptureID] = []
+            for capture in ids.sorted() {
+                let saves = acknowledgements[capture] ?? []
+                for save in saves where !Self.isOfTheScript(save, planned) {
+                    problems.append(
+                        Problem(
+                            code: "acknowledgement_not_of_the_script",
+                            ids: [capture.description, "index=\(index)", "save=\(save.save)"], launch: save.launch))
+                }
+                let found = try await expectation(
+                    capture, index: index, planned: planned, saves: saves, notes: notes)
+                problems += found.problems
+                if found.stored { stored.append(capture) }
+            }
+            // 3'. No capture of the script is stored twice.
+            if stored.count > 1 {
+                problems.append(
+                    Problem(code: "capture_stored_twice", ids: ["index=\(index)"] + stored.map(\.description)))
+            }
         }
 
         // Nothing waits in `Inbox/` once the last launch has recovered.
@@ -227,12 +200,83 @@ struct SoakWitness {
         return problems
     }
 
-    /// Whether `text` begins with the text that `save` acknowledged, by the digest of its first
-    /// bytes.
-    static func begins(_ text: String, with save: Acknowledgement) -> Bool {
+    /// 3. One capture against the script: an acknowledged capture is in the store, at least at
+    /// the revision the engine reported as saved, and its stored text is exactly a text of the
+    /// script, at or after the last save acknowledged; the end's own once the end was
+    /// acknowledged.
+    private func expectation(
+        _ capture: CaptureID, index: Int, planned: SoakScript.Capture, saves: [Acknowledgement], notes: NoteRepository
+    ) async throws -> (problems: [Problem], stored: Bool) {
+        var problems: [Problem] = []
+        let latest = saves.max { ($0.save, $0.revision) < ($1.save, $1.revision) }
+        let launch = latest?.launch
+        let ids = [capture.description, "index=\(index)"]
+        func problem(_ code: String, _ more: [String] = []) {
+            problems.append(Problem(code: code, ids: ids + more, launch: launch))
+        }
+        guard let row = try await notes.capture(capture) else {
+            if latest != nil { problem("acknowledged_capture_missing") }
+            return (problems, false)
+        }
+        let highest = saves.map(\.revision).max() ?? 0
+        if row.revision < highest {
+            problem("revision_below_acknowledged", ["stored=\(row.revision)", "acknowledged=\(highest)"])
+        }
+        let endAcknowledged = latest.map { $0.state != .open } ?? false
+        switch row.outcome {
+        case .open:
+            return (problems, false)  // reported above
+        case .failed(let code):
+            problem("capture_failed", [code.rawValue])
+            return (problems, false)
+        case .discardedEmpty:
+            if latest?.state == .ended {
+                problem("acknowledged_text_discarded")
+            } else if latest?.state == .open, !discarding.contains(capture), !planned.blank {
+                problem("acknowledged_text_discarded")
+            }
+            return (problems, false)
+        case .stored:
+            if latest?.state == .discarded {
+                problem("acknowledged_discard_stored")
+                return (problems, true)
+            }
+            guard let text = try await storedText(of: capture, notes: notes) else {
+                problem("stored_capture_without_text")
+                return (problems, true)
+            }
+            // The texts the store may hold: from the last acknowledged save on, or only the
+            // last once the end was acknowledged.
+            let first = endAcknowledged ? planned.texts.count - 1 : min(latest?.save ?? 0, planned.texts.count - 1)
+            let allowed = planned.texts[first...]
+            if !allowed.contains(text) {
+                problem("acknowledged_text_not_stored", ["acknowledged_save=\(latest?.save ?? -1)"])
+            } else if let latest, row.revision == latest.revision, latest.state == .open,
+                text != planned.texts[min(latest.save, planned.texts.count - 1)]
+            {
+                problem("text_not_of_its_revision", ["revision=\(row.revision)", "save=\(latest.save)"])
+            }
+            return (problems, true)
+        }
+    }
+
+    /// Whether an acknowledgement names a save the script has, with that save's text.
+    static func isOfTheScript(_ save: Acknowledgement, _ planned: SoakScript.Capture) -> Bool {
+        let text: String
+        switch save.state {
+        case .discarded: text = ""
+        case .ended: text = planned.texts[planned.texts.count - 1]
+        case .open:
+            guard planned.texts.indices.contains(save.save) else { return false }
+            text = planned.texts[save.save]
+        }
         let bytes = Data(text.utf8)
-        guard bytes.count >= save.bytes else { return false }
-        return digest(bytes.prefix(save.bytes)) == save.digest
+        return bytes.count == save.bytes && digest(bytes) == save.digest
+    }
+
+    /// The text the store holds for a capture.
+    private func storedText(of capture: CaptureID, notes: NoteRepository) async throws -> String? {
+        try await notes.segment(SegmentID(capture))?.text
     }
 
     static func digest(_ data: Data) -> String {
