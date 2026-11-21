@@ -953,20 +953,51 @@ def shell_segments(text, first_line=1):
     """The simple commands of a piece of shell, as (first line, last line, text), split outside
     quotes at newlines, ;, &&, ||, | and &, with a backslash-newline read as a space. What a
     command substitution, $(…) or backticks, holds is read as commands of its own, at the line
-    where it starts; arithmetic, $((…)) and ((…)), holds none."""
+    where it starts; arithmetic, $((…)) and ((…)), holds none. A case pattern, which stands
+    after `case … in` and after `;;`, names values, so it is no command, whatever its
+    alternatives and however it is spelled."""
     segments = []
     current, start, line = [], first_line, first_line
     i, n = 0, len(text)
     quote = None
     parens = 0
+    pattern_next = False
+    CASE_HEAD = re.compile(r"^\s*case\s+.+\s+in$")
 
     def close(end_line):
-        nonlocal current, start
+        nonlocal current, start, pattern_next
         body = "".join(current).strip()
         if body:
             segments.append((start, end_line, body))
+            if CASE_HEAD.match(body):
+                pattern_next = True
         current = []
         start = end_line
+
+    def pattern_end(at):
+        """The index of the ) that ends a case pattern starting at text[at], and the newlines
+        it crosses."""
+        k, depth, crossed = at + (text[at] == "("), 0, 0
+        while k < n:
+            ch = text[k]
+            if ch == "\\" and k + 1 < n:
+                crossed += text[k + 1] == "\n"
+                k += 2
+                continue
+            if ch in "'\"":
+                close_at = text.find(ch, k + 1)
+                k = n if close_at < 0 else close_at + 1
+                continue
+            if ch == "\n":
+                crossed += 1
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == 0:
+                    return k, crossed
+                depth -= 1
+            k += 1
+        return n, crossed
 
     def matching(at, opener, closer):
         """The index just past the closer that matches an opener at text[at]."""
@@ -994,6 +1025,19 @@ def shell_segments(text, first_line=1):
 
     while i < n:
         c = text[i]
+        if pattern_next and not quote and c not in " \t\n#":
+            pattern_next = False
+            if not re.match(r"esac\b", text[i:i + 5]):
+                end, crossed = pattern_end(i)
+                line += crossed
+                current, start = [], line
+                i = end + 1
+                continue
+        if not quote and c in " \t" and CASE_HEAD.match("".join(current)):
+            # `case x in` followed on the same line by its first pattern.
+            close(line)
+            i += 1
+            continue
         if c == "\\" and i + 1 < n and text[i + 1] == "\n" and quote != "'":
             current.append(" ")
             line += 1
@@ -1081,6 +1125,12 @@ def shell_segments(text, first_line=1):
             parens += 1 if c == "(" else -1
             close(line)
             i += 1
+            continue
+        if text.startswith(";;", i) or text.startswith(";&", i):
+            # The end of a case item: a pattern or esac comes next.
+            close(line)
+            pattern_next = True
+            i += 3 if text.startswith(";;&", i) else 2
             continue
         if c in ";|&":
             close(line)

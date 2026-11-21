@@ -151,7 +151,26 @@ step_six() {
         xcodebuild) limit=$KNOT_BUILD_LIMIT ;;
         # expect: nothing
         swift) limit=$KNOT_SWIFT_TEST_LIMIT ;;
+        # expect: nothing
+        xcodebuild|swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        xcodebuild | swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        (xcodebuild | swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        swift | xcodebuild) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        xcodebuild | \
+        xcrun) limit=1 ;;
+        # expect: unbounded
+        xcb) xcodebuild -list ;;
+        # expect: unbounded
+        xcodebuild | xcb) xcodebuild -version ;;
     esac
+    # expect: nothing
+    case $tool in xcodebuild|swift) limit=1 ;; esac
+    # expect: unbounded
+    case $tool in xcodebuild) xcodebuild -list ;; esac
     cat <<EOT
 Run xcodebuild -version to see it.
 EOT
