@@ -208,6 +208,35 @@ import Testing
         #expect(model.problem == nil)
         #expect(try await rig.environment.notes.segment(segment)?.text == "call the electrician")
     }
+
+    /// Finding 5. Product spec §4.4: when the end itself fails, the text stays in the field, the
+    /// surface says it could not save, and the capture stays open for the next Done.
+    @Test func anEndThatFailsKeepsTheTextInTheField() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let flaky = FlakyEngine(rig.environment.engine)
+        var environment = rig.environment
+        environment.engine = flaky
+        let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+        await model.refresh()
+        model.fieldChanged("nothing lost")
+        await settled(model)
+        let capture = try #require(model.typedCapture)
+
+        flaky.failEnds(true)
+        model.endCapture()
+        await settled(model)
+        #expect(model.fieldText == "nothing lost")
+        #expect(model.problem == .couldNotSave(KnotError.writeFailed.code))
+        #expect(model.typedCapture == capture)
+
+        flaky.failEnds(false)
+        model.endCapture()
+        await settled(model)
+        #expect(model.fieldText.isEmpty)
+        #expect(model.problem == nil)
+        #expect(try await rig.environment.notes.capture(capture)?.outcome == .stored)
+    }
 }
 
 /// The real engine, whose text saves and ends can be made to fail.
