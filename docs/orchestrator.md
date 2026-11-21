@@ -30,7 +30,7 @@ What the build Mac has today, for every first message:
 - A thread records each commit in UTC, as `AGENTS.md` says: `TZ=UTC git commit -F <file>`. The hook lets that form through.
 - No hardware microphone, ever. A simulator's microphone is the Mac's own, so no recording path runs in a simulator.
 - No suite has a bound that a loaded machine can miss. Every wait of the suites ends through `SuiteWait` after ten minutes, with an issue that names what it waited for, and a test that holds something back bounds its own calls into what it tests the same way (docs/architecture.md §17). On main, three calls in `NoteStoreFakeTests.swift` that are made during a hold do not yet: WP-02's third pull request bounds them.
-- A package test takes no file from `Fixtures/generated/`, which a fresh checkout and the hosted runner lack, unless only the build Mac runs the test (docs/architecture.md §17).
+- A package test reads `Fixtures/generated/` only through `FixtureFiles`, before any model check, and every run that runs package tests speaks the audio first. A missing fixture fails a test, and a test skips only on a missing model (docs/architecture.md §17).
 - The owner's team configuration is on the Mac since 2026-11-20, in a file outside the repository. A thread whose package must sign with the team gets the file's path in `KNOT_LOCAL_CONFIG`, and no other thread does: every other build signs locally. The team's ID is never printed, never logged and never written to a tracked file, a note or a pull request. A thread that has the file runs `scripts/verify.sh --only team-id` before each push, and it does not run the gate, which refuses the variable.
 - Xcode on this Mac knows the owner's team, and it writes the team's prefix into the log of every app build, whatever the signing: the lines `TeamIdentifierPrefix` and `AppIdentifierPrefix`, and the entitlements it prints. So the ID is in the build logs of every worktree that has built an app. The team-ID check does not see it there, because it reads tracked files only, and it sees no commit message and no description of a pull request. No thread puts a build log, or a part of one, into a note, a commit message or a pull request without taking those lines out. On 2026-11-20 every branch, tag, commit message and pull request description was searched, and none held the ID.
 - A build signed with the team and a locally signed build of the same bundle ID do not share a container quietly on this Mac. Each new signer raises a consent dialog that only Paolo answers, and while it is open every start of that bundle ID waits, the gate's own too. So a team-signed build of the development identifiers runs on this Mac only with him at the Mac, and while no gate and no UI test runs. Xcode on this Mac is signed in to his account, he allowed this Mac to be registered as a development device, and he answers each consent dialog himself.
@@ -59,6 +59,7 @@ A top-level thread does not wake the orchestrator by ending. The RESULT line tha
 - A proof step's code stays on `wp/<number>-proof` with no pull request, and its note merges from `wp/<number>-note`. The orchestrator reads a short note itself, and the squash message says that no second agent did.
 - WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from another model.
 - The implementer fixes the findings. After two rounds the orchestrator decides what is left. It writes every finding it sets aside in the pull request and in the journal.
+- A reviewer's test that goes into a suite is run many times and under load before it merges, and is read for two calls started as tasks whose order it relies on: such an order is made with a hook (docs/architecture.md §17). The gate's replay runs a taken test at least 30 times. On 2026-11-20 one such test passed on the build Mac every time and failed the hosted check on `main`.
 
 ## The merge queue
 
@@ -80,7 +81,11 @@ The team-ID check is required since 2026-11-20, when Paolo's signing configurati
 
 Since pull request 38 the packaging step starts `knot-dev` under a time limit, and so does each run of UI tests, and at the limit the step fails and says that a system dialog may be waiting for Paolo (docs/architecture.md §18).
 
-A pull request that changes the gate, or a contract that others build on, is tried on the next pull request in the queue before it merges, by running its scripts with `--tree` on that candidate. On 2026-11-19 this found two faults in the tooling that its own gate could not show.
+A pull request that changes the gate, or a contract that others build on, is tried on the next pull request in the queue before it merges, by running its scripts with `--tree` on that candidate. On 2026-11-19 this found two faults in the tooling that its own gate could not show. The trial of a scripts pull request runs on the other pull request's head merged locally with the scripts pull request's head, with `--base` at that head. Merged with `main` alone, a self-test check of a file that the scripts pull request changes fails, and without `--base` the ownership step counts the scripts pull request's files as the other package's.
+
+## A milestone build
+
+At each milestone tag, the build of that tag makes a seeded synthetic store, `KnotStoreCrashHost seed Packages/KnotKit/Tests/KnotStoreTests/SeededStores/<tag>`, and the result is committed, so that later versions are tested against the stores that earlier milestones made (docs/architecture.md §7).
 
 ## What needs Paolo
 
