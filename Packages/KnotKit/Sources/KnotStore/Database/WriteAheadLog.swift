@@ -11,8 +11,11 @@ import KnotCore
 /// a 32-byte header with its magic, page size, salts and checksum, then frames of a 24-byte
 /// header and a page. Frames are taken in order, each only while its salts are the header's and
 /// the running checksum matches, and the first frame that fails ends the log. A frame's page
-/// counts once a commit frame, one that gives the database's size, follows it or is it. A log
-/// whose header does not check is one SQLite ignores, and so is this reading.
+/// counts once a commit frame, one that gives the database's size, follows it or is it. The
+/// header is checked in SQLite's order (`walIndexRecover`): the magic and the page size, then
+/// the checksum, then the format version. A log whose header does not check is one SQLite
+/// ignores, and so is this reading, whatever version it says; one whose header checks and gives
+/// another version is one SQLite refuses to open.
 enum WriteAheadLog {
     /// The schema version, `PRAGMA user_version`, of the newest committed image of page 1 in the
     /// log at `url`, or `nil` when there is no log or it holds no committed image of page 1. A
@@ -53,12 +56,12 @@ enum WriteAheadLog {
         let found = word(header, 0)
         guard found | 1 == magic | 1 else { return nil }
         let bigEndianSums = found & 1 == 1
-        guard word(header, 4) == formatVersion else { throw KnotError.storeDamaged }
         let pageSize = Int(word(header, 8))
         guard (512...65_536).contains(pageSize), pageSize & (pageSize - 1) == 0 else { return nil }
         let salts = (word(header, 16), word(header, 20))
         var sum = checksum(header, range: 0..<24, bigEndian: bigEndianSums, from: (0, 0))
         guard sum == (word(header, 24), word(header, 28)) else { return nil }
+        guard word(header, 4) == formatVersion else { throw KnotError.storeDamaged }
         var pending: Data?
         var committed: Data?
         while let frame = try handle.read(upToCount: frameHeaderSize + pageSize),
@@ -88,8 +91,9 @@ enum WriteAheadLog {
     }
 
     /// SQLite's checksum of the log: over pairs of 32-bit words, each pair adding to both sums,
-    /// the words read in the order the log's magic gives.
-    private static func checksum(
+    /// the words read in the order the log's magic gives. Internal for the tests, which write a
+    /// header that checks.
+    static func checksum(
         _ data: Data, range: Range<Int>, bigEndian: Bool, from start: (UInt32, UInt32)
     ) -> (UInt32, UInt32) {
         var (first, second) = start

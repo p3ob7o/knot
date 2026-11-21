@@ -511,11 +511,30 @@ import Testing
             var spoiled = data
             spoiled[data.count - pageSize / 2] ^= 0xFF
             pieces.append(spoiled)
+            // Another format version, in a header that no longer checks: a log SQLite ignores.
+            var otherVersion = data
+            otherVersion.replaceSubrange(4..<8, with: [0x00, 0x2D, 0xE2, 0x19])
+            pieces.append(otherVersion)
             for piece in pieces {
                 let place = folders.make("log").appending(path: "log", directoryHint: .notDirectory)
                 try piece.write(to: place)
                 let read = try WriteAheadLog.committedVersion(of: place) ?? headerVersion()
                 #expect(read == (try sqliteReads(piece)), "\(label), \(piece.count) of \(data.count) bytes")
+            }
+            // The same in a header that checks: a log SQLite refuses to open, and so does the store.
+            var checked = otherVersion
+            let sum = WriteAheadLog.checksum(checked, range: 0..<24, bigEndian: checked[3] & 1 == 1, from: (0, 0))
+            for (offset, word) in [(24, sum.0), (28, sum.1)] {
+                checked.replaceSubrange(offset..<(offset + 4), with: withUnsafeBytes(of: word.bigEndian) { Array($0) })
+            }
+            #expect(throws: (any Error).self, "\(label): SQLite refuses the log.") { try sqliteReads(checked) }
+            let refused = folders.make("log").appending(path: "log", directoryHint: .notDirectory)
+            try checked.write(to: refused)
+            do {
+                _ = try WriteAheadLog.committedVersion(of: refused)
+                Issue.record("\(label): a log of another version whose header checks is read.")
+            } catch {
+                #expect(error.code == KnotError.storeDamaged.code, "\(label)")
             }
         }
         for version in 2...5 {
