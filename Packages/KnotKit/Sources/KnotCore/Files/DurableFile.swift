@@ -51,19 +51,22 @@ public struct DurableFile: Sendable {
     public static let partialSuffix = ".partial"
 
     public let layer: any FileLayer
-    /// The store's root, `KnotStore/`. Every path this value places lies under it.
+    /// The store's root, `KnotStore/`, as it was given, with `.` and `..` worked out. Every path
+    /// this value places lies under it: under the same real folder, however either path is
+    /// written (`PathForm`).
     public let root: URL
     private let synced = SyncedFolders()
 
     public init(layer: any FileLayer, root: URL) {
         self.layer = layer
-        self.root = root.standardizedFileURL
+        self.root = PathForm.folder(PathForm.lexical(root))
     }
 
     /// Places `data` at `url`, replacing what was there.
     public func place(_ data: Data, at url: URL) throws(KnotError) {
-        let folder = url.deletingLastPathComponent()
-        try retryingOnce(below: folder) { () throws(KnotError) in try placeOnce(data, at: url, in: folder) }
+        let target = try below(url)
+        let folder = target.deletingLastPathComponent()
+        try retryingOnce(below: folder) { () throws(KnotError) in try placeOnce(data, at: target, in: folder) }
     }
 
     private func placeOnce(_ data: Data, at url: URL, in folder: URL) throws(KnotError) {
@@ -85,9 +88,10 @@ public struct DurableFile: Sendable {
     /// Moves a file that is already written, such as one the watch link received, into place.
     /// The file is synced first, then renamed, then both folders are synced.
     public func move(_ source: URL, to destination: URL) throws(KnotError) {
-        let destinationFolder = destination.deletingLastPathComponent()
+        let target = try below(destination)
+        let destinationFolder = target.deletingLastPathComponent()
         try retryingOnce(below: destinationFolder) { () throws(KnotError) in
-            try moveOnce(source, to: destination, in: destinationFolder)
+            try moveOnce(source, to: target, in: destinationFolder)
         }
     }
 
@@ -97,15 +101,20 @@ public struct DurableFile: Sendable {
         try layer.syncFile(source)
         try layer.rename(source, to: destination)
         try layer.syncFolder(destinationFolder)
-        if sourceFolder.standardizedFileURL != destinationFolder.standardizedFileURL {
+        if PathForm.real(sourceFolder) != PathForm.real(destinationFolder) {
             try layer.syncFolder(sourceFolder)
         }
     }
 
-    /// Removes a file and syncs its folder, so the removal stays.
+    /// Removes a file and syncs its folder, so the removal stays. A path outside the root is
+    /// refused, and the layer is given the path that was checked. A link or a file in the place
+    /// of a folder below the root is refused, as `makeFolder` refuses it; a folder that is not
+    /// there holds nothing to remove, and is no error.
     public func remove(_ url: URL) throws(KnotError) {
-        try layer.remove(url)
-        try layer.syncFolder(url.deletingLastPathComponent())
+        let target = try below(url)
+        guard try foldersAreThere(down: target.deletingLastPathComponent()) else { return }
+        try layer.remove(target)
+        try layer.syncFolder(target.deletingLastPathComponent())
     }
 
     /// Makes sure `url` and every folder between the store's root and it exist, and that the
@@ -127,7 +136,8 @@ public struct DurableFile: Sendable {
             if layer.entryKind(folder) == nil { try layer.createFolder(folder) }
             // Checked after creating too, since another writer may have put something else
             // there first: each folder the store owns must be a folder, never a file and never
-            // a link that leads somewhere else.
+            // a link that leads somewhere else. The root is checked as given: a root reached
+            // through a link above it is found, and a root whose own name is a link is refused.
             guard layer.entryKind(folder) == .folder else {
                 throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
             }
@@ -143,9 +153,9 @@ public struct DurableFile: Sendable {
     /// before Knot. The root's own name is synced as the first step of every path.
     private func syncRootAncestorsOnce() throws(KnotError) {
         guard !synced.contains(Self.ancestorsKey) else { return }
-        var folder = root.deletingLastPathComponent().standardizedFileURL
+        var folder = root.deletingLastPathComponent()
         while folder.path != "/" {
-            let parent = folder.deletingLastPathComponent().standardizedFileURL
+            let parent = folder.deletingLastPathComponent()
             do {
                 try layer.syncFolder(parent)
             } catch {
@@ -178,28 +188,66 @@ public struct DurableFile: Sendable {
         }
     }
 
-    /// Removes what a crash left of files being placed in `folder`.
+    /// Removes what a crash left of files being placed in `folder`, a folder below the root,
+    /// given to the layer as it was checked.
     public func removePartials(in folder: URL) throws(KnotError) {
-        for name in try layer.contents(of: folder) where name.hasPrefix(".") && name.hasSuffix(Self.partialSuffix) {
-            try layer.remove(folder.appending(path: name, directoryHint: .notDirectory))
+        let checked = try below(folder)
+        guard try foldersAreThere(down: checked) else { return }
+        for name in try layer.contents(of: checked) where name.hasPrefix(".") && name.hasSuffix(Self.partialSuffix) {
+            try layer.remove(checked.appending(path: name, directoryHint: .notDirectory))
         }
-        try layer.syncFolder(folder)
+        try layer.syncFolder(checked)
+    }
+
+    /// Whether every folder from the root down to `folder` is there, as a removal meets them:
+    /// false at the first one that is not, below which nothing is there to remove. A link or a
+    /// file in a folder's place is refused with `write_failed` and `ENOTDIR`, never followed.
+    private func foldersAreThere(down folder: URL) throws(KnotError) -> Bool {
+        for each in try chain(to: folder) {
+            switch layer.entryKind(each) {
+            case .folder?: continue
+            case nil: return false
+            default: throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
+            }
+        }
+        return true
     }
 
     /// The store's root and every folder below it down to `url`. A path outside the root is refused.
     private func chain(to url: URL) throws(KnotError) -> [URL] {
-        let target = url.standardizedFileURL
-        let rootComponents = root.pathComponents
-        let components = target.pathComponents
-        guard components.count >= rootComponents.count, Array(components.prefix(rootComponents.count)) == rootComponents
-        else { throw KnotError.writeFailed.with(.init(posixError: EINVAL)) }
+        let components = try componentsBelowRoot(url)
         var chain = [root]
         var folder = root
-        for component in components.dropFirst(rootComponents.count) {
+        for component in components {
             folder = folder.appending(path: component, directoryHint: .isDirectory)
             chain.append(folder)
         }
         return chain
+    }
+
+    /// `url` as a path below the root, written from the root as this value holds it: the path
+    /// that is checked is the path the layer is given. A path outside the root is refused with
+    /// `write_failed` and `EINVAL`.
+    func below(_ url: URL) throws(KnotError) -> URL {
+        var target = root
+        for component in try componentsBelowRoot(url) {
+            target = target.appending(path: component, directoryHint: .notDirectory)
+        }
+        return target
+    }
+
+    /// The components of `url` below the root. The root is found in `url` as its shortest part
+    /// whose real path is the root's real path, so the same folder matches however either is
+    /// written, and every folder below it stays to be checked as written: a symbolic link
+    /// there is refused by `makeFolder`, never followed out. A `..` is worked out from the text
+    /// first, so one that leads out of the root leaves no part that matches it.
+    func componentsBelowRoot(_ url: URL) throws(KnotError) -> [String] {
+        let parts = PathForm.lexical(url)
+        let rootReal = PathForm.real(root)
+        for count in 0...parts.count where PathForm.real(Array(parts.prefix(count))) == rootReal {
+            return Array(parts.dropFirst(count))
+        }
+        throw KnotError.writeFailed.with(.init(posixError: EINVAL))
     }
 }
 
