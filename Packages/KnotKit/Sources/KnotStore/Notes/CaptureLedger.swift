@@ -475,6 +475,10 @@ extension StoreTransaction {
             row.revision = winnerRevision
         case .voice, .ink:
             let first = SegmentID(id)
+            // A recording whose start committed after a newer capture began is stored with no
+            // content, ended at that capture's start, until its file comes. Its own end applies
+            // to it as to an open one: its file, its failure, or a discard as empty.
+            let lateRecording = row.kind == .voice && row.outcome == .stored && row.contentHash == nil
             switch incoming {
             case .file(let asset, let duration):
                 guard let content = CaptureBody.file(asset, duration: duration).content,
@@ -510,7 +514,8 @@ extension StoreTransaction {
                 }
             case .discard:
                 switch row.outcome {
-                case .open, .failed:
+                case .open, .failed,
+                    _ where lateRecording:
                     // A failed one too: a recording that launch recovery reads at last and finds
                     // to hold no frame.
                     try discard(id, touched: &touched)
@@ -522,7 +527,8 @@ extension StoreTransaction {
                 }
             case .failed(let code):
                 switch row.outcome {
-                case .open:
+                case .open,
+                    _ where lateRecording:
                     if var segment = try segment(first) {
                         segment.endedAt = endingAt ?? now
                         segment.state = row.kind == .voice ? .voice(.failed(.record, code)) : .ink(.failed(code))

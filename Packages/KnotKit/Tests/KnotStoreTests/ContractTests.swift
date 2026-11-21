@@ -102,6 +102,57 @@ private func check(_ name: String) async throws {
         try database.close()
     }
 
+    /// A recording whose start commits after a newer capture began is ended at that capture's
+    /// start and stored with no content, and it is not open. Its own end applies to it as to an
+    /// open one: stored with its file, failed with its code, or discarded as empty. The same end
+    /// again changes nothing.
+    @Test(arguments: ["file", "failure", "empty"])
+    func aRecordingRecordedLateTakesItsOwnEnd(ending: String) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 97, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let store = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        let newer = captures.draft("A synthetic newer line", at: 1)
+        _ = try await store.record(newer)
+        let id: CaptureID = ids.make()
+        let late = try await store.record(
+            NewCapture(
+                id: id, kind: .voice, origin: CaptureOrigin(source: .device(database.deviceID), surface: .app),
+                launchID: captures.launch, placement: .window, startedAt: captures.at(0), body: .none))
+        #expect(late.outcome == .stored, "Ended at the newer capture's start.")
+        #expect(try await store.openCaptures().map(\.id) == [newer.id], "It is not open.")
+        let code = KnotError.conversionFailed.code
+        let outcome: CaptureEnd.Outcome =
+            switch ending {
+            case "file": .stored(.file(captures.asset(.audio, for: id), duration: .seconds(60)))
+            case "failure": .failed(code)
+            default: .discardedEmpty
+            }
+        let end = CaptureEnd(captureID: id, endedAt: captures.at(2), outcome: outcome, revision: 0)
+        let receipt = try await store.end(end)
+        let segment = try await store.segment(SegmentID(id))
+        switch ending {
+        case "file":
+            #expect(receipt.outcome == .stored)
+            #expect(segment?.state == .voice(.recorded))
+            #expect(try await !store.jobs(for: SegmentID(id)).isEmpty, "Its transcription is queued.")
+        case "failure":
+            #expect(receipt.outcome == .failed(code))
+            #expect(segment?.state == .voice(.failed(.record, code)))
+        default:
+            #expect(receipt.outcome == .discardedEmpty)
+            #expect(segment == nil, "It goes from the stream.")
+            #expect(try await store.jobs(for: SegmentID(id)).isEmpty)
+        }
+        #expect(try await store.end(end).outcome == receipt.outcome, "The same end again changes nothing.")
+        #expect(try await store.openCaptures().map(\.id) == [newer.id])
+        expectConsistent(database)
+        try database.close()
+    }
+
     /// Held by its own type, as the app holds it, the store answers each operation that
     /// `NoteStore` gives a default with its own method, as it does held as `any NoteStore`, and
     /// never with the default's `port_unavailable`.
