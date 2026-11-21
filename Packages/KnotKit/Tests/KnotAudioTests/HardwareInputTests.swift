@@ -302,6 +302,47 @@ import Testing
         case startByStop
     }
 
+    /// A second stop, asked for while the engine's stop runs, returns only once the tap is gone,
+    /// the engine stopped and the session given back, and no buffer comes through after it: in
+    /// the start's undoing, the first stop having come inside the engine's start, and in the first
+    /// stop's own finishing, after the start. The engine's stop holds until the second stop waits,
+    /// or returns. After finding 22.
+    @Test(arguments: [true, false])
+    func aSecondStopWaitsForTheFirst(duringTheStart: Bool) async throws {
+        let (opened, engine, hardware) = try await Self.openStandIn()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let first = StopTask()
+        let second = StopTask()
+        let returned = Flag()
+        let seen = Mutex<(calls: [String], released: Int)>(([], 0))
+        let deliveries = Mutex(0)
+        if duringTheStart {
+            engine.whenAt(.starting) { _ in
+                first.start { await opened.stop() }
+                Self.waitUntil { opened.stopRequested }
+            }
+        }
+        engine.whenAt(.stopping) { engine in
+            second.start {
+                await opened.stop()
+                seen.withLock { $0 = (engine.calls, hardware.uses.filter { $0 == "deactivate" }.count) }
+                if let buffer = Self.silence(format) { engine.deliver(buffer) }
+                returned.set()
+            }
+            // The first stop waits for the start too when it came inside it: the second is one more.
+            let waiting = duringTheStart ? 2 : 1
+            Self.waitUntil { returned.value || opened.suspendedStops >= waiting }
+        }
+        try await Self.startOffThePool(opened, format: format) { _ in deliveries.withLock { $0 += 1 } }
+        if !duringTheStart { first.start(offThePool: true) { await opened.stop() } }
+        await first.wait()
+        await second.wait()
+        #expect(deliveries.withLock { $0 } == 0, "A buffer came through after a stop returned.")
+        #expect(seen.withLock { $0.calls } == ["installTap", "start", "stop", "removeTap"], "\(seen.withLock { $0 })")
+        #expect(seen.withLock { $0.released } == 1, "The second stop returned before the session was given back.")
+        #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
+    }
+
     /// The microphone opened on a stand-in engine at 48 kHz, which opens nothing.
     static func openStandIn() async throws -> (OpenMicrophone, StandInEngine, StandInHardware) {
         let engine = StandInEngine(tap: InputShape(sampleRate: 48_000, channels: 1))
@@ -368,9 +409,16 @@ import Testing
 final class StopTask: Sendable {
     private let task = Mutex<Task<Void, Never>?>(nil)
 
-    func start(_ body: @escaping @Sendable () async -> Void) {
+    /// Starts `body`, once: on the cooperative pool, or with `offThePool` on a queue of its own,
+    /// for a stop whose hooks block the thread it runs on while another task needs the pool.
+    func start(offThePool: Bool = false, _ body: @escaping @Sendable () async -> Void) {
         task.withLock { task in
-            if task == nil { task = Task { await body() } }
+            guard task == nil else { return }
+            if offThePool {
+                task = Task(executorPreference: DispatchSerialQueue(label: "StopTask")) { await body() }
+            } else {
+                task = Task { await body() }
+            }
         }
     }
 
@@ -425,15 +473,17 @@ final class StandInHardware: HardwareAudio {
 /// An engine that opens nothing. It records each call, and runs a hook inside the tap's
 /// installation or inside the start, so that a test delivers an ending at that point.
 final class StandInEngine: InputEngine {
-    enum Point: Sendable {
+    enum Point: Sendable, Hashable {
         case installingTheTap
         case starting
+        case stopping
     }
 
     let tap: InputShape
     let hardware: InputShape
     private let state = Mutex<(calls: [String], tap: (@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?)>(([], nil))
-    private let hook = Mutex<(point: Point, run: @Sendable (StandInEngine) -> Void)?>(nil)
+    private let hooks = Mutex<[Point: @Sendable (StandInEngine) -> Void]>([:])
+    private let changes = AsyncStream<Void>.makeStream()
 
     init(tap: InputShape, hardware: InputShape? = nil) {
         self.tap = tap
@@ -444,8 +494,11 @@ final class StandInEngine: InputEngine {
 
     /// Runs `body` inside the call at `point`, before that call returns.
     func whenAt(_ point: Point, _ body: @escaping @Sendable (StandInEngine) -> Void) {
-        hook.withLock { $0 = (point, body) }
+        hooks.withLock { $0[point] = body }
     }
+
+    /// Tells the input that the engine's configuration changed, as the system would.
+    func changeConfiguration() { changes.continuation.yield() }
 
     /// Hands the installed tap a buffer, as the input would.
     func deliver(_ buffer: AVReadOnlyAudioPCMBuffer) {
@@ -477,17 +530,13 @@ final class StandInEngine: InputEngine {
 
     func stop() {
         state.withLock { $0.calls.append("stop") }
+        run(at: .stopping)
     }
 
-    func configurationChanges() -> AsyncStream<Void> {
-        AsyncStream { _ in }
-    }
+    func configurationChanges() -> AsyncStream<Void> { changes.stream }
 
     private func run(at point: Point) {
-        let body = hook.withLock { hook -> (@Sendable (StandInEngine) -> Void)? in
-            guard let hook, hook.point == point else { return nil }
-            return hook.run
-        }
+        let body = hooks.withLock { $0[point] }
         body?(self)
     }
 }

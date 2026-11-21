@@ -208,11 +208,12 @@ struct SystemInputEngine: InputEngine {
 
 /// The microphone opened for one recording.
 ///
-/// The engine is touched in two places only, never at once: inside the start, and inside a stop
-/// that no start is running beside. A stop asked for while the start runs waits for it, and the
-/// start then takes away what it put there. So a stop takes the tap away and stops the engine
-/// whenever it arrives, during the start, after it or twice, and returns only once nothing will
-/// be delivered.
+/// The engine is touched in two places only, never at once: inside the start, and inside the one
+/// stop that finishes the input, which no start runs beside. A stop asked for while the start
+/// runs, its own undoing included, waits for it, and the start then takes away what it put
+/// there. One stop finishes the input and every other waits until it has. So every stop, during
+/// the start, after it or at once with another, returns only once the tap is gone, the engine
+/// stopped and the session given back.
 final class OpenMicrophone: OpenAudioInput {
     let sampleRate: Double
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
@@ -232,6 +233,13 @@ final class OpenMicrophone: OpenAudioInput {
         var watcher: Task<Void, Never>?
         /// Stops asked for while the start runs, waiting for it.
         var waiting: [CheckedContinuation<Void, Never>] = []
+        /// True once a stop has begun to finish the input, and once it has finished it.
+        var finishing = false
+        var finished = false
+        /// Stops waiting for the one that finishes the input.
+        var finishWaiters: [CheckedContinuation<Void, Never>] = []
+        /// How many stops are waiting, for the start or for the one that finishes the input.
+        var suspended = 0
     }
 
     init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio) {
@@ -242,6 +250,9 @@ final class OpenMicrophone: OpenAudioInput {
 
     /// True once a stop has been asked for, which a test reads to order a stop inside a start.
     var stopRequested: Bool { state.withLock { $0.stopped } }
+
+    /// How many stops are waiting, which a test reads to see that a stop waits.
+    var suspendedStops: Int { state.withLock { $0.suspended } }
 
     func start(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void) throws(KnotError) {
         // A stop that came first leaves nothing to start.
@@ -284,15 +295,16 @@ final class OpenMicrophone: OpenAudioInput {
         } catch {
             failure = error
         }
-        // The start is over. A stop asked for while it ran, or a failure, takes away what it put
-        // there, and the stops that waited for it go on.
-        let (undo, waiting) = state.withLock { state in
+        // A stop asked for while it ran, or a failure, takes away what it put there. The start is
+        // over only then: a stop asked for meanwhile waits for that too, and the stops that
+        // waited for it go on.
+        if state.withLock({ $0.stopped }) || failure != nil { tearDown() }
+        let waiting = state.withLock { state in
             state.starting = false
-            let undo = state.stopped || failure != nil
+            state.suspended -= state.waiting.count
             defer { state.waiting = [] }
-            return (undo, state.waiting)
+            return state.waiting
         }
-        if undo { tearDown() }
         for stop in waiting { stop.resume() }
         if let failure { throw failure }
     }
@@ -303,14 +315,24 @@ final class OpenMicrophone: OpenAudioInput {
             return state.starting
         }
         if starting {
-            await withCheckedContinuation { (stop: CheckedContinuation<Void, Never>) in
-                let goOn = state.withLock { state in
-                    guard state.starting else { return true }
-                    state.waiting.append(stop)
-                    return false
-                }
-                if goOn { stop.resume() }
+            await wait { state, stop in
+                guard state.starting else { return false }
+                state.waiting.append(stop)
+                return true
             }
+        }
+        // One stop finishes the input; every other waits until it has.
+        let finishes = state.withLock { state in
+            defer { state.finishing = true }
+            return !state.finishing
+        }
+        guard finishes else {
+            await wait { state, stop in
+                guard !state.finished else { return false }
+                state.finishWaiters.append(stop)
+                return true
+            }
+            return
         }
         tearDown()
         let release = state.withLock { state in
@@ -318,6 +340,26 @@ final class OpenMicrophone: OpenAudioInput {
             return !state.sessionReleased
         }
         if release { hardware.deactivateSession() }
+        let waiters = state.withLock { state in
+            state.finished = true
+            state.suspended -= state.finishWaiters.count
+            defer { state.finishWaiters = [] }
+            return state.finishWaiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Suspends this stop when `waits`, under the lock, puts it on a list and says so, until it
+    /// is resumed from there; goes on at once when `waits` says there is nothing to wait for.
+    private func wait(_ waits: (inout State, CheckedContinuation<Void, Never>) -> Bool) async {
+        await withCheckedContinuation { (stop: CheckedContinuation<Void, Never>) in
+            let waiting = state.withLock { state in
+                let waiting = waits(&state, stop)
+                if waiting { state.suspended += 1 }
+                return waiting
+            }
+            if !waiting { stop.resume() }
+        }
     }
 
     /// Stops the engine and takes the tap away, if they are there, once.
