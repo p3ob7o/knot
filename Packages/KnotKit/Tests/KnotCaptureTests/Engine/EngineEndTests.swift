@@ -51,4 +51,42 @@ import Testing
         #expect(r.layer.exists(r.locations.recordingManifest(recording.captureID)), "The file is kept.")
         #expect(try await r.notes.openCaptures().isEmpty)
     }
+
+    // MARK: 68
+
+    /// Finding 68. A recording with no frames, ended after four seconds on the clock, is
+    /// discarded as empty: no job and no asset. Frames decide, not time.
+    @Test func recordingWithNoFramesIsDiscarded() async throws {
+        let r = Rig()
+        r.recorder.setScript(.init(buffers: 0))
+        let a = try await r.engine.begin(CaptureRequest(kind: .voice, surface: .macPanel))
+        r.clock.advance(by: 4)
+        let ended = try await r.engine.end(a.captureID)
+        #expect(ended.outcome == .discardedEmpty)
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .discardedEmpty)
+        #expect(try await r.notes.jobs(for: SegmentID(a.captureID)).isEmpty)
+        #expect(try await r.assets.find(AssetID(a.captureID), kind: .audio) == nil)
+        #expect(try await r.stream().notes.isEmpty)
+    }
+
+    /// Finding 68, the other side. A recording that ends by itself with a failed write, naming its
+    /// working file, has a frame count that is only the last length the recorder read, which can
+    /// be zero. It ends failed with the failure's code, and its file is kept, whatever its frames.
+    @Test(arguments: [RecordingEnding.diskFull, .writeFailed])
+    func recordingWhoseWriteFailedIsKeptWhateverItsFrames(_ ending: RecordingEnding) async throws {
+        let r = Rig()
+        r.recorder.setScript(.init(buffers: 0, endsBySelf: ending))
+        let states = r.engine.states()
+        let a = try await r.engine.begin(CaptureRequest(kind: .voice, surface: .macPanel))
+        let ended = await SuiteWait.value("the recording to end by itself") { () async -> CaptureOutcome? in
+            for await state in states where state.captureID == a.captureID && state.outcome != .open {
+                return state.outcome
+            }
+            return nil
+        }
+        let code = ending == .diskFull ? KnotError.diskFull.code : KnotError.writeFailed.code
+        #expect(ended == .failed(code))
+        #expect(try await r.notes.capture(a.captureID)?.outcome == .failed(code))
+        #expect(r.layer.exists(r.locations.recordingManifest(a.captureID)), "The recording's files are kept.")
+    }
 }

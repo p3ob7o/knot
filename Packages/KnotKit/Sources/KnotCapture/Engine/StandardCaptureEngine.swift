@@ -634,7 +634,29 @@ public actor StandardCaptureEngine: CaptureEngine {
         let audio = await session.stop()
         let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
+        if audio.frames == 0 {
+            // Frames decide, not time (settled point 4). A failed write that names its working file
+            // gives only the last length the recorder could read, which can be zero: such a
+            // recording ends failed, and its file is kept. Otherwise no frame is nothing to keep.
+            if audio.workingFile != nil, let failure = Self.failure(of: audio.ending) {
+                try await failRecording(id, endedAt: endedAt, failure.about(capture: id))
+                return
+            }
+            entries[id]?.session = nil
+            try await discardRecording(id)
+            try? await recorder.removeWorkingFile(of: id)
+            return
+        }
         try await storeRecording(id, audio: audio, endedAt: endedAt)
+    }
+
+    /// The error of a recording that ended because a write failed.
+    private static func failure(of ending: RecordingEnding) -> KnotError? {
+        switch ending {
+        case .diskFull: KnotError.diskFull
+        case .writeFailed: KnotError.writeFailed
+        default: nil
+        }
     }
 
     /// Converts a stopped recording, moves it into the `AssetStore` and ends its capture with
