@@ -230,7 +230,7 @@ struct CompositionTests {
     /// The breaker holds for the whole launch: with recovery skipped after two deaths, the
     /// engine, which ingests `Inbox/` as soon as a capture of this launch ends on that path, does
     /// not ingest an earlier launch's item, which may be the one that killed ingest twice.
-    @Test("probe-breaker-bypass: a recovery skipped by its breaker leaves earlier launches' items alone")
+    @Test("probe-breaker-bypass: with recovery held back by its breaker, earlier launches' items stay where they are")
     func breakerHoldsForTheWholeLaunch() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
