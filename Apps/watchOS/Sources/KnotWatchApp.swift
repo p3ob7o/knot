@@ -1,18 +1,57 @@
-import KnotAudio
 import KnotCore
-import KnotLink
 import KnotUI
 import SwiftUI
 
 /// The Watch app. It does not use KnotApp or the capture engine: it composes the recorder,
-/// the link to the iPhone and the UI itself (docs/architecture.md §3).
+/// the link to the iPhone and the UI itself (docs/architecture.md §3), in `WatchComposition`.
+/// It has one screen, the record control (docs/product-spec.md §6).
 @main
 struct KnotWatchApp: App {
-    private let environment = KnotUILive.wire(KnotLinkLive.wire(KnotAudioLive.wire(.unavailable)))
+    @State private var model = RecordScreenModel(composition: WatchComposition.make(.current))
 
     var body: some Scene {
         WindowGroup {
-            PlaceholderView()
+            RecordScreen(model: model)
         }
+    }
+}
+
+/// The Watch app's one screen: the record control and what came of the last press, in the
+/// system's default look through KnotUI's theme. It shows no note content.
+struct RecordScreen: View {
+    let model: RecordScreenModel
+
+    var body: some View {
+        #if DEBUG
+            if let report = model.compositionText {
+                // The launch on injected audio says what it wired, for the smoke test. It is
+                // longer than the screen, so the screen scrolls.
+                ScrollView {
+                    control
+                    Text(report)
+                        .font(.caption2)
+                        .accessibilityIdentifier("knot.composition")
+                }
+            } else {
+                control
+            }
+        #else
+            control
+        #endif
+    }
+
+    private var control: some View {
+        VStack(spacing: 8) {
+            RecordButton(phase: model.controlPhase, action: model.press)
+                .disabled(model.controlDisabled)
+                .accessibilityIdentifier("knot.record")
+            if let text = model.status.text {
+                Text(text)
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("knot.status")
+            }
+        }
+        .onAppear { model.launch() }
     }
 }
