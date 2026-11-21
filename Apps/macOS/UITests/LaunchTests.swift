@@ -1,8 +1,9 @@
 import XCTest
 
-/// The skeleton's launch smoke test, on the environment the factory gives a debug build: the
-/// main window opens on the capture surface, a line entered through the capture surface's model
-/// is saved, and the stream beside it shows the line.
+/// The skeleton's launch smoke test, on `.preview`: the main window opens on the capture surface,
+/// a line entered through the capture surface's model is saved, and the stream beside it shows
+/// the line. It launches through `KnotLauncher`, as every UI test does, so the app carries the
+/// agent's mark and ignores the saved window state.
 ///
 /// No Mac UI test types or clicks (the orchestrator's ruling on WP-33 PR 1): the runner
 /// synthesizes real events, which go to whatever app is in front, and on the build Mac that can
@@ -19,11 +20,10 @@ final class KnotMacLaunchTests: XCTestCase {
 
     @MainActor
     func testLaunchIntoCaptureAndFindTheEnteredLineInTheStream() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-KnotEnterLine", line]
-        // Ignores the saved window state, which every development build shares
-        // (`launchForSmokeTest()`).
-        app.launchForSmokeTest()
+        let app = KnotLauncher.application(.preview)
+        // After the launcher's own arguments, so that the window-state pair stays first.
+        app.launchArguments += ["-KnotEnterLine", line]
+        app.launch()
 
         let field = app.descendants(matching: .any)["Capture field"]
         XCTAssertTrue(field.waitForExistence(timeout: 30), "The capture surface is on screen at launch.")
