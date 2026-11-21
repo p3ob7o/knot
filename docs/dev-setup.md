@@ -122,6 +122,15 @@ KNOT_TREE=<gate worktree> ~/knot/scripts/bootstrap.sh
 
 The build products, the logs and the status line go to the tree's own `.build/`. A pull request that changes `scripts/` is the stated exception: the orchestrator then runs the candidate's own scripts, `<gate worktree>/scripts/verify.sh --gate --branch …`, and says so in the journal. The gate prints which scripts checked which tree, by commit.
 
+**A trial of a scripts pull request on another head.** To see a pull request that changes `scripts/` run another package's gate before it merges, the orchestrator checks out the other head in a scratch worktree, merges the scripts pull request's head into it, not main alone, and runs that worktree's own scripts with `--base` at the scripts pull request's head:
+
+```sh
+git -C <trial worktree> merge --no-edit <scripts head>
+<trial worktree>/scripts/verify.sh --gate --branch <other branch> --base <scripts head>
+```
+
+The tree then holds both changes, as the merge queue would. With `--base` at the scripts head, the ownership step and the depth read the other package's change alone; against `origin/main` the scripts' files would count as the other package's, and ownership would fail on them. The depth follows that change too, so a step that only the scripts' change reaches, such as `mac-ui` for a change to `scripts/`, runs only if the other change reaches it as well. A trial on the other head merged with main alone does not test the scripts' change: the tree lacks the files that change with the scripts. The scripts' self-test reads none of the tree's files in any case. It checks the scripts, so the plan, the fixtures' manifest, the pinned Xcode, the apps' manifests, `project.yml` and the nightly workflow that it reads all come from the checkout the scripts come from, and its verdict is the scripts' alone, whatever tree `--tree` names.
+
 **The status line.** GitHub cuts a commit status's description at 140 characters, and the summary line is longer. So every run also writes a status line of at most 140 characters, such as `gate everything ok: 18/18 steps, 27 tests, 1 pending · 9m12s · Xcode 27.2 27B52 · macOS 26C5047e`, to `.build/logs/verify-status.txt`. `scripts/verify.sh --status-line` prints the last one, for the orchestrator to post as `knot/gate`. A `*` after the Xcode means it was named by `KNOT_XCODE`.
 
 **Build slots.** A heavy step waits for a build slot (`scripts/build-slot.sh`): three on this Mac, one of them kept for the gate, an exclusive one for the Mac UI tests, and two for booted simulator sets. A slot is a `lockf` lock, so a killed build frees it at once. A waiting run prints the holders each minute. `scripts/build-slot.sh status` shows who holds what. `KNOT_SLOT_DIR`, `KNOT_BUILD_SLOTS`, `KNOT_SIMULATOR_SLOTS` and `KNOT_SLOT_TIMEOUT` change the defaults.

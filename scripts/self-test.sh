@@ -12,6 +12,13 @@
 
 source "$(dirname "$0")/lib/common.sh"
 
+# The self-test checks the scripts, so every file it reads comes from the checkout the scripts
+# come from, never from the tree that KNOT_TREE or --tree names: the plan, the fixtures'
+# manifest, the pinned Xcode, the apps' manifests, project.yml and the nightly workflow. A
+# trial of these scripts on another tree, or main's scripts on a candidate, then judges the
+# scripts alone, whatever that tree holds (docs/dev-setup.md).
+KNOT_SELF="$(cd "$KNOT_SCRIPTS/.." && pwd -P)"
+
 FAILED=0
 pass() { printf 'ok    %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAILED=1; }
@@ -96,8 +103,8 @@ fi
 # 3. The plan check catches a brief with a missing heading, and passes on the plan as it is.
 plan="$scratch/plan"
 mkdir -p "$plan/docs" "$plan/scripts/lib"
-cp "$KNOT_ROOT/PLAN.md" "$plan/"
-cp -R "$KNOT_ROOT/docs/plan" "$plan/docs/"
+cp "$KNOT_SELF/PLAN.md" "$plan/"
+cp -R "$KNOT_SELF/docs/plan" "$plan/docs/"
 cp "$KNOT_SCRIPTS/check-plan.sh" "$plan/scripts/"
 cp "$KNOT_SCRIPTS/lib/fail.sh" "$plan/scripts/lib/"
 if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
@@ -116,7 +123,7 @@ else
 fi
 
 # 4. The gate's helper reads the plan as it states it.
-cd "$KNOT_ROOT"
+cd "$KNOT_SELF"
 # The helper comes from the scripts' own folder; the plan it reads, from the tree.
 if python3 -I -B - "$KNOT_SCRIPTS/lib" <<'PY'
 import sys
@@ -242,7 +249,7 @@ lint_fixture() {
     (cd "$1" && python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
         --as Apps/Extensions/Widgets-iOS/Sources/ --manifest "$fixture_manifest" >"$2") || true
 }
-lint_fixture "$KNOT_ROOT" "$scratch/lint.out"
+lint_fixture "$KNOT_SELF" "$scratch/lint.out"
 if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
 import re, sys
 fixture, output = sys.argv[1], open(sys.argv[2]).read()
@@ -279,7 +286,7 @@ fi
 manifests="$scratch/manifests"
 for manifest in Apps/iOS Apps/macOS Apps/watchOS Apps/Extensions/Widgets-iOS Apps/Extensions/Widgets-watchOS; do
     mkdir -p "$manifests/$manifest"
-    python3 -I - "$KNOT_ROOT/$manifest/PrivacyInfo.xcprivacy" "$manifests/$manifest/PrivacyInfo.xcprivacy" <<'PY'
+    python3 -I - "$KNOT_SELF/$manifest/PrivacyInfo.xcprivacy" "$manifests/$manifest/PrivacyInfo.xcprivacy" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], "rb") as f:
     manifest = plistlib.load(f)
@@ -340,7 +347,7 @@ fi
 # On a detached head the gate needs the branch, which tells a note's pull request from a code
 # one: it refuses --package alone, and with neither it asks for --branch, not for either.
 # The scratch tree has no branch to read, as a detached head has none, and the tree's pin.
-cp "$KNOT_ROOT/.xcode-version" "$gate_tree/"
+cp "$KNOT_SELF/.xcode-version" "$gate_tree/"
 status_package=0
 output_package="$("$KNOT_SCRIPTS/verify.sh" --gate --package WP-01 --tree "$gate_tree" 2>&1)" || status_package=$?
 status_none=0
@@ -640,8 +647,8 @@ fi
 # that fails; the fixtures step's own path runs on it.
 st="$scratch/stamp-tree"
 mkdir -p "$st/Fixtures/tools"
-cp "$KNOT_ROOT/Fixtures/manifest.json" "$st/Fixtures/"
-cp "$KNOT_ROOT/.xcode-version" "$st/"
+cp "$KNOT_SELF/Fixtures/manifest.json" "$st/Fixtures/"
+cp "$KNOT_SELF/.xcode-version" "$st/"
 printf '#!/bin/sh\necho "the voices are missing" >&2\nexit 2\n' >"$st/Fixtures/tools/generate.sh"
 chmod +x "$st/Fixtures/tools/generate.sh"
 stamp_status=0
@@ -763,7 +770,7 @@ pkill -KILL -f "$lockdir/silent/ioreg" 2>/dev/null || true
 wl="$scratch/lock-loop"
 mkdir -p "$wl/tree" "$wl/slots" "$wl/stubs"
 cp -R "$KNOT_SCRIPTS" "$wl/scripts"
-cp "$KNOT_ROOT/.xcode-version" "$wl/tree/"
+cp "$KNOT_SELF/.xcode-version" "$wl/tree/"
 python3 -I - "$wl/scripts/verify.sh" <<'PY'
 import re, sys
 path = sys.argv[1]
@@ -847,8 +854,8 @@ pkill -KILL -f "$xs/xcodebuild" 2>/dev/null || true
 # which writes no stamp.
 ma="$scratch/make-audio"
 mkdir -p "$ma/Fixtures/tools"
-cp "$KNOT_ROOT/Fixtures/manifest.json" "$ma/Fixtures/"
-cp "$KNOT_ROOT/.xcode-version" "$ma/"
+cp "$KNOT_SELF/Fixtures/manifest.json" "$ma/Fixtures/"
+cp "$KNOT_SELF/.xcode-version" "$ma/"
 cat >"$ma/Fixtures/tools/generate.sh" <<'STUB'
 #!/bin/sh
 echo spoke >>"$(dirname "$0")/../../spoken"
@@ -893,7 +900,7 @@ fi
 # The hosted nightly run makes this tree's audio before the package tests under Thread
 # Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio. Only a
 # step's own `run:` line counts, so a step that is commented out is none.
-nightly="$KNOT_ROOT/.github/workflows/nightly.yml"
+nightly="$KNOT_SELF/.github/workflows/nightly.yml"
 nightly_step() { grep -n -E "^ *(- )?run: +scripts/verify\.sh --only $1 *\$" "$nightly" | head -n 1 | cut -d: -f1 || true; }
 fixtures_line=$(nightly_step fixtures)
 tsan_line=$(nightly_step tsan)
@@ -930,7 +937,7 @@ fi
 sl="$scratch/skip-loop"
 mkdir -p "$sl/tree" "$sl/logs"
 cp -R "$KNOT_SCRIPTS" "$sl/scripts"
-cp "$KNOT_ROOT/.xcode-version" "$sl/tree/"
+cp "$KNOT_SELF/.xcode-version" "$sl/tree/"
 python3 -I - "$sl/scripts/verify.sh" <<'PY'
 import sys
 path = sys.argv[1]
@@ -999,7 +1006,7 @@ wr="$scratch/worktree-remove"
 mkdir -p "$wr/home" "$wr/stub" "$wr/repo"
 git -C "$wr/repo" init -q -b main
 cp -R "$KNOT_SCRIPTS" "$wr/repo/scripts"
-cp "$KNOT_ROOT/.xcode-version" "$wr/repo/"
+cp "$KNOT_SELF/.xcode-version" "$wr/repo/"
 git -C "$wr/repo" add scripts .xcode-version
 git -C "$wr/repo" -c user.name=self-test -c user.email=self-test@example.invalid commit -q -m scratch
 git -C "$wr/repo" worktree add -q "$wr/home/wt" -b self-test-wt
@@ -1098,7 +1105,7 @@ fi
 ul="$scratch/ui-loop"
 mkdir -p "$ul/tree" "$ul/slots" "$ul/stub"
 cp -R "$KNOT_SCRIPTS" "$ul/scripts"
-cp "$KNOT_ROOT/.xcode-version" "$ul/tree/"
+cp "$KNOT_SELF/.xcode-version" "$ul/tree/"
 python3 -I - "$ul/scripts/verify.sh" <<'PY'
 import sys
 path = sys.argv[1]
@@ -1150,7 +1157,7 @@ make_xcodegen "$xg/folder/$pinned_dir" pinned "$KNOT_XCODEGEN_VERSION"
 make_xcodegen "$xg/named-wrong" named-wrong 2.48.0
 make_xcodegen "$xg/moving/$pinned_dir" moving "$KNOT_XCODEGEN_VERSION"
 mkdir -p "$xg/empty-folder" "$xg/tree"
-cp "$KNOT_ROOT/project.yml" "$xg/tree/"
+cp "$KNOT_SELF/project.yml" "$xg/tree/"
 # xg_doctor <build folder> <PATH entry> [KNOT_XCODEGEN]: the doctor's XcodeGen line or failure.
 xg_doctor() {
     env -u KNOT_XCODEGEN PATH="$2:$PATH" KNOT_BUILD_FOLDER="$1" ${3:+KNOT_XCODEGEN="$3"} \
