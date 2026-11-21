@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "set": "synthetic",
-  "casesSha256": "66cf856d4436ba1a90390df1c39e2cdfda2d9b27c10ff36d0f93a16394e80bbc",
+  "casesSha256": "37576db15815ff8af593eea0b984450cc86867e290c196660ee35b35dc2d7f16",
   "extraCasesSha256": "a62d233d7e26578f9e079ceeb4012bb9b0c2041c778eb54715c9d8069db0e9bb",
   "model": {
     "name": "AFM 3 Core Advanced",
@@ -31,6 +31,7 @@
         "uh"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -40,6 +41,7 @@
         "modelOutput": "Um so I don't think we should sign the lease yet, uh not until the landlord fixes the heating.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -60,6 +62,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "It's not the blue folder",
@@ -69,6 +72,7 @@
         "modelOutput": "It's not, it's not the blue folder, it's the green one.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -88,6 +92,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -97,6 +102,7 @@
         "modelOutput": "Remind me to not reply to the email from the bank until I've called them.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -119,6 +125,7 @@
         "um"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Pay plumber 240 dollars",
@@ -128,6 +135,7 @@
         "modelOutput": "Pay the Plumber 240 dollars, um, and 50 cents for the parts.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -150,6 +158,7 @@
         "uh"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "chairs tables hall",
@@ -159,6 +168,7 @@
         "modelOutput": "We need forty two chairs and, uh, six tables for the hall.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -178,6 +188,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "appointment moved",
@@ -187,6 +198,7 @@
         "modelOutput": "The dentist moved my appointment to the 14th of March at 9:30.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -207,6 +219,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -216,6 +229,7 @@
         "modelOutput": "The flight is next Friday, the 3rd, not Thursday.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -238,6 +252,7 @@
         "uh"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Send draft to Siobhan",
@@ -247,6 +262,7 @@
         "modelOutput": "Send the draft to Siobhan and copy uh Mateus on it.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -267,6 +283,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Ask Dr Okafor",
@@ -276,6 +293,7 @@
         "modelOutput": "Ask Dr Okafor whether Lena can start on the 2nd.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -296,6 +314,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -305,6 +324,7 @@
         "modelOutput": "Let's meet at the café on Tuesday, no Wednesday at 10.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -325,6 +345,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -334,6 +355,7 @@
         "modelOutput": "Buy 2, no 3 bags of rice.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -354,6 +376,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -363,6 +386,7 @@
         "modelOutput": "The door code is 4 7 1 9, sorry 4 7 9 1?",
         "guard": "accepted",
         "readingsHeld": false,
+        "questionAdded": true,
         "meaningChanged": true,
         "pass": false
       }
@@ -384,6 +408,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "No more than five",
@@ -393,6 +418,7 @@
         "modelOutput": "No more than five people can come to the tasting.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -413,6 +439,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": true,
       "pass": true,
       "title": "invite Anna Maria Joe dinner",
@@ -422,6 +449,7 @@
         "modelOutput": "Invite Anna Maria and Joe to the dinner.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -442,6 +470,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": false,
+      "questionAdded": false,
       "meaningChanged": true,
       "pass": false,
       "title": "Meet at ten thirty two",
@@ -451,6 +480,7 @@
         "modelOutput": "Meet at ten thirty two, people from finance are joining?",
         "guard": "accepted",
         "readingsHeld": false,
+        "questionAdded": true,
         "meaningChanged": true,
         "pass": false
       }
@@ -471,6 +501,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -480,6 +511,7 @@
         "modelOutput": "I'm not sure we should cancel the booking.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -503,6 +535,7 @@
         "uh"
       ],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "new running route",
@@ -512,6 +545,7 @@
         "modelOutput": "Um so uh I want to uh like try the new running route tomorrow morning, you know the one by the river?",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -534,6 +568,7 @@
         "the"
       ],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "meeting with design team",
@@ -543,6 +578,7 @@
         "modelOutput": "The meeting with the design team went well.",
         "guard": "rejected:removalNotAllowed",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -565,6 +601,7 @@
         "should"
       ],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "book hotel this week",
@@ -574,6 +611,7 @@
         "modelOutput": "We should, we should book the hotel this week.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -593,6 +631,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Shopping list",
@@ -602,6 +641,7 @@
         "modelOutput": "Shopping list:  \n- eggs  \n- milk  \n- bread  \n- two lemons  \n- coffee",
         "guard": "rejected:removalNotAllowed",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": true,
         "pass": true
       }
@@ -621,6 +661,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Three things for trip",
@@ -630,6 +671,7 @@
         "modelOutput": "Three things for the trip:  \n- The passport  \n- The charger  \n- The blue jacket",
         "guard": "rejected:protectedWordRemoved",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": true,
         "pass": true
       }
@@ -652,6 +694,7 @@
         "um"
       ],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -661,6 +704,7 @@
         "modelOutput": "Okay, two things about the garden:  \n- the tomato plants need staking before the weekend  \n- the hose by the shed is leaking  \n\num, separate thing:  \nthe neighbours asked if they can borrow the ladder on Sunday",
         "guard": "rejected:removalNotAllowed",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -680,6 +724,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Spare key bike lock",
@@ -689,6 +734,7 @@
         "modelOutput": "Do we still have the spare key for the bike lock, or did it go with the old bike?",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -708,6 +754,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Water the plants",
@@ -717,6 +764,7 @@
         "modelOutput": "Water the plants.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -736,6 +784,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -745,6 +794,7 @@
         "modelOutput": "Um.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -767,6 +817,7 @@
         "uh"
       ],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "street party",
@@ -776,6 +827,7 @@
         "modelOutput": "So this morning I went to the market and then I got the bread and then I saw that the fish stall had moved to the other end and uh then I ran into the neighbours and they said the street party is on the last Saturday of the month and we should bring chairs.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -795,6 +847,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Can you pick up grab parcel",
@@ -804,6 +857,7 @@
         "modelOutput": "Can you pick up? Can you grab the parcel from the post office?",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -823,7 +877,8 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
-      "meaningChanged": false,
+      "questionAdded": false,
+      "meaningChanged": true,
       "pass": true,
       "title": "Update iOS app check API keys",
       "titleDropped": null,
@@ -832,8 +887,9 @@
         "modelOutput": "Remind me to update the iOS app, and check the API keys tonight?",
         "guard": "accepted",
         "readingsHeld": null,
-        "meaningChanged": false,
-        "pass": true
+        "questionAdded": true,
+        "meaningChanged": true,
+        "pass": false
       }
     },
     {
@@ -853,6 +909,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "book table for 4",
@@ -862,6 +919,7 @@
         "modelOutput": "I'd like to like book a table for 4 on Saturday.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -881,6 +939,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": false,
+      "questionAdded": true,
       "meaningChanged": true,
       "pass": false,
       "title": "You know the answer",
@@ -890,6 +949,7 @@
         "modelOutput": "You know the answer better than I do, so just decide?",
         "guard": "accepted",
         "readingsHeld": false,
+        "questionAdded": true,
         "meaningChanged": true,
         "pass": false
       }
@@ -910,6 +970,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Anna Joe",
@@ -919,6 +980,7 @@
         "modelOutput": "We call her Anna. We call her Joe at home.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -939,6 +1001,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Buy the eggs buy the milk",
@@ -948,6 +1011,7 @@
         "modelOutput": "Buy the eggs, buy the milk.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -967,6 +1031,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": false,
+      "questionAdded": true,
       "meaningChanged": true,
       "pass": false,
       "title": "Call bank call school",
@@ -976,6 +1041,7 @@
         "modelOutput": "Call the bank, call the school about the loan?",
         "guard": "accepted",
         "readingsHeld": false,
+        "questionAdded": true,
         "meaningChanged": true,
         "pass": false
       }
@@ -995,6 +1061,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "had had enough",
@@ -1004,6 +1071,7 @@
         "modelOutput": "He had had enough by then.",
         "guard": "accepted",
         "readingsHeld": true,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1026,6 +1094,7 @@
         "like"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": true,
       "pass": false,
       "title": "I think I like him",
@@ -1035,6 +1104,7 @@
         "modelOutput": "I think I like him,",
         "guard": "rejected:removalNotAllowed",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": true,
         "pass": true
       }
@@ -1055,15 +1125,17 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
-      "title": "Don't sign yet",
-      "titleDropped": null,
+      "title": null,
+      "titleDropped": "negation_left_out",
       "punctuationOnly": {
         "outcome": "cleaned",
         "modelOutput": "Um, I don't think we should sign it yet. Not until they fix the heating.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1086,6 +1158,7 @@
         "uh"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Pay plumber parts Friday",
@@ -1095,6 +1168,7 @@
         "modelOutput": "Pay the plumber $240 and 50 cents for the parts, uh, by Friday.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1115,6 +1189,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": "Meet at ten thirty",
@@ -1124,6 +1199,7 @@
         "modelOutput": "Meet at ten thirty. Two people from finance are joining.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1145,6 +1221,7 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -1154,6 +1231,7 @@
         "modelOutput": "Ask Dr. Okafor whether Lena can start on the 2nd. No, the 3rd.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1179,6 +1257,7 @@
         "we"
       ],
       "readingsHeld": true,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
       "title": null,
@@ -1188,6 +1267,7 @@
         "modelOutput": "So the plan for Saturday is: uh, we leave at 9, no at ten, and we pick up the bikes from the shop on Carver Street.",
         "guard": "rejected:removalNotAllowed",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1208,15 +1288,17 @@
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": null,
+      "questionAdded": false,
       "meaningChanged": false,
       "pass": true,
-      "title": "Flight next Friday",
-      "titleDropped": null,
+      "title": null,
+      "titleDropped": "negation_left_out",
       "punctuationOnly": {
         "outcome": "cleaned",
         "modelOutput": "The flight is next Friday, the 3rd. Not Thursday.",
         "guard": "accepted",
         "readingsHeld": null,
+        "questionAdded": false,
         "meaningChanged": false,
         "pass": true
       }
@@ -1238,7 +1320,7 @@
     "other": {
       "cases": 13,
       "pass": 13,
-      "meaningChanged": 0,
+      "meaningChanged": 1,
       "reachedTheNote": 0
     },
     "beyondTheGuard": {
@@ -1259,13 +1341,13 @@
       "cleaned": 35,
       "rejected": 6,
       "declined": 0,
-      "meaningChanged": 7,
-      "reachedTheNote": 4,
+      "meaningChanged": 8,
+      "reachedTheNote": 5,
       "meaningCriticalPass": 24
     },
     "titles": {
-      "kept": 30,
-      "droppedForNegationLeftOut": 4
+      "kept": 28,
+      "droppedForNegationLeftOut": 6
     }
   }
 }
