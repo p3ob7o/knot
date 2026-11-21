@@ -190,10 +190,14 @@ import Testing
                 // The least time an uncancelled run of the long clip takes, measured here and
                 // now, so that a cancelled run is judged against this Mac as it is.
                 let (_, longRun) = try await SpeechClips.timedRun(long)
+                // The speech is clean.wav, whose longest pause, below -45 dBFS in frames of 20 ms, lasts
+                // 0.44 s, under the budget of 1 s. The long silence is silence.wav: ten seconds,
+                // ten times the budget.
                 let clean = try SpeechClips.url(SpeechClips.clean)
+                let silence = try SpeechClips.url(SpeechClips.silence)
                 return TranscriberSubject(
                     transcriber: SpeechClips.transcriber(), speech: clean, long: long, longRunAtLeast: longRun,
-                    silence: try SpeechClips.url(SpeechClips.silence),
+                    silence: silence, longSilence: silence,
                     missing: FileManager.default.temporaryDirectory.appending(path: "knot-\(UUID().uuidString).m4a"),
                     budget: SpeechRunCut.shortestWindow, liveChunks: try SpeechClips.chunks(of: clean))
             }
