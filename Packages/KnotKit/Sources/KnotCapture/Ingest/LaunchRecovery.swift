@@ -134,7 +134,9 @@ public struct LaunchRecovery: Sendable {
             }
             let hasAudio = recording.frames > 0 && recording.workingFile.map { layer.entryKind($0) == .file } == true
             guard hasAudio else {
-                if let row, row.outcome == .open {
+                // Read, and holding no frame. The row is open, or it ended failed at a launch
+                // that could not read the file: either way it ends empty, as is reported.
+                if let row {
                     _ = try await notes.end(
                         CaptureEnd(
                             captureID: id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision))
