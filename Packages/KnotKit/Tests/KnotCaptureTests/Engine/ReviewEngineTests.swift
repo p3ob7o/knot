@@ -10,7 +10,9 @@ import Testing
 @Suite struct ReviewEngineTests {
     /// Finding 1. A begin that reached no disk keeps its capture: the surface's retry of the
     /// text is the same capture, with the same ID, so a row the store made late and the retry
-    /// reconcile into one segment.
+    /// reconcile into one segment. Once the late row has been acknowledged, the surface takes the
+    /// capture by the ID its begin named, with an update, as finding 59 rules: a begin then would
+    /// be a capture of its own.
     @Test(arguments: [false, true])
     func retryOfABeginThatReachedNoDiskIsTheSameCapture(lateRowFirst: Bool) async throws {
         let r = Rig(deadline: .immediate)
@@ -24,8 +26,12 @@ import Testing
             pending.release()
             #expect(await eventually("the late row") { r.logs.logged("store_answered_late", id) })
         }
-        // The surface sends the text it kept again.
-        let retry = try await r.engine.begin(request)
+        // The surface sends the text it kept again: by a begin while nothing of the capture is
+        // acknowledged, and by an update of the capture its begin named after.
+        let retry =
+            lateRowFirst
+            ? try await r.engine.update(id, with: .text("book the room"))
+            : try await r.engine.begin(request)
         #expect(retry.captureID == id)
         #expect(retry.durableRevision == 2)
         _ = try await r.engine.end(id)

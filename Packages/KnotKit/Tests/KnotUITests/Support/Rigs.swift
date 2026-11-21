@@ -15,7 +15,7 @@ final class PreviewRig {
     let context: UIContext
     let announcer = RecordingAnnouncer()
 
-    init() {
+    private init() {
         root = FileManager.default.temporaryDirectory.appending(
             path: "KnotUITests-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
         environment = AppEnvironment.makePreview(root: root)
@@ -23,8 +23,26 @@ final class PreviewRig {
         context = UIContext(thisDevice: device, sync: .notInThisBuild)
     }
 
+    /// A rig whose store keeps the append window open for its longest, a day. The preview's
+    /// store and engine run on the wall clock, so a test that needs a capture to join the one
+    /// before it never rests on running inside the default five minutes.
+    static func make() async -> PreviewRig {
+        let rig = PreviewRig()
+        if let window = try? AppendWindow(minutes: AppendWindow.maximumMinutes) {
+            await (rig.environment.notes as? InMemoryNoteStore)?.setWindow(window)
+        }
+        return rig
+    }
+
     func capture(surface: CaptureSurface = .app) -> NoteViewModel {
         NoteViewModel(environment: environment, context: context, surface: surface, announcer: announcer)
+    }
+
+    /// A capture surface whose presses are timed on `clock`, a clock the test moves itself.
+    func capture(surface: CaptureSurface = .app, pressClock clock: FakeClock) -> NoteViewModel {
+        var environment = environment
+        environment.clock = clock
+        return NoteViewModel(environment: environment, context: context, surface: surface, announcer: announcer)
     }
 
     func open(_ note: NoteID) -> NoteViewModel {

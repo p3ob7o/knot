@@ -14,7 +14,7 @@ import Testing
     /// asked until it answers, the field takes no typing, so nothing is typed that the capture
     /// will not hold; after the end, the field takes typing again.
     @Test func keystrokesDuringTheEndAreNotLost() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let gated = HeldEndEngine(rig.environment.engine)
         var environment = rig.environment
@@ -45,7 +45,7 @@ import Testing
 
     /// Finding 7, with the end failing: the field takes typing again, with its text.
     @Test func aFailedEndGivesTheFieldBackWithItsText() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let flaky = FlakyEngine(rig.environment.engine)
         var environment = rig.environment
@@ -67,7 +67,7 @@ import Testing
     /// Finding 8. A conflict belongs to its segment: a second conflict on another segment keeps
     /// the first, and its draft, until the person decides each.
     @Test func aSecondConflictKeepsTheFirstDraft() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("first line"))
         try await rig.type("second line")
@@ -110,7 +110,7 @@ import Testing
     /// Finding 9. A write to a segment that succeeds ends that segment's conflict, so "Keep
     /// mine" can no longer write the older draft over the newer edit.
     @Test func anEditAfterAConflictEndsTheConflict() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("call the plumber"))
         let model = rig.open(note)
@@ -140,7 +140,7 @@ import Testing
     }
 
     @Test func aTitleWrittenAfterItsConflictEndsTheConflict() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("errands"))
         let model = rig.open(note)
@@ -161,7 +161,7 @@ import Testing
     /// Finding 10. "Keep mine" was decided over what the conflict showed: a change that arrived
     /// after it is not replaced unseen. Nothing is written, and the conflict shows the newer one.
     @Test func keepMineDoesNotReplaceALaterArrivalUnseen() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("v1"))
         let model = rig.open(note)
@@ -193,7 +193,7 @@ import Testing
     }
 
     @Test func keepMineOnATitleDoesNotReplaceALaterArrivalUnseen() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("errands"))
         let model = rig.open(note)
@@ -216,7 +216,7 @@ import Testing
     /// Finding 11. A base ends with its edit, whether or not the edit changed anything: a focus
     /// that ends unchanged leaves nothing that would make a later edit meet a false conflict.
     @Test func aFocusWithoutAnEditLeavesNoStaleBase() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("v1"))
         let model = rig.open(note)
@@ -239,7 +239,7 @@ import Testing
     /// Finding 11, with the field's own end: leaving it unchanged ends the base, so an edit sent
     /// later without a new focus carries the revision read then.
     @Test func leavingAFieldUnchangedEndsItsBase() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("v1"))
         let model = rig.open(note)
@@ -259,7 +259,7 @@ import Testing
     /// The re-check found this right: two changes that arrive before the commit leave the
     /// conflict holding the latest.
     @Test func twoChangesBeforeTheCommitHoldTheLatest() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("v1"))
         let model = rig.open(note)
@@ -286,7 +286,7 @@ import Testing
     /// The re-check found this right: a segment deleted elsewhere while the draft is open stays
     /// deleted, with the edit kept in the recoverable copy (product spec §9).
     @Test func aSegmentDeletedWhileTheDraftIsOpenKeepsTheDraft() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let note = try #require(try await rig.type("first line"))
         try await rig.type("second line")
@@ -307,7 +307,7 @@ import Testing
     /// The re-check found this right: a recording that ended by itself leaves no watch that ends
     /// the next one.
     @Test func aSecondRecordingIsNotEndedByTheFirstWatch() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let recorder = try #require(rig.environment.recorder as? ScriptedRecorder)
         recorder.setScript(.init(buffers: 25, interval: .milliseconds(2), endsBySelf: .limitReached))
@@ -317,7 +317,8 @@ import Testing
         await settled(model)
         #expect(await eventually("the first recording to end by itself") { model.recording == .idle })
         await settled(model)
-        recorder.setScript(.init(buffers: 100_000, interval: .milliseconds(2)))
+        // The default script runs dry and the recording stays live until it is stopped.
+        recorder.setScript(.init())
         model.press(.holdStart)
         await settled(model)
         guard case .recording(let second) = model.recording else {
