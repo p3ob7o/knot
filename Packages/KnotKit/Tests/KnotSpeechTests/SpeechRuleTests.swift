@@ -90,26 +90,63 @@ private func piece(_ text: String, _ from: Double, _ to: Double) -> TranscriptPi
 }
 
 @Test func aWindowThatReachesTheEndKeepsEveryPhraseAndEndsTheFile() {
-    let phrases = [piece("one", 10, 11), piece(" two", 12, 13)]
-    #expect(SpeechRunCut.decide(phrases, start: .seconds(10), reachedEnd: true) == .run(phrases, resumeAt: nil))
-    #expect(SpeechRunCut.decide([], start: .seconds(10), reachedEnd: true) == .run([], resumeAt: nil))
+    let phrases = [piece("one", 10, 11), piece(" two", 12, 14.9)]
+    #expect(
+        SpeechRunCut.decide(phrases, start: .seconds(10), cut: .seconds(15), reachedEnd: true)
+            == .run(phrases, resumeAt: nil))
+    #expect(
+        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(15), reachedEnd: true) == .run([], resumeAt: nil))
 }
 
-@Test func aWindowCutInsideTheFileLeavesItsLastPhraseForTheNextRun() {
-    let phrases = [piece("one", 10, 11), piece(" two", 12, 13), piece(" thr", 14, 15)]
+@Test func aWindowWithNoSpeechEndsTheRunJustBeforeItsEdge() {
+    // Silence is no phrase: the run ends with none, and never reads on. The next run starts
+    // half a second before the edge, so that a word that begins at the edge is heard whole.
     #expect(
-        SpeechRunCut.decide(phrases, start: .seconds(10), reachedEnd: false)
+        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(14.5)))
+    // A phrase with no words is no speech either.
+    #expect(
+        SpeechRunCut.decide([piece(" ", 11, 12)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(14.5)))
+    // A window shorter than the edge still moves on.
+    #expect(
+        SpeechRunCut.decide([], start: .seconds(10), cut: .seconds(10.25), reachedEnd: false)
+            == .run([], resumeAt: .seconds(10.25)))
+}
+
+@Test func aPhraseThatEndedBeforeTheEdgeIsARunWithIt() {
+    // One phrase, then silence to the edge: it is whole, and the run is that phrase.
+    let one = [piece("one", 11, 12)]
+    #expect(
+        SpeechRunCut.decide(one, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run(one, resumeAt: .seconds(12)))
+    // Several, the last of them ended before the edge: all are whole.
+    let two = [piece("one", 10, 11), piece(" two", 12, 14.4)]
+    #expect(
+        SpeechRunCut.decide(two, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run(two, resumeAt: .seconds(14.4)))
+}
+
+@Test func aPhraseOpenAtTheEdgeIsLeftForTheNextRun() {
+    let phrases = [piece("one", 10, 11), piece(" two", 12, 13), piece(" thr", 14, 14.6)]
+    #expect(
+        SpeechRunCut.decide(phrases, start: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .run(Array(phrases.prefix(2)), resumeAt: .seconds(14)))
 }
 
-@Test func aWindowWithFewerThanTwoPhrasesIsReadAgainLonger() {
-    // One phrase may be cut at the window's end, and none proves nothing either way: a first
-    // phrase longer than the budget is taken whole by reading on.
-    #expect(SpeechRunCut.decide([piece("one", 10, 11)], start: .seconds(10), reachedEnd: false) == .extend)
-    #expect(SpeechRunCut.decide([], start: .seconds(10), reachedEnd: false) == .extend)
-    // A last phrase that starts where the run starts would not move on.
+@Test func onlyAPhraseOpenAtTheEdgeMakesTheWindowLonger() {
+    // The window's only phrase may run on past its edge: a first phrase longer than the budget
+    // is taken whole by reading on, and nothing else reads past the budget.
     #expect(
-        SpeechRunCut.decide([piece("a", 10, 10), piece("b", 10, 11)], start: .seconds(10), reachedEnd: false)
+        SpeechRunCut.decide([piece("one", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .extend)
+    #expect(
+        SpeechRunCut.decide([piece("one", 13, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .extend)
+    // A last phrase open at the edge that starts where the run starts would not move on.
+    #expect(
+        SpeechRunCut.decide(
+            [piece("a", 10, 10), piece("b", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
     #expect(SpeechRunCut.longer(.seconds(3)) == .seconds(6))
 }

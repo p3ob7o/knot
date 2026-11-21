@@ -51,6 +51,7 @@
         /// transcriber uses.
         let system: any SpeechSystem
         private let log: KnotLog
+        private let hooks: SpeechRunHooks
         private let state: Mutex<State>
 
         /// A transcriber that follows the English variant of the settings.
@@ -67,10 +68,14 @@
             self.init(source: .fixed(locale), system: LiveSpeechSystem(), log: log)
         }
 
-        init(source: LocaleSource, system: any SpeechSystem, log: KnotLog = KnotLog(.speech)) {
+        init(
+            source: LocaleSource, system: any SpeechSystem, log: KnotLog = KnotLog(.speech),
+            hooks: SpeechRunHooks = SpeechRunHooks()
+        ) {
             self.source = source
             self.system = system
             self.log = log
+            self.hooks = hooks
             switch source {
             case .fixed(let locale): state = Mutex(State(locale: locale))
             case .setting: state = Mutex(State(locale: Locale(identifier: EnglishVariant.fallbackLocale)))
@@ -240,7 +245,9 @@
             while true {
                 let phrases = try await analyse(buffers, startingAt: start, locale: locale)
                 if Task.isCancelled { throw KnotError.cancelled }
-                switch SpeechRunCut.decide(phrases, start: floor, reachedEnd: last >= total) {
+                let cut = Self.duration(last, rate: rate)
+                hooks.windowAnalysed(start..<cut, phrases)
+                switch SpeechRunCut.decide(phrases, start: floor, cut: cut, reachedEnd: last >= total) {
                 case .run(let pieces, let resumeAt):
                     return TranscriptionRun(
                         startsAt: offset, pieces: pieces, resumeAt: resumeAt, provenance: provenance(locale))
@@ -446,6 +453,13 @@
             let (seconds, attoseconds) = duration.components
             return Double(seconds) + Double(attoseconds) / 1e18
         }
+    }
+
+    /// What a test can watch of a run. The defaults do nothing.
+    struct SpeechRunHooks: Sendable {
+        /// After a run has analysed a window of the file: the window's range in the file's time,
+        /// and the phrases the engine finalised in it.
+        var windowAnalysed: @Sendable (Range<Duration>, [TranscriptPiece]) -> Void = { _, _ in }
     }
 
     extension KnotError {

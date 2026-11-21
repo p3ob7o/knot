@@ -25,10 +25,93 @@ import Testing
 
         /// The transcriber under test: US English, which the synthetic voices speak, on the
         /// speech system of a model test, which never installs.
-        static func transcriber(locale: Locale = Locale(identifier: "en_US"), log: KnotLog = KnotLog(.speech))
-            -> SpeechAnalyzerTranscriber
-        {
-            SpeechAnalyzerTranscriber(source: .fixed(locale), system: SpeechModelSystem(), log: log)
+        static func transcriber(
+            locale: Locale = Locale(identifier: "en_US"), log: KnotLog = KnotLog(.speech),
+            hooks: SpeechRunHooks = SpeechRunHooks()
+        ) -> SpeechAnalyzerTranscriber {
+            SpeechAnalyzerTranscriber(source: .fixed(locale), system: SpeechModelSystem(), log: log, hooks: hooks)
+        }
+
+        /// One run as the queue makes it, with the windows of the file it analysed.
+        struct Run {
+            var offset: Duration
+            var run: TranscriptionRun
+            var windows: [(range: Range<Duration>, phrases: [TranscriptPiece])]
+            /// The window the run ended on: what it read last.
+            var window: Range<Duration> { windows.last?.range ?? offset..<offset }
+        }
+
+        /// The file in runs of `budget`, as the queue runs it, each with what it read. Each run
+        /// is checked against the budget: its first window is at most the budget, and a window is
+        /// read again longer only when its one phrase reaches its edge.
+        static func runs(_ url: URL, budget: Duration) async throws -> [Run] {
+            let seen = Mutex<[(range: Range<Duration>, phrases: [TranscriptPiece])]>([])
+            let transcriber = transcriber(
+                hooks: SpeechRunHooks(windowAnalysed: { range, phrases in
+                    seen.withLock { $0.append((range, phrases)) }
+                }))
+            var offset: Duration = .zero
+            var runs: [Run] = []
+            while runs.count < 1_000 {
+                seen.withLock { $0.removeAll() }
+                let run = try await transcriber.transcribe(file: url, from: offset, budget: budget)
+                let windows = seen.withLock { $0 }
+                runs.append(Run(offset: offset, run: run, windows: windows))
+                #expect(run.startsAt == offset)
+                #expect(!windows.isEmpty, "A run reads a window.")
+                if let first = windows.first {
+                    let read = first.range.upperBound - first.range.lowerBound
+                    #expect(read <= budget + .milliseconds(1), "A run's first window is its budget at most.")
+                }
+                for window in windows.dropLast() {
+                    let spoken = SpeechRunCut.normalise(window.phrases, from: window.range.lowerBound)
+                    #expect(
+                        spoken.count == 1
+                            && spoken[0].range.upperBound >= window.range.upperBound - SpeechRunCut.edge,
+                        "A window was read again longer though it did not end inside its one phrase.")
+                }
+                guard let next = run.resumeAt else { break }
+                #expect(next > offset, "Every run moves on.")
+                offset = next
+            }
+            #expect(runs.count < 1_000, "The runs end.")
+            return runs
+        }
+
+        /// The phrases of one run of the whole file that no run's phrase overlaps: what the runs
+        /// lost, wherever they join.
+        static func lost(_ whole: TranscriptionRun, in runs: [Run]) -> [TranscriptPiece] {
+            let pieces = runs.flatMap(\.run.pieces)
+            return whole.pieces.filter { phrase in
+                !pieces.contains { $0.range.overlaps(phrase.range) }
+            }
+        }
+
+        /// The words of a transcript, as letters and digits.
+        static func words(_ text: String) -> [String] {
+            text.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
+        }
+
+        /// The clips one after another, in one 16 kHz mono WAV of the test's own, each cut to at
+        /// most `seconds` when it says so.
+        static func join(_ parts: [(path: String, seconds: Double?)], into folder: URL) throws -> URL {
+            let out = folder.appending(path: "joined-\(UUID().uuidString).wav")
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000.0, AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
+            ]
+            let writer = try AVAudioFile(forWriting: out, settings: settings)
+            for part in parts {
+                let reader = try AVAudioFile(forReading: try url(part.path))
+                #expect(reader.processingFormat.sampleRate == 16_000 && reader.processingFormat.channelCount == 1)
+                let frames = part.seconds.map { min(AVAudioFramePosition($0 * 16_000), reader.length) } ?? reader.length
+                let buffer = try #require(
+                    AVAudioPCMBuffer(pcmFormat: reader.processingFormat, frameCapacity: AVAudioFrameCount(frames)))
+                try reader.read(into: buffer, frameCount: AVAudioFrameCount(frames))
+                try writer.write(from: buffer)
+            }
+            writer.close()
+            return out
         }
 
         static let model = OnDeviceModel.speech { transcriber() }
@@ -77,30 +160,55 @@ import Testing
             let long = try SpeechClips.url(SpeechClips.long)
             let (whole, _) = try await SpeechClips.timedRun(long)
             let wholeEnd = try #require(whole.pieces.last).range.upperBound
-            let transcriber = SpeechClips.transcriber()
             for budget in [Duration.seconds(60), .seconds(20)] {
-                var offset: Duration = .zero
-                var pieces: [TranscriptPiece] = []
-                var runs = 0
-                while runs < 1_000 {
-                    let run = try await transcriber.transcribe(file: long, from: offset, budget: budget)
-                    runs += 1
-                    #expect(run.startsAt == offset)
-                    if let previous = pieces.last, let first = run.pieces.first {
-                        #expect(first.range.lowerBound >= previous.range.upperBound, "Runs never overlap.")
-                    }
-                    pieces += run.pieces
-                    guard let next = run.resumeAt else { break }
-                    #expect(next > offset, "Every run moves on.")
-                    // A run reads its budget, and more only to finish a phrase that crosses it.
-                    #expect(next <= offset + budget, "A run that is not the last ends inside its budget.")
-                    offset = next
-                }
-                #expect(runs > Int(600 / (budget / .seconds(1))) / 2, "The ten minutes take many runs.")
-                #expect(runs < 1_000, "The runs end.")
+                let runs = try await SpeechClips.runs(long, budget: budget)
+                let pieces = runs.flatMap(\.run.pieces)
+                #expect(
+                    zip(pieces, pieces.dropFirst()).allSatisfy { $0.range.upperBound <= $1.range.lowerBound },
+                    "Runs never overlap.")
+                #expect(runs.count > Int(600 / (budget / .seconds(1))) / 2, "The ten minutes take many runs.")
                 let end = try #require(pieces.last).range.upperBound
                 #expect(abs((end - wholeEnd) / .seconds(1)) <= 1.5, "The runs cover what one run covers.")
             }
+        }
+
+        @Test func silenceLongerThanTheBudgetEndsARunWithNoPhrases() async throws {
+            // The review's file: 40 s of silence, then 70 s of speech, in runs of 5 s. A recording
+            // left running in a pocket is mostly silence: no run reads past its budget for it.
+            let scratch = try SpeechScratch()
+            let silence: (path: String, seconds: Double?) = (SpeechClips.silence, nil)
+            let speech: (path: String, seconds: Double?) = (SpeechClips.clean, nil)
+            let file = try SpeechClips.join(
+                Array(repeating: silence, count: 4) + Array(repeating: speech, count: 4), into: scratch.folder)
+            let budget = Duration.seconds(5)
+            let runs = try await SpeechClips.runs(file, budget: budget)
+            let first = try #require(runs.first)
+            #expect(first.run.pieces.isEmpty, "A window of silence is a run with no phrases.")
+            #expect(first.run.resumeAt == budget - SpeechRunCut.edge, "The next run starts just before its edge.")
+            #expect(first.window == .zero..<budget, "It read its budget, and no more.")
+            #expect(runs.prefix { $0.run.pieces.isEmpty }.count >= 8, "Each window of the silence is read once.")
+            let (whole, _) = try await SpeechClips.timedRun(file)
+            #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file is lost between runs.")
+        }
+
+        @Test(arguments: [5.0, 4.75, 5.25])
+        func speechThatBeginsAtAWindowsEdgeLosesNoWord(_ silence: Double) async throws {
+            // Speech that begins exactly where the first window ends, a quarter of a second
+            // before, and a quarter after.
+            let scratch = try SpeechScratch()
+            let file = try SpeechClips.join(
+                [(SpeechClips.silence, silence), (SpeechClips.clean, nil)], into: scratch.folder)
+            let runs = try await SpeechClips.runs(file, budget: .seconds(5))
+            let (whole, _) = try await SpeechClips.timedRun(file)
+            let wholeWords = SpeechClips.words(whole.text)
+            let runWords = SpeechClips.words(runs.map(\.run.text).joined(separator: " "))
+            #expect(!wholeWords.isEmpty)
+            // The engine may hear a word differently in another context, so the words are not
+            // compared one for one: no phrase falls between runs, and the first words are there.
+            #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file is lost between runs.")
+            #expect(
+                Array(runWords.prefix(3)) == Array(wholeWords.prefix(3)),
+                "The runs begin as one run of the file begins.")
         }
 
         @Test func aRunCancelledWhileTheEngineRunsYieldsAtOnce() async throws {

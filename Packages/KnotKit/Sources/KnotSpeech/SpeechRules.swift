@@ -68,28 +68,49 @@ public struct SpeechFacts: Hashable, Sendable {
 
 /// Where a run over a file ends (docs/architecture.md §9).
 ///
-/// A run reads a window of the file and finalises everything in it. The window's last phrase
-/// may end at the cut, in the middle of a word, so a run that stops inside the file keeps it
-/// for the next run, which starts where that phrase starts. Every phrase before it ended
-/// before the next one began, so it is whole. A window that holds fewer than two phrases
-/// proves none of them whole, and is read again twice as long: that is how a first phrase
-/// longer than the budget is taken whole, and how every run that is not the last moves on.
+/// A run reads a window of at most its budget and finalises everything in it. The budget bounds
+/// what a run reads, with the one exception the port gives: a first phrase longer than the
+/// budget is taken whole. Silence is not a phrase.
+///
+/// - A window with no speech ends the run with no phrases. The next run starts `edge` before
+///   the window's end, so that a word that begins at the edge, too short there to be heard, is
+///   heard whole in the next run.
+/// - A phrase that ended more than `edge` before the window's end is whole, and a run keeps it.
+///   The next run starts where the run's last phrase ended.
+/// - A phrase that ends within `edge` of the window's end may be cut there. A run leaves it for
+///   the next run, which starts where it starts. When it is the window's only phrase, the window
+///   is read again twice as long: that alone makes a window longer than the budget.
 public enum SpeechRunCut {
     /// What to do with the phrases of one window.
     public enum Decision: Hashable, Sendable {
         /// The run ends: these phrases, and where the next run starts, or `nil` at the end.
         case run([TranscriptPiece], resumeAt: Duration?)
-        /// No phrase is known to be whole yet: read a window twice as long.
+        /// The window's only phrase is still open at its edge: read a window twice as long.
         case extend
     }
 
-    /// Decides a run from the phrases of a window that starts at `start`, in the file's time.
-    /// `reachedEnd` says whether the window ran to the end of the file.
-    public static func decide(_ phrases: [TranscriptPiece], start: Duration, reachedEnd: Bool) -> Decision {
+    /// How close to the window's end a phrase may end and still count as cut there.
+    public static let edge: Duration = .milliseconds(500)
+
+    /// Decides a run from the phrases of a window that starts at `start` and ends at `cut`, in
+    /// the file's time. `reachedEnd` says whether the window ran to the end of the file.
+    public static func decide(_ phrases: [TranscriptPiece], start: Duration, cut: Duration, reachedEnd: Bool)
+        -> Decision
+    {
         let pieces = normalise(phrases, from: start)
         if reachedEnd { return .run(pieces, resumeAt: nil) }
-        guard pieces.count >= 2, let open = pieces.last, open.range.lowerBound > start else { return .extend }
-        return .run(Array(pieces.dropLast()), resumeAt: open.range.lowerBound)
+        let edgeOfWindow = max(cut - edge, start)
+        guard let last = pieces.last else {
+            // No speech in the window.
+            return .run([], resumeAt: edgeOfWindow > start ? edgeOfWindow : cut)
+        }
+        guard last.range.upperBound >= edgeOfWindow else {
+            // Every phrase ended before the edge: all of them are whole.
+            return .run(pieces, resumeAt: last.range.upperBound > start ? last.range.upperBound : edgeOfWindow)
+        }
+        // The last phrase may be cut at the edge.
+        guard pieces.count >= 2, last.range.lowerBound > start else { return .extend }
+        return .run(Array(pieces.dropLast()), resumeAt: last.range.lowerBound)
     }
 
     /// The phrases with words, in order, none before `start` and none overlapping the one
@@ -105,7 +126,7 @@ public enum SpeechRunCut {
         return out
     }
 
-    /// The window that follows one that held too few phrases: twice as long.
+    /// The window that follows one whose only phrase was open at its edge: twice as long.
     public static func longer(_ window: Duration) -> Duration { window * 2 }
 
     /// The shortest window a run reads. A budget below it, or none at all for zero, would read
