@@ -104,6 +104,17 @@ let reviewLimits: [GuardExample] = [
     // Letter case and punctuation that change a word's sense.
     GuardExample(row: "case-us", raw: "tell us about it", cleaned: "Tell US about it.", verdict: "accepted"),
     GuardExample(row: "case-may", raw: "we may go", cleaned: "We May go.", verdict: "accepted"),
+    // N5 of the re-check, set aside by ruling: the one-for-one count is over the whole text, so a
+    // "not" said later in the note lets a chain of restarts with one word changed go, each removed
+    // "not" still coming again at its place in the start that follows. Finding 4 allows such a
+    // chain already.
+    GuardExample(
+        row: "one-for-one-elsewhere",
+        raw:
+            "we will not go we will not go we will not stay home tonight with the others after all. we do not know when",
+        cleaned: "We will not stay home tonight with the others after all. We do not know when.", verdict: "accepted"),
+    // A number the speaker ended a sentence with may start a list line: "?" ends a sentence.
+    GuardExample(row: "question-then-number", raw: "is it 2? eggs", cleaned: "Is it\n2. eggs", verdict: "accepted"),
 ]
 
 @Test(arguments: reviewRefused)
