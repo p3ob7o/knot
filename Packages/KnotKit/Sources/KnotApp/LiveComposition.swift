@@ -45,11 +45,17 @@ public final class LiveComposition: Sendable {
         public var storeHooks: StoreHooks
         /// Whether the launch asks for the speech model when it is not installed.
         public var installSpeechModel: Bool
+        /// The recorder instead of KnotAudio's, set once the audio module is wired.
+        public var recorder: (any Recorder)?
+        /// Called with each module's name and the environment its live entry point is given,
+        /// just before it is called.
+        public var wiring: (@Sendable (String, AppEnvironment) -> Void)?
 
         public init(
             input: (any AudioInput)? = nil, transcriber: (any Transcriber)? = nil,
             deadline: StoreDeadline = .standard, migrations: [StoreSchema.Migration]? = nil,
-            storeHooks: StoreHooks = StoreHooks(), installSpeechModel: Bool = true
+            storeHooks: StoreHooks = StoreHooks(), installSpeechModel: Bool = true, recorder: (any Recorder)? = nil,
+            wiring: (@Sendable (String, AppEnvironment) -> Void)? = nil
         ) {
             self.input = input
             self.transcriber = transcriber
@@ -57,6 +63,8 @@ public final class LiveComposition: Sendable {
             self.migrations = migrations
             self.storeHooks = storeHooks
             self.installSpeechModel = installSpeechModel
+            self.recorder = recorder
+            self.wiring = wiring
         }
     }
 
@@ -142,7 +150,7 @@ public final class LiveComposition: Sendable {
             self.gatedQueue = nil
             self.recoveryLatch = RecoveryLatch()
             self.ingest = nil
-            self.environment = Self.wireModules(environment)
+            self.environment = Self.wireModules(environment, seams: seams)
             sequence.make(for: self)
             return
         }
@@ -157,13 +165,17 @@ public final class LiveComposition: Sendable {
         environment.assets = GatedAssetStore(gate: gate)
         environment.settings = GatedSettingsStore(gate: gate)
         environment.fetcher = GatedAssetFetcher(gate: gate)
+        seams.wiring?("KnotAudio", environment)
         if let input = seams.input {
             environment = KnotAudioLive.wire(environment, locations: locations, input: input)
         } else {
             environment = KnotAudioLive.wire(environment, locations: locations)
         }
+        if let recorder = seams.recorder { environment.recorder = recorder }
+        seams.wiring?("KnotSpeech", environment)
         environment = KnotSpeechLive.wire(environment)
         if let transcriber = seams.transcriber { environment.transcriber = transcriber }
+        seams.wiring?("KnotCleanup", environment)
         environment = KnotCleanupLive.wire(environment)
 
         let queue = StandardProcessingQueue(
@@ -185,27 +197,31 @@ public final class LiveComposition: Sendable {
         environment.engine = TimedCaptureEngine(inner: engine, timings: timings)
         self.gatedQueue = gatedQueue
         self.ingest = ingest
-        self.environment = Self.wireModules(environment)
+        self.environment = Self.wireModules(environment, seams: seams)
         sequence.make(for: self)
     }
 
     /// The live entry points of the modules whose ports need nothing that only the composition
     /// knows. Each returns the environment it is given until its package fills it in, so those
     /// packages wire themselves in without editing this folder.
-    private static func wireModules(_ environment: AppEnvironment) -> AppEnvironment {
+    private static func wireModules(_ environment: AppEnvironment, seams: Seams) -> AppEnvironment {
         var environment = environment
-        environment = KnotStoreLive.wire(environment)
-        environment = KnotCaptureLive.wire(environment)
-        environment = KnotInkLive.wire(environment)
-        environment = KnotSyncLive.wire(environment)
-        environment = KnotIntentsLive.wire(environment)
-        environment = KnotExportLive.wire(environment)
-        environment = KnotUILive.wire(environment)
+        func wire(_ name: String, _ entry: (AppEnvironment) -> AppEnvironment) {
+            seams.wiring?(name, environment)
+            environment = entry(environment)
+        }
+        wire("KnotStore", KnotStoreLive.wire)
+        wire("KnotCapture", KnotCaptureLive.wire)
+        wire("KnotInk", KnotInkLive.wire)
+        wire("KnotSync", KnotSyncLive.wire)
+        wire("KnotIntents", KnotIntentsLive.wire)
+        wire("KnotExport", KnotExportLive.wire)
+        wire("KnotUI", KnotUILive.wire)
         #if os(iOS)
-            environment = KnotLinkLive.wire(environment)
+            wire("KnotLink", KnotLinkLive.wire)
         #endif
         #if os(macOS)
-            environment = KnotAgentLive.wire(environment)
+            wire("KnotAgent", KnotAgentLive.wire)
         #endif
         return environment
     }

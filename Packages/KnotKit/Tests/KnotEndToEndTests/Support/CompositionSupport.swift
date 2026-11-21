@@ -31,9 +31,9 @@ final class LiveFolder: Sendable {
 
     /// The configuration of a development build on the Mac whose container is this folder, as
     /// an agent's process runs it.
-    func configuration(level: MilestoneLevel? = nil) -> LiveConfiguration {
+    func configuration(level: MilestoneLevel? = nil, platform: StoreLocations.Platform = .macOS) -> LiveConfiguration {
         LiveConfiguration(
-            flavour: .dev, platform: .macOS, appContainer: container, appGroup: .absent, devStoreFolder: "e2e",
+            flavour: .dev, platform: platform, appContainer: container, appGroup: .absent, devStoreFolder: "e2e",
             environment: ["KNOT_AGENT": "1"], milestoneLevel: level, settingsSuite: settingsSuite,
             build: BuildInfo(version: "0.3.0", build: "1", flavour: .dev, milestoneLevel: level))
     }

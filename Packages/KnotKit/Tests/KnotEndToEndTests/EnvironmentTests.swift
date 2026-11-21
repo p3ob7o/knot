@@ -10,14 +10,23 @@ import Testing
 
 @Suite("The live environment")
 struct EnvironmentTests {
-    @Test("unavailable-ports-of-live-match-allowed-list", .tags(.named))
-    func unavailablePortsMatchTheAllowedList() {
+    /// On each platform the list names. The iPhone's composition is this package's code, built
+    /// with the iPhone's configuration: what the composition does differently on iOS at compile
+    /// time is the watch link's entry point, which leaves the iPhone's `WatchLink` unavailable,
+    /// as the Mac's agent entry point leaves the Mac's environment as it is.
+    @Test(
+        "unavailable-ports-of-live-match-allowed-list", .tags(.named),
+        arguments: [StoreLocations.Platform.iOS, .macOS])
+    func unavailablePortsMatchTheAllowedList(_ platform: StoreLocations.Platform) {
         let folder = LiveFolder()
         defer { folder.remove() }
         // `.live` as the app composes it, KnotSpeech's transcriber included. Nothing is opened.
-        let composition = folder.compose(seams: LiveComposition.Seams(installSpeechModel: false))
+        let composition = LiveComposition(
+            configuration: folder.configuration(platform: platform),
+            seams: LiveComposition.Seams(installSpeechModel: false))
+        #expect(composition.locations != nil)
         let unavailable = UnavailablePorts.of(composition.environment)
-        let allowed = UnavailablePorts.allowed(at: UnavailablePorts.comingMilestone, on: .macOS)
+        let allowed = UnavailablePorts.allowed(at: UnavailablePorts.comingMilestone, on: platform)
         #expect(
             unavailable.sorted() == allowed.sorted(),
             "unavailable but not allowed: \(unavailable.subtracting(allowed).sorted()); allowed but filled: \(allowed.subtracting(unavailable).sorted())"
@@ -30,17 +39,34 @@ struct EnvironmentTests {
         }
     }
 
-    @Test("The ports a shell brings are in .live, set before the modules are wired")
-    func shellPortsAreInTheEnvironment() {
-        let folder = LiveFolder()
-        defer { folder.remove() }
-        let cues = RecordingCueEmitter()
-        let surfaces = RecordingSurfaceRouter()
-        let composition = folder.compose(shell: ShellPorts(cues: cues, surfaces: surfaces))
-        #expect((composition.environment.cues as? RecordingCueEmitter) === cues)
-        #expect((composition.environment.surfaces as? RecordingSurfaceRouter) === surfaces)
-        let unavailable = UnavailablePorts.of(composition.environment)
-        #expect(!unavailable.contains(.cues) && !unavailable.contains(.surfaces))
+    /// The whole list, level by level on each platform, as the plan's table of milestone builds
+    /// gives it: a change to it changes this table too.
+    @Test("The allowed list, level by level, on iOS and on the Mac")
+    func allowedListByLevel() {
+        let always: Set<EnvironmentPort> = [.watchLink]
+        let ink: Set<EnvironmentPort> = [.inkRecogniser, .drawingImages]
+        let beforeM2: Set<EnvironmentPort> = [
+            .cleaner, .player, .recordingState, .freeSpace, .installIdentity, .lifecycle, .recordingActivity,
+        ]
+        let iOS: [MilestoneLevel: Set<EnvironmentPort>] = [
+            .m1: always.union(ink).union(beforeM2).union([.notifier, .sync, .surfaces, .cues]),
+            .m2: always.union(ink).union([.notifier, .sync]),
+            .m3: always.union(ink).union([.notifier, .sync]),
+            .m4: always.union(ink),
+            .m5: always, .m6: always, .m7: always,
+        ]
+        let mac: [MilestoneLevel: Set<EnvironmentPort>] = [
+            .m1: always.union(ink).union(beforeM2).union([.notifier, .sync, .surfaces, .cues]),
+            .m2: always.union(ink).union([.recordingActivity, .notifier, .sync, .surfaces, .cues]),
+            .m3: always.union(ink).union([.recordingActivity, .notifier, .sync, .surfaces, .cues]),
+            .m4: always.union(ink).union([.recordingActivity]),
+            .m5: always.union([.recordingActivity]), .m6: always.union([.recordingActivity]),
+            .m7: always.union([.recordingActivity]),
+        ]
+        for level in MilestoneLevel.allCases {
+            #expect(UnavailablePorts.allowed(at: level, on: .iOS) == iOS[level], "iOS at \(level.infoValue)")
+            #expect(UnavailablePorts.allowed(at: level, on: .macOS) == mac[level], "the Mac at \(level.infoValue)")
+        }
     }
 
     @Test(
