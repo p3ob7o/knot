@@ -152,6 +152,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// The main window is there at every launch. AppKit counts a launch that finds saved state
+    /// as a restore, not a default launch, even when that state holds no window
+    /// (`NSApplicationLaunchIsDefaultLaunchKey`, NSApplication.h), and then no scene presents
+    /// itself. Every development build shares one saved state through its bundle ID, so a
+    /// window that any build closed before it was killed would keep the next one windowless.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The scenes SwiftUI presents by itself are on screen after this turn of the run loop.
+        Task { @MainActor in
+            await Task.yield()
+            MainWindowOpener.openIfNone()
+        }
+    }
+
+    /// The running app opened again, from the Dock, the Finder or `open`, with no window
+    /// showing: the main window comes back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard !hasVisibleWindows else { return true }
+        MainWindowOpener.openIfNone()
+        return false
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
         shell.leave()
     }
@@ -171,6 +192,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reply.send()
         }
         return .terminateLater
+    }
+}
+
+/// Opens the main window when it is not showing, through the item that SwiftUI gives a
+/// `Window` scene in the Window menu ("People open the window by selecting it in the Windows
+/// menu", SwiftUI's `Window`). AppKit has no call that presents a SwiftUI scene, and no view of
+/// the scene is alive to hold its `openWindow` action while the window is closed.
+@MainActor
+enum MainWindowOpener {
+    /// The main window's title, which is also its item in the Window menu.
+    static let title = "Knot"
+    /// The scene's ID. It names the window's saved frame, which the system writes into the
+    /// standard defaults domain, so it carries the `v1.` prefix (docs/architecture.md §7).
+    static let sceneID = "v1.main"
+
+    static var isShowing: Bool {
+        NSApp.windows.contains { $0.isVisible && $0.title == title }
+    }
+
+    static func openIfNone() {
+        guard !isShowing else { return }
+        for menu in [NSApp.windowsMenu].compactMap({ $0 }) + (NSApp.mainMenu?.items.compactMap(\.submenu) ?? []) {
+            if let index = menu.items.firstIndex(where: { $0.title == title && $0.action != nil && $0.isEnabled }) {
+                menu.performActionForItem(at: index)
+                return
+            }
+        }
     }
 }
 
