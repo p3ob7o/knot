@@ -119,6 +119,21 @@ import Testing
         #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
     }
 
+    /// Nothing says "recording" before the input has started: a start whose input fails after
+    /// it opened goes from starting to idle (finding 8 of the review; the port's "Before it
+    /// returns, nothing implies a recording").
+    @Test func nothingSaysRecordingBeforeTheInputStarts() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let folder = try ScratchFolder()
+        let live = LiveRecorder(
+            locations: folder.locations, input: injected(startFailure: .audioSessionBusy),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)), state: store)
+        await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
+        #expect(store.phases == [.starting, .idle], "\(store.phases)")
+    }
+
     /// A second start of a capture that is recording is refused, and the state stays that
     /// recording's.
     @Test func aRefusedSecondStartLeavesTheStateAlone() async throws {

@@ -162,6 +162,20 @@ import Testing
         #expect(cues.played.allSatisfy { $0.queue == "knot.audio.cues" }, "\(cues.played)")
     }
 
+    /// A start whose input fails after it opened, as the engine's start does, gives no live cue
+    /// and gives the could-not-start cue: the live cue waits for the input to have started
+    /// (finding 5 of the review).
+    @Test func aStartWhoseInputFailsAfterItOpenedIsNotLive() async throws {
+        let folder = try ScratchFolder()
+        let cues = RecordingCueEmitter()
+        let live = LiveRecorder(
+            locations: folder.locations, input: injected(startFailure: .audioSessionBusy),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)), cues: cues)
+        await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
+        #expect(await SuiteWait.until("a cue", limit: .seconds(10)) { !cues.cues.isEmpty })
+        #expect(cues.cues == [.couldNotStart])
+    }
+
     /// An ending that begins inside the start, here a buffer the file cannot take, handed over by
     /// the tap while the engine starts: the start gives no live cue and publishes no "recording",
     /// the phases never step back, and the stopped-early cue is the recording's one cue (finding

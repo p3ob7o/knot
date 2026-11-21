@@ -54,6 +54,23 @@ import Testing
         #expect(audio.ending == .writeFailed && audio.frames == 8_000, "\(audio)")
     }
 
+    /// The same failed write on a volume whose free space the probe cannot tell is a write
+    /// failure: a full disk is said only when the volume says so (finding 9 of the review).
+    @Test func aFailedWriteWhoseSpaceCannotBeToldIsAWriteFailure() async throws {
+        let folder = try ScratchFolder()
+        let volume = FillingVolume(capacity: 8_000, unknownAfterTheFailure: true)
+        let recorder = LiveRecorder(
+            locations: folder.locations, input: injected(frames: 32_000),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20), spaceToStart: .zero), freeSpace: volume,
+            workingFiles: volume.maker)
+        let session = try await recorder.start(request())
+        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
+            Issue.record("The recording did not end by itself.")
+            return
+        }
+        #expect(audio.ending == .writeFailed && audio.frames == 8_000, "\(audio)")
+    }
+
     /// With too little room for the start's minute of audio, a start is refused with
     /// `too_little_space`, and nothing is written: no manifest and no working file.
     @Test func aStartWithTooLittleSpaceIsRefused() async throws {
@@ -91,15 +108,20 @@ import Testing
 final class FillingVolume: FreeSpaceProbe {
     private let capacity: Int64
     private let roomAfterTheFailure: Bool
+    private let unknownAfterTheFailure: Bool
     private let filled = Mutex(false)
 
-    init(capacity: Int64, roomAfterTheFailure: Bool = false) {
+    /// With `unknownAfterTheFailure`, the probe cannot tell the free space once a write failed.
+    init(capacity: Int64, roomAfterTheFailure: Bool = false, unknownAfterTheFailure: Bool = false) {
         self.capacity = capacity
         self.roomAfterTheFailure = roomAfterTheFailure
+        self.unknownAfterTheFailure = unknownAfterTheFailure
     }
 
     func availableBytes(forVolumeAt url: URL) -> Int64? {
-        filled.withLock { $0 } && !roomAfterTheFailure ? 0 : 1 << 30
+        guard filled.withLock({ $0 }) else { return 1 << 30 }
+        if unknownAfterTheFailure { return nil }
+        return roomAfterTheFailure ? 1 << 30 : 0
     }
 
     var maker: WorkingFileMaker {
