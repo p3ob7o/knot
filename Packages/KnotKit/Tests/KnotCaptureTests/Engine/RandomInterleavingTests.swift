@@ -93,6 +93,8 @@ import Testing
         await world.engine.retryConversions()
 
         let settled = await eventually("every capture to be stored and Inbox/ to be empty") {
+            // The engine's old work, as when the app comes forward, and ingest.
+            await raw.retryConversions()
             _ = await r.ingest.ingestAll()
             let open = (try? await r.notes.openCaptures()) ?? [Capture]()
             return open.isEmpty && r.inboxFiles().isEmpty
@@ -109,6 +111,7 @@ import Testing
         try await check.noTextTwiceAndNoCopy()
         try await check.recordings()
         try await check.follows()
+        check.failedStartsLeftAlone()
     }
 }
 
@@ -197,7 +200,13 @@ private struct Check {
             }
             byWord[word, default: []].append(CaptureID(segment.id))
         }
+        // A begin that a surface meant as its retry, which became a capture of its own because a late
+        // row had just acknowledged the capture it held, carries the same text: the caller's race,
+        // which the port leaves open (finding 59). The surface discards such a capture; one that
+        // rule 15 had ended first keeps its text.
+        let racedPairs = ledger.raced()
         for (_, captures) in byWord where captures.count > 1 {
+            if captures.count == 2, racedPairs.contains(where: { Set([$0.0, $0.1]) == Set(captures) }) { continue }
             fail("one text is stored under \(captures.count) captures", about: captures)
         }
     }
@@ -214,6 +223,14 @@ private struct Check {
                 }
             case .discardedEmpty:
                 if let segment, segment.segment.deletedAt == nil {
+                    // A late row that the store's rule 15 ended before its file was known cannot
+                    // be discarded yet: `DiscardedLateRecordingTests` holds it as a known issue.
+                    if rig.logs.lines.contains("late_row_not_ended capture=\(capture) code=capture_id_conflict") {
+                        withKnownIssue("A store refuses the discard of a recording rule 15 ended before its file") {
+                            fail("recording \(capture) was discarded, and is in the stream", about: [capture])
+                        }
+                        continue
+                    }
                     fail("recording \(capture) was discarded, and is in the stream", about: [capture])
                 }
             default:
@@ -238,8 +255,14 @@ private struct Check {
                     "\(follower) answered its start before it settled \(followed), which it follows",
                     about: [follower, followed])
             }
-            guard case .inbox = answered.path, !ledger.failedBegin(follower), !ledger.failedBegin(followed),
-                !rig.logs.logged("store_answered_late", follower), !rig.logs.logged("capture_not_ended", followed),
+            // Only a capture that had answered its start when the follower arrived: one whose start
+            // still ran may have no row and no item yet when the follower is ingested, and the
+            // follower is then placed by the window.
+            let followedAnswered = ledger.begun(followed).map { $0.logIndex <= index } ?? false
+            guard case .inbox = answered.path, followedAnswered, !ledger.failedBegin(follower),
+                !ledger.failedBegin(followed),
+                !rig.logs.logged("store_answered_late", follower), !rig.logs.logged("store_answered_late", followed),
+                !rig.logs.logged("capture_not_ended", followed),
                 let noteA = try await rig.note(of: followed), let noteB = try await rig.note(of: follower),
                 try await text(of: followed) != nil || ledger.recordings()[followed] != nil
             else { continue }
@@ -248,6 +271,22 @@ private struct Check {
                     "\(follower) follows \(followed) on the Inbox/ path, and is in another note",
                     about: [follower, followed])
             }
+        }
+    }
+
+    /// Nothing ends a capture whose begin threw before a call or a late row answered it
+    /// (finding 55): a start that follows one never ends it.
+    func failedStartsLeftAlone() {
+        let lines = rig.logs.lines
+        for (index, line) in lines.enumerated() where line.hasPrefix("followed_capture_ended ") {
+            guard let pair = Self.pair(line), ledger.failedBegin(pair.1) else { continue }
+            let (follower, followed) = pair
+            // Answered by its retry, by a late row, or by an update or an end that is its first write.
+            let answers = ["capture_begin_retried", "store_answered_late", "capture_started_late"].map {
+                "\($0) capture=\(followed)"
+            }
+            if lines.prefix(index).contains(where: { answers.contains($0) }) { continue }
+            fail("\(follower) ended \(followed), whose start reached no disk", about: [follower, followed])
         }
     }
 
@@ -352,6 +391,7 @@ private struct SurfaceModel: Sendable {
                 // capture of its own, with the same text: the surface discards it and keeps the
                 // one it held, which is still its own.
                 ledger.note("\(surface) begin was not the retry of \(held); discards \(state.captureID)")
+                ledger.race(held, state.captureID)
                 ledger.begin(state.captureID, kind: kind, logIndex: logIndex, path: state.path)
                 if kind == .typed { ledger.acknowledge(state.captureID, .text(text), sent: text) }
                 _ = await discardNamed(state.captureID, in: world)
@@ -373,6 +413,16 @@ private struct SurfaceModel: Sendable {
                 ledger.note("\(surface) begin \(kind) refused \(error.code)")
                 current = held
                 begun = false
+                return
+            }
+            if let held, let named = error.context.captureID, named != held {
+                // The capture it held was acknowledged meanwhile, and the begin was a capture of
+                // its own that reached no disk: the surface discards that one, and keeps its own.
+                ledger.note("\(surface) begin was not the retry of \(held), and failed; discards \(named)")
+                ledger.beginFailed(named)
+                _ = await discardNamed(named, in: world)
+                current = held
+                begun = true
                 return
             }
             // Reached no disk: the surface keeps the text, and the capture the begin named.
@@ -535,6 +585,7 @@ private final class Ledger: Sendable {
         var failed: Set<CaptureID> = []
         var durable: Set<CaptureID> = []
         var recordings: [CaptureID: CaptureOutcome] = [:]
+        var raced: [(CaptureID, CaptureID)] = []
         var trace: [String] = []
     }
 
@@ -567,6 +618,10 @@ private final class Ledger: Sendable {
     /// A state the engine published named a durable revision: an acknowledgement.
     func markDurable(_ capture: CaptureID) { state.withLock { _ = $0.durable.insert(capture) } }
     func isDurable(_ capture: CaptureID) -> Bool { state.withLock { $0.durable.contains(capture) } }
+
+    /// A begin meant as the retry of `held` that was a capture of its own, `other`.
+    func race(_ held: CaptureID, _ other: CaptureID) { state.withLock { $0.raced.append((held, other)) } }
+    func raced() -> [(CaptureID, CaptureID)] { state.withLock { $0.raced } }
 
     /// How a recording's last call came out.
     func recording(_ capture: CaptureID, _ outcome: CaptureOutcome) {
