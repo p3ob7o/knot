@@ -49,7 +49,7 @@ struct InboxItems: Sendable {
         try itemLock.mutex.withLock { _ throws(KnotError) in
             try files.place(encoded, at: locations.inboxManifest(manifest.captureID))
             #if DEBUG
-                Self.afterManifestPlaced.withLock { $0 }?(manifest.captureID)
+                Self.afterManifestPlaced.withLock { $0 }?(manifest.captureID, itemLock)
             #endif
             // A payload already on the drive with the same bytes is not placed again: it is durable.
             let url = locations.inboxPayload(manifest.captureID, kind: .typed)
@@ -58,14 +58,10 @@ struct InboxItems: Sendable {
         }
     }
 
-    /// The removals that wait for the lock now, by capture: a test reads it to know that ingest
-    /// waits for the engine's writing of that capture's item.
-    static let removalsWaiting = Mutex<[CaptureID: Int]>([:])
-
     #if DEBUG
         /// Runs after a typed item's manifest is placed and before its payload, holding the lock:
         /// the test of finding 74 runs an ingest there.
-        static let afterManifestPlaced = Mutex<(@Sendable (CaptureID) -> Void)?>(nil)
+        static let afterManifestPlaced = Mutex<(@Sendable (CaptureID, ItemLock) -> Void)?>(nil)
     #endif
 
     /// Places a recording's item: the manifest alone, which names the stored file's digest.
@@ -96,9 +92,9 @@ struct InboxItems: Sendable {
 
     /// Removes an item whose content the store holds: the payload, then the manifest.
     func remove(_ capture: CaptureID, kind: SegmentKind) throws(KnotError) {
-        Self.removalsWaiting.withLock { $0[capture, default: 0] += 1 }
+        itemLock.removalsWaiting.withLock { $0[capture, default: 0] += 1 }
         try itemLock.mutex.withLock { _ throws(KnotError) in
-            Self.removalsWaiting.withLock { waiting in
+            itemLock.removalsWaiting.withLock { waiting in
                 waiting[capture, default: 1] -= 1
                 if waiting[capture] == 0 { waiting[capture] = nil }
             }
@@ -204,6 +200,10 @@ extension AssetID {
 /// folder, so they share it, and no other store waits for it.
 final class ItemLock: Sendable {
     let mutex = Mutex(())
+
+    /// The removals that wait for the lock now, by capture: a test reads it to know that ingest
+    /// waits for the engine's writing of that capture's item.
+    let removalsWaiting = Mutex<[CaptureID: Int]>([:])
 
     private static let locks = Mutex<[String: ItemLock]>([:])
 

@@ -22,10 +22,12 @@ import Testing
         let begun = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "one"))
         let id = begun.captureID
         let ingest = r.ingest
+        let ownLock = ItemLock.of(inbox: r.locations.inbox, layer: r.layer)
         let ran = Mutex(false)
         InboxItems.afterManifestPlaced.withLock { hook in
-            hook = { capture in
-                guard capture == id else { return }
+            hook = { capture, lock in
+                // Another test's store may make a capture with the same ID: only this store's.
+                guard capture == id, lock === ownLock else { return }
                 let finished = Mutex(false)
                 Task.detached {
                     _ = await ingest.ingestAllInLaunchOrder()
@@ -33,7 +35,7 @@ import Testing
                 }
                 // Until ingest has removed the item, or waits to remove it for this writing.
                 let limit = ContinuousClock.now.advanced(by: SuiteWait.limit)
-                while !finished.withLock({ $0 }), InboxItems.removalsWaiting.withLock({ $0[id] ?? 0 }) == 0 {
+                while !finished.withLock({ $0 }), ownLock.removalsWaiting.withLock({ $0[id] ?? 0 }) == 0 {
                     guard ContinuousClock.now < limit else {
                         Issue.record("Ingest neither finished nor waited for the item's lock.")
                         break
