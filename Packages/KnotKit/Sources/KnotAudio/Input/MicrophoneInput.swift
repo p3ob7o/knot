@@ -211,9 +211,11 @@ struct SystemInputEngine: InputEngine {
 /// The engine is touched in two places only, never at once: inside the start, and inside the one
 /// stop that finishes the input, which no start runs beside. A stop asked for while the start
 /// runs, its own undoing included, waits for it, and the start then takes away what it put
-/// there. One stop finishes the input and every other waits until it has. So every stop, during
-/// the start, after it or at once with another, returns only once the tap is gone, the engine
-/// stopped and the session given back.
+/// there. One stop finishes the input and every other waits until it has. Every delivery, of the
+/// tap or of the configuration change, is counted while it runs, and none begins once the input
+/// is finishing. So every stop, during the start, after it or at once with another, returns only
+/// once the tap is gone, the engine stopped, every delivery under way ended and the session given
+/// back: no delivery follows it.
 final class OpenMicrophone: OpenAudioInput {
     let sampleRate: Double
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
@@ -238,8 +240,14 @@ final class OpenMicrophone: OpenAudioInput {
         var finished = false
         /// Stops waiting for the one that finishes the input.
         var finishWaiters: [CheckedContinuation<Void, Never>] = []
-        /// How many stops are waiting, for the start or for the one that finishes the input.
+        /// How many stops are waiting, for the start, for the one that finishes the input, or for
+        /// the deliveries under way.
         var suspended = 0
+        /// True once the input is finishing: no delivery begins after.
+        var closed = false
+        /// Deliveries under way, and the stop waiting for them to end.
+        var delivering = 0
+        var deliveryWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio) {
@@ -262,6 +270,7 @@ final class OpenMicrophone: OpenAudioInput {
             return true
         }
         guard proceed else { return }
+        let deliver = counted(deliver)
         var failure: KnotError?
         do throws(KnotError) {
             // The tap delivers the hardware's format, every 100 ms or more; each buffer is mixed
@@ -335,6 +344,13 @@ final class OpenMicrophone: OpenAudioInput {
             return
         }
         tearDown()
+        // A delivery under way, of the tap or of the configuration change, ends before this stop
+        // returns; none begins after the teardown.
+        await wait { state, stop in
+            guard state.delivering > 0 else { return false }
+            state.deliveryWaiters.append(stop)
+            return true
+        }
         let release = state.withLock { state in
             defer { state.sessionReleased = true }
             return !state.sessionReleased
@@ -362,9 +378,31 @@ final class OpenMicrophone: OpenAudioInput {
         }
     }
 
-    /// Stops the engine and takes the tap away, if they are there, once.
+    /// `deliver`, counted while it runs, and dropped once the input is finishing.
+    private func counted(_ deliver: @escaping @Sendable (AudioDelivery) -> Void) -> @Sendable (AudioDelivery) -> Void {
+        { [self] delivery in
+            let begins = state.withLock { state in
+                guard !state.closed else { return false }
+                state.delivering += 1
+                return true
+            }
+            guard begins else { return }
+            deliver(delivery)
+            let waiters = state.withLock { state in
+                state.delivering -= 1
+                guard state.delivering == 0 else { return [CheckedContinuation<Void, Never>]() }
+                state.suspended -= state.deliveryWaiters.count
+                defer { state.deliveryWaiters = [] }
+                return state.deliveryWaiters
+            }
+            for waiter in waiters { waiter.resume() }
+        }
+    }
+
+    /// Stops the engine and takes the tap away, if they are there, once. No delivery begins after.
     private func tearDown() {
         let (engineStarted, tapInstalled, watcher) = state.withLock { state in
+            state.closed = true
             defer {
                 state.engineStarted = false
                 state.tapInstalled = false

@@ -343,6 +343,35 @@ import Testing
         #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
     }
 
+    /// A stop returns only once a delivery under way has ended: here the configuration
+    /// change's, which asks for the stop and runs on after it. The delivery holds until the stop
+    /// waits for it, or returns. After finding 23.
+    @Test func aStopWaitsForTheDeliveryUnderWay() async throws {
+        let (opened, engine, hardware) = try await Self.openStandIn()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let stopped = StopTask()
+        let delivering = Mutex(false)
+        let deliveringAtReturn = Mutex<Bool?>(nil)
+        let returned = Flag()
+        try await Self.startOffThePool(opened, format: format) { delivery in
+            guard case .ended = delivery else { return }
+            delivering.withLock { $0 = true }
+            stopped.start(offThePool: true) {
+                await opened.stop()
+                deliveringAtReturn.withLock { $0 = delivering.withLock { $0 } }
+                returned.set()
+            }
+            Self.waitUntil { returned.value || opened.suspendedStops >= 1 }
+            delivering.withLock { $0 = false }
+        }
+        engine.changeConfiguration()
+        #expect(await SuiteWait.until("the stop") { returned.value })
+        await stopped.wait()
+        #expect(deliveringAtReturn.withLock { $0 } == false, "The stop returned while the delivery ran.")
+        #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
+        #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
+    }
+
     /// The microphone opened on a stand-in engine at 48 kHz, which opens nothing.
     static func openStandIn() async throws -> (OpenMicrophone, StandInEngine, StandInHardware) {
         let engine = StandInEngine(tap: InputShape(sampleRate: 48_000, channels: 1))
