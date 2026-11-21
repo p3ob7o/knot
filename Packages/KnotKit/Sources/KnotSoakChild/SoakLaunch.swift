@@ -64,6 +64,13 @@
                 do {
                     let outcomes = try await recovery.run(ingest: ingest)
                     Say.line(SoakLine.recovered(outcomes.count).rendered)
+                    // Recovery finishes only captures of earlier launches: one of this launch, which
+                    // a launch that captures meanwhile may have open, is not its to end.
+                    var own = 0
+                    for id in outcomes.keys {
+                        if let row = try await notes.capture(id), row.launchID == launchID { own += 1 }
+                    }
+                    Say.line(SoakLine.recoveredOwn(own).rendered)
                 } catch {
                     Say.fail("recovery failed: \(error.code)")
                 }

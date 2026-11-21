@@ -14,6 +14,9 @@
         /// `Inbox/`, and apart from them the temporaries of writes a kill cut before their rename
         /// (`DurableFile`'s `.<name>.<uuid>.partial`), which never held an item.
         case recoveryLeft(open: Int, inbox: Int, partials: Int)
+        /// How many captures of the running launch recovery finished: none, for recovery finishes
+        /// only captures of earlier launches.
+        case recoveredOwn(Int)
         /// A row of an earlier launch that recovery left open.
         case leftOpen(CaptureID)
         /// A temporary of a cut write that recovery left in `Inbox/` (`InboxEntries`), by its name,
@@ -58,6 +61,7 @@
             case .launch(let number): "launch \(number)"
             case .recovered(let count): "recovered \(count)"
             case .recoveryLeft(let open, let inbox, let partials): "recovery-left \(open) \(inbox) \(partials)"
+            case .recoveredOwn(let count): "recovered-own \(count)"
             case .leftOpen(let capture): "left-open \(capture)"
             case .inboxPartial(let name): "inbox-partial \(name)"
             case .intent(let index): "intent \(index)"
@@ -82,6 +86,7 @@
                     return nil
                 }
                 return .recoveryLeft(open: open, inbox: inbox, partials: partials)
+            case "recovered-own": return fields.count == 2 ? int(1).map(SoakLine.recoveredOwn) : nil
             case "left-open": return fields.count == 2 ? CaptureID(fields[1]).map(SoakLine.leftOpen) : nil
             case "inbox-partial":
                 guard fields.count == 2, InboxEntries.capture(ofPartial: fields[1]) != nil else { return nil }

@@ -121,6 +121,8 @@ struct SoakWitness {
                 partialCount = partials
                 if open > 0 { problem("recovery_left_rows_open", "count=\(open)") }
                 if inbox > 0 { problem("recovery_left_inbox_items", "count=\(inbox)") }
+            case .recoveredOwn(let count) where count > 0:
+                problem("recovery_ended_a_running_capture", "count=\(count)")
             case .leftOpen(let capture):
                 problem("recovery_left_row_open", capture.description)
             case .inboxPartial(let name):
