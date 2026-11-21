@@ -51,7 +51,7 @@ public enum FidelityWords {
     ]
 
     /// Abbreviations written with a full stop that does not end a sentence.
-    static let titles: Set<String> = ["dr", "mr", "mrs", "ms", "prof", "st", "mt", "jr", "sr", "vs"]
+    public static let titles: Set<String> = ["dr", "mr", "mrs", "ms", "prof", "st", "mt", "jr", "sr", "vs"]
 
     /// The word "I" and its contractions, which are written with a capital but are not names.
     static let firstPerson: Set<String> = ["i", "im", "id", "ive", "ill"]

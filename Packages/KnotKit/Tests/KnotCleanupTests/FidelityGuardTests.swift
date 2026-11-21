@@ -485,3 +485,57 @@ func fidelityGuardMutationSuite(_ item: GuardCase) throws {
         #expect(own.count >= floor, "\(mutation.rawValue) changes the own words of \(own.count) cases")
     }
 }
+
+// MARK: - Finding 10: each closed list and each rule has a test that fails without it
+
+/// Every negation, number word and date word is protected in a restart: a list emptied or
+/// halved fails here.
+@Test(
+    arguments: Array(FidelityWords.negations.union(FidelityWords.numberWords).union(FidelityWords.dateWords)).sorted())
+func eachProtectedWordOfTheListsSurvivesARestart(_ word: String) {
+    let raw = "we will \(word) go we will go to the shop on the corner after work"
+    #expect(
+        FidelityGuard.check(raw: raw, cleaned: "We will go to the shop on the corner after work.")
+            == .rejected(.protectedWordRemoved))
+    // The same restart with a plain word in its place may go.
+    let plain = "we will soon go we will go to the shop on the corner after work"
+    #expect(FidelityGuard.check(raw: plain, cleaned: "We will go to the shop on the corner after work.").isAccepted)
+}
+
+/// Every filler sound of the list may go, and nothing else in its place.
+@Test(arguments: Array(FidelityWords.fillers).sorted())
+func eachFillerSoundOfTheListMayGo(_ filler: String) {
+    #expect(FidelityGuard.check(raw: "\(filler) call the bank", cleaned: "Call the bank.").isAccepted)
+}
+
+/// After every abbreviation of the list, the next word with a capital is a name.
+@Test(arguments: Array(FidelityWords.titles).sorted())
+func theNameAfterEachAbbreviationIsProtected(_ title: String) {
+    let words = FidelityWords.words(in: "Ask \(title.prefix(1).uppercased() + title.dropFirst()). Okafor now")
+    #expect(words.first { $0.text == "okafor" }?.isProtected == true)
+}
+
+/// A date word in lower case is protected by the list, not by a capital.
+@Test func aDateWordInLowerCaseIsProtected() {
+    #expect(
+        FidelityGuard.check(
+            raw: "see you on monday see you on friday at the station", cleaned: "See you on friday at the station.")
+            == .rejected(.protectedWordRemoved))
+}
+
+/// The words after a repeat or a restart are counted past filler sounds.
+@Test func theWordsAfterASpanSkipFillerSounds() {
+    #expect(FidelityGuard.check(raw: "we should um we should book it", cleaned: "We should book it.").isAccepted)
+    #expect(
+        FidelityGuard.check(
+            raw: "can you pick up uh can you grab the parcel from the post office",
+            cleaned: "Can you grab the parcel from the post office?"
+        ).isAccepted)
+}
+
+/// The share counts only the words that are not filler sounds, so many fillers do not make
+/// room for more removals.
+@Test func theShareIsOfTheWordsThatAreNotFillerSounds() {
+    let raw = "um um um um um um um um can you can you can you hear me"
+    #expect(FidelityGuard.check(raw: raw, cleaned: "Can you hear me?") == .rejected(.droppedTooMuch))
+}
