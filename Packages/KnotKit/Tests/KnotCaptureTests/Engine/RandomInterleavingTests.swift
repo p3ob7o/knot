@@ -223,14 +223,6 @@ private struct Check {
                 }
             case .discardedEmpty:
                 if let segment, segment.segment.deletedAt == nil {
-                    // A late row that the store's rule 15 ended before its file was known cannot
-                    // be discarded yet: `DiscardedLateRecordingTests` holds it as a known issue.
-                    if rig.logs.lines.contains("late_row_not_ended capture=\(capture) code=capture_id_conflict") {
-                        withKnownIssue("A store refuses the discard of a recording rule 15 ended before its file") {
-                            fail("recording \(capture) was discarded, and is in the stream", about: [capture])
-                        }
-                        continue
-                    }
                     fail("recording \(capture) was discarded, and is in the stream", about: [capture])
                 }
             default:
