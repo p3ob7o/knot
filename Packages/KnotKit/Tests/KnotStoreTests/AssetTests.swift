@@ -250,4 +250,34 @@ import Testing
         let again = try await made.assets.move(kept, as: made.audio, kind: .audio)
         #expect(again.sha256 == moved.sha256, "A source that cannot be removed does not fail the move.")
     }
+
+    /// A drawing and a recording placed under one asset ID at once: the drawing stops with its
+    /// bytes written, before it is published, while the recording is placed. One ID ends with one
+    /// file, and the drawing's placement is refused as a conflict.
+    @Test func aRecordingAndADrawingUnderOneIDAtOnceLeaveOneFile() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 204)
+        let asset: AssetID = made.captures.ids.make()
+        let gate = Gate()
+        let slower = AssetRepository(
+            locations: made.database.locations,
+            layer: HookedFileLayer(beforeSyncFile: { url in
+                if url.lastPathComponent.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
+            }))
+        let drawing = Task.detached { () throws -> StoredFile in
+            try await slower.place(Data([9]), as: asset, kind: .ink)
+        }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        _ = try await made.assets.place(Data([8]), as: asset, kind: .audio)
+        gate.release()
+        await expectFailure(.assetConflict) { try await drawing.value }
+        #expect(try await made.assets.find(asset, kind: .audio) != nil)
+        #expect(try await made.assets.find(asset, kind: .ink) == nil)
+        let folder = made.database.locations.asset(asset, kind: .audio).deletingLastPathComponent()
+        let partials = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasSuffix(DurableFile.partialSuffix) }
+        #expect(partials.isEmpty, "\(partials)")
+    }
 }

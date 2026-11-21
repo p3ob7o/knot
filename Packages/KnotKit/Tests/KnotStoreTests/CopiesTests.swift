@@ -253,12 +253,16 @@ import Testing
         var files: Set<String> = [locations.database.lastPathComponent]
         var expectedFolders: Set<String> = ["", "Assets"]
         let assets = locations.storeRoot.appending(path: "Assets", directoryHint: .isDirectory)
-        let walker = FileManager.default.enumerator(at: assets, includingPropertiesForKeys: [.isDirectoryKey])
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey]
+        let walker = FileManager.default.enumerator(at: assets, includingPropertiesForKeys: Array(keys))
         while let url = walker?.nextObject() as? URL {
             let path = "Assets/" + url.standardizedFileURL.path.dropFirst(assets.standardizedFileURL.path.count + 1)
-            if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true {
+            let values = try url.resourceValues(forKeys: keys)
+            // A file's bytes and a folder's names are what a sync puts on the drive; an asset's
+            // claim is a link, made and synced with the file it names.
+            if values.isDirectory == true {
                 expectedFolders.insert(path)
-            } else {
+            } else if values.isRegularFile == true {
                 files.insert(path)
             }
         }

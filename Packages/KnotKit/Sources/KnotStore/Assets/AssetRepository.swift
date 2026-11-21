@@ -15,7 +15,8 @@ public final class AssetRepository: AssetStore {
     private let locations: StoreLocations
     private let layer: any FileLayer
     private let files: StoreFiles
-    /// The same placing, with a rename that never replaces a file another placement published.
+    /// The same placing, published under a claim on the asset's ID with a rename that never
+    /// replaces a file another placement published (`AssetPublishingLayer`).
     private let exclusive: StoreFiles
 
     /// The store whose rows say which files are named, which a removal checks first.
@@ -28,7 +29,7 @@ public final class AssetRepository: AssetStore {
         self.layer = layer
         self.database = database
         self.files = locations.durableFiles(layer: layer)
-        self.exclusive = locations.durableFiles(layer: ExclusiveRenameLayer(base: layer))
+        self.exclusive = locations.durableFiles(layer: AssetPublishingLayer(base: layer))
     }
 
     public func place(_ data: Data, as asset: AssetID, kind: AssetKind) async throws(KnotError) -> StoredFile {
@@ -41,6 +42,8 @@ public final class AssetRepository: AssetStore {
         }
         do {
             try exclusive.place(data, at: url)
+        } catch  where error.code == KnotError.assetConflict.code {
+            throw KnotError.assetConflict.with(.init(assetID: asset))
         } catch  where ExclusiveRenameLayer.isTaken(error) {
             // Another placement published first: the same content is the stored file.
             guard let stored = try find(url, asset: asset, kind: kind), stored.sha256 == sha else {
@@ -69,6 +72,8 @@ public final class AssetRepository: AssetStore {
         let (sha, byteCount) = try Self.digestAndSize(of: source)
         do {
             try exclusive.move(source, to: url)
+        } catch  where error.code == KnotError.assetConflict.code {
+            throw KnotError.assetConflict.with(.init(assetID: asset))
         } catch  where ExclusiveRenameLayer.isTaken(error) {
             // Another placement published first: the same content is the stored file, and the
             // source goes; other content is refused, and the source stays.
@@ -99,7 +104,10 @@ public final class AssetRepository: AssetStore {
     public func remove(_ asset: AssetID, kind: AssetKind) async throws(KnotError) {
         let url = try destination(asset, kind)
         guard layer.entryKind(url) != nil else { return }
-        guard let database else { return try files.remove(url) }
+        guard let database else {
+            try files.remove(url)
+            return AssetPublishingLayer.release(url)
+        }
         let files = files
         let id = asset.description
         do {
@@ -113,6 +121,7 @@ public final class AssetRepository: AssetStore {
                             """, arguments: [id, id]) ?? false
                 guard !named else { return }
                 try files.remove(url)
+                AssetPublishingLayer.release(url)
             }
         } catch let error as KnotError {
             throw error
@@ -134,6 +143,10 @@ public final class AssetRepository: AssetStore {
     /// The conflict rule is on the ID: an asset ID that holds a file of one kind takes no file
     /// of another, whose place would differ only by its extension.
     private func refuseOtherKinds(_ asset: AssetID, _ kind: AssetKind) throws(KnotError) {
+        let file = locations.asset(asset, kind: kind)
+        if let claimed = AssetPublishingLayer.claimed(file), claimed != file.lastPathComponent {
+            throw KnotError.assetConflict.with(.init(assetID: asset))
+        }
         for other in AssetKind.allCases where other != kind {
             if layer.entryKind(locations.asset(asset, kind: other)) != nil {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
