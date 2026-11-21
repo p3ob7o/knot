@@ -12,6 +12,16 @@ public protocol CaptureEngine: Sendable {
     /// Begins a capture: a typed capture at its first keystroke, with that text; a recording,
     /// which returns once it is live; a drawing, at its first stroke. It returns once the
     /// capture has started, which is its first durable write (§6, rule 6).
+    ///
+    /// A begin that throws after it made a capture names that capture in `context.captureID`,
+    /// and from then on the capture is the caller's: `update`, `end` and `discard` take it. The
+    /// first `update` or `end` that reaches a drive, or the begin's retry or its store call
+    /// answering late, does what the start would have done; a discard keeps nothing and ends
+    /// nothing else. Three throws leave the caller no capture: a start that rule 15 refuses
+    /// throws `segment_capture_open`, or `capture_blocked_by_recording` while a recording runs,
+    /// about the open capture that refused it, which is not the caller's; a recording whose
+    /// recorder did not start leaves nothing, and its ID answers `not_found`; a kind the engine
+    /// does not take yet throws `port_unavailable` and names none.
     func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState
 
     /// Saves the content of an open capture so far: a typed capture's text, or a drawing's
@@ -23,6 +33,10 @@ public protocol CaptureEngine: Sendable {
     /// Ends an open capture: stops a recording, finishes a draft or a drawing. It returns once
     /// the final content is durable, so that the "saved" cue can follow. Content that is
     /// empty is discarded as empty.
+    ///
+    /// It saves the latest content the engine was given, also content whose save it answered
+    /// with an error: a caller whose text changed since, or went back, sends it with `update`
+    /// first. Rule 15's end of a capture does the same.
     func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState
 
     /// Ends an open capture and keeps nothing: the accidental press of product spec §4.2.
@@ -31,6 +45,10 @@ public protocol CaptureEngine: Sendable {
     /// The state of each capture each time it changes. Only `durableRevision` counts as
     /// acknowledged (§5): tests and the soak treat nothing else as saved. When the consumer
     /// goes away, its subscription ends; no capture is affected.
+    ///
+    /// A state that names a durable revision is an acknowledgement, whichever call or late store
+    /// answer published it. After one, a start on the same surface is a capture of its own and
+    /// never this one's retry, so no start replaces text that was acknowledged.
     func states() -> AsyncStream<CaptureState>
 
     /// The live view of an open recording, for the screen only: its levels, and its words so far
