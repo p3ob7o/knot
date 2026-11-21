@@ -52,6 +52,33 @@ import Testing
         #expect(try await r.notes.openCaptures().isEmpty)
     }
 
+    /// Finding 81, the re-check's witness. A recording on the store path that will not convert,
+    /// whose failed end the store does not take at first: the row ends failed with the first
+    /// code; the retried conversion fails with another code, and that end is refused with
+    /// `capture_id_conflict` for good. The engine reads the row, which has ended, and drops the
+    /// end, once, with a log line that names the capture and the code; it is not tried at every
+    /// call.
+    @Test func failedEndWithAnotherCodeIsRefusedForGood() async throws {
+        let r = Rig()
+        let recording = try await r.beginRecording()
+        r.recorder.failNextConversions(with: .conversionFailed, .diskFull)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let state = try await r.engine.end(recording.captureID)
+        #expect(state.outcome == .failed(KnotError.conversionFailed.code))
+        await r.engine.retryConversions()
+        for _ in 0..<3 {
+            let other = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "x"))
+            _ = try await r.engine.end(other.captureID)
+            await r.engine.retryConversions()
+        }
+        let id = recording.captureID
+        #expect(try await r.notes.capture(id)?.outcome != .open)
+        let notTaken = r.logs.lines.filter { $0.hasPrefix("failed_end_not_taken capture=\(id)") }
+        #expect(notTaken.isEmpty, "A failed end the store refuses for good is not tried again at every call.")
+        let settled = r.logs.lines.filter { $0 == "failed_end_settled capture=\(id) code=capture_id_conflict" }
+        #expect(settled.count == 1)
+    }
+
     // MARK: 68
 
     /// Finding 68. A recording with no frames, ended after four seconds on the clock, is

@@ -997,10 +997,8 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // No row yet: a late record is ended when it arrives (`discardLateRow`).
                 pendingDiscards.remove(id)
             case .refused(let error) where error.code == KnotError.captureIDConflict.code:
-                // The store will never take this end: its row ended otherwise, as rule 15 ends a late
-                // row before its file is known. Not tried again (a known issue of the store's rule).
                 pendingDiscards.remove(id)
-                log.failure(error.about(capture: id), "late_row_not_ended")
+                await settleRefused(id, error, event: "discard_end_settled")
             default:
                 // The store did not take it this time: the next call, or the app coming forward,
                 // tries again.
@@ -1015,9 +1013,25 @@ public actor StandardCaptureEngine: CaptureEngine {
                 log.capture(id, "recording_failed_row_ended")
             case .refused(let error) where error.code == KnotError.notFound.code:
                 pendingFailures[id] = nil
+            case .refused(let error) where error.code == KnotError.captureIDConflict.code:
+                pendingFailures[id] = nil
+                await settleRefused(id, error, event: "failed_end_settled")
             default:
                 log.capture(id, "failed_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
             }
+        }
+    }
+
+    /// A pending end the store refuses for good, with `capture_id_conflict`, settled by reading the
+    /// row (finding 81). A row that has ended, failed or stored or discarded, needs no end: the
+    /// pending one goes, with one log line that names the capture and the code. A row still open
+    /// is another fault, and is logged as one; recovery ends it at the next launch.
+    private func settleRefused(_ id: CaptureID, _ error: KnotError, event: StaticString) async {
+        let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
+        if case .answered(let row?) = answer, row.outcome == .open {
+            log.failure(error.about(capture: id), "pending_end_refused_while_open")
+        } else {
+            log.capture(id, event, .code(error.code))
         }
     }
 
