@@ -15,6 +15,11 @@ import Foundation
 /// stops matching the paths below it once they are made. Here `.` and `..` are worked out from
 /// the text alone, and the deepest part of the path that exists is read as the system resolves
 /// it, through every symbolic link, from the real file system.
+///
+/// Letter case is not that fault: `realpath` answers with the case on the drive, so a path
+/// written in another case than its root is refused while the root does not exist and placed
+/// once it does. Every caller takes its paths from one `StoreLocations`, so none meets it, and
+/// making both answers the same would need a rule about volumes that fold case.
 enum PathForm {
     /// `url`'s path as components below `/`, with `.` and `..` worked out from the text alone.
     static func lexical(_ url: URL) -> [String] {
