@@ -138,6 +138,7 @@ public final class StoreDatabase: Sendable {
                 migrations: migrations)
         }
         try checkHeader(at: locations.database, latest: latest)
+        try checkJournaledVersion(at: locations.database, latest: latest)
         let pool = try openPool(at: path, hooks: hooks)
         do {
             try setWriterDurability(pool)
@@ -316,6 +317,37 @@ public final class StoreDatabase: Sendable {
         try files.place(
             Data(String(generation).utf8),
             at: locations.storeRoot.appending(path: generationFileName, directoryHint: .notDirectory))
+    }
+
+    /// The version a commit wrote to the write-ahead log, which no checkpoint has carried into
+    /// the file's header yet, read from a copy of the two files in the temporary folder: SQLite
+    /// reads the log only through its shared-memory file, which it would make beside the store,
+    /// so a store newer than this build is refused with its folder untouched. The copy is a
+    /// clone on APFS. A probe that cannot be made decides nothing: the version is read again
+    /// once the store is open, before anything is written.
+    private static func checkJournaledVersion(at database: URL, latest: Int) throws(KnotError) {
+        let log = URL(fileURLWithPath: database.path + "-wal")
+        guard let handle = try? FileHandle(forReadingFrom: log) else { return }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.close()
+        // A log of its header alone holds no commit.
+        guard size > 32 else { return }
+        let probe = FileManager.default.temporaryDirectory.appending(
+            path: "knot-probe-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: probe) }
+        let version: Int
+        do {
+            try FileManager.default.createDirectory(at: probe, withIntermediateDirectories: true)
+            let copy = probe.appending(path: database.lastPathComponent, directoryHint: .notDirectory)
+            try FileManager.default.copyItem(at: database, to: copy)
+            try FileManager.default.copyItem(at: log, to: URL(fileURLWithPath: copy.path + "-wal"))
+            let queue = try DatabaseQueue(path: copy.path, configuration: configuration())
+            defer { try? queue.close() }
+            version = try queue.read { db in try userVersion(db) }
+        } catch {
+            return
+        }
+        guard version <= latest else { throw KnotError.storeNewerThanBuild }
     }
 
     static func userVersion(_ db: Database) throws -> Int {

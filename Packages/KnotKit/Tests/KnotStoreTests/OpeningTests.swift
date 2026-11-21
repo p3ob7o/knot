@@ -382,6 +382,34 @@ import Testing
         #expect(writer == 5_000)
         #expect(reader == 5_000)
     }
+
+    /// A store whose newer version is only in its write-ahead log is refused with its folder
+    /// untouched: no shared-memory file is made, and the database and its log stay as they were.
+    @Test func aNewerVersionInTheLogIsRefusedUntouched() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 93)
+        try await made.database.pool.writeWithoutTransaction { db in
+            _ = try db.checkpoint(.truncate)
+            try db.execute(sql: "PRAGMA user_version = 99")
+        }
+        let locations = StoreLocations.testing(root: folders.make())
+        try FileManager.default.copyItem(at: made.database.locations.storeRoot, to: locations.storeRoot)
+        try? FileManager.default.removeItem(atPath: locations.database.path + "-shm")
+        let before = try Self.digests(locations.storeRoot)
+        #expect(before.keys.contains("knot.sqlite-wal"))
+        await expectFailure(.storeNewerThanBuild) { try StoreDatabase.open(locations: locations, role: .app) }
+        #expect(try Self.digests(locations.storeRoot) == before, "The folder is as it was.")
+    }
+
+    static func digests(_ folder: URL) throws -> [String: String] {
+        var digests: [String: String] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: folder.path) where name.hasPrefix("knot") {
+            let data = try Data(contentsOf: folder.appending(path: name, directoryHint: .notDirectory))
+            digests[name] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        return digests
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.
