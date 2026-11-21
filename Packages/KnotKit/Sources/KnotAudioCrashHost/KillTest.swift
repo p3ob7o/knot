@@ -62,7 +62,7 @@
                     // Kill only once the recording is live, so that the kill falls inside it.
                     while let line = lines.next() {
                         if line.hasPrefix("capture ") { result.capture = String(line.dropFirst("capture ".count)) }
-                        if line == "live" {
+                        if line.hasPrefix("live ") {
                             result.wentLive = true
                             break
                         }

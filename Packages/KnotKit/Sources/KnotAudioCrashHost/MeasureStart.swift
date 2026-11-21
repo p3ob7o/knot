@@ -9,7 +9,7 @@ import KnotCore
 ///     measure-start --dir <folder> [--runs 20] [--rate 16000]
 ///
 /// The first start of the process is cold, the rest are warm. Prints one line per start,
-/// `start <n> liveUs <microseconds>`, then `cold <us> warm median <us> p95 <us>`. Each recording
+/// `start <n> <capture> liveUs <microseconds>`, then `cold <us> warm median <us> p95 <us>`. Each recording
 /// is stopped and its files removed before the next one starts.
 func measureStart(_ arguments: Arguments) async throws(HostError) {
     let runs = try arguments.int("runs", default: 20)
@@ -31,7 +31,7 @@ func measureStart(_ arguments: Arguments) async throws(HostError) {
         let elapsed = ContinuousClock.now - began
         let micros = elapsed.components.seconds * 1_000_000 + elapsed.components.attoseconds / 1_000_000_000_000
         times.append(micros)
-        print("start \(run) liveUs \(micros)")
+        print("start \(run) \(request.captureID) liveUs \(micros)")
         _ = await session.stop()
         do {
             try await recorder.removeWorkingFile(of: request.captureID)

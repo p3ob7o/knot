@@ -33,10 +33,11 @@ let endedEarlyStatus: Int32 = 3
 ///     record --dir <folder> --witness <file> [--rate 16000] [--seconds 60] [--sync-ms 1000]
 ///            [--ends-after <frames>]
 ///
-/// Prints `pid <n>`, then `capture <id>`, `live` once the start has returned, `durable <frames>`
-/// after each sync, and at the end `stopped frames <n> ending <ending>`. A recording that ends
-/// before it is stopped, by itself or because its input ends after `--ends-after` frames, ends
-/// the command at once with `ended-early frames <n> ending <ending>`, and status 3.
+/// Prints `pid <n>`, then `capture <id>`, and every later line names the capture after its first
+/// word: `live <id>` once the start has returned, `durable <id> <frames>` after each sync, and at
+/// the end `stopped <id> frames <n> ending <ending>`. A recording that ends before it is stopped,
+/// by itself or because its input ends after `--ends-after` frames, ends the command at once with
+/// `ended-early <id> frames <n> ending <ending>`, and status 3. The gate reads these lines.
 func record(_ arguments: Arguments) async throws(HostError) {
     let witness = try Witness(url: try arguments.url("witness"))
     let rate = try arguments.double("rate", default: 16_000)
@@ -65,7 +66,7 @@ func record(_ arguments: Arguments) async throws(HostError) {
     } catch {
         throw .knot(error)
     }
-    print("live")
+    print("live \(capture)")
     // Stops once the injected audio has all been taken, unless a kill comes first, or the
     // recording ends before that by itself.
     let stopping = Task {
@@ -76,7 +77,7 @@ func record(_ arguments: Arguments) async throws(HostError) {
         switch event {
         case .durable(let frames):
             witness.durable(frames)
-            print("durable \(frames)")
+            print("durable \(capture) \(frames)")
         case .ended(let audio):
             if audio.ending.endedByItself { ended.set(1) }
         case .level:
@@ -85,10 +86,10 @@ func record(_ arguments: Arguments) async throws(HostError) {
     }
     let audio = await stopping.value
     guard !audio.ending.endedByItself else {
-        print("ended-early frames \(audio.frames) ending \(audio.ending.rawValue)")
+        print("ended-early \(capture) frames \(audio.frames) ending \(audio.ending.rawValue)")
         exit(endedEarlyStatus)
     }
-    print("stopped frames \(audio.frames) ending \(audio.ending.rawValue)")
+    print("stopped \(capture) frames \(audio.frames) ending \(audio.ending.rawValue)")
 }
 
 /// A count that one task sets and another reads.

@@ -23,6 +23,28 @@ import Testing
             #expect(run.status == 3, "\(run.output)")
             #expect(run.output.contains("ended-early ") && run.output.contains(" ending input_lost"), "\(run.output)")
         }
+
+        /// Every line of `record` about the recording names its capture, after its first word, in the
+        /// form the gate reads: `live <id>`, `durable <id> <frames>`, `stopped <id> frames <n> ending
+        /// <ending>`.
+        @Test func everyLineAboutARecordingNamesItsCapture() async throws {
+            let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
+            let folder = try ScratchFolder()
+            let run = try await HostRun.run(
+                host,
+                [
+                    "record", "--dir", folder.url.path, "--witness", folder.file("witness").path, "--seconds", "0.5",
+                    "--sync-ms", "50",
+                ])
+            let lines = run.output.split(separator: "\n").map(String.init)
+            let capture = try #require(lines.first { $0.hasPrefix("capture ") }?.dropFirst("capture ".count))
+            let about = lines.filter { !$0.hasPrefix("pid ") && !$0.hasPrefix("capture ") }
+            #expect(about.contains("live \(capture)") && about.contains { $0.hasPrefix("durable \(capture) ") })
+            #expect(about.last == "stopped \(capture) frames 8000 ending stopped", "\(run.output)")
+            #expect(
+                about.allSatisfy { $0.split(separator: " ").dropFirst().first.map(String.init) == String(capture) },
+                "\(run.output)")
+        }
     }
 
     /// The policy lets a real process that carries none of its signs open a hardware input: a
