@@ -281,10 +281,10 @@ final class RecordScreenModel {
         switch phase {
         case .recording(let shown) where shown != ended.captureID:
             status = .recordingAfterEarlyStop(reason, fate)
-        case .starting:
-            // A press is starting the next recording: its outcome moves the control.
-            status = .stoppedEarly(reason, fate)
-        case .idle, .recording, .stopping:
+        case .idle, .recording, .starting, .stopping:
+            // While a start is on its way too: when the recording that ended is the one that
+            // start made, its answer is ignored above, and nothing else would set the control
+            // back. A start that answers with a live recording sets it to recording again.
             phase = .idle
             status = .stoppedEarly(reason, fate)
         }
