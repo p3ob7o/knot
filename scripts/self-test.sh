@@ -179,6 +179,28 @@ assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("W
 assert not k.named_test_required("WP-11", None, one)
 assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
 assert k.named_test_required("WP-11", None, one * 3)
+# And the command holds to it (finding 41): named-tests itself, with a given list of merged
+# pull requests, on a list of made-up tests that no code holds. At WP-11's first pull request
+# the test given to it is required and missing, and the others wait; at its second, the test
+# given to that one joins it, and the package's own still waits.
+import contextlib, io, os, tempfile
+with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as named:
+    named.write("# made-up tests\n"
+                "WP-11 PR 1\tselftest-given-to-pr-one\tA test the first pull request holds\n"
+                "WP-11\tselftest-given-to-pr-two\tWP-11 PR 2 adds a test the second holds\n"
+                "WP-11\tselftest-given-to-package\tA test for the package's end\n")
+k.NAMED_TESTS, k.code_text = named.name, dict
+def named_missing(branch, merged):
+    k.merged_prs = lambda source: list(merged)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = k.cmd_named_tests("git", "WP-11", branch)
+    return status, sorted(w.rstrip(",") for w in out.getvalue().split() if w.startswith("selftest-"))
+assert named_missing("wp/11-engine", []) == (1, ["selftest-given-to-pr-one"]), named_missing("wp/11-engine", [])
+assert named_missing("wp/11-engine-2", one) == (1, ["selftest-given-to-pr-one", "selftest-given-to-pr-two"])
+assert named_missing("wp/11-engine-3", one * 2)[1] == ["selftest-given-to-package", "selftest-given-to-pr-one",
+                                                       "selftest-given-to-pr-two"]
+os.unlink(named.name)
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
