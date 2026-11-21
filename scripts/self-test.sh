@@ -287,6 +287,25 @@ else
     fail "the lint misses or wrongly flags cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
 fi
 
+# 5a. The lint reads the package's tests for its cancel rule (finding 64): a whole run, not
+#     a fixture, on a scratch repository whose one Swift file is a package test that cancels
+#     itself, beside copies of the apps' manifests, finds it.
+lt="$scratch/lint-tests"
+mkdir -p "$lt/Packages/KnotKit/Tests/SelfTestTests"
+git -C "$lt" init -q -b main
+for manifest in Apps/iOS Apps/macOS Apps/watchOS Apps/Extensions/Widgets-iOS Apps/Extensions/Widgets-watchOS; do
+    mkdir -p "$lt/$manifest"
+    cp "$KNOT_SELF/$manifest/PrivacyInfo.xcprivacy" "$lt/$manifest/"
+done
+printf 'import Testing\n\n@Test func needsAModel() throws {\n    try Test.cancel("the model is not on this Mac")\n}\n' \
+    >"$lt/Packages/KnotKit/Tests/SelfTestTests/Cancels.swift"
+(cd "$lt" && python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint >"$lt/out" 2>&1) || true
+if grep -e 'Packages/KnotKit/Tests/SelfTestTests/Cancels.swift:4: \[test-cancel\]' "$lt/out" >/dev/null; then
+    pass "the lint reads the package's tests, and finds a test that cancels itself"
+else
+    fail "the lint on a package test that cancels itself: $(tail -n 3 "$lt/out")"
+fi
+
 # 5b. The fixture's verdict is the same when the tree's manifests change: run again from a
 #     copy whose real manifests declare every required reason, the findings must not move.
 manifests="$scratch/manifests"
@@ -1172,8 +1191,11 @@ mkdir -p "$wr/home/Library/Containers/com.p3ob7o.knot.dev/Data/Library/Applicati
 printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] && printf %s\n' "$wr" \
     "'{\"devices\":{\"r\":[{\"name\":\"$wr_id-iphone\",\"udid\":\"U1\",\"state\":\"Shutdown\"}]}}\\n'" >"$wr/stub/xcrun"
 # With KNOT_WR_FAIL set, the delete fails as simctl does, with a message that names a path
-# under the home folder.
-printf '[ -n "$KNOT_WR_FAIL" ] && [ "$1 $2" = "simctl delete" ] && { echo "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=513): NSFilePath=$HOME/Library/Developer/CoreSimulator/Devices/U1" >&2; exit 1; }\nexit 0\n' >>"$wr/stub/xcrun"
+# under the home folder in its resolved form, as simctl names it.
+printf '[ -n "$KNOT_WR_FAIL" ] && [ "$1 $2" = "simctl delete" ] && { echo "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=513): NSFilePath=$(cd "$HOME" && pwd -P)/Library/Developer/CoreSimulator/Devices/U1" >&2; exit 1; }\nexit 0\n' >>"$wr/stub/xcrun"
+# The failing run's home folder is a link, so that its given and resolved forms differ
+# wherever the self-test runs (finding 64).
+ln -s "$wr/home" "$wr/home-link"
 chmod +x "$wr/stub/xcrun"
 # A refusal names its target with no home folder in it either: a folder under the home
 # folder that is no worktree of the repository.
@@ -1183,7 +1205,7 @@ wr_refused_status=0
     scripts/worktree-remove.sh "$wr/home/not-a-worktree" >"$wr/refused.out" 2>&1) || wr_refused_status=$?
 # A delete that fails prints simctl's message with no home folder in it either.
 wr_fail_status=0
-(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 KNOT_WR_FAIL=1 \
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home-link" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 KNOT_WR_FAIL=1 \
     scripts/worktree-remove.sh "$wr_tree" >"$wr/fail.out" 2>&1) || wr_fail_status=$?
 wr_status=0
 (cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 \
@@ -1204,12 +1226,18 @@ else
 fi
 
 # The package's tests under the strict cooperative pool (package-test-strict), through
-# verify.sh's loop: a copy of scripts/ whose doctor is a stand-in, with a stub swift whose
-# build passes and whose suite hangs when LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 is set and
-# passes when it is not. With a 3 s limit the step fails, says that a test may be blocking a
-# thread of the cooperative pool, and names the test that started and did not end, and not
-# the one that passed. A copy that runs the tests without the variable passes, so that this
-# case catches it.
+# verify.sh's loop: a copy of scripts/ whose doctor is a stand-in, and whose in-step process
+# takes the tier that KNOT_POOL_TIER names, with a stub swift whose build passes and whose
+# suite does what KNOT_STUB_MODE says when LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 is set, and
+# passes when it is not. It writes the event stream as swift test does.
+# - hang: with a 3 s limit the step fails, says that a test may be blocking a thread of the
+#   cooperative pool, and names the test that started and did not end, and not the one that
+#   passed; a copy that runs the tests without the variable passes, which this case refuses.
+# - skip-console, cancel-stream (finding 64): at the gate a skip that only the console shows,
+#   and a cancelled case that only the stream shows, each fail the step, since either
+#   reading fails the gate.
+# - fail: a test that fails only under the variable fails the step, and the summary counts
+#   one failure.
 ps="$scratch/pool-strict"
 mkdir -p "$ps/tree" "$ps/stub"
 cp -R "$KNOT_SCRIPTS" "$ps/scripts"
@@ -1221,6 +1249,9 @@ text = open(path).read()
 start = text.index("step_doctor() {")
 end = text.index("\n}\n", start) + 3
 text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+old = "export KNOT_VERIFY_TIER=$TIER"
+assert old in text
+text = text.replace(old, "export KNOT_VERIFY_TIER=${KNOT_POOL_TIER:-$TIER}")
 open(path, "w").write(text)
 PY
 cat >"$ps/stub/swift" <<'SH'
@@ -1229,22 +1260,39 @@ for word in "$@"; do [ "$word" = build ] && exit 0; done
 # The event stream, as swift test writes it at --event-stream-output-path, once the run ends.
 stream="" previous=""
 for word in "$@"; do [ "$previous" = --event-stream-output-path ] && stream=$word; previous=$word; done
+mode=pass
+[ "$LIBDISPATCH_COOPERATIVE_POOL_STRICT" = 1 ] && mode=${KNOT_STUB_MODE:-hang}
 printf '%s\n' "􀟈  Test aPlainTest() started." "􁁛  Test aPlainTest() passed after 0.001 seconds." "􀟈  Test aWaitThatBlocks() started."
-if [ "$LIBDISPATCH_COOPERATIVE_POOL_STRICT" = 1 ]; then exec sleep 30; fi
-printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds." "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
-[ -n "$stream" ] && printf '%s\n' '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' \
-    '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >"$stream"
+[ "$mode" = hang ] && exec sleep 30
+if [ "$mode" = fail ]; then
+    printf '%s\n' "􀢄  Test aWaitThatBlocks() recorded an issue at A.swift:3:5: Expectation failed: false" \
+        "􀢄  Test aWaitThatBlocks() failed after 0.002 seconds with 1 issue." \
+        "􀢄  Test run with 2 tests in 1 suite failed after 0.003 seconds with 1 issue."
+    exit 1
+fi
+printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds."
+[ "$mode" = skip-console ] && printf '%s\n' "􀙟  Test aSkippedOne() skipped: \"only on the console\""
+printf '%s\n' "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
+if [ -n "$stream" ]; then
+    printf '%s\n' '{"kind":"test","payload":{"id":"w","name":"aWaitThatBlocks()","kind":"function"},"version":0}' \
+        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' >"$stream"
+    [ "$mode" = cancel-stream ] &&
+        printf '%s\n' '{"kind":"event","payload":{"kind":"testCaseCancelled","testID":"w","_testCase":{"displayName":"2"}},"version":0}' >>"$stream"
+    printf '%s\n' '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >>"$stream"
+fi
 exit 0
 SH
 chmod +x "$ps/stub/swift"
-pool_strict() { # pool_strict <scripts folder> <name>: status, and the step's log
+pool_strict() { # pool_strict <scripts folder> <name> [mode] [tier]: status, the step's log, the summary
     local status=0 run="$ps/run-$2"
     mkdir -p "$run/slots" "$run/tree"
     cp "$ps/tree/.xcode-version" "$run/tree/"
-    env PATH="$ps/stub:$PATH" KNOT_STRICT_TEST_LIMIT=3 KNOT_TREE="$run/tree" KNOT_SLOT_DIR="$run/slots" \
+    env PATH="$ps/stub:$PATH" KNOT_STRICT_TEST_LIMIT=3 KNOT_STUB_MODE="${3:-hang}" KNOT_POOL_TIER="${4:-}" \
+        KNOT_TREE="$run/tree" KNOT_SLOT_DIR="$run/slots" \
         "$1/verify.sh" --only package-test-strict >"$run/out" 2>&1 || status=$?
     echo "$status"
     cat "$run/tree/.build/logs/verify-package-test-strict.log" 2>/dev/null || true
+    grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" | sed 's/^/summary: /' || true
     # bash's own notice of the job that the limit ended must reach neither the log nor the
     # console, since it names the script by its path (finding 63).
     grep -h -e 'Terminated' "$run/tree/.build/logs/verify-package-test-strict.log" "$run/out" 2>/dev/null | sed 's/^/notice: /' || true
@@ -1253,6 +1301,9 @@ strict_hang="$(pool_strict "$ps/scripts" hang)"
 cp -R "$ps/scripts" "$ps/unset-scripts"
 sed -i '' 's/env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test/env swift test/' "$ps/unset-scripts/verify.sh"
 strict_unset="$(pool_strict "$ps/unset-scripts" unset)"
+strict_skip_console="$(pool_strict "$ps/scripts" skip-console skip-console gate)"
+strict_cancel_stream="$(pool_strict "$ps/scripts" cancel-stream cancel-stream gate)"
+strict_fail="$(pool_strict "$ps/scripts" fail fail)"
 pkill -KILL -f "$ps/stub/swift" 2>/dev/null || true
 if [[ ${strict_hang%%$'\n'*} == 1 && $strict_hang == *"may be blocking a thread of the cooperative pool"* &&
     $strict_hang == *"started, not ended: aWaitThatBlocks()"* && $strict_hang != *"not ended: aPlainTest()"* &&
@@ -1261,6 +1312,13 @@ if [[ ${strict_hang%%$'\n'*} == 1 && $strict_hang == *"may be blocking a thread 
     pass "under the strict pool a suite that hangs fails package-test-strict, which names the test that had not ended; without the variable it would pass"
 else
     fail "package-test-strict through verify's loop: a suite that hangs under the variable: $strict_hang; run without the variable, status ${strict_unset%%$'\n'*}"
+fi
+if [[ ${strict_skip_console%%$'\n'*} == 1 && ${strict_cancel_stream%%$'\n'*} == 1 &&
+    $strict_cancel_stream == *"events: cancelled case: aWaitThatBlocks() (2)"* &&
+    ${strict_fail%%$'\n'*} == 1 && $strict_fail == *"summary: tests 0 passed, 1 failed, 0 skipped"* ]]; then
+    pass "at the gate the strict step fails on a skip the console shows and on a cancelled case the stream shows, and counts its failures once"
+else
+    fail "package-test-strict's skips and failures: a skip on the console alone at the gate: ${strict_skip_console%%$'\n'*}; a cancelled case in the stream alone at the gate: $strict_cancel_stream; a failure: $strict_fail"
 fi
 
 # The step's place in each tier: after package-test in --full and in the gate's leaf and
