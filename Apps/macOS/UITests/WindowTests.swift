@@ -2,14 +2,17 @@ import AppKit
 import CoreGraphics
 import XCTest
 
-/// The main window is on screen at launch whatever window state an earlier quit left, with its
-/// capture field and its stream.
+/// The main window, with its capture field and its stream, is on screen at launch.
 ///
-/// This is the one UI test that does not launch with the saved window state ignored: the state
-/// is what it is about. It only reads (the orchestrator's ruling on WP-33 PR 1): no Mac UI test
-/// types or clicks, because a synthesized event can land in another app on the build Mac.
-/// Closing the window, opening the running app again and quitting are the owner's rows at the
-/// M1 sitting.
+/// It launches with the saved window state as earlier launches left it: the one UI test that
+/// does not ignore that state. It only reads (the orchestrator's ruling on WP-33 PR 1): no Mac UI
+/// test types or clicks, because a synthesized event can land in another app on the build Mac.
+///
+/// What it does not prove: no test closes the window or writes a saved state, so it never meets
+/// a saved state with no window in it, and it passes whether or not the delegate's
+/// `MainWindowOpener.openIfNone()` works. A launch after the window was closed, a reopen of the
+/// running app and a quit are the owner's to try at the M1 sitting. At the gate every other UI
+/// test launches with the saved state ignored, through `KnotLauncher`.
 ///
 /// A closed window stays in the accessibility tree with its contents, so whether the window is
 /// on screen is read from the window server, as `scripts/lib/windows.swift` reads it: the
@@ -20,7 +23,7 @@ final class KnotMacWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testTheMainWindowIsThereAtLaunchWhateverWasSaved() {
+    func testTheMainWindowWithItsCaptureFieldAndStreamIsOnScreenAtLaunch() {
         // Through the launcher, for the agent's mark and `.preview`, without the window-state pair
         // it adds to every launch: this test is about that state.
         let app = KnotLauncher.application(.preview)
