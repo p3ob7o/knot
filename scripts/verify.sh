@@ -238,14 +238,7 @@ step_links() { tool links; }
 # once, since the generator writes the clips in place: the decision and the speaking hold a
 # lock in the tree's .build/, and a second run waits for it and then finds the audio made.
 step_fixtures() {
-    local lock="$KNOT_BUILD/fixtures-audio.lock" wait=${KNOT_FIXTURES_LOCK_WAIT:-1800} status=0
-    mkdir -p "$KNOT_BUILD"
-    /usr/bin/lockf -k -t "$wait" "$lock" "$KNOT_SCRIPTS/verify.sh" --in-step fixtures-audio || status=$?
-    if ((status == 75)); then
-        echo "fixtures: another run in this tree held the audio's lock for ${wait}s ($lock)."
-        return 1
-    fi
-    ((status == 0)) || return "$status"
+    knot_make_audio
     "$KNOT_ROOT/Fixtures/tools/generate.sh" --check
 }
 
@@ -422,11 +415,11 @@ step_package_test() {
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
         return 1
     fi
-    # The gate requires the on-device models, so a test skipped because a model is missing
-    # fails it (docs/architecture.md §17).
-    if [[ $TIER == gate ]] && grep -E 'Test .* skipped' "$output" >/dev/null; then
-        echo "The gate requires every test to run. Skipped:"
-        grep -E 'Test .* skipped' "$output"
+    # The gate requires the on-device models, so a test skipped because a model is missing,
+    # or cancelled at run time, fails it (docs/architecture.md §17).
+    if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        echo "The gate requires every test to run. Skipped or cancelled:"
+        knot_skipped_tests "$output"
         return 1
     fi
 }
@@ -645,12 +638,13 @@ step_launch() {
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds (30). The
-    # probe reads only what needs no Screen Recording permission; the Mac UI tests are the
-    # mac-ui step. Afterwards neither the app nor anything it started may be left running.
+    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds, 60: the first
+    # probe compiles its script, which a loaded Mac makes slow. The probe reads only what
+    # needs no Screen Recording permission; the Mac UI tests are the mac-ui step. Afterwards
+    # neither the app nor anything it started may be left running.
     local mac status=0
     mac="$(products Debug)/Knot.app"
-    knot_start_app "${KNOT_APP_START_LIMIT:-30}" "$mac/Contents/MacOS/Knot" \
+    knot_start_app "${KNOT_APP_START_LIMIT:-60}" "$mac/Contents/MacOS/Knot" \
         xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
     end_mac_test_hosts
     if [[ -n "$(mac_test_hosts)" ]]; then
@@ -927,7 +921,7 @@ count_tests() {
         TESTS_PASSED=$((TESTS_PASSED + n))
     done
     TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
-    TESTS_SKIPPED=$((TESTS_SKIPPED + $(grep -c -E 'Test .* skipped' "$log" || true)))
+    TESTS_SKIPPED=$((TESTS_SKIPPED + $(knot_skipped_tests "$log" | grep -c . || true)))
     # XCTest cases, such as UI tests, from knot_xctest_result's lines.
     for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
         TESTS_PASSED=$((TESTS_PASSED + n))
@@ -946,13 +940,27 @@ for step in $STEPS; do
     log="$KNOT_LOGS/verify-$step.log"
     step_start=$(knot_now)
     options="$(slot_options "$step")"
+    runner="step_${step//-/_}"
+    # The Mac UI tests need the screen unlocked. The state is read once, before the step. A
+    # locked screen fails the step at once, before it takes its slot, and runs no test. A
+    # read that says nothing never passes the step: the step runs, and fails by itself if the
+    # screen is locked.
+    if [[ $step == mac-ui ]]; then
+        case "$(knot_console_state)" in
+            locked)
+                options=none
+                runner=knot_mac_ui_locked ;;
+            unknown)
+                echo "verify: could not read whether the screen is locked; the Mac UI step runs, and fails by itself if it is." ;;
+        esac
+    fi
     if [[ $options == none ]]; then
         # A light step runs in a background subshell, so that `set -e` holds inside it:
         # bash ignores -e in a function that runs as the condition of an `if`.
         # Its output is filtered for the team's ID, as every log of the run is.
         (
             set -o pipefail
-            ("step_${step//-/_}") 2>&1 | knot_filter_team
+            ("$runner") 2>&1 | knot_filter_team
         ) >"$log" &
     else
         # A heavy step runs in its own process, holding a build slot.
