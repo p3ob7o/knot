@@ -18,17 +18,27 @@ import Synchronization
 /// into the working file's, which keeps its rate for its whole length (docs/architecture.md §8).
 /// An engine that cannot start again, or media services that were reset, end the recording as
 /// `input_lost`.
+///
+/// A recording holds the process's `AudioActivity` from the open to the stop: it stops every
+/// player that plays as it takes the session, and a play is refused while it holds it.
 public struct MicrophoneInput: AudioInput {
     let hardware: any HardwareAudio
     let policy: @Sendable () -> HardwareInputPolicy.Refusal?
+    let activity: AudioActivity
 
     public init() {
-        self.init(hardware: SystemHardwareAudio(), policy: HardwareInputPolicy.refusalForThisProcess)
+        self.init(
+            hardware: SystemHardwareAudio(), policy: HardwareInputPolicy.refusalForThisProcess, activity: .process)
     }
 
-    init(hardware: any HardwareAudio, policy: @escaping @Sendable () -> HardwareInputPolicy.Refusal?) {
+    /// With an activity of its own unless one is given, as a test gives the one its player shares.
+    init(
+        hardware: any HardwareAudio, policy: @escaping @Sendable () -> HardwareInputPolicy.Refusal?,
+        activity: AudioActivity = AudioActivity()
+    ) {
         self.hardware = hardware
         self.policy = policy
+        self.activity = activity
     }
 
     public func prepare() async {}
@@ -37,12 +47,20 @@ public struct MicrophoneInput: AudioInput {
         // First, before anything reaches the hardware or asks for a permission.
         if policy() != nil { throw KnotError.noInputDevice }
         guard await hardware.recordPermission() else { throw KnotError.microphonePermissionRefused }
-        try hardware.activateSession()
+        // The recording wins: a player that plays stops before the session is taken.
+        let claim = await activity.recordingBegins()
+        do {
+            try hardware.activateSession()
+        } catch {
+            claim.end()
+            throw error
+        }
         let engine: any InputEngine
         do {
             engine = try hardware.makeEngine()
         } catch {
             hardware.deactivateSession()
+            claim.end()
             throw error
         }
         // The input node's input format is the hardware's: a rate or a channel count of zero
@@ -53,9 +71,10 @@ public struct MicrophoneInput: AudioInput {
         let tap = engine.tap
         guard hardwareShape.sampleRate > 0, hardwareShape.channels > 0, tap.sampleRate > 0, tap.channels > 0 else {
             hardware.deactivateSession()
+            claim.end()
             throw KnotError.noInputDevice
         }
-        return OpenMicrophone(engine: engine, sampleRate: tap.sampleRate, hardware: hardware)
+        return OpenMicrophone(engine: engine, sampleRate: tap.sampleRate, hardware: hardware, claim: claim)
     }
 }
 
@@ -280,6 +299,8 @@ final class OpenMicrophone: OpenAudioInput {
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
     private let engine: any InputEngine
     private let hardware: any HardwareAudio
+    /// The recording's hold on the process's audio, given back with the session.
+    private let claim: RecordingClaim?
     private let state = Mutex(State())
     /// Where a configuration change and the session's events are handled: a queue of the input's
     /// own, never a thread of the cooperative pool, so that a restart, which starts the engine,
@@ -326,10 +347,11 @@ final class OpenMicrophone: OpenAudioInput {
         var deliveryWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
-    init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio) {
+    init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio, claim: RecordingClaim? = nil) {
         self.engine = engine
         self.sampleRate = sampleRate
         self.hardware = hardware
+        self.claim = claim
     }
 
     /// True once a stop has been asked for, which a test reads to order a stop inside a start.
@@ -528,7 +550,10 @@ final class OpenMicrophone: OpenAudioInput {
             defer { state.sessionReleased = true }
             return !state.sessionReleased
         }
-        if release { hardware.deactivateSession() }
+        if release {
+            hardware.deactivateSession()
+            claim?.end()
+        }
         let waiters = state.withLock { state in
             state.finished = true
             state.suspended -= state.finishWaiters.count

@@ -46,6 +46,63 @@ import Testing
         #expect(wired.recordingState.read() == .idle)
     }
 
+    /// A play while this process records is refused, and the recording wins (the orchestrator's
+    /// ruling on this pull request): nothing renders, the player's state does not change, and the
+    /// recording runs on to its own end with every frame. One log line says so, with the asset
+    /// the file's name gives and nothing made from its content.
+    @Test func aPlayWhileRecordingIsRefused() async throws {
+        let folder = try ScratchFolder()
+        let activity = AudioActivity()
+        let (input, engine, _) = InterruptionTests.standInMicrophone(
+            InputShape(sampleRate: 48_000, channels: 1), activity: activity)
+        let live = recorder(folder.locations, input: input)
+        let session = try await live.start(request())
+        var tone = try #require(Tone(rate: 48_000, channels: 1))
+        engine.deliver(try tone.next(4_800))
+        let asset = AssetID(uuid: UUID())
+        let file = folder.file("\(asset).caf")
+        _ = try writeWorkingFile(at: file, frames: 32_000)
+        let kept = KeptLog()
+        let player = LiveAudioPlayer(output: .offline, log: KnotLog(.audio, sink: kept), activity: activity)
+        _ = try await player.load(file)
+        await player.play()
+        #expect(player.currentState == .paused(at: .zero, of: .seconds(2)), "\(player.currentState)")
+        #expect(await player.renderOffline(4_800) == 0, "Nothing renders.")
+        engine.deliver(try tone.next(4_800))
+        let audio = await session.stop()
+        #expect(audio.ending == .stopped && audio.frames == 9_600, "\(audio)")
+        let lines = kept.lines("player_refused_while_recording")
+        #expect(lines.count == 1 && lines.first?.fields == [.asset(asset)], "\(lines)")
+        // Once the recording has stopped, the player plays again.
+        await player.play()
+        #expect(player.currentState == .playing(at: .zero, of: .seconds(2)), "\(player.currentState)")
+        await player.pause()
+    }
+
+    /// A recording that starts stops a player that plays, which says that it paused where it
+    /// stood, never playing for ever: half a second rendered, it is paused half a second in once
+    /// the start has returned.
+    @Test func aRecordingThatStartsPausesThePlayer() async throws {
+        let folder = try ScratchFolder()
+        let activity = AudioActivity()
+        let file = folder.file("two-seconds.caf")
+        _ = try writeWorkingFile(at: file, frames: 32_000)
+        let player = LiveAudioPlayer(output: .offline, activity: activity)
+        _ = try await player.load(file)
+        await player.play()
+        _ = await player.renderOffline(8_000)
+        let (input, _, _) = InterruptionTests.standInMicrophone(
+            InputShape(sampleRate: 48_000, channels: 1), activity: activity)
+        let session = try await recorder(folder.locations, input: input).start(request())
+        guard case .paused(let at, let length) = player.currentState else {
+            Issue.record("The player plays on under a recording: \(player.currentState)")
+            _ = await session.stop()
+            return
+        }
+        #expect(length == .seconds(2) && at >= .milliseconds(400) && at <= .milliseconds(500), "\(at)")
+        _ = await session.stop()
+    }
+
     /// What it renders moves it on: a second rendered is a second played, told as it plays, and
     /// at the end of the recording it has ended. A play from the end plays again from the start.
     /// The converted copy, the stored format, plays the same.

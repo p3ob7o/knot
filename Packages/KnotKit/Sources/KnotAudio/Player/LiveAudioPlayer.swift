@@ -27,6 +27,8 @@ public final class LiveAudioPlayer: AudioPlayer {
 
     private let output: Output
     private let log: KnotLog
+    private let activity: AudioActivity
+    private let id = UUID()
     private let queue = DispatchQueue(label: "knot.audio.player", qos: .userInitiated)
     private let state = Mutex(State())
 
@@ -54,9 +56,18 @@ public final class LiveAudioPlayer: AudioPlayer {
         self.init(output: .device)
     }
 
-    init(output: Output, log: KnotLog = KnotLog(.audio)) {
+    /// With an activity of its own unless one is given, as a test gives the one its recorder's
+    /// input shares.
+    init(output: Output, log: KnotLog = KnotLog(.audio), activity: AudioActivity = AudioActivity()) {
         self.output = output
         self.log = log
+        self.activity = activity
+        let id = self.id
+        activity.register(player: id) { [weak self] in await self?.giveWay() }
+    }
+
+    deinit {
+        activity.unregister(player: id)
     }
 
     // MARK: The port
@@ -112,7 +123,13 @@ public final class LiveAudioPlayer: AudioPlayer {
     }
 
     public func play() async {
+        let recording = activity.isRecording
         await onQueue { [self] in
+            if recording, state.withLock({ $0.engine }) != nil {
+                // The recording wins: nothing plays, and nothing changes.
+                logRefused()
+                return
+            }
             switch state.withLock({ $0.playback }) {
             case .empty, .playing: return
             case .paused(let at, _): start(from: at)
@@ -143,6 +160,27 @@ public final class LiveAudioPlayer: AudioPlayer {
             case .paused, .ended:
                 publish(.paused(at: held, of: length))
             }
+        }
+    }
+
+    /// A recording begins: a player that plays stops where it stands and says so. Returns once it
+    /// has.
+    private func giveWay() async {
+        await onQueue { [self] in
+            guard case .playing = state.withLock({ $0.playback }) else { return }
+            let at = halt()
+            state.withLock { $0.engine }?.pause()
+            publish(.paused(at: at, of: state.withLock { $0.length }))
+        }
+    }
+
+    /// A play refused while this process records, with the loaded file's asset when its name
+    /// gives one: nothing made from its content.
+    private func logRefused() {
+        if let asset = state.withLock({ $0.asset }) {
+            log.log(.info, "player_refused_while_recording", .asset(asset))
+        } else {
+            log.log(.info, "player_refused_while_recording")
         }
     }
 

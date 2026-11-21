@@ -260,10 +260,12 @@ import Testing
 
     /// The stand-in microphone: an input on a stand-in engine of `shape` and a stand-in session,
     /// which open nothing.
-    static func standInMicrophone(_ shape: InputShape) -> (MicrophoneInput, StandInEngine, StandInHardware) {
+    static func standInMicrophone(
+        _ shape: InputShape, activity: AudioActivity = AudioActivity()
+    ) -> (MicrophoneInput, StandInEngine, StandInHardware) {
         let engine = StandInEngine(tap: shape)
         let hardware = StandInHardware(permission: true, engine: engine)
-        return (MicrophoneInput(hardware: hardware, policy: { nil }), engine, hardware)
+        return (MicrophoneInput(hardware: hardware, policy: { nil }, activity: activity), engine, hardware)
     }
 
     static func describe(_ delivery: AudioDelivery) -> String {
