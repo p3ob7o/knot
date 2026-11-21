@@ -27,6 +27,7 @@ public final class AssetRepository: AssetStore {
 
     public func place(_ data: Data, as asset: AssetID, kind: AssetKind) async throws(KnotError) -> StoredFile {
         let url = try destination(asset, kind)
+        try refuseOtherKinds(asset, kind)
         let sha = Self.sha256(data)
         if let stored = try find(url, asset: asset, kind: kind) {
             guard stored.sha256 == sha else { throw KnotError.assetConflict.with(.init(assetID: asset)) }
@@ -46,6 +47,7 @@ public final class AssetRepository: AssetStore {
 
     public func move(_ source: URL, as asset: AssetID, kind: AssetKind) async throws(KnotError) -> StoredFile {
         let url = try destination(asset, kind)
+        try refuseOtherKinds(asset, kind)
         if let stored = try find(url, asset: asset, kind: kind) {
             // The stored file itself, or a retry after the move committed and its source went:
             // nothing to do.
@@ -91,6 +93,16 @@ public final class AssetRepository: AssetStore {
     }
 
     // MARK: Files
+
+    /// The conflict rule is on the ID: an asset ID that holds a file of one kind takes no file
+    /// of another, whose place would differ only by its extension.
+    private func refuseOtherKinds(_ asset: AssetID, _ kind: AssetKind) throws(KnotError) {
+        for other in AssetKind.allCases where other != kind {
+            if layer.entryKind(locations.asset(asset, kind: other)) != nil {
+                throw KnotError.assetConflict.with(.init(assetID: asset))
+            }
+        }
+    }
 
     /// A stored file that a placement finds in place, answered only once it and its folder are
     /// on the drive: the placement that put it there may have failed at its folder's sync, and a

@@ -146,4 +146,18 @@ import Testing
         await expectFailure(.cancelled) { try await task.value }
         #expect(try await made.notes.asset(made.audio)?.availability == .remote)
     }
+
+    /// The conflict rule is on the asset's ID: an ID that holds a recording takes no drawing,
+    /// by a write or by a move.
+    @Test func anAssetIDTakesNoFileOfAnotherKind() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 92)
+        await expectFailure(.assetConflict) { try await made.assets.place(Data([7]), as: made.audio, kind: .ink) }
+        let source = folders.make("source").appending(path: "drawing.png", directoryHint: .notDirectory)
+        try Data([8]).write(to: source)
+        await expectFailure(.assetConflict) { try await made.assets.move(source, as: made.audio, kind: .ink) }
+        #expect(try await made.assets.find(made.audio, kind: .ink) == nil)
+        #expect(FileManager.default.fileExists(atPath: source.path))
+    }
 }
