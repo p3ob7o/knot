@@ -2229,8 +2229,9 @@ public enum NoteStoreContract {
             #expect(note.note.createdAt == item.foundAt, "The note is dated when the item was found.")
             #expect(note.isShown, "Where a person sees it.")
             let files = try await h.store.keptFiles(of: item.captureID)
-            #expect(files.map(\.url.lastPathComponent) == item.files.map(\.url.lastPathComponent))
-            #expect(files.map(\.role) == item.files.map(\.role))
+            #expect(files.map(\.url.lastPathComponent) == item.fileNames, "The files it named, by name.")
+            #expect(files.map(\.role) == [.manifest, .payload(.typed)], "Each with its role.")
+            #expect(Set(files.map { $0.url.deletingLastPathComponent() }).count == 1, "All in one folder.")
         }
         #expect(try await h.store.keptFiles(of: earlier.captureID).isEmpty, "Another capture keeps no files.")
         #expect(try await h.store.openCaptures().isEmpty, "A kept item is not open.")
@@ -2245,7 +2246,7 @@ public enum NoteStoreContract {
         let row = try await h.row(item.captureID)
         let cursor = try await h.store.cursor()
         var again = item
-        again.files = [item.files[0]]
+        again.fileNames = [item.fileNames[0]]
         again.foundAt = h.at(7)
         again.reason = KnotError.inboxItemNewerVersion.code
         let second = try await h.store.recordKeptItem(again)
@@ -2253,7 +2254,7 @@ public enum NoteStoreContract {
         #expect(try await h.row(item.captureID) == row, "The row is as it was.")
         #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Nothing else changes.")
         let files = try await h.store.keptFiles(of: item.captureID)
-        #expect(files.map(\.url.lastPathComponent) == [item.files[0].url.lastPathComponent], "The files named now.")
+        #expect(files.map(\.url.lastPathComponent) == [item.fileNames[0]], "The files named now.")
     }
 
     /// A kept item that a later version can read is stored through the failed-row path, in the
@@ -2289,7 +2290,8 @@ public enum NoteStoreContract {
     }
 
     /// A kept item is refused, and nothing is written, for a reason that is not one of the two,
-    /// no file, a file named for another capture, or a capture the store holds that is not a
+    /// no file, a name that is not the capture's ID and an extension (a path that leaves
+    /// `Inbox/`, a folder, another capture's file), or a capture the store holds that is not a
     /// kept item.
     public static func aKeptItemThatIsNotOneIsRefused(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
@@ -2297,10 +2299,17 @@ public enum NoteStoreContract {
         var item = h.keptItem(id, reason: KnotError.writeFailed.code, at: 1)
         await refuses(KnotError.captureInvalid, "another reason") { try await h.store.recordKeptItem(item) }
         item.reason = KnotError.inboxItemUnreadable.code
-        item.files = []
+        item.fileNames = []
         await refuses(KnotError.captureInvalid, "no file") { try await h.store.recordKeptItem(item) }
-        item.files = h.keptItem(h.ids.make(), reason: item.reason, at: 1).files
-        await refuses(KnotError.captureInvalid, "another capture's file") { try await h.store.recordKeptItem(item) }
+        let other: CaptureID = h.ids.make()
+        for name in [
+            "\(other).json", "../Notes/\(id).json", "/etc/\(id).json", "\(id)/\(id).txt", "\(id).j/son",
+            "\(id).json/..", "\(id).", "\(id)", "\(id).JSON", "\(id)".uppercased() + ".json",
+            "\(id)." + String(repeating: "x", count: 17), "x\(id).json",
+        ] {
+            item.fileNames = ["\(id).json", name]
+            await refuses(KnotError.captureInvalid, name) { try await h.store.recordKeptItem(item) }
+        }
         #expect(try await h.row(id) == nil, "Nothing is written.")
         #expect(try await h.store.keptFiles(of: id).isEmpty)
         let stored = try await h.store.record(h.typed("Stored", from: 2, to: 2.5))
@@ -2673,10 +2682,9 @@ struct Harness {
     /// named as `Inbox/` names them.
     func keptItem(_ capture: CaptureID, reason: ErrorCode, at minute: Double) -> KeptInboxItem {
         clock.set(at(minute))
-        let inbox = URL(fileURLWithPath: "/store/Inbox", isDirectory: true)
         return KeptInboxItem(
             captureID: capture, reason: reason, foundAt: at(minute),
-            files: ["json", "txt"].map { KeptFile(url: inbox.appending(path: "\(capture).\($0)")) })
+            fileNames: ["\(capture).json", "\(capture).txt"])
     }
 
     func run(_ text: String, from start: Duration, resumeAt: Duration?) -> TranscriptionRun {

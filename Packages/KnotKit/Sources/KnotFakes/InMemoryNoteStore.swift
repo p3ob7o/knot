@@ -79,8 +79,9 @@
             var savedRevisions: [CaptureID: [SegmentID: Int64]] = [:]
             /// The revision of the late save each capture keeps as a conflict copy.
             var keptRevision: [CaptureID: Int64] = [:]
-            /// The files `Inbox/` keeps for each kept item, as its latest `recordKeptItem` named them.
-            var keptFiles: [CaptureID: [KeptFile]] = [:]
+            /// The names of the files `Inbox/` keeps for each kept item, as its latest
+            /// `recordKeptItem` named them.
+            var keptFiles: [CaptureID: [String]] = [:]
         }
 
         /// What a save brings: new content, an end with nothing to keep, a failed save, or
@@ -104,6 +105,8 @@
         public nonisolated let deviceID: DeviceID
         private let clock: any WallClock
         private let ids: any IDGenerator
+        /// The `Inbox/` that a kept item's file names are resolved against.
+        private let inbox: URL
         private let secret: StoreSecret
         private let faults: Faults
         private var window: AppendWindow
@@ -115,11 +118,15 @@
         /// - Parameters:
         ///   - seed: notes with their segments that the store holds from the start, such as
         ///     conflict copies and generated titles, which only sync and the queue make.
+        /// - Parameter inbox: the `Inbox/` against which `keptFiles(of:)` resolves the names of a
+        ///   kept item's files; a folder of the temporary directory when none is given.
         public init(
             clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, window: AppendWindow = .default,
             storeID: StoreID? = nil, generation: StoreGeneration = 0, seed: [NoteRecord] = [],
-            faults: Faults = []
+            faults: Faults = [], inbox: URL? = nil
         ) {
+            let temporary = FileManager.default.temporaryDirectory
+            self.inbox = inbox ?? temporary.appending(path: "knot-in-memory/Inbox", directoryHint: .isDirectory)
             self.clock = clock
             self.ids = ids
             self.deviceID = deviceID
@@ -247,8 +254,8 @@
         public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
             await waitIfHeld()
             try failIfScripted(item.captureID)
-            guard KeptInboxItem.reasons.contains(item.reason), !item.files.isEmpty,
-                item.files.allSatisfy({ $0.belongs(to: item.captureID) })
+            guard KeptInboxItem.reasons.contains(item.reason), !item.fileNames.isEmpty,
+                item.fileNames.allSatisfy({ KeptInboxItem.isFileName($0, of: item.captureID) })
             else { throw KnotError.captureInvalid.about(capture: item.captureID) }
             var next = state
             if let row = next.captures[item.captureID] {
@@ -256,7 +263,7 @@
                 guard row.kind == .keptInboxItem, let receipt = next.receipts[item.captureID] else {
                     throw KnotError.captureIDConflict.about(capture: item.captureID)
                 }
-                next.keptFiles[item.captureID] = item.files
+                next.keptFiles[item.captureID] = item.fileNames
                 state = next
                 return receipt
             }
@@ -275,7 +282,7 @@
             next.captures[item.captureID]?.lastSavedAt = nil
             receipt.outcome = .failed(item.reason)
             next.receipts[item.captureID] = receipt
-            next.keptFiles[item.captureID] = item.files
+            next.keptFiles[item.captureID] = item.fileNames
             commit(next)
             return receipt
         }
@@ -375,7 +382,7 @@
         public func note(_ id: NoteID) throws(KnotError) -> NoteRecord? { record(id, in: state) }
 
         public func keptFiles(of capture: CaptureID) throws(KnotError) -> [KeptFile] {
-            state.keptFiles[capture] ?? []
+            (state.keptFiles[capture] ?? []).map { KeptFile(name: $0, in: inbox) }
         }
 
         public func segment(_ id: SegmentID) throws(KnotError) -> SegmentRead? {

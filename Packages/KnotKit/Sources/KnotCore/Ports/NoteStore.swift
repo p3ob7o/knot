@@ -95,13 +95,14 @@ public protocol NoteStore: Sendable {
     /// a failed capture, in one transaction (docs/architecture.md §6, rule 2): a row failed
     /// with the item's reason, and one segment of kind `SegmentKind.keptInboxItem` in the state
     /// `SegmentState.keptInboxItem(_:)`, which carries the reason, in a new note dated
-    /// `foundAt`. It records the files the caller names, which `keptFiles(of:)` reads; the
-    /// store never looks in `Inbox/` itself, and nothing it does removes them.
+    /// `foundAt`. It records the names of the files the caller names, which `keptFiles(of:)`
+    /// resolves against the store's own `Inbox/`; the store never looks in `Inbox/` itself, and
+    /// nothing it does removes them.
     ///
     /// The same capture again changes nothing but that record, which takes the files the call
     /// names now, and returns the first receipt. Refused with `capture_invalid` for a reason
-    /// that is not one of `KeptInboxItem.reasons`, no file, or a file whose name is not the
-    /// capture's ID and an extension; with `capture_id_conflict` when the store holds a capture
+    /// that is not one of `KeptInboxItem.reasons`, no file, or a name that
+    /// `KeptInboxItem.isFileName(_:of:)` does not accept; with `capture_id_conflict` when the store holds a capture
     /// of that ID that is not a kept item. Nothing is written then.
     ///
     /// It came after the second pull request merged, so it has a default implementation that
@@ -152,8 +153,9 @@ public protocol NoteStore: Sendable {
     func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead?
 
     /// The files `Inbox/` keeps for a capture, as its latest `recordKeptItem(_:)` named them,
-    /// until `ingest` stores the item: empty for any other capture. A screen offers them from
-    /// this read, to open or share each one, without touching storage.
+    /// each name resolved against the store's own `Inbox/`, until `ingest` stores the item:
+    /// empty for any other capture. A screen offers them from this read, to open or share each
+    /// one, without touching storage.
     ///
     /// It came after the second pull request merged, so it has a default implementation that
     /// answers `port_unavailable`.
