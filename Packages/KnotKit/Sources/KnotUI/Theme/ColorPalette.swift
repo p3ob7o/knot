@@ -36,17 +36,19 @@ public struct ColorPalette: Sendable {
         colors[role] ?? .primary
     }
 
+    /// The secondary roles are the primary colour at 72 per cent: the system's own `.secondary`
+    /// fails the accessibility audit's contrast check on small text.
     public static let placeholder = ColorPalette([
         .background: .clear,
         .surface: .secondary.opacity(0.08),
         .textPrimary: .primary,
-        .textSecondary: .secondary,
+        .textSecondary: .primary.opacity(0.72),
         .accent: .accentColor,
         .recording: .red,
-        .pending: .secondary,
+        .pending: .primary.opacity(0.72),
         .failed: .orange,
         .arrived: .accentColor,
-        .quietMark: .secondary,
+        .quietMark: .primary.opacity(0.72),
         .separator: .secondary.opacity(0.3),
     ])
 }
