@@ -1132,6 +1132,9 @@ pool_strict() { # pool_strict <scripts folder> <name>: status, and the step's lo
         "$1/verify.sh" --only package-test-strict >"$run/out" 2>&1 || status=$?
     echo "$status"
     cat "$run/tree/.build/logs/verify-package-test-strict.log" 2>/dev/null || true
+    # bash's own notice of the job that the limit ended must reach neither the log nor the
+    # console, since it names the script by its path (finding 63).
+    grep -h -e 'Terminated' "$run/tree/.build/logs/verify-package-test-strict.log" "$run/out" 2>/dev/null | sed 's/^/notice: /' || true
 }
 strict_hang="$(pool_strict "$ps/scripts" hang)"
 cp -R "$ps/scripts" "$ps/unset-scripts"
@@ -1140,6 +1143,7 @@ strict_unset="$(pool_strict "$ps/unset-scripts" unset)"
 pkill -KILL -f "$ps/stub/swift" 2>/dev/null || true
 if [[ ${strict_hang%%$'\n'*} == 1 && $strict_hang == *"may be blocking a thread of the cooperative pool"* &&
     $strict_hang == *"started, not ended: aWaitThatBlocks()"* && $strict_hang != *"not ended: aPlainTest()"* &&
+    $strict_hang != *"notice: "* &&
     ${strict_unset%%$'\n'*} == 0 ]] && ! cmp -s "$ps/scripts/verify.sh" "$ps/unset-scripts/verify.sh"; then
     pass "under the strict pool a suite that hangs fails package-test-strict, which names the test that had not ended; without the variable it would pass"
 else

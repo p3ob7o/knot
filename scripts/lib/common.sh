@@ -298,8 +298,13 @@ knot_limit() {
     kill "$timer" 2>/dev/null || true
     wait "$timer" 2>/dev/null || true
     if kill -0 "$pid" 2>/dev/null; then
-        knot_end_process "$pid"
-        wait "$pid" 2>/dev/null || true
+        # bash reports a job that a signal ended, "<pid> Terminated: 15", with this file's
+        # path, on its own standard error as it reaps the job: during the ending and the wait.
+        # The step's log and the console carry the limit's own message instead.
+        {
+            knot_end_process "$pid"
+            wait "$pid" || true
+        } 2>/dev/null
         KNOT_LIMIT_HIT=1
         return 124
     fi
