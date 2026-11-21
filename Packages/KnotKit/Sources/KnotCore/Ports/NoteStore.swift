@@ -95,7 +95,9 @@ public protocol NoteStore: Sendable {
     /// a failed capture, in one transaction (docs/architecture.md §6, rule 2): a row failed
     /// with the item's reason, and one segment of kind `SegmentKind.keptInboxItem` in the state
     /// `SegmentState.keptInboxItem(_:)`, which carries the reason, in a new note dated
-    /// `foundAt`. It records the names of the files the caller names, which `keptFiles(of:)`
+    /// `foundAt`. The time an item was found is not a capture's start: the kept segment does not
+    /// count for the append window, so a later capture is placed as if its note were not there,
+    /// and it carries no arrival mark. It records the names of the files the caller names, which `keptFiles(of:)`
     /// resolves against the store's own `Inbox/`; the store never looks in `Inbox/` itself, and
     /// nothing it does removes them.
     ///

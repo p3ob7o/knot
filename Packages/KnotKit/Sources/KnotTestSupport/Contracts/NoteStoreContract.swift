@@ -117,6 +117,7 @@ public enum NoteStoreContract {
         Check(name: "kept-item-again", run: aKeptItemAgainChangesOnlyItsFiles),
         Check(name: "kept-item-ingested", run: aKeptItemReadLaterIsStoredInItsNote),
         Check(name: "kept-item-refused", run: aKeptItemThatIsNotOneIsRefused),
+        Check(name: "kept-item-window", run: aKeptItemCountsForNoWindow),
         Check(name: "small-ones", run: theSmallOnes),
         Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
@@ -2319,6 +2320,23 @@ public enum NoteStoreContract {
         }
         #expect(try await h.row(stored.captureID) == row, "It is as it was.")
         #expect(try await h.store.keptFiles(of: stored.captureID).isEmpty)
+    }
+
+    /// The time an item was found is not a capture's start: a kept segment does not count for the
+    /// append window, and carries no arrival mark. A capture after it is placed as if the kept
+    /// note were not there: in the note it would join otherwise, or in a new note.
+    public static func aKeptItemCountsForNoWindow(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let reason = KnotError.inboxItemUnreadable.code
+        let earlier = try await h.store.record(h.typed("Earlier", from: 0, to: 0.5))
+        let kept = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 1))
+        let segment = try #require(try await h.store.segment(SegmentID(kept.captureID))).segment
+        #expect(segment.arrivedAt == nil, "A kept segment carries no arrival mark.")
+        let next = try await h.store.record(h.typed("Next", from: 1.2, to: 1.3))
+        #expect(next.noteID == earlier.noteID, "It joins the note it would join were the kept note not there.")
+        let alone = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 30))
+        let after = try await h.store.record(h.typed("After", from: 30.2, to: 30.3))
+        #expect(after.noteID != alone.noteID && !after.joinedExistingNote, "With nothing else near, a new note.")
     }
 
     /// Witness 67: `changes` reports a "Remove recording".

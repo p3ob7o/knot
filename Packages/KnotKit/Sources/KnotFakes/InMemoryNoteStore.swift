@@ -277,6 +277,8 @@
             var receipt = try place(found, ingesting: true, in: &next)
             for segmentID in receipt.segmentIDs {
                 next.segments[segmentID]?.state = .keptInboxItem(item.reason)
+                // Found, not arrived: it carries no arrival mark.
+                next.segments[segmentID]?.arrivedAt = nil
             }
             next.captures[item.captureID]?.outcome = .failed(item.reason)
             next.captures[item.captureID]?.lastSavedAt = nil
@@ -1374,7 +1376,8 @@
                 namedDeletedAt = named.deletedAt ?? (hasLiveSegment(note, in: next) ? nil : named.updatedAt)
             }
             let priors: [PriorCapture] = next.segments.values.compactMap { segment in
-                guard let note = next.notes[segment.noteID] else { return nil }
+                // A kept item's segment is no capture: the time it was found is not a start.
+                guard segment.kind != .keptInboxItem, let note = next.notes[segment.noteID] else { return nil }
                 return PriorCapture(segment, in: note, noteHasLiveSegment: hasLiveSegment(note.id, in: next))
             }
             let openPrior = openOnDevice(in: next).flatMap { capture -> PriorCapture? in
