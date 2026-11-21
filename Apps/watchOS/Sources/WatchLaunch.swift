@@ -23,6 +23,9 @@ enum WatchLaunch: Equatable, Sendable {
     static let startFailsArgument = "-KnotPreviewStartFails"
     /// With `.preview`: each recording reaches the 30-minute limit by itself, at once.
     static let endsAtLimitArgument = "-KnotPreviewEndsAtLimit"
+    /// With `.preview`: the first recording reaches its limit by itself, and its conversion
+    /// waits until the next recording is live, as a long recording's does.
+    static let holdsFirstConversionArgument = "-KnotPreviewHoldsFirstConversion"
     /// With `.preview`, followed by a number of seconds: each press is dated that long after
     /// the one before, so that a test of the one-second rule rests on no time of its own.
     static let pressGapArgument = "-KnotPreviewPressGap"
@@ -36,6 +39,7 @@ enum WatchLaunch: Equatable, Sendable {
         var preview = WatchPreview()
         preview.startFails = arguments.contains(startFailsArgument)
         preview.endsAtLimit = arguments.contains(endsAtLimitArgument)
+        preview.holdsFirstConversion = arguments.contains(holdsFirstConversionArgument)
         if let index = arguments.firstIndex(of: pressGapArgument), arguments.indices.contains(index + 1),
             let gap = Double(arguments[index + 1]), gap.isFinite, gap >= 0
         {
@@ -64,6 +68,9 @@ struct WatchPreview: Equatable, Sendable {
     var startFails = false
     /// Each recording ends by itself at the limit, as soon as it is live.
     var endsAtLimit = false
+    /// The first recording ends by itself at its limit, and its conversion waits until the next
+    /// recording is live.
+    var holdsFirstConversion = false
     /// Seconds between the dates of two presses, or `nil` for the clock's own time.
     var pressGap: Double?
 }

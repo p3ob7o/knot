@@ -20,6 +20,9 @@ enum RecordStatus: Equatable, Sendable {
     case couldNotStart(RecordFailure)
     /// The recording stopped by itself, for this reason, and this became of it.
     case stoppedEarly(EarlyStop, RecordFate)
+    /// A recording is live, and the one before it stopped by itself, for this reason, and this
+    /// became of it.
+    case recordingAfterEarlyStop(EarlyStop, RecordFate)
 
     /// The words on the screen, or `nil` for none.
     var text: String? {
@@ -30,6 +33,8 @@ enum RecordStatus: Equatable, Sendable {
         case .tooShort: String(localized: "Too short. Nothing was kept.")
         case .couldNotStart(let failure): String(localized: "Couldn't start recording. \(failure.text)")
         case .stoppedEarly(let reason, let fate): String(localized: "Recording stopped. \(reason.text) \(fate.text)")
+        case .recordingAfterEarlyStop(let reason, let fate):
+            String(localized: "Recording. The recording before stopped. \(reason.text) \(fate.text)")
         }
     }
 }
@@ -209,7 +214,13 @@ final class RecordScreenModel {
             // It may have ended by itself already, and said so.
             guard !endedByThemselves.contains(capture) else { return }
             phase = .recording(capture)
-            status = .recording
+            // The words for a recording before it that stopped by itself stay, after the word
+            // that says Knot is recording.
+            if case .stoppedEarly(let reason, let fate) = status {
+                status = .recordingAfterEarlyStop(reason, fate)
+            } else {
+                status = .recording
+            }
             announcer.announce(.recordingStarted)
         case .stopped(let stop):
             let fate = RecordFate(stop)
@@ -233,12 +244,26 @@ final class RecordScreenModel {
     }
 
     /// A recording that ended by itself: at its limit, by a call, or because its input or its
-    /// drive failed. It is where it will stay when this is told.
+    /// drive failed. It is where it will stay when this is told, which can be seconds after it
+    /// ended, once it is converted: by then another recording may be live.
+    ///
+    /// The control moves only when the recording that ended is the one it shows, or while a
+    /// press is on its way. When another recording is live, the control stays that recording's,
+    /// and the words say that Knot is recording, and then what became of the one before.
     private func ended(_ ended: WatchCoordinator.RecordingEndedByItself) {
         endedByThemselves.insert(ended.captureID)
+        let reason = EarlyStop(ended.ending)
         let fate = RecordFate(ended.outcome)
-        phase = .idle
-        status = .stoppedEarly(EarlyStop(ended.ending), fate)
+        switch phase {
+        case .recording(let shown) where shown != ended.captureID:
+            status = .recordingAfterEarlyStop(reason, fate)
+        case .starting:
+            // A press is starting the next recording: its outcome moves the control.
+            status = .stoppedEarly(reason, fate)
+        case .idle, .recording, .stopping:
+            phase = .idle
+            status = .stoppedEarly(reason, fate)
+        }
         announcer.announce(fate.announcement)
     }
 }

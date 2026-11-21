@@ -133,6 +133,7 @@ struct WatchComposition: Sendable {
             if let recorder = environment.recorder as? ScriptedRecorder {
                 if preview.startFails { recorder.failNextStarts(with: KnotError.microphonePermissionRefused) }
                 if preview.endsAtLimit { recorder.setScript(ScriptedRecorder.Script(endsBySelf: .limitReached)) }
+                if preview.holdsFirstConversion { environment.recorder = ConversionHoldingRecorder(recorder) }
             }
             let system = FakeLinkSystem(receiving: root.appending(path: "Received", directoryHint: .isDirectory))
             environment = KnotLinkLive.wire(

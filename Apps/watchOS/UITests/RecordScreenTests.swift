@@ -92,6 +92,28 @@ extension RecordScreenTests {
     }
 }
 
+extension RecordScreenTests {
+    /// A recording ends by itself and is reported only once it is converted, by when a tap has
+    /// started the next one. The control stays the live recording's, and the words say that Knot
+    /// is recording, and then what became of the one before.
+    @MainActor
+    func testAnEndReportedWhileTheNextRecordingIsLiveLeavesTheControlRecording() throws {
+        let app = launchPreview(gap: 2, [WatchLaunch.holdsFirstConversionArgument])
+        let record = app.buttons["knot.record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 30))
+        record.tap()
+        // The first recording has ended by itself, and the coordinator has not said so yet.
+        XCTAssertTrue(waitForLabel(record, "Stop recording"))
+        record.tap()
+        XCTAssertTrue(
+            waitForLabel(
+                app.staticTexts["knot.status"],
+                "Recording. The recording before stopped. It reached the 30-minute limit. Saved"))
+        XCTAssertTrue(waitForLabel(record, "Stop recording"))
+        try app.auditAccessibility()
+    }
+}
+
 /// The smoke test on the real composition: the live recorder, the coordinator and the outbox,
 /// on injected audio and a temporary store, since a simulator refuses the microphone
 /// (docs/architecture.md §8). Press, wait over a second, press, and "Saved" is on the screen.
@@ -153,7 +175,7 @@ final class WatchLaunchTests: XCTestCase {
     func testAReleaseBuildIgnoresEveryArgument() {
         let every = [
             WatchLaunch.previewArgument, WatchLaunch.injectedAudioArgument, WatchLaunch.startFailsArgument,
-            WatchLaunch.endsAtLimitArgument,
+            WatchLaunch.endsAtLimitArgument, WatchLaunch.holdsFirstConversionArgument,
             WatchLaunch.pressGapArgument, "2",
         ]
         XCTAssertEqual(WatchLaunch.mode(arguments: every, honoursDebugArguments: false), .live)
