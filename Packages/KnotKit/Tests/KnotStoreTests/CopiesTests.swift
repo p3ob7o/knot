@@ -366,6 +366,30 @@ import Testing
         #expect(kept.count == StoreCopies.dailyCopiesKept)
         #expect(kept.contains(today))
     }
+
+    /// Foundation's file errors, which a restore meets, keep their meaning: a full volume is
+    /// `disk_full`, and a volume that takes no writes is `write_failed`.
+    @Test func foundationFileErrorsKeepTheirMeaning() {
+        let cases: [(any Error, KnotError)] = [
+            (CocoaError(.fileWriteOutOfSpace), .diskFull),
+            (CocoaError(.fileWriteVolumeReadOnly), .writeFailed),
+            (CocoaError(.fileWriteNoPermission), .writeFailed),
+            (NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC)), .diskFull),
+            (NSError(domain: NSPOSIXErrorDomain, code: Int(EROFS)), .writeFailed),
+            (
+                NSError(
+                    domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+                    userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(EDQUOT))]),
+                .diskFull
+            ),
+        ]
+        for (error, expected) in cases {
+            let mapped = StoreErrors.knotError(error)
+            #expect(mapped.code == expected.code, "\(error)")
+            #expect(
+                mapped.next == expected.next && mapped.retry == expected.retry && mapped.written == expected.written)
+        }
+    }
 }
 
 extension StoreCopies {

@@ -425,7 +425,7 @@ enum StoreErrors {
     static func knotError(_ error: any Error) -> KnotError {
         if let error = error as? KnotError { return error }
         if error is CancellationError { return KnotError.cancelled }
-        guard let error = error as? DatabaseError else { return KnotError.unexpected }
+        guard let error = error as? DatabaseError else { return fileError(error) }
         let mapped: KnotError
         switch error.resultCode {
         case .SQLITE_FULL: mapped = KnotError.diskFull
@@ -437,6 +437,32 @@ enum StoreErrors {
         }
         // SQLite's extended result code, a number only, for the diagnostics.
         return mapped.with(ErrorContext(engineCode: Int(error.extendedResultCode.rawValue)))
+    }
+
+    /// A failure of Foundation's file operations, which a restore and a probe use: a full
+    /// volume is `disk_full`, any other failed write `write_failed`, a file that is not there
+    /// `not_found`. Only what none of them is stays `unexpected`.
+    static func fileError(_ error: any Error) -> KnotError {
+        let error = error as NSError
+        var posix: Int32?
+        if error.domain == NSPOSIXErrorDomain { posix = Int32(error.code) }
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError, underlying.domain == NSPOSIXErrorDomain {
+            posix = Int32(underlying.code)
+        }
+        if let posix {
+            let base: KnotError = (posix == ENOSPC || posix == EDQUOT) ? .diskFull : .writeFailed
+            return base.with(ErrorContext(posixError: posix))
+        }
+        guard error.domain == NSCocoaErrorDomain else { return KnotError.unexpected }
+        switch error.code {
+        case NSFileWriteOutOfSpaceError: return KnotError.diskFull
+        case NSFileNoSuchFileError, NSFileReadNoSuchFileError: return KnotError.notFound
+        case NSFileWriteUnknownError, NSFileWriteNoPermissionError, NSFileWriteInvalidFileNameError,
+            NSFileWriteFileExistsError, NSFileWriteVolumeReadOnlyError, NSFileWriteInapplicableStringEncodingError,
+            NSFileReadUnknownError, NSFileReadNoPermissionError, NSFileLockingError:
+            return KnotError.writeFailed
+        default: return KnotError.unexpected
+        }
     }
 
     /// An error while opening the pool: a file SQLite cannot read is damaged.
