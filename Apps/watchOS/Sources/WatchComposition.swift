@@ -77,16 +77,20 @@ struct WatchComposition: Sendable {
     }
 
     /// The Watch's own folders, from its Info.plist: its flavour, and its app group, which only
-    /// a team-signed build has.
+    /// a team-signed build has (`WatchAppGroup`).
     private static func ownLocations(appContainer: URL) throws(KnotError) -> StoreLocations {
         let info = Bundle.main.infoDictionary ?? [:]
         let flavour = (info["KnotFlavour"] as? String).flatMap(StoreLocations.Flavour.init(rawValue:)) ?? .dev
         let group: StoreLocations.AppGroup
-        if info["KnotSigning"] as? String == "team", let identifier = info["KnotAppGroup"] as? String {
+        switch WatchAppGroup(info: info) {
+        case .present(let identifier):
             group = .present(
                 container: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier))
-        } else {
+        case .absent:
             group = .absent
+        case .refused:
+            // A group with no container, which `StoreLocations.resolve` refuses.
+            group = .present(container: nil)
         }
         return try StoreLocations.resolve(
             flavour: flavour, platform: .watchOS, appContainer: appContainer, appGroup: group,

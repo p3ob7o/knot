@@ -28,8 +28,10 @@ targets:
     sources:
       - UITests
       - ../UITestSupport
-      # The launch arguments, so that a test shows a release build ignores them.
+      # The launch arguments, so that a test shows a release build ignores them, and the
+      # app group's decision, so that a test covers each row.
       - Sources/WatchLaunch.swift
+      - Sources/WatchAppGroup.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).watchkitapp.uitests
