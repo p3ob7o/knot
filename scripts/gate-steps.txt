@@ -26,7 +26,7 @@ ownership	required	WP-01	The diff stays inside the paths the package owns, from 
 core-api	required	WP-01	KnotCore's public API matches the base, except on a contract branch.
 named-tests	required	WP-01	Every test in docs/plan/named-tests.txt exists once its package has merged.
 package-build	required	WP-01	The package and its tests build, with --explicit-target-dependency-import-check error.
-package-test	required	WP-01	The package tests, Swift Testing, on the Mac. A skipped or cancelled test fails the gate, because the gate requires the models.
+package-test	required	WP-01	The package tests, Swift Testing, on the Mac. A skipped or cancelled test, or a cancelled case, read from the console or from the run's event stream, fails the gate, because the gate requires the models; a stream that is missing or did not end fails the step.
 package-test-strict	required	WP-01	The package tests once more with LIBDISPATCH_COOPERATIVE_POOL_STRICT=1, one pool thread for each priority, so that a test whose wait blocks a pool thread hangs here as on the three-core hosted runner; at its limit it names the tests that started and did not end. A skipped or cancelled test fails the gate.
 contract-two-targets	required	WP-01	A contract suite in KnotTestSupport runs from two test targets.
 self-test	required	WP-01	The scripts' self-test.

@@ -83,6 +83,9 @@ func cancelsItself() throws {
     try Test.cancel("the model is not on this Mac")
     // expect: test-cancel
     try Test.Case.cancel()
+    // expect: test-cancel
+    try Test
+        .cancel("the member on the next line, as finding 60 found it")
     // expect: nothing
     // Test.cancel() in a comment is no call.
     let note = 1

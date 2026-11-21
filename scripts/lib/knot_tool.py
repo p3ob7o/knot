@@ -600,7 +600,23 @@ MANIFESTS = {
 def code_lines(path):
     """The statements of a Swift file, as (first line number, code, raw text). The code has its
     comments blanked; the raw text keeps them, for the `knot-lint: allow` marker. A call that
-    runs over several lines is joined into one statement, by its parentheses."""
+    runs over several lines is joined into one statement, by its parentheses; and a line that
+    begins with a member access, as `.cancel(…)` after `try Test`, joins the statement before
+    it."""
+    held = None
+    for statement in _code_statements(path):
+        if held is not None and statement[1].startswith("."):
+            held = (held[0], held[1] + " " + statement[1], held[2] + " " + statement[2])
+            continue
+        if held is not None:
+            yield held
+        held = statement
+    if held is not None:
+        yield held
+
+
+def _code_statements(path):
+    """code_lines's statements, before a line that begins with a member access is joined."""
     with open(path, encoding="utf-8") as f:
         raw_text = f.read()
     text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), raw_text, flags=re.S)
@@ -868,6 +884,61 @@ def cmd_unended_tests(log):
             print(f"started, not ended: {name}")
     for name in failed:
         print(f"failed: {name}")
+    return 0
+
+
+# ---------------------------------------------------------------- the event stream
+
+
+def cmd_test_events(path, gate=False):
+    """What a run's Swift Testing event stream says ran: the stream that
+    `swift test --event-stream-output-path <file> --event-stream-version 0` writes, one JSON
+    object a line, every target's run appended to the one file. It prints each test skipped,
+    test cancelled and case cancelled, which the console can print as passed or over two
+    lines, and a summary line that the run's summary reads. It fails when the stream is
+    missing, or holds no run, or a run that did not end; and, with --gate, when any test or
+    case did not run. Names are printed with a newline written as \\n, and no path."""
+    if not os.path.exists(path):
+        print(f"events: the run wrote no event stream at {os.path.basename(path)}")
+        return 2
+    names, notes, runs_started, runs_ended, tests, malformed = {}, [], 0, 0, 0, 0
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                kind, payload = record["kind"], record["payload"]
+            except (ValueError, KeyError, TypeError):
+                malformed += 1
+                continue
+            if kind == "test":
+                names[payload.get("id")] = payload.get("displayName") or payload.get("name") or "?"
+                tests += payload.get("kind") == "function"
+                continue
+            if kind != "event":
+                continue
+            event = payload.get("kind")
+            name = names.get(payload.get("testID"), payload.get("testID") or "?").replace("\n", "\\n")
+            if event == "runStarted":
+                runs_started += 1
+            elif event == "runEnded":
+                runs_ended += 1
+            elif event == "testSkipped":
+                notes.append(f"skipped: {name}")
+            elif event == "testCancelled":
+                notes.append(f"cancelled: {name}")
+            elif event == "testCaseCancelled":
+                case = (payload.get("_testCase") or {}).get("displayName", "?").replace("\n", "\\n")
+                notes.append(f"cancelled case: {name} ({case})")
+    for note in notes:
+        print(f"events: {note}")
+    print(f"events: {runs_ended} of {runs_started} runs ended, {tests} tests, {len(notes)} skipped or cancelled"
+          f"{f', {malformed} lines unread' if malformed else ''}")
+    if runs_started == 0 or runs_ended < runs_started:
+        print("events: the stream holds no run, or a run that did not end, so it cannot say that every test ran")
+        return 2
+    if gate and notes:
+        print("events: the gate requires every test and every case to run")
+        return 1
     return 0
 
 
@@ -1674,6 +1745,8 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "test-events":
+        return cmd_test_events(args[0], "--gate" in args[1:])
     if command == "unended-tests":
         return cmd_unended_tests(args[0])
     if command == "workflows":

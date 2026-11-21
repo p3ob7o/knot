@@ -149,6 +149,23 @@ xcb() {
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
 
+# Swift Testing's event stream, which every step that runs Swift Testing writes and reads:
+# `--event-stream-output-path` with `--event-stream-version 0`, an option of `swift test`
+# that its --help does not list (docs/dev-setup.md). The console can print a cancelled case
+# of a test with arguments as passed, and an event whose reason or name holds a newline over
+# two lines; the stream says what ran.
+#   event_flags <stream>         sets EVENT_FLAGS for swift test, and removes an old stream
+#   check_events <stream>        prints what did not run, and fails on a missing or
+#                                incomplete stream, and at the gate on a test or case that
+#                                did not run (knot_tool.py test-events)
+event_flags() {
+    rm -f "$1"
+    EVENT_FLAGS=(--event-stream-output-path "$1" --event-stream-version 0)
+}
+check_events() {
+    if [[ $TIER == gate ]]; then tool test-events "$1" --gate; else tool test-events "$1"; fi
+}
+
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
 # xcodebuild's own test limits, for every run of tests in a simulator or on the desktop: a
@@ -430,15 +447,16 @@ step_package_build() {
 
 step_package_test() {
     knot_swiftpm_flags
-    local filter=() output="$KNOT_LOGS/verify-package-test.out"
+    local filter=() output="$KNOT_LOGS/verify-package-test.out" stream="$KNOT_LOGS/verify-package-test-events.jsonl"
     if [[ -n $MODULE ]]; then
         # The Swift module of a test target turns "-" into "_": knot-evalTests is
         # knot_evalTests.
         filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
+    event_flags "$stream"
     package_tests() {
         swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
-            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
+            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
     }
     knot_swift_test_limited package-test package_tests
     # A run that matched no test is a failure, not a pass.
@@ -446,6 +464,10 @@ step_package_test() {
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
         return 1
     fi
+    # The stream says what ran: a run whose stream is missing or did not end fails, and at
+    # the gate a test or case that did not run fails it, whatever the console printed. The
+    # console's own reading below stays as a second one.
+    check_events "$stream" || return 1
     # The gate requires the on-device models, so a test skipped because a model is missing,
     # or cancelled at run time, fails it (docs/architecture.md §17).
     if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
@@ -468,17 +490,19 @@ step_package_test() {
 step_package_test_strict() {
     knot_swiftpm_flags
     local output="$KNOT_LOGS/verify-package-test-strict.out" limit=${KNOT_STRICT_TEST_LIMIT:-1800} status=0
+    local stream="$KNOT_LOGS/verify-package-test-strict-events.jsonl"
     local filter=()
     if [[ -n $MODULE ]]; then
         filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
     : >"$output"
+    event_flags "$stream"
     strict_build() {
         swift build "${KNOT_SWIFTPM_FLAGS[@]}" --build-tests --explicit-target-dependency-import-check error # limit: strict_build
     }
     strict_tests() {
         env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test "${KNOT_SWIFTPM_FLAGS[@]}" --skip-build \
-            ${filter[@]+"${filter[@]}"} >"$output" 2>&1 # limit: strict_tests
+            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} >"$output" 2>&1 # limit: strict_tests
     }
     knot_run_limited "The package build" "$KNOT_BUILD_LIMIT" strict_build || return 1
     knot_limit "$limit" strict_tests || status=$?
@@ -500,6 +524,7 @@ step_package_test_strict() {
         echo "No test ran${MODULE:+ for $TEST_TARGET} under the strict pool."
         return 1
     fi
+    check_events "$stream" || return 1
     if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
         echo "The gate requires every test to run. Skipped or cancelled under the strict pool:"
         knot_skipped_tests "$output" | sed 's/^/    /'
@@ -519,11 +544,14 @@ step_contract_two_targets() {
         local targets target ran=0
         targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null | grep -e "$suite" | cut -d. -f1 | sort -u)" # limit: contract_runs
         for target in $targets; do
-            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
+            event_flags "$KNOT_LOGS/verify-contract-run-$target-events.jsonl"
+            swift test "${KNOT_SWIFTPM_FLAGS[@]}" "${EVENT_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
                 echo "FAIL  the dummy contract suite failed in $target"
                 continue
             }
-            if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
+            if ! check_events "$KNOT_LOGS/verify-contract-run-$target-events.jsonl"; then
+                echo "FAIL  the dummy contract suite's run in $target did not run every test"
+            elif grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
                 echo "ok    the dummy contract suite ran and passed in $target"
                 ran=$((ran + 1))
             else
@@ -826,8 +854,11 @@ step_perf() {
 # The package tests under Thread Sanitizer, as the nightly run does (named test
 # package-tests-under-thread-sanitizer-nightly).
 step_tsan() {
+    local stream="$KNOT_LOGS/verify-tsan-events.jsonl"
+    event_flags "$stream"
     knot_swift_test_limited tsan \
-        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread "${EVENT_FLAGS[@]}"
+    check_events "$stream"
 }
 
 # Reports a change in the on-device models since the last report, as the nightly run on
@@ -1005,7 +1036,14 @@ count_tests() {
         TESTS_PASSED=$((TESTS_PASSED + n))
     done
     TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
-    TESTS_SKIPPED=$((TESTS_SKIPPED + $(knot_skipped_tests "$log" | grep -c . || true)))
+    # The console's reading and the event stream's, the larger: a cancelled case prints as
+    # passed, and an event over two lines matches no pattern, while the stream counts both.
+    local console stream=0
+    console=$(knot_skipped_tests "$log" | grep -c . || true)
+    for n in $(sed -n -E 's/^events: [0-9]+ of [0-9]+ runs ended, [0-9]+ tests, ([0-9]+) skipped or cancelled.*/\1/p' "$log"); do
+        stream=$((stream + n))
+    done
+    TESTS_SKIPPED=$((TESTS_SKIPPED + (stream > console ? stream : console)))
     # XCTest cases, such as UI tests, from knot_xctest_result's lines.
     for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
         TESTS_PASSED=$((TESTS_PASSED + n))

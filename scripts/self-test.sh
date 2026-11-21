@@ -989,8 +989,9 @@ end = text.index("\n}\n", start) + 3
 text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
 for old, new in (
     ('swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \\\n'
-     '            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"',
-     'cat "$KNOT_SKIP_LOG" | tee "$output"'),
+     '            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"',
+     '{ if [[ -f $KNOT_SKIP_LOG.events ]]; then cp "$KNOT_SKIP_LOG.events" "${EVENT_FLAGS[1]}"; fi; '
+     'cat "$KNOT_SKIP_LOG"; } | tee "$output"'),
     ("export KNOT_VERIFY_TIER=$TIER", "export KNOT_VERIFY_TIER=${KNOT_SKIP_TIER:-$TIER}"),
 ):
     assert old in text, old
@@ -1036,6 +1037,80 @@ cat >"$sl/logs/failed.log" <<'LOG'
 􀢄  Test aFailingTest() failed after 0.002 seconds with 1 issue.
 􀢄  Test run with 2 tests in 1 suite failed after 0.003 seconds with 1 issue.
 LOG
+# Each log has the event stream its run would write beside it, <log>.events, which the copy's
+# package tests hand to the step as swift test would (finding 60). The re-check's probe of
+# pull request 63 adds six runs that the console reads wrong: three cancellations, a case
+# cancelled by `try Test` and `.cancel` on the next line, a test cancelled through an alias,
+# and a case cancelled by its task, two of them printed as passed; and three events over two
+# lines, a skip reason, a display name and a cancellation reason. And two runs that print as
+# passed with no stream, and with a stream whose run did not end.
+cat >"$sl/logs/case-cancel-split.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􁁛  Test caseCancelSplit(x:) with 2 test cases passed after 0.001 seconds.
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/alias-cancel.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test aliasCancel() was cancelled after 0.001 seconds: "through an alias"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/case-task-cancel.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􁁛  Test caseTaskCancelled(x:) with 2 test cases passed after 0.001 seconds.
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/reason-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test multiLineReason() skipped: "first line
+second line"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/name-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test "two
+lines" skipped: "r"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/cancel-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test cancelMultiLine() was cancelled after 0.001 seconds: "one
+two"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cp "$sl/logs/lookalike.log" "$sl/logs/no-stream.log"
+cp "$sl/logs/lookalike.log" "$sl/logs/no-run-end.log"
+python3 -I - "$sl/logs" <<'PY'
+import json, os, sys
+logs = sys.argv[1]
+def stream(name, tests, events, ended=True):
+    """tests: [(id, name, display name)]; events: [(kind, id, case display name)]"""
+    lines = [{"kind": "test", "payload": {"id": i, "name": n, "displayName": d, "kind": "function"}, "version": 0}
+             for i, n, d in tests]
+    lines.append({"kind": "event", "payload": {"kind": "runStarted"}, "version": 0})
+    for kind, i, case in events:
+        payload = {"kind": kind, "testID": i}
+        if case:
+            payload["_testCase"] = {"displayName": case}
+        lines.append({"kind": "event", "payload": payload, "version": 0})
+    if ended:
+        lines.append({"kind": "event", "payload": {"kind": "runEnded"}, "version": 0})
+    with open(os.path.join(logs, name + ".log.events"), "w") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+plain = ("p", "aPlainTest()", None)
+stream("cancelled", [plain, ("c", "cancelledAtRunTime()", None)], [("testCancelled", "c", None)])
+stream("skipped", [plain, ("s", "disabledByATrait()", None)], [("testSkipped", "s", None)])
+stream("lookalike", [plain, ("a", "aRecordedIssue()", None), ("b", "skippedSegmentIsReported()", None)], [])
+stream("quoted", [plain, ("q", "quoted()", 'He said "hi"'), ("d", "plainDisabled()", None)],
+       [("testSkipped", "q", None), ("testSkipped", "d", None)])
+stream("failed", [plain, ("f", "aFailingTest()", None)], [])
+stream("case-cancel-split", [plain, ("x", "caseCancelSplit(x:)", None)], [("testCaseCancelled", "x", "2")])
+stream("alias-cancel", [plain, ("y", "aliasCancel()", None)], [("testCancelled", "y", None)])
+stream("case-task-cancel", [plain, ("z", "caseTaskCancelled(x:)", None)], [("testCaseCancelled", "z", "2")])
+stream("reason-two-lines", [plain, ("r", "multiLineReason()", None)], [("testSkipped", "r", None)])
+stream("name-two-lines", [plain, ("n", "multiLineName()", "two\nlines")], [("testSkipped", "n", None)])
+stream("cancel-two-lines", [plain, ("m", "cancelMultiLine()", None)], [("testCancelled", "m", None)])
+stream("no-run-end", [plain], [], ended=False)
+PY
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
     local status=0 run="$sl/run-$1-$2"
     mkdir -p "$run/slots"
@@ -1058,6 +1133,25 @@ if [[ $gate_cancelled == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
     pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and counts once; a line that only looks like one counts for nothing"
 else
     fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike', quoted names and a bare skip at the gate '$gate_quoted', one failed test at the quick tier '$quick_failed'"
+fi
+# The event stream decides (finding 60): each of the probe's six runs fails the gate and
+# passes the quick tier with one skipped, though the console printed two of them as passed
+# and three over two lines; a run with no stream, or whose stream did not end, fails at
+# either tier.
+stream_verdicts=""
+for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
+    stream_verdicts="$stream_verdicts $run: $(skip_loop "$run" gate) / $(skip_loop "$run" quick);"
+done
+no_stream="$(skip_loop no-stream quick)"
+no_run_end="$(skip_loop no-run-end quick)"
+expected_verdicts=""
+for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
+    expected_verdicts="$expected_verdicts $run: 1 FAIL · tests 2 passed, 0 failed, 1 skipped / 0 ok · tests 2 passed, 0 failed, 1 skipped;"
+done
+if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* ]]; then
+    pass "the event stream fails the gate on a cancelled case printed as passed and on events over two lines, and a run with no complete stream fails"
+else
+    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end'"
 fi
 
 # worktree-remove.sh prints no path with the home folder in it, since its lines end in the
@@ -1132,9 +1226,15 @@ PY
 cat >"$ps/stub/swift" <<'SH'
 #!/bin/sh
 for word in "$@"; do [ "$word" = build ] && exit 0; done
+# The event stream, as swift test writes it at --event-stream-output-path, once the run ends.
+stream="" previous=""
+for word in "$@"; do [ "$previous" = --event-stream-output-path ] && stream=$word; previous=$word; done
 printf '%s\n' "􀟈  Test aPlainTest() started." "􁁛  Test aPlainTest() passed after 0.001 seconds." "􀟈  Test aWaitThatBlocks() started."
 if [ "$LIBDISPATCH_COOPERATIVE_POOL_STRICT" = 1 ]; then exec sleep 30; fi
 printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds." "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
+[ -n "$stream" ] && printf '%s\n' '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' \
+    '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >"$stream"
+exit 0
 SH
 chmod +x "$ps/stub/swift"
 pool_strict() { # pool_strict <scripts folder> <name>: status, and the step's log
