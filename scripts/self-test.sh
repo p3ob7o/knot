@@ -1096,6 +1096,101 @@ else
     fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out"); a failed delete, status $wr_fail_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/fail.out"); a refusal, status $wr_refused_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/refused.out")"
 fi
 
+# The package's tests under the strict cooperative pool (package-test-strict), through
+# verify.sh's loop: a copy of scripts/ whose doctor is a stand-in, with a stub swift whose
+# build passes and whose suite hangs when LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 is set and
+# passes when it is not. With a 3 s limit the step fails, says that a test may be blocking a
+# thread of the cooperative pool, and names the test that started and did not end, and not
+# the one that passed. A copy that runs the tests without the variable passes, so that this
+# case catches it.
+ps="$scratch/pool-strict"
+mkdir -p "$ps/tree" "$ps/stub"
+cp -R "$KNOT_SCRIPTS" "$ps/scripts"
+cp "$KNOT_SELF/.xcode-version" "$ps/tree/"
+python3 -I - "$ps/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+open(path, "w").write(text)
+PY
+cat >"$ps/stub/swift" <<'SH'
+#!/bin/sh
+for word in "$@"; do [ "$word" = build ] && exit 0; done
+printf '%s\n' "􀟈  Test aPlainTest() started." "􁁛  Test aPlainTest() passed after 0.001 seconds." "􀟈  Test aWaitThatBlocks() started."
+if [ "$LIBDISPATCH_COOPERATIVE_POOL_STRICT" = 1 ]; then exec sleep 30; fi
+printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds." "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
+SH
+chmod +x "$ps/stub/swift"
+pool_strict() { # pool_strict <scripts folder> <name>: status, and the step's log
+    local status=0 run="$ps/run-$2"
+    mkdir -p "$run/slots" "$run/tree"
+    cp "$ps/tree/.xcode-version" "$run/tree/"
+    env PATH="$ps/stub:$PATH" KNOT_STRICT_TEST_LIMIT=3 KNOT_TREE="$run/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$1/verify.sh" --only package-test-strict >"$run/out" 2>&1 || status=$?
+    echo "$status"
+    cat "$run/tree/.build/logs/verify-package-test-strict.log" 2>/dev/null || true
+}
+strict_hang="$(pool_strict "$ps/scripts" hang)"
+cp -R "$ps/scripts" "$ps/unset-scripts"
+sed -i '' 's/env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test/env swift test/' "$ps/unset-scripts/verify.sh"
+strict_unset="$(pool_strict "$ps/unset-scripts" unset)"
+pkill -KILL -f "$ps/stub/swift" 2>/dev/null || true
+if [[ ${strict_hang%%$'\n'*} == 1 && $strict_hang == *"may be blocking a thread of the cooperative pool"* &&
+    $strict_hang == *"started, not ended: aWaitThatBlocks()"* && $strict_hang != *"not ended: aPlainTest()"* &&
+    ${strict_unset%%$'\n'*} == 0 ]] && ! cmp -s "$ps/scripts/verify.sh" "$ps/unset-scripts/verify.sh"; then
+    pass "under the strict pool a suite that hangs fails package-test-strict, which names the test that had not ended; without the variable it would pass"
+else
+    fail "package-test-strict through verify's loop: a suite that hangs under the variable: $strict_hang; run without the variable, status ${strict_unset%%$'\n'*}"
+fi
+
+# The step's place in each tier: after package-test in --full and in the gate's leaf and
+# everything depths, and in neither --quick nor the gate of documents alone. A copy of
+# scripts/ whose runner records each step's name and runs nothing, and whose gate takes its
+# depth from KNOT_SELF_TEST_DEPTH, runs each tier on a scratch tree.
+pl="$scratch/step-lists"
+mkdir -p "$pl/tree"
+cp -R "$KNOT_SCRIPTS" "$pl/scripts"
+cp "$KNOT_SELF/.xcode-version" "$pl/tree/"
+python3 -I - "$pl/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+base_check = 'git -C "$KNOT_ROOT" rev-parse --verify --quiet "$BASE^{' + 'commit}" >/dev/null ||'
+for old, new in (
+    ('    options="$(slot_options "$step")"\n    runner="step_${step//-/_}"',
+     '    options=none\n    runner=record_step'),
+    (base_check, 'true ||'),
+    ('depth_out="$(cd "$KNOT_ROOT" && tool depth --base "$BASE")"',
+     'depth_out="$(printf \'depth=%s\\nmac_ui=0\\nsoak=0\\nhosted=0\\nreason=the self-test\\n\' "$KNOT_SELF_TEST_DEPTH")"'),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+text = text.replace("for step in $STEPS; do\n    log=", 'record_step() { echo "$step" >>"$KNOT_STEP_RECORD"; }\nfor step in $STEPS; do\n    log=', 1)
+open(path, "w").write(text)
+PY
+step_list() { # step_list <name> <depth> <verify arguments…>: the steps the tier ran, on one line
+    local name=$1 depth=$2
+    shift 2
+    env -u KNOT_LOCAL_CONFIG KNOT_STEP_RECORD="$pl/$name" KNOT_SELF_TEST_DEPTH="$depth" KNOT_TREE="$pl/tree" \
+        "$pl/scripts/verify.sh" "$@" >"$pl/$name.out" 2>&1 || true
+    tr '\n' ' ' <"$pl/$name" 2>/dev/null || true
+}
+list_quick="$(step_list quick - --quick)"
+list_full="$(step_list full - --full --skip mac-ui)"
+list_leaf="$(step_list leaf leaf --gate --branch wp/01-self-test --package WP-01)"
+list_everything="$(step_list everything everything --gate --branch wp/01-self-test --package WP-01)"
+list_documents="$(step_list documents documents --gate --branch wp/01-self-test --package WP-01)"
+if [[ $list_quick == *"package-test "* && $list_quick != *"package-test-strict"* &&
+    $list_full == *"package-test package-test-strict "* && $list_leaf == *"package-test package-test-strict "* &&
+    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* ]]; then
+    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents"
+else
+    fail "the steps of each tier: quick '$list_quick'; full '$list_full'; gate leaf '$list_leaf'; everything '$list_everything'; documents '$list_documents'"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

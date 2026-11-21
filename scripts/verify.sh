@@ -22,8 +22,8 @@
 #                                              gate does: main's scripts on the candidate
 #
 # Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
-# named-tests, package-build, package-test, contract-two-targets, self-test, apps, packaging,
-# launch, mac-ui, soak, perf, tsan, model-report.
+# named-tests, package-build, package-test, package-test-strict, contract-two-targets,
+# self-test, apps, packaging, launch, mac-ui, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
@@ -45,15 +45,15 @@ done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
 model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
-        package-build | package-test | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
+        package-build | package-test | package-test-strict | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
         launch | ios-hosted) echo "--simulators" ;;
         mac-ui) echo "--mac-ui" ;;
         perf) echo "--all" ;;
@@ -451,6 +451,57 @@ step_package_test() {
     if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
         # Indented, so that the summary, which reads this step's log, counts each test once.
         echo "The gate requires every test to run. Skipped or cancelled:"
+        knot_skipped_tests "$output" | sed 's/^/    /'
+        return 1
+    fi
+}
+
+# The package's tests once more, with Swift's cooperative pool held strict
+# (LIBDISPATCH_COOPERATIVE_POOL_STRICT=1): one thread for each priority, so that a test whose
+# wait blocks a pool thread while the work that would end it needs a thread of the same
+# priority hangs here, as it does on the three-core hosted runner, where three such waits
+# take every thread (docs/dev-setup.md). It builds the tests without the variable, which
+# package-build has done already, and runs them under it, with a limit of its own
+# (KNOT_STRICT_TEST_LIMIT, 30 minutes). At the limit, or on a failure, it names the tests
+# that had started and not ended, and those that failed. Not in --quick, and not on the
+# hosted runner, which is the other proof.
+step_package_test_strict() {
+    knot_swiftpm_flags
+    local output="$KNOT_LOGS/verify-package-test-strict.out" limit=${KNOT_STRICT_TEST_LIMIT:-1800} status=0
+    local filter=()
+    if [[ -n $MODULE ]]; then
+        filter=(--filter "^${TEST_TARGET//-/_}\.")
+    fi
+    : >"$output"
+    strict_build() {
+        swift build "${KNOT_SWIFTPM_FLAGS[@]}" --build-tests --explicit-target-dependency-import-check error # limit: strict_build
+    }
+    strict_tests() {
+        env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test "${KNOT_SWIFTPM_FLAGS[@]}" --skip-build \
+            ${filter[@]+"${filter[@]}"} >"$output" 2>&1 # limit: strict_tests
+    }
+    knot_run_limited "The package build" "$KNOT_BUILD_LIMIT" strict_build || return 1
+    knot_limit "$limit" strict_tests || status=$?
+    cat "$output"
+    local unended
+    unended="$(tool unended-tests "$output")"
+    if ((KNOT_LIMIT_HIT)); then
+        echo "The package's tests under the strict pool did not end within $(knot_duration "$limit") (KNOT_STRICT_TEST_LIMIT)."
+        echo "A test may be blocking a thread of the cooperative pool while the work that would end its wait needs a thread of the same priority. These had started and not ended:"
+        printf '%s\n' "${unended:-    none that Swift Testing printed}" | sed 's/^/    /'
+        return 1
+    fi
+    if ((status != 0)); then
+        echo "The package's tests failed under the strict pool. A test that fails here and passes in package-test may be blocking a thread of the cooperative pool:"
+        printf '%s\n' "${unended:-    none that Swift Testing named}" | sed 's/^/    /'
+        return 1
+    fi
+    if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
+        echo "No test ran${MODULE:+ for $TEST_TARGET} under the strict pool."
+        return 1
+    fi
+    if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        echo "The gate requires every test to run. Skipped or cancelled under the strict pool:"
         knot_skipped_tests "$output" | sed 's/^/    /'
         return 1
     fi
@@ -898,12 +949,12 @@ else
                 # ID is most easily written down.
                 documents) STEPS="doctor plan links ownership named-tests lint team-id" ;;
                 leaf)
-                    STEPS="$common package-test contract-two-targets self-test apps launch"
+                    STEPS="$common package-test package-test-strict contract-two-targets self-test apps launch"
                     [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
                 everything)
                     # docs/architecture.md §18: everything adds the two-process test and the
                     # .live smoke tests. They are pending until their packages build them.
-                    STEPS="$common package-test contract-two-targets self-test apps packaging ios-hosted launch"
+                    STEPS="$common package-test package-test-strict contract-two-targets self-test apps packaging ios-hosted launch"
                     STEPS="$STEPS live-smoke two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
@@ -969,6 +1020,8 @@ export KNOT_VERIFY_TIER=$TIER KNOT_VERIFY_MODULE=$MODULE KNOT_VERIFY_TEST_TARGET
 
 # The steps whose logs hold test results, which the summary counts, whether they pass or fail.
 COUNTED_STEPS="package-test tsan soak ios-hosted launch mac-ui"
+# package-test-strict runs the same tests as package-test, which counts them: the summary
+# adds only its failures.
 for step in $STEPS; do
     log="$KNOT_LOGS/verify-$step.log"
     step_start=$(knot_now)
@@ -1027,6 +1080,7 @@ for step in $STEPS; do
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
         # A failed step's tests count too, so the summary shows its failed cases.
         [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
         [[ -n $MODULE && $step == package-* ]] && rerun="scripts/verify.sh --module $MODULE"

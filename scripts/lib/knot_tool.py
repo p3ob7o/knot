@@ -828,6 +828,46 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
     return 1 if problems else 0
 
 
+# ---------------------------------------------------------------- tests that started
+
+
+# Swift Testing's event lines: the glyph, two spaces, "Test ", the name, and the event. A test
+# with arguments ends as "Test f(x:) with 3 test cases passed after …".
+TEST_EVENT = re.compile(r"^[^\x00-\x7f]+  Test (.+?)(?: with \d+ test cases?)? "
+                        r"(started\.|passed after .*|failed after .*|skipped(?:\.|: .*)?|was cancelled after .*)$")
+
+
+def cmd_unended_tests(log):
+    """The tests of a Swift Testing log that started and did not end, one a line, for a run
+    that reached its limit; and the ones that failed. The names are counted, since a suite's
+    targets run one after another and a name can recur."""
+    from collections import Counter
+    open_tests, failed = Counter(), []
+    with open(log, errors="replace") as f:
+        for line in f:
+            match = TEST_EVENT.match(line.rstrip("\n"))
+            if not match:
+                continue
+            name, event = match.groups()
+            if name == "run" or name.startswith("run with ") or name.startswith("case passing "):
+                # The run's own lines, "Test run started." and "Test run with N tests …"; and
+                # the cases of a test with arguments, whose start is printed and whose end is
+                # not: the test's own lines say whether it ended.
+                continue
+            if event == "started.":
+                open_tests[name] += 1
+            else:
+                open_tests[name] -= 1
+                if event.startswith("failed"):
+                    failed.append(name)
+    for name, count in open_tests.items():
+        for _ in range(max(count, 0)):
+            print(f"started, not ended: {name}")
+    for name in failed:
+        print(f"failed: {name}")
+    return 0
+
+
 # ---------------------------------------------------------------- workflows
 
 
@@ -1612,6 +1652,8 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "unended-tests":
+        return cmd_unended_tests(args[0])
     if command == "workflows":
         return cmd_workflows(option(args, "--file", NIGHTLY))
     if command == "lint":
