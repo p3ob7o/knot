@@ -77,18 +77,20 @@ import Testing
         #expect(try await r.notes.openCaptures().isEmpty)
     }
 
-    /// Seed 72 (F3). A recording on the store path will not convert, and the store refuses its end
-    /// as failed, then refuses it again in the old work; the retried conversion fails again. The
-    /// end it leaves is made in the same call, not at the next one.
+    /// Seed 72 (F3). A recording on the store path will not convert, and the store will not take
+    /// its end as failed with that code; the retried conversion fails with another code. The end
+    /// that the retry leaves is made in the same call, not at the next one.
     @Test func failedEndLeftByARetriedConversionIsMadeInTheSameCall() async throws {
         let r = Rig()
-        let recording = try await r.beginRecording()
-        r.recorder.failNextConversions(with: .conversionFailed, .conversionFailed)
-        await r.notes.failNextCaptureWrites(with: .storeBusy, .storeBusy)
-        let ended = try await r.engine.end(recording.captureID)
+        let engine = Self.engine(r, deadline: .patient) { end throws(KnotError) in
+            if end.outcome == .failed(KnotError.conversionFailed.code) { throw KnotError.storeBusy }
+        }
+        let recording = try await r.beginRecording(on: engine)
+        r.recorder.failNextConversions(with: .conversionFailed, .diskFull)
+        let ended = try await engine.end(recording.captureID)
         #expect(ended.outcome == .failed(KnotError.conversionFailed.code))
-        await r.engine.retryConversions()
-        #expect(try await r.notes.capture(recording.captureID)?.outcome == .failed(KnotError.conversionFailed.code))
+        await engine.retryConversions()
+        #expect(try await r.notes.capture(recording.captureID)?.outcome == .failed(KnotError.diskFull.code))
     }
 
     /// Seed 4 (F4). A discarded recording's pending end that the store refuses for good, with
