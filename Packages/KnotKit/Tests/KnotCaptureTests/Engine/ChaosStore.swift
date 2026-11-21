@@ -9,6 +9,8 @@ struct ChaosStore: NoteStore {
     let store: InMemoryNoteStore
     /// Awaited before each read of a capture's row: the chaos may hold it there.
     let beforeCaptureRead: @Sendable () async -> Void
+    /// Run before each end the store is asked for: it may refuse it.
+    var beforeEnd: (@Sendable (CaptureEnd) throws(KnotError) -> Void)? = nil
 
     func cursor() async throws(KnotError) -> StoreCursor {
         return try await store.cursor()
@@ -29,6 +31,7 @@ struct ChaosStore: NoteStore {
         return try await store.checkpoint(checkpoint)
     }
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt {
+        try beforeEnd?(end)
         return try await store.end(end)
     }
     func openCaptures() async throws(KnotError) -> [Capture] {
