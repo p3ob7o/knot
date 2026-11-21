@@ -263,6 +263,26 @@ import Testing
         case stopped
     }
 
+    /// The files of a recording that is live in this process cannot be removed: the removal is
+    /// refused with `illegal_transition`, the recording goes on, and its stop keeps every frame.
+    @Test func theFilesOfALiveRecordingCannotBeRemoved() async throws {
+        let folder = try ScratchFolder()
+        let recorder = recorder(folder.locations, input: injected(frames: 16_000))
+        let request = request()
+        let session = try await recorder.start(request)
+        await durable(atLeast: 16_000, of: session)
+        let error = await #expect(throws: KnotError.self) {
+            try await recorder.removeWorkingFile(of: request.captureID)
+        }
+        #expect(error?.code == KnotError.illegalTransition.code && error?.context.captureID == request.captureID)
+        #expect(exists(folder.locations.recordingManifest(request.captureID)))
+        let audio = await session.stop()
+        #expect(audio.frames == 16_000 && audio.ending == .stopped, "\(audio)")
+        #expect(WorkingFileReader.samples(of: try #require(audio.workingFile)) == synthetic(16_000))
+        try await recorder.removeWorkingFile(of: request.captureID)
+        #expect(recordingFolder(folder.locations).isEmpty, "Once it has ended, its files go.")
+    }
+
     /// A discard removes the recording's files and ends its events with one `.ended`, discarded.
     @Test func aDiscardLeavesNoFileAndEndsTheEvents() async throws {
         let folder = try ScratchFolder()

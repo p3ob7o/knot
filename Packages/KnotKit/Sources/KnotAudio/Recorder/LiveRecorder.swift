@@ -251,7 +251,15 @@ public final class LiveRecorder: Recorder {
         return ConvertedRecording(captureID: id, file: destination, duration: converted.duration)
     }
 
+    /// Removes a recording's working file, a conversion's leftover and its manifest. A capture
+    /// whose recording is live in this process, starting or recording, is refused with
+    /// `illegal_transition` and nothing is removed: its working file is the only copy of its audio.
     public func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        guard sessions.withLock({ $0[capture] == nil }) else {
+            let error = KnotError.illegalTransition.about(capture: capture)
+            log.failure(error, "recording_files_kept_while_live")
+            throw error
+        }
         let files = SessionFiles(locations: locations, capture: capture, layer: layer, store: store)
         do {
             try await onWork { () throws(KnotError) in try files.remove() }
