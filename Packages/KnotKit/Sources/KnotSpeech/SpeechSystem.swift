@@ -16,8 +16,16 @@
         func install(_ locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> Bool
     }
 
+    /// An install refused by `SpeechInstallPolicy`: nothing was asked of the system.
+    struct SpeechInstallRefused: Error, Equatable {
+        var refusal: SpeechInstallPolicy.Refusal
+    }
+
     /// The speech system of the device.
     struct LiveSpeechSystem: SpeechSystem {
+        /// The process the install policy reads: this one, unless a test names another.
+        var process: @Sendable () -> SpeechInstallPolicy.Process = { .current }
+
         var isAvailable: Bool { SpeechTranscriber.isAvailable }
 
         func supportedLocales() async -> [Locale] { await SpeechTranscriber.supportedLocales }
@@ -35,6 +43,10 @@
         }
 
         func install(_ locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> Bool {
+            // A test or an agent never installs: an install may download.
+            if let refusal = SpeechInstallPolicy.refusal(for: process()) {
+                throw SpeechInstallRefused(refusal: refusal)
+            }
             // nil when the model is already on the device. The call still reserves the locale,
             // which is what makes `AssetInventory.status` say installed for this process.
             guard

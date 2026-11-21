@@ -393,6 +393,53 @@ import Testing
         #expect(error.code.rawValue == row.1)
     }
 
+    private func process(
+        environment: [String: String] = [:], bundles: [String] = ["/Applications/Knot.app"], name: String = "Knot"
+    ) -> SpeechInstallPolicy.Process {
+        SpeechInstallPolicy.Process(environment: environment, bundlePaths: bundles, processName: name)
+    }
+
+    @Test func theInstallPolicyRefusesATestAndAnAgent() {
+        // The app itself may install.
+        #expect(SpeechInstallPolicy.refusal(for: process()) == nil)
+        // An agent's thread, by KNOT_AGENT=1 only.
+        #expect(SpeechInstallPolicy.refusal(for: process(environment: ["KNOT_AGENT": "1"])) == .agent)
+        #expect(SpeechInstallPolicy.refusal(for: process(environment: ["KNOT_AGENT": "0"])) == nil)
+        // A test, by each of its signs.
+        for variable in ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"] {
+            #expect(SpeechInstallPolicy.refusal(for: process(environment: [variable: "x"])) == .test, "\(variable)")
+        }
+        for runner in ["xctest", "swiftpm-testing-helper"] {
+            #expect(SpeechInstallPolicy.refusal(for: process(name: runner)) == .test, "\(runner)")
+        }
+        #expect(
+            SpeechInstallPolicy.refusal(
+                for: process(bundles: ["/Applications/Knot.app", "/tmp/KnotKitPackageTests.xctest"]))
+                == .test)
+    }
+
+    @Test func thisTestProcessMayNotInstall() {
+        #expect(SpeechInstallPolicy.refusal(for: .current) != nil, "A test process is refused, whoever started it.")
+    }
+
+    @Test(arguments: [SpeechInstallPolicy.Refusal.test, .agent])
+    func theLiveSystemsInstallRefusesBeforeItAsksTheSystem(_ sign: SpeechInstallPolicy.Refusal) async {
+        // The process is scripted, so a broken check here could not reach the system either way:
+        // the refusal comes before any call, and the error says which sign it read.
+        let signs =
+            sign == .agent
+            ? process(environment: ["KNOT_AGENT": "1"]) : process(bundles: ["/tmp/KnotKitPackageTests.xctest"])
+        let system = LiveSpeechSystem(process: { signs })
+        do {
+            _ = try await system.install(Locale(identifier: "en_US")) { _ in }
+            Issue.record("The live install must refuse a test and an agent.")
+        } catch {
+            #expect(error as? SpeechInstallRefused == SpeechInstallRefused(refusal: sign))
+        }
+        // The transcriber reads the refusal as a model that stays missing: a deferral.
+        #expect(SpeechErrorMapping.installError(SpeechInstallRefused(refusal: sign)).isDeferral)
+    }
+
     @Test func theMappingNamesTheSDKsOwnCodes() {
         // SpeechRules names the codes by number, so that it compiles where Speech does not.
         #expect(SFSpeechError.errorDomain == SpeechErrorMapping.speechDomain)
