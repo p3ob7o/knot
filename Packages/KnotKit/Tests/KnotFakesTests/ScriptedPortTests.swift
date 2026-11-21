@@ -198,10 +198,12 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
     static func scripted() -> ScriptedTranscriber {
         let transcriber = ScriptedTranscriber()
         let words = ["pick", "up", "the", "blue", "bike", "from", "the", "shop"]
+        // Words of a second, with pauses shorter than the contract's budget between them.
         transcriber.script(
             speech,
             pieces: words.enumerated().map { index, word in
-                TranscriptPiece(text: word, range: .seconds(index * 2) ..< .seconds(index * 2 + 1))
+                TranscriptPiece(
+                    text: word, range: .milliseconds(index * 1_200) ..< .milliseconds(index * 1_200 + 1_000))
             })
         transcriber.script(silence, pieces: [])
         transcriber.scriptMissing(missing)
