@@ -905,7 +905,9 @@ OTHER_PARTS = ("soak",)
 RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
                   "time", "case", "esac", "in", "function", "select", "for"}
 PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs"}
-FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{(.*)$")
+# Words whose command only looks a name up, and starts nothing.
+LOOKUP_WORDS = {"type", "hash", "which", "whence"}
+FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\))?|([A-Za-z_][\w-]*)\s*\(\))\s*\{(.*)$")
 # A here-document: `<<` or `<<-`, not `<<<`, and a word that starts with a letter, an
 # underscore or a quote, so that an arithmetic shift such as $((1 << 3)) is none.
 HEREDOC = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)([A-Za-z_]\w*)\1")
@@ -920,6 +922,7 @@ def shell_segments(text, first_line=1):
     current, start, line = [], first_line, first_line
     i, n = 0, len(text)
     quote = None
+    parens = 0
 
     def close(end_line):
         nonlocal current, start
@@ -1033,7 +1036,17 @@ def shell_segments(text, first_line=1):
             current.append(c)
             i += 1
             continue
-        if c in ";|&()":
+        if c == ")" and parens == 0:
+            # A ) with no ( open ends a case pattern, such as `xcodebuild)`: no command.
+            current = []
+            i += 1
+            continue
+        if c in "()":
+            parens += 1 if c == "(" else -1
+            close(line)
+            i += 1
+            continue
+        if c in ";|&":
             close(line)
             i += 1
             continue
@@ -1071,14 +1084,21 @@ def command_words(words, scalars, arrays):
     k = 0
     while k < len(words):
         word = words[k]
+        if word in ("case", "for", "select"):
+            # `case x in`, `for x in …`: the words name values, not a command.
+            return []
         if re.match(r"^[A-Za-z_]\w*(\[[^]]*\])?\+?=", word) or word in RESERVED_WORDS:
             k += 1
             continue
         if os.path.basename(word) in PREFIX_WORDS:
+            if word == "command" and k + 1 < len(words) and words[k + 1] in ("-v", "-V"):
+                return []
             k += 1
             while k < len(words) and (words[k].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[k])):
                 k += 1 + (words[k] in ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-S"))
             continue
+        if word in LOOKUP_WORDS:
+            return []
         break
     rest = words[k:]
     if rest:
@@ -1105,6 +1125,8 @@ def limited_call(words):
     if name == "xcrun":
         k = 0
         while k < len(args) and args[k].startswith("-"):
+            if args[k] in ("-f", "-find", "--find") or args[k].startswith("--show-") or args[k] in ("--version", "-h", "--help"):
+                return None
             k += 1 + (args[k] in ("--sdk", "-sdk", "--toolchain", "-toolchain"))
         rest = args[k:]
         if rest[:1] == ["simctl"]:
@@ -1148,7 +1170,7 @@ def cmd_unbounded_calls(files):
         for number, line in enumerate(lines, 1):
             definition = FUNCTION_DEF.match(line)
             if definition:
-                name, rest = definition.group(2), definition.group(3)
+                name, rest = definition.group(2) or definition.group(3), definition.group(4)
                 holder[number] = name
                 if not re.search(r"\}\s*(#.*)?$", rest):
                     stack.append((len(definition.group(1)), name))

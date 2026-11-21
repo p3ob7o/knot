@@ -114,7 +114,39 @@ step_four() {
     # expect: unbounded
     xcodebuild -version
     # expect: unbounded
+    legacy
+    # expect: unbounded
     run=xcodebuild; "$run" -version
+}
+function legacy {
+    # expect: nothing
+    xcodebuild -version # limit: legacy
+}
+step_six() {
+    # expect: nothing
+    knot_limit 10 legacy
+    # expect: nothing
+    command -v xcodebuild >/dev/null || echo "no Xcode"
+    # expect: nothing
+    xcrun -f xcodebuild
+    # expect: nothing
+    xcrun --find swift
+    # expect: nothing
+    type xcodebuild
+    # expect: nothing
+    hash xcodebuild 2>/dev/null
+    # expect: nothing
+    case $tool in
+        # expect: nothing
+        xcodebuild) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        swift) limit=$KNOT_SWIFT_TEST_LIMIT ;;
+    esac
+    cat <<EOT
+Run xcodebuild -version to see it.
+EOT
+    # expect: nothing
+    printf '%s\n' "xcodebuild"
 }
 xcb() {
     # expect: nothing
