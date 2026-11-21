@@ -891,6 +891,59 @@ else
     fail "the skipped and cancelled tests found: $skip_lines"
 fi
 
+# The gate's own check of skipped and cancelled tests, through verify.sh's step loop: a
+# copy of scripts/ in which the doctor is a stand-in, the package tests print a given log in
+# place of running swift test, and the in-step process takes the tier that KNOT_SKIP_TIER
+# names (the gate refuses --only, so this is the one change to its tier). At the gate, a log
+# with a cancelled test, or with a skipped one, fails the step; at the quick tier it passes.
+sl="$scratch/skip-loop"
+mkdir -p "$sl/tree" "$sl/logs"
+cp -R "$KNOT_SCRIPTS" "$sl/scripts"
+cp "$KNOT_ROOT/.xcode-version" "$sl/tree/"
+python3 -I - "$sl/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+for old, new in (
+    ('swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \\\n'
+     '            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"',
+     'cat "$KNOT_SKIP_LOG" | tee "$output"'),
+    ("export KNOT_VERIFY_TIER=$TIER", "export KNOT_VERIFY_TIER=${KNOT_SKIP_TIER:-$TIER}"),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+open(path, "w").write(text)
+PY
+cat >"$sl/logs/cancelled.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test cancelledAtRunTime() was cancelled after 0.001 seconds: "the speech model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/skipped.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test disabledByATrait() skipped: "the speech model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
+    local status=0 run="$sl/run-$1-$2"
+    mkdir -p "$run/slots"
+    env KNOT_SKIP_LOG="$sl/logs/$1.log" KNOT_SKIP_TIER="$2" KNOT_TREE="$sl/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$sl/scripts/verify.sh" --only package-test >"$run/out" 2>&1 || status=$?
+    printf '%s %s · %s' "$status" "$(sed -n -E 's/^verify: (ok|FAIL) +package-test.*/\1/p' "$run/out")" \
+        "$(grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" || true)"
+}
+gate_cancelled="$(skip_loop cancelled gate)"
+gate_skipped="$(skip_loop skipped gate)"
+quick_cancelled="$(skip_loop cancelled quick)"
+if [[ $gate_cancelled == "1 FAIL"* && $gate_skipped == "1 FAIL"* && $quick_cancelled == "0 ok"* ]]; then
+    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, and passes the quick tier"
+else
+    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled'"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
