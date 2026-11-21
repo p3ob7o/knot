@@ -138,7 +138,8 @@
         /// recording that died while it ran, finished as recovered, and one that stopped and was
         /// never converted, or whose conversion failed, as it ended (finding 23). One whose
         /// working file cannot be read through the layer is left out until it can. One whose
-        /// manifest cannot be read ends `recovered`.
+        /// manifest cannot be read ends `recovered`, and one whose working file is gone holds no
+        /// audio: no frame, and no working file named.
         public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
             // A session of an earlier launch that never ended is finished as recovered, which
             // keeps its working file among the others. It is finished outside the lock, because
@@ -156,10 +157,18 @@
             // A working file that is there and cannot be read is left where it is, and returned
             // once it can be read: never as one with no audio. A manifest that cannot be read
             // hides nothing, and it is left where it is.
-            return orphans.filter { canRead($0) }.map { orphan in
+            return orphans.filter { canRead($0) }.compactMap { orphan in
                 var found = orphan
+                let manifest = manifestURL(orphan.captureID)
+                if found.workingFile.map({ layer.entryKind($0) == nil }) ?? true {
+                    // A manifest with no working file is a recording with no audio; with neither
+                    // on the drive, nothing of it is left.
+                    guard layer.entryKind(manifest) != nil else { return nil }
+                    found.frames = 0
+                    found.workingFile = nil
+                }
                 // The ending is the manifest's when the manifest can be read, else `recovered`.
-                if (try? layer.read(manifestURL(orphan.captureID))) == nil { found.ending = .recovered }
+                if (try? layer.read(manifest)) == nil { found.ending = .recovered }
                 return found
             }
         }

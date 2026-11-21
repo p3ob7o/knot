@@ -191,6 +191,23 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         #expect(again?.ending == .stopped, "Once it can be read, the ending is the manifest's again.")
     }
 
+    /// Finding 4 of the review of pull request 61: a manifest with no working file is a
+    /// recording with no audio. With the working file gone, the scripted recorder returned the
+    /// frames it held in memory and named the missing file.
+    @Test func aManifestWithNoWorkingFileHoldsNoAudio() async throws {
+        let (recorder, layer) = try scriptedRecorder()
+        let orphan: CaptureID = Identifier(uuid: UUID())
+        try recorder.leaveOrphan(orphan, launch: Identifier(uuid: UUID()), frames: 16_000)
+        try layer.remove(recorder.locations.recordingAudio(orphan, format: .caf))
+        let found = try #require(
+            try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+                $0.captureID == orphan
+            }, "The manifest is still an orphan's.")
+        #expect(found.frames == 0, "No frame.")
+        #expect(found.workingFile == nil, "No working file is named that is not on the drive.")
+        #expect(layer.exists(recorder.locations.recordingManifest(orphan)), "The manifest stays.")
+    }
+
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {
         let (recorder, _) = try scriptedRecorder(script: .init(buffers: 40, interval: .zero))
         let session = try await recorder.start(recordingRequest())
