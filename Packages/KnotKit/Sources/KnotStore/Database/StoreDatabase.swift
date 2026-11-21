@@ -168,6 +168,9 @@ public final class StoreDatabase: Sendable {
         configuration.label = "knot.store"
         let statements = hooks.statements
         configuration.prepareDatabase { db in
+            // Five seconds on every connection: GRDB gives a pool's readers a busy mode of their
+            // own, which this sets again.
+            try db.execute(sql: "PRAGMA busy_timeout = 5000")
             db.add(function: SearchWords.function)
             if let statements {
                 db.trace(options: .statement) { event in

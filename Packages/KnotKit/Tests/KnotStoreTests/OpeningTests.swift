@@ -369,6 +369,19 @@ import Testing
                 "pre-migration-v2.sqlite"
             ])
     }
+
+    /// Every connection waits five seconds for a lock: the writer and the readers.
+    @Test func everyConnectionWaitsFiveSeconds() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let database = try openStore(in: folders.make())
+        let writer = try await database.pool.writeWithoutTransaction {
+            try Int.fetchOne($0, sql: "PRAGMA busy_timeout")
+        }
+        let reader = try await database.pool.read { try Int.fetchOne($0, sql: "PRAGMA busy_timeout") }
+        #expect(writer == 5_000)
+        #expect(reader == 5_000)
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.
