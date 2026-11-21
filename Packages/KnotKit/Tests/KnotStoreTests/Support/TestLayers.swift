@@ -5,7 +5,8 @@ import Synchronization
 import Testing
 
 /// The system's files, with places where a test pauses a call or makes one fail: before a
-/// folder is made, before a file is synced, before a rename, at a folder's sync and at a rename.
+/// folder is made, before a file is synced, before a rename, at a folder's sync, at a rename and
+/// at a file's sync.
 struct HookedFileLayer: FileLayer {
     let base = PosixFileLayer()
     var beforeCreate: @Sendable (URL) -> Void = { _ in }
@@ -13,6 +14,7 @@ struct HookedFileLayer: FileLayer {
     var beforeRename: @Sendable (URL, URL) -> Void = { _, _ in }
     var refuseSync: @Sendable (URL) -> Bool = { _ in false }
     var refuseRename: @Sendable (URL, URL) -> Bool = { _, _ in false }
+    var refuseSyncFile: @Sendable (URL) -> Bool = { _ in false }
 
     func createFolder(_ url: URL) throws(KnotError) {
         beforeCreate(url)
@@ -23,6 +25,7 @@ struct HookedFileLayer: FileLayer {
 
     func syncFile(_ url: URL) throws(KnotError) {
         beforeSyncFile(url)
+        if refuseSyncFile(url) { throw KnotError.writeFailed.with(.init(posixError: EIO)) }
         try base.syncFile(url)
     }
 

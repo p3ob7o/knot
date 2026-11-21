@@ -170,11 +170,13 @@ import Testing
         }
     }
 
-    /// A restore cut short, by a crash or by a disk that stops answering, leaves a whole store
-    /// at the next open: the store as it was while the new one was not published, and the
-    /// restored one once it was. The place of the store is never empty to an open.
-    @Test(arguments: ["set aside", "published"])
-    func aRestoreCutShortLeavesAWholeStore(cutAfter step: String) async throws {
+    /// A restore cut short by a disk that stops answering, at each of its phases, leaves a whole
+    /// store at the next open, with the item that waited in `Inbox/`: the store as it was while
+    /// the restore was building, and while it had built but not published, since a restore that
+    /// fails publishes nothing; the restored one once it was published. Every sync and rename
+    /// after the phase fails, those of the failed restore's own settling too.
+    @Test(arguments: ["building", "built", "published"])
+    func aRestoreCutShortLeavesAWholeStore(cutAfter phase: String) async throws {
         let folders = TemporaryFolders()
         defer { folders.removeAll() }
         let root = folders.make()
@@ -188,20 +190,20 @@ import Testing
         #expect(current == copied + 1)
         try made.database.close()
         let locations = made.database.locations
+        let waiting = locations.inbox.appending(path: "synthetic.json", directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(at: locations.inbox, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: waiting)
         let parent = locations.storeRoot.deletingLastPathComponent()
+        let journal = RestoreJournal.url(of: locations)
         let dead = Switch(false)
-        // The disk stops answering at the first sync after the step: every sync and rename after
-        // it fails, those of the failed restore's own undo too, as after a crash.
         let layer = HookedFileLayer(
             refuseSync: { _ in
-                if !dead.isOn {
-                    let names = (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? []
-                    let setAside = names.contains { $0.hasPrefix("\(StoreLocations.rootFolderName)-before-restore-") }
-                    let reached =
-                        step == "set aside"
-                        ? setAside && !FileManager.default.fileExists(atPath: locations.storeRoot.path)
-                        : setAside && FileManager.default.fileExists(atPath: locations.database.path)
-                    if reached { dead.set(true) }
+                if !dead.isOn, let data = try? Data(contentsOf: journal),
+                    let written = try? JSONDecoder().decode(RestoreJournal.self, from: data),
+                    written.phase.rawValue == phase
+                {
+                    let built = written.staging(of: locations).appending(path: locations.database.lastPathComponent)
+                    if phase != "building" || FileManager.default.fileExists(atPath: built.path) { dead.set(true) }
                 }
                 return dead.isOn
             },
@@ -209,14 +211,47 @@ import Testing
         await expectFailure(.writeFailed) {
             try StoreCopies.restore(copy, at: locations, clock: made.clock, fileLayer: layer)
         }
-        #expect(dead.isOn, "The restore reached the step.")
+        #expect(dead.isOn, "The restore reached the phase.")
         let reopened = try openStore(in: root)
-        #expect(try await noteCount(reopened) == (step == "set aside" ? current : copied))
+        #expect(try await noteCount(reopened) == (phase == "published" ? copied : current))
+        #expect(FileManager.default.fileExists(atPath: waiting.path), "The waiting item is in the store.")
         expectConsistent(reopened)
         let left = try FileManager.default.contentsOfDirectory(atPath: parent.path).filter {
             $0.hasPrefix("\(StoreLocations.rootFolderName)-restor")
         }
         #expect(left.isEmpty, "Nothing is left of the restore but the store set aside: \(left)")
+    }
+
+    /// A restore that died once its build was complete, before it was published, as a crash
+    /// leaves it: the next open publishes the build, and the item that waited in `Inbox/` moves
+    /// into the restored store.
+    @Test func theNextOpenPublishesACompleteBuild() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 128)
+        let copy = try made.database.makeDailyCopy()
+        _ = try await made.notes.record(
+            made.captures.typed("A synthetic later line", from: 30, to: 31, placement: .newNote))
+        let copied = try #require(try StoreCopies.tableCounts(in: copy)["note"])
+        try made.database.close()
+        let locations = made.database.locations
+        let waiting = locations.inbox.appending(path: "synthetic.json", directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(at: locations.inbox, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: waiting)
+        var journal = RestoreJournal(stamp: 1, storeID: made.captures.ids.make(), phase: .building)
+        try journal.write(at: locations, layer: PosixFileLayer())
+        _ = try StoreCopies.build(
+            copy, in: journal.staging(of: locations), for: locations, journal: journal, above: 0,
+            layer: PosixFileLayer())
+        journal.phase = .built
+        try journal.write(at: locations, layer: PosixFileLayer())
+        let reopened = try openStore(in: root)
+        #expect(reopened.storeID == journal.storeID, "The restored store.")
+        #expect(try await noteCount(reopened) == copied)
+        #expect(FileManager.default.fileExists(atPath: waiting.path), "The waiting item is in the restored store.")
+        #expect(!RestoreJournal.isPending(at: locations))
+        expectConsistent(reopened)
     }
 
     /// A restore puts every file and folder of the new store on the drive before it publishes
@@ -607,6 +642,74 @@ import Testing
             let mapped = StoreErrors.knotError(NSError(domain: NSCocoaErrorDomain, code: code)).code
             #expect(mapped == KnotError.writeFailed.code, "Cocoa \(code) maps to \(mapped)")
         }
+    }
+
+    /// An item written to `Inbox/` while a restore runs, as the Mac's share extension or a
+    /// recording's manifest writes one at any time: the restore is whole, and the item ends in the
+    /// published store. With a store there, and with none.
+    @Test(arguments: [true, false])
+    func anItemWrittenDuringARestoreEndsInTheRestoredStore(storeThere: Bool) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 207)
+        let copy = folders.make("kept").appending(path: "kept.sqlite", directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: made.database.makeDailyCopy(), to: copy)
+        let copied = try #require(try StoreCopies.tableCounts(in: copy)["note"])
+        try made.database.close()
+        let locations = storeThere ? made.database.locations : StoreLocations.testing(root: folders.make())
+        let item = locations.inbox.appending(path: "synthetic.json", directoryHint: .notDirectory)
+        let written = Switch(false)
+        let syncs = Recorded()
+        let layer = HookedFileLayer(refuseSync: { url in
+            // While the new store's tree is synced, an item arrives in the store's place: at its
+            // recordings' folder when there is a store, at its own folder's second sync when not.
+            guard !written.isOn, url.path.contains("\(StoreLocations.rootFolderName)-restoring-") else { return false }
+            let folder = url.lastPathComponent
+            if folder.hasPrefix("\(StoreLocations.rootFolderName)-restoring-") { syncs.add(folder) }
+            if storeThere ? folder == "Assets" : syncs.all.count == 2 {
+                written.set(true)
+                let inbox = DurableFile(layer: PosixFileLayer(), root: locations.sharedRoot)
+                try? inbox.place(Data("{}".utf8), at: item)
+            }
+            return false
+        })
+        _ = try StoreCopies.restore(copy, at: locations, clock: made.clock, fileLayer: layer)
+        #expect(written.isOn, "The item was written while the restore ran.")
+        let reopened = try StoreDatabase.open(locations: locations, role: .app)
+        #expect(try await noteCount(reopened) == copied, "The restored store.")
+        #expect(FileManager.default.fileExists(atPath: item.path), "The item is in the restored store.")
+        expectConsistent(reopened)
+        try reopened.close()
+    }
+
+    /// A restore where there is no store, which fails once its store is built: nothing is
+    /// published that was not synced, and a copy that is not Knot's is never published.
+    @Test(arguments: ["sync fails", "not Knot's"])
+    func aFailedRestoreWhereThereIsNoStorePublishesNothing(case kind: String) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 208)
+        var copy = try made.database.makeDailyCopy()
+        try made.database.close()
+        if kind == "not Knot's" {
+            copy = folders.make("foreign").appending(path: "foreign.sqlite", directoryHint: .notDirectory)
+            let queue = try DatabaseQueue(path: copy.path)
+            try await queue.write { db in try db.execute(sql: "CREATE TABLE synthetic (id INTEGER)") }
+            try queue.close()
+        }
+        let target = StoreLocations.testing(root: folders.make())
+        let layer = HookedFileLayer(refuseSyncFile: { url in
+            kind == "sync fails" && url.lastPathComponent == target.database.lastPathComponent
+        })
+        await expectFailure(kind == "sync fails" ? KnotError.writeFailed : .storeNotCreatedByKnot) {
+            try StoreCopies.restore(copy, at: target, clock: made.clock, fileLayer: layer)
+        }
+        #expect(!FileManager.default.fileExists(atPath: target.database.path), "Nothing is published.")
+        let parent = target.storeRoot.deletingLastPathComponent()
+        let left = try FileManager.default.contentsOfDirectory(atPath: parent.path)
+            .filter { $0.hasPrefix(StoreLocations.rootFolderName) }
+        #expect(left.isEmpty, "Nothing of the restore is left: \(left)")
     }
 }
 

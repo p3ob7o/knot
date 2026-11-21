@@ -21,6 +21,22 @@ enum ExclusiveRename {
         let base: KnotError = (number == ENOSPC || number == EDQUOT) ? .diskFull : .writeFailed
         throw base.with(ErrorContext(posixError: number))
     }
+
+    /// Exchanges the places of two folders in one step, `renamex_np` with `RENAME_SWAP`: each
+    /// takes the other's name, and nothing is ever at neither. Returns false, and changes
+    /// nothing, when either is not there.
+    static func swap(_ first: URL, _ second: URL) throws(KnotError) -> Bool {
+        let result = first.withUnsafeFileSystemRepresentation { one in
+            second.withUnsafeFileSystemRepresentation { other in
+                renamex_np(one!, other!, UInt32(RENAME_SWAP))
+            }
+        }
+        if result == 0 { return true }
+        let number = errno
+        if number == ENOENT { return false }
+        let base: KnotError = (number == ENOSPC || number == EDQUOT) ? .diskFull : .writeFailed
+        throw base.with(ErrorContext(posixError: number))
+    }
 }
 
 /// A file layer whose rename never replaces: a rename onto a place that is taken fails with

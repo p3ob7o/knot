@@ -219,14 +219,18 @@ public enum StoreCopies {
     /// Restores a kept copy as the store (docs/architecture.md §7). The app and the tool must be
     /// stopped first: nothing may have the store open.
     ///
-    /// Restoring never discards work, and never leaves the place of the store empty. The new
-    /// store is built in a folder beside the store's, from the copy, with the recordings and
-    /// drawings of the current store. Then the current store folder is set aside whole and
-    /// kept, with its database, its copies and its files, the folders a capture may wait in,
-    /// `Inbox/` and `Recording/`, move into the new one, and the new folder is published in the
-    /// store's place with one rename. A journal beside the store's folder names both folders
-    /// from before the first step to after the last, and the next open, or the next restore,
-    /// finishes a restore it finds published and undoes any other (`RestoreJournal`).
+    /// Restoring never discards work, never leaves the place of the store empty, and is whole
+    /// whatever another writer puts below the store's folder while it runs, such as an item of
+    /// `Inbox/` or a recording's manifest. The new store is built in a folder beside the store's,
+    /// from the copy, with the recordings and drawings of the current store, then synced and
+    /// checked. Then it takes the store's place in one step, swapped with the folder there, or
+    /// moved in when there is none. What the folder it replaced held besides the store itself,
+    /// the folders a capture may wait in and anything another writer made, moves into the new
+    /// store, and the rest is set aside whole, with its database, its copies and its files.
+    ///
+    /// A journal beside the store's folder records the restore from before its first step to
+    /// after its last: its new store ID and how far it got. The next open, or the next restore,
+    /// settles a restore that was cut short from what the journal records (`RestoreJournal`).
     ///
     /// The new store is a store of its own: it takes a new store ID, so that every cursor and
     /// every stamped revision kept from before the restore, of the store it replaces or of any
@@ -239,84 +243,86 @@ public enum StoreCopies {
         ids: any IDGenerator = SystemIDGenerator(), fileLayer: any FileLayer = PosixFileLayer()
     ) throws(KnotError) -> RestoreReport {
         let manager = FileManager.default
-        let root = locations.storeRoot
         guard manager.fileExists(atPath: copy.path) else { throw KnotError.notFound }
         do {
             try RestoreJournal.settle(at: locations, layer: fileLayer)
             let previousGeneration = knownGeneration(of: locations)
-            let storeID: StoreID = ids.make()
-            let journal = RestoreJournal(stamp: Int64(clock.now().timeIntervalSince1970 * 1000))
-            let aside = journal.aside(of: locations)
+            var journal = RestoreJournal(
+                stamp: Int64(clock.now().timeIntervalSince1970 * 1000), storeID: ids.make(), phase: .building)
             let staging = journal.staging(of: locations)
             do {
                 try journal.write(at: locations, layer: fileLayer)
-                // The new store, built beside the current one.
-                let parentFiles = DurableFile(layer: fileLayer, root: root.deletingLastPathComponent())
-                try parentFiles.makeFolder(staging)
-                let database = staging.appending(
-                    path: locations.database.lastPathComponent, directoryHint: .notDirectory)
-                try manager.copyItem(at: copy, to: database)
-                // The recordings and drawings, from the current store.
-                let stagedAssets = staging.appending(path: "Assets", directoryHint: .isDirectory)
-                let assets = root.appending(path: "Assets", directoryHint: .isDirectory)
-                if manager.fileExists(atPath: assets.path) { try manager.copyItem(at: assets, to: stagedAssets) }
-                let queue = try DatabaseQueue(path: database.path, configuration: StoreDatabase.configuration())
-                let (generation, missing) = try queue.write { db -> (StoreGeneration, [AssetID]) in
-                    guard let meta = try StoreMeta.fetch(db) else { throw KnotError.storeNotCreatedByKnot }
-                    let raised = max(meta.generation, previousGeneration) + 1
-                    try db.execute(
-                        sql: "UPDATE store_meta SET store_id = ?, generation = ? WHERE singleton = 1",
-                        arguments: [storeID.description, raised])
-                    // A file the copy names that is gone, as one purged after the copy was made,
-                    // shows as missing: its row says it is not on this device.
-                    var missing: [AssetID] = []
-                    for row in try Row.fetchAll(db, sql: "SELECT id, kind FROM asset WHERE availability = 'local'") {
-                        guard let id = AssetID(row["id"] as String) else { continue }
-                        let kind = AssetKind(rawValue: row["kind"])
-                        guard !kind.isUnknown else { continue }
-                        let file = stagedAssets.appending(path: id.folderName, directoryHint: .isDirectory)
-                            .appending(path: "\(id).\(kind.fileExtension)", directoryHint: .notDirectory)
-                        if !manager.fileExists(atPath: file.path) { missing.append(id) }
-                    }
-                    for id in missing {
-                        try db.execute(
-                            sql: "UPDATE asset SET availability = 'remote' WHERE id = ?", arguments: [id.description])
-                    }
-                    return (raised, missing.sorted())
-                }
-                try queue.close()
-                removeJournals(of: database)
-                try fileLayer.syncFile(database)
-                try parentFiles.place(
-                    Data(String(generation).utf8),
-                    at: staging.appending(path: StoreDatabase.generationFileName, directoryHint: .notDirectory))
-                // The current store, set aside whole, and the folders a capture may wait in.
-                if manager.fileExists(atPath: root.path) {
-                    try fileLayer.rename(root, to: aside)
-                    try fileLayer.syncFolder(root.deletingLastPathComponent())
-                }
-                for name in RestoreJournal.waitingFolders {
-                    let from = aside.appending(path: name, directoryHint: .isDirectory)
-                    guard manager.fileExists(atPath: from.path) else { continue }
-                    try fileLayer.rename(from, to: staging.appending(path: name, directoryHint: .isDirectory))
-                }
-                // Every file and folder of the new store is on the drive before it is published
-                // (docs/architecture.md §6, rule 7).
-                try syncTree(staging, layer: fileLayer)
-                if manager.fileExists(atPath: aside.path) { try fileLayer.syncFolder(aside) }
-                // Published in one step: the store's place is never empty to a later open.
-                guard try ExclusiveRename.move(staging, to: root) else { throw KnotError.writeFailed }
-                try fileLayer.syncFolder(root.deletingLastPathComponent())
+                let (generation, missing) = try build(
+                    copy, in: staging, for: locations, journal: journal, above: previousGeneration, layer: fileLayer)
+                journal.phase = .built
+                try journal.write(at: locations, layer: fileLayer)
+                try RestoreJournal.publish(staging, at: locations, layer: fileLayer)
+                journal.phase = .published
+                try journal.write(at: locations, layer: fileLayer)
+                let aside = try journal.finish(at: locations, layer: fileLayer)
                 try RestoreJournal.remove(at: locations, layer: fileLayer)
-                return RestoreReport(setAside: aside, storeID: storeID, generation: generation, missingAssets: missing)
+                return RestoreReport(
+                    setAside: aside, storeID: journal.storeID, generation: generation, missingAssets: missing)
             } catch {
-                // What can be undone now is; what cannot, the next open undoes.
-                try? RestoreJournal.settle(at: locations, layer: fileLayer)
+                // A restore that fails publishes nothing it has not already published.
+                try? RestoreJournal.settle(at: locations, layer: fileLayer, finishing: false)
                 throw error
             }
         } catch {
             throw StoreErrors.knotError(error)
         }
+    }
+
+    /// Builds the new store in `staging`: the copy's database with the journal's store ID, a
+    /// generation above `previous` and its missing files marked as not on this device, the
+    /// recordings and drawings of the current store, and the record of its generation. Every
+    /// file and folder of it is then on the drive (docs/architecture.md §6, rule 7), and its
+    /// database passes `quick_check`.
+    static func build(
+        _ copy: URL, in staging: URL, for locations: StoreLocations, journal: RestoreJournal,
+        above previous: StoreGeneration, layer: any FileLayer
+    ) throws -> (StoreGeneration, [AssetID]) {
+        let manager = FileManager.default
+        let parentFiles = DurableFile(layer: layer, root: locations.storeRoot.deletingLastPathComponent())
+        try parentFiles.makeFolder(staging)
+        let database = staging.appending(path: locations.database.lastPathComponent, directoryHint: .notDirectory)
+        try manager.copyItem(at: copy, to: database)
+        let stagedAssets = staging.appending(path: "Assets", directoryHint: .isDirectory)
+        let assets = locations.storeRoot.appending(path: "Assets", directoryHint: .isDirectory)
+        if manager.fileExists(atPath: assets.path) { try manager.copyItem(at: assets, to: stagedAssets) }
+        let queue = try DatabaseQueue(path: database.path, configuration: StoreDatabase.configuration())
+        let (generation, missing) = try queue.write { db -> (StoreGeneration, [AssetID]) in
+            guard let meta = try StoreMeta.fetch(db) else { throw KnotError.storeNotCreatedByKnot }
+            let raised = max(meta.generation, previous) + 1
+            try db.execute(
+                sql: "UPDATE store_meta SET store_id = ?, generation = ? WHERE singleton = 1",
+                arguments: [journal.storeID.description, raised])
+            // A file the copy names that is gone, as one purged after the copy was made, shows as
+            // missing: its row says it is not on this device.
+            var missing: [AssetID] = []
+            for row in try Row.fetchAll(db, sql: "SELECT id, kind FROM asset WHERE availability = 'local'") {
+                guard let id = AssetID(row["id"] as String) else { continue }
+                let kind = AssetKind(rawValue: row["kind"])
+                guard !kind.isUnknown else { continue }
+                let file = stagedAssets.appending(path: id.folderName, directoryHint: .isDirectory)
+                    .appending(path: "\(id).\(kind.fileExtension)", directoryHint: .notDirectory)
+                if !manager.fileExists(atPath: file.path) { missing.append(id) }
+            }
+            for id in missing {
+                try db.execute(
+                    sql: "UPDATE asset SET availability = 'remote' WHERE id = ?", arguments: [id.description])
+            }
+            return (raised, missing.sorted())
+        }
+        let checked = try queue.read { db in try String.fetchOne(db, sql: "PRAGMA quick_check") == "ok" }
+        try queue.close()
+        guard checked else { throw KnotError.storeDamaged }
+        removeJournals(of: database)
+        try parentFiles.place(
+            Data(String(generation).utf8),
+            at: staging.appending(path: StoreDatabase.generationFileName, directoryHint: .notDirectory))
+        try syncTree(staging, layer: layer)
+        return (generation, missing)
     }
 
     /// Syncs every file under `folder`, then every folder, the deepest first, `folder` last.
@@ -357,16 +363,35 @@ public enum StoreCopies {
     }
 }
 
-/// The journal of a restore: a file beside the store's folder that names the folder the new
-/// store is built in and the folder the current one is set aside to, from before the first
-/// step of a restore until after its last. An open, or the next restore, that finds one settles
-/// it: a restore it finds published is finished, and any other is undone, so the place of the
-/// store is never left empty and an open never makes an empty store over one set aside.
+/// The journal of a restore: a file beside the store's folder that records, from before the
+/// first step of a restore until after its last, the new store's ID and how far the restore
+/// got. An open, or the next restore, that finds one settles it from what it records, never
+/// from which names exist in the store's place, since another writer may make the store's
+/// folder at any time: a restore whose build was not complete is undone, and nothing of it is
+/// published; one that was complete is published and finished.
 struct RestoreJournal: Codable, Hashable, Sendable {
-    var stamp: Int64
+    /// How far a restore got.
+    enum Phase: String, Codable, Sendable {
+        /// The new store is being built beside the store's folder.
+        case building
+        /// The new store is built whole, synced and checked: it may take the store's place.
+        case built
+        /// The new store has taken the store's place: what it replaced is being moved aside.
+        case published
+    }
 
-    /// The folders of the store that a capture may wait in, which move into the new store.
-    static let waitingFolders = ["Inbox", "Recording", "RecordingState"]
+    var stamp: Int64
+    /// The new store's ID, which tells the new store from any other wherever it is.
+    var storeID: StoreID
+    var phase: Phase
+
+    /// The names in a store's folder that are the store itself: they stay with the store they
+    /// belong to. Anything else in the folder, such as the folders a capture waits in, goes on
+    /// in the store's place.
+    static func isStoreItself(_ name: String) -> Bool {
+        name.hasPrefix("knot.sqlite") || name.hasPrefix(".knot.sqlite") || name == "Assets" || name == "Copies"
+            || name == StoreDatabase.generationFileName
+    }
 
     static func url(of locations: StoreLocations) -> URL {
         locations.storeRoot.deletingLastPathComponent().appending(
@@ -398,50 +423,105 @@ struct RestoreJournal: Codable, Hashable, Sendable {
         FileManager.default.fileExists(atPath: url(of: locations).path)
     }
 
-    /// Finishes or undoes a restore that was cut short. Published, it is finished; otherwise the
-    /// folders a capture may wait in go back to the store set aside, which goes back in its
-    /// place, and the folder built for the new store goes.
-    static func settle(at locations: StoreLocations, layer: any FileLayer) throws {
+    /// Puts the built folder in the store's place in one step, whatever is there: swapped with
+    /// the folder in the place, or moved in when the place is empty. A writer that makes the
+    /// store's folder meanwhile only changes which of the two it is. Afterwards the build's
+    /// folder holds what was in the place, if anything.
+    static func publish(_ staging: URL, at locations: StoreLocations, layer: any FileLayer) throws {
+        let root = locations.storeRoot
+        var published = false
+        for _ in 0..<4 where !published {
+            published = try ExclusiveRename.swap(staging, root)
+            if !published { published = try ExclusiveRename.move(staging, to: root) }
+        }
+        guard published else { throw KnotError.writeFailed }
+        try layer.syncFolder(root.deletingLastPathComponent())
+    }
+
+    /// The store ID of the database in `folder`, read without changing it, or `nil`.
+    static func storeID(in folder: URL, locations: StoreLocations) -> StoreID? {
+        let database = folder.appending(path: locations.database.lastPathComponent, directoryHint: .notDirectory)
+        guard FileManager.default.fileExists(atPath: database.path),
+            let queue = try? DatabaseQueue(
+                path: database.path, configuration: StoreDatabase.configuration(readonly: true))
+        else { return nil }
+        defer { try? queue.close() }
+        return (try? queue.read { db in try StoreMeta.fetch(db)?.storeID }) ?? nil
+    }
+
+    /// After the publish: what the published store replaced, now in the build's folder, keeps in
+    /// the store's place what is not the store itself, the folders a capture waits in and
+    /// anything another writer made, each moved into the published store where it has nothing of
+    /// that name, and into its folder of that name otherwise. The rest is set aside whole. An
+    /// empty folder that was nobody's store goes.
+    func finish(at locations: StoreLocations, layer: any FileLayer) throws -> URL {
+        let manager = FileManager.default
+        let root = locations.storeRoot
+        let replaced = staging(of: locations)
+        let aside = aside(of: locations)
+        guard manager.fileExists(atPath: replaced.path) else { return aside }
+        for name in try manager.contentsOfDirectory(atPath: replaced.path) where !Self.isStoreItself(name) {
+            let from = replaced.appending(path: name)
+            let to = root.appending(path: name)
+            if !manager.fileExists(atPath: to.path) {
+                try layer.rename(from, to: to)
+                continue
+            }
+            var isFolder: ObjCBool = false
+            guard manager.fileExists(atPath: from.path, isDirectory: &isFolder), isFolder.boolValue else { continue }
+            for child in try manager.contentsOfDirectory(atPath: from.path) {
+                let target = to.appending(path: child)
+                if !manager.fileExists(atPath: target.path) {
+                    try layer.rename(from.appending(path: child), to: target)
+                }
+            }
+            try layer.syncFolder(to)
+            try layer.syncFolder(from)
+        }
+        try layer.syncFolder(root)
+        try layer.syncFolder(replaced)
+        if try manager.contentsOfDirectory(atPath: replaced.path).isEmpty {
+            try manager.removeItem(at: replaced)
+        } else {
+            try layer.rename(replaced, to: aside)
+        }
+        try layer.syncFolder(root.deletingLastPathComponent())
+        return aside
+    }
+
+    /// Settles a restore that was cut short, from what its journal records and from the store
+    /// IDs of the two databases, never from which names exist: a build that was not complete is
+    /// removed, and nothing of it is published; a complete build is published, unless the restore
+    /// that made it failed (`finishing` false), when it is removed; a published one is finished.
+    /// A folder whose database is not the build's is never removed.
+    static func settle(at locations: StoreLocations, layer: any FileLayer, finishing: Bool = true) throws {
         let manager = FileManager.default
         let file = url(of: locations)
         guard manager.fileExists(atPath: file.path) else { return }
-        let journal = try JSONDecoder().decode(RestoreJournal.self, from: Data(contentsOf: file))
-        let root = locations.storeRoot
-        let parent = root.deletingLastPathComponent()
-        let aside = journal.aside(of: locations)
+        var journal = try JSONDecoder().decode(RestoreJournal.self, from: Data(contentsOf: file))
         let staging = journal.staging(of: locations)
-        let rootThere = manager.fileExists(atPath: root.path)
-        let asideThere = manager.fileExists(atPath: aside.path)
-        let stagingThere = manager.fileExists(atPath: staging.path)
-        switch (rootThere, asideThere) {
-        case (true, true):
-            // Published: only the journal is left.
-            break
-        case (false, true):
-            // Set aside and not published: everything goes back.
-            if stagingThere {
-                for name in waitingFolders {
-                    let moved = staging.appending(path: name, directoryHint: .isDirectory)
-                    let home = aside.appending(path: name, directoryHint: .isDirectory)
-                    if manager.fileExists(atPath: moved.path), !manager.fileExists(atPath: home.path) {
-                        try layer.rename(moved, to: home)
-                    }
+        let isBuild = { storeID(in: staging, locations: locations) == journal.storeID }
+        let isPublished = { storeID(in: locations.storeRoot, locations: locations) == journal.storeID }
+        switch journal.phase {
+        case .building:
+            // Never complete: what was built goes. Nothing of it was published.
+            if manager.fileExists(atPath: staging.path), !isPublished() { try manager.removeItem(at: staging) }
+        case .built:
+            if isPublished() {
+                _ = try journal.finish(at: locations, layer: layer)
+            } else if isBuild() {
+                if finishing {
+                    try publish(staging, at: locations, layer: layer)
+                    journal.phase = .published
+                    try journal.write(at: locations, layer: layer)
+                    _ = try journal.finish(at: locations, layer: layer)
+                } else {
+                    try manager.removeItem(at: staging)
                 }
-                try layer.syncFolder(aside)
             }
-            guard try ExclusiveRename.move(aside, to: root) else { throw KnotError.writeFailed }
-            try layer.syncFolder(parent)
-        case (false, false):
-            // Nothing was set aside: a built store, if there is one, is the only store.
-            if stagingThere {
-                guard try ExclusiveRename.move(staging, to: root) else { throw KnotError.writeFailed }
-                try layer.syncFolder(parent)
-            }
-        case (true, false):
-            // Nothing was set aside yet.
-            break
+        case .published:
+            _ = try journal.finish(at: locations, layer: layer)
         }
-        if manager.fileExists(atPath: staging.path) { try manager.removeItem(at: staging) }
         try remove(at: locations, layer: layer)
     }
 }
