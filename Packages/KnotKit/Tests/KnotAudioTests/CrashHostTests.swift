@@ -82,6 +82,33 @@ import Testing
         }
     }
 
+    /// Every line of the kill test about a trial names the trial's capture after its first word:
+    /// the capture whose files the trial's store holds. After finding 26.
+    @Test func everyTrialLineNamesItsCapture() async throws {
+        let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
+        let folder = try ScratchFolder()
+        let run = try await HostRun.run(
+            host,
+            [
+                "kill-test", "--dir", folder.file("run").path, "--trials", "2", "--early-every", "2", "--min-ms",
+                "300", "--max-ms", "300", "--seed", "7",
+            ])
+        #expect(run.status == 0, "\(run.output)")
+        let trials = run.output.split(separator: "\n").map(String.init).filter { $0.hasPrefix("trial ") }
+        #expect(trials.count == 2, "\(run.output)")
+        for line in trials {
+            let words = line.split(separator: " ").map(String.init)
+            guard words.count > 3, let capture = CaptureID(words[1]) else {
+                Issue.record("The line names no capture after its first word: \(line)")
+                continue
+            }
+            let store = folder.file("run").appendingPathComponent("trial-7-\(words[2])/KnotStore/Recording")
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: store.path)) ?? []
+            #expect(words[3] != "live" || !names.isEmpty, "The live trial left nothing: \(line)")
+            #expect(names.allSatisfy { $0.hasPrefix("\(capture).") }, "\(line) for the files \(names)")
+        }
+    }
+
     /// Every step of a kill test's trial that waits on another process has a limit. A child, a
     /// runner or a recovery that hangs at a step fails its trial there, with a line that names
     /// the step and the trial's capture, and the run goes on to its summary well before the
@@ -149,10 +176,12 @@ import Testing
             let words = line.split(separator: " ").map(String.init)
             #expect(words.count == 8 && words[4] == "step" && words[5] == step && words[7] == "1", "\(line)")
             #expect(words.count > 1 && CaptureID(words[1]) != nil, "The line names no capture: \(line)")
+            let capture = words.count > 1 ? words[1] : "-"
             let trial = words.count > 3 ? words[3] : "-"
             #expect(
                 lines.contains {
-                    $0.hasPrefix("trial \(trial) ") && $0.hasSuffix(" FAIL step \(step) reached its limit of 1 s")
+                    $0.hasPrefix("trial \(capture) \(trial) ")
+                        && $0.hasSuffix(" FAIL step \(step) reached its limit of 1 s")
                 }, "\(run.output)")
         }
         #expect(lines.last?.hasPrefix("summary trials \(trials) passed 0 ") == true, "\(run.output)")

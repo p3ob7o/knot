@@ -32,7 +32,8 @@
     /// its output after the kill, and the recovery. A step that reaches its limit fails the trial
     /// and prints `step-limit <capture> trial <n> step <step> limitS <s>`. However a trial ends,
     /// its pipes are closed, and what it started is ended and reaped before the next one. The parent chooses each trial's capture and gives it to `record --capture`,
-    /// so every line about a trial names its capture, even one whose child never printed a line.
+    /// so every line about a trial names its capture after its first word, even one whose child
+    /// never printed a line: `trial <capture> <n> <kind> … ok|FAIL <why>` for each trial.
     ///
     ///     kill-test --dir <folder> [--trials 5] [--seed <n>] [--child <crash host>]
     ///               [--runner "<command> <arguments>"] [--min-ms 300] [--max-ms 4000]
@@ -355,7 +356,7 @@
         }
 
         var line: String {
-            "trial \(trial) \(kind.name) killAfterMs \(delayMs) taken \(taken) durable \(durable) "
+            "trial \(capture) \(trial) \(kind.name) killAfterMs \(delayMs) taken \(taken) durable \(durable) "
                 + "printedDurable \(printedDurable) lone \(lone) orphans \(orphans) frames \(frames) "
                 + "match \(matching) ending \(ending) manifest \(manifest) converted \(convertedFrames) "
                 + "leftover \(leftover) lossMs \(lossMs.map { String(format: "%.1f", $0) } ?? "-") "
