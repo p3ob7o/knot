@@ -418,6 +418,22 @@ import Testing
                 == .test)
     }
 
+    @Test func aNamedProcessCanAddARefusalAndNeverTakeOneAway() {
+        let clean = process()
+        let test = process(bundles: ["/tmp/KnotKitPackageTests.xctest"])
+        let agent = process(environment: ["KNOT_AGENT": "1"])
+        // A clean named process beside a test process is still refused.
+        #expect(SpeechInstallPolicy.refusal(named: clean, actual: test) == .test)
+        #expect(SpeechInstallPolicy.refusal(named: clean, actual: agent) == .agent)
+        // A named refusal beside a clean process is a refusal.
+        #expect(SpeechInstallPolicy.refusal(named: agent, actual: clean) == .agent)
+        #expect(SpeechInstallPolicy.refusal(named: test, actual: clean) == .test)
+        // Only two clean processes may install.
+        #expect(SpeechInstallPolicy.refusal(named: clean, actual: clean) == nil)
+        // And in this process, whatever a test names, the answer is a refusal.
+        #expect(SpeechInstallPolicy.refusal(named: clean, actual: .current) != nil)
+    }
+
     @Test func thisTestProcessMayNotInstall() {
         #expect(SpeechInstallPolicy.refusal(for: .current) != nil, "A test process is refused, whoever started it.")
     }

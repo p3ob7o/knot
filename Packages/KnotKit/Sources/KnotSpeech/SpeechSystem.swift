@@ -23,7 +23,8 @@
 
     /// The speech system of the device.
     struct LiveSpeechSystem: SpeechSystem {
-        /// The process the install policy reads: this one, unless a test names another.
+        /// A process the install policy reads beside this one. A test may name one to add a
+        /// refusal; it can never take away this process's own.
         var process: @Sendable () -> SpeechInstallPolicy.Process = { .current }
 
         var isAvailable: Bool { SpeechTranscriber.isAvailable }
@@ -44,7 +45,7 @@
 
         func install(_ locale: Locale, progress: @escaping @Sendable (Double) -> Void) async throws -> Bool {
             // A test or an agent never installs: an install may download.
-            if let refusal = SpeechInstallPolicy.refusal(for: process()) {
+            if let refusal = SpeechInstallPolicy.refusal(named: process(), actual: .current) {
                 throw SpeechInstallRefused(refusal: refusal)
             }
             // nil when the model is already on the device. The call still reserves the locale,

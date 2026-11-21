@@ -42,6 +42,14 @@ public enum SpeechInstallPolicy {
     /// The names of the processes that run package tests.
     static let testRunners: Set<String> = ["xctest", "swiftpm-testing-helper"]
 
+    /// Why an install may not run when a test names `named` as the process and the process is
+    /// `actual`: the refusal of either, and `nil` only when neither is refused. A named process
+    /// can add a refusal and never take one away, so a test that names a clean process still
+    /// runs in a test process, which is refused by three signs and an agent's by a fourth.
+    public static func refusal(named: Process, actual: Process) -> Refusal? {
+        refusal(for: named) ?? refusal(for: actual)
+    }
+
     /// Why `process` may not install a speech model, or `nil` when it may.
     public static func refusal(for process: Process) -> Refusal? {
         if process.environment["KNOT_AGENT"] == "1" { return .agent }
