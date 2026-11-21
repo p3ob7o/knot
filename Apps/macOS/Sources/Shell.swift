@@ -146,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// How long a quit waits for the last save.
     static let quitLimit: Duration = .seconds(3)
 
+    /// A window can close while the app stays (assumption A13): an app whose one scene is a
+    /// `Window` would otherwise quit when it closes. Opening the app again shows the window.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
         shell.leave()
     }
