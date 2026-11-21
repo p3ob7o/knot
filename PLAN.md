@@ -88,7 +88,7 @@ Out of v1: see product spec §15. `TODOS.md` at the repo root holds the seventee
 
 If the build has to shrink, at the keep-gate sitting or at a later milestone sitting, scope leaves in this order, and only on the owner's word. No agent cuts scope.
 
-1. iPad Pencil: WP-35; the rest of WP-18, and beside it the third PR of WP-11, which runs drawings through the engine; the Sketch control and intent; and M5. The iPad then keeps the iPhone's layout, which it has had since M1, and has no canvas, no side-by-side layout, no hardware-keyboard shortcuts and no menu bar. Ink stays a kind the store knows, so a later version can add it without a migration.
+1. iPad Pencil: WP-35; the rest of WP-18, and beside it the fourth PR of WP-11, which runs drawings through the engine; the Sketch control and intent; and M5. The iPad then keeps the iPhone's layout, which it has had since M1, and has no canvas, no side-by-side layout, no hardware-keyboard shortcuts and no menu bar. Ink stays a kind the store knows, so a later version can add it without a migration.
 2. System surfaces beyond the first of each kind: the Watch complication families beyond one, the Smart Stack widget, and the Home Screen and Lock Screen widgets of the iPhone. The Action Button, the controls and one complication stay.
 
 A part that is cut is not started. The orchestrator writes each cut to `TODOS.md` with what would bring it back, and updates the briefs in `docs/plan/` and the checklists in one PR. If M5 is cut, every condition that names M5 names M4: the deployment of the CloudKit production schema, which then also needs a recording made on one device to play on the other, and the start of WP-43. Anything beyond these two steps is a new decision of the owner's.
@@ -119,11 +119,11 @@ A milestone build is made from `main` in a fresh worktree by the thread of the o
 <!-- milestone-needs:begin -->
 | Milestone | Owning package | Also needs |
 |---|---|---|
-| M1 | WP-22 PR 1 | WP-05; WP-06; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
-| M2 | WP-30 PR 2 | WP-11 PR 2; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
+| M1 | WP-22 PR 1 | WP-05; WP-06 PR 1; WP-06a; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
+| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
 | M3 | WP-32 PR 2 | WP-17 PR 2; WP-19 PR 3; SP-2 |
 | M4 | WP-33 PR 2 | WP-16; WP-34 PR 3; SP-3; SP-4; SP-5 |
-| M5 | WP-35 | WP-18; WP-11 PR 3; WP-16; WP-19 PR 4; WP-31 PR 2 |
+| M5 | WP-35 | WP-18; WP-11 PR 4; WP-16; WP-19 PR 4; WP-31 PR 2 |
 | M6 | WP-40 | WP-40a; WP-40b; WP-40c; WP-40d; WP-41; WP-42; WP-32 PR 3; WP-31 PR 2 if M5 is cut |
 | M7 | WP-43 | WP-44; M6; WP-40a; WP-40b; WP-40c; WP-40d; WP-41; WP-42 |
 <!-- milestone-needs:end -->
@@ -164,7 +164,7 @@ Wave 0 is reset and foundations, wave 1 spikes, wave 2 modules, wave 3 integrati
 
 WP-05, the capture tracer, starts after the second PR of WP-02 and comes before wave 2. WP-06, the soak harness, starts after WP-05 and the first PR of WP-10. The proof steps of WP-12, WP-13, WP-14 and WP-18, and the code half of each spike, start beside the first PR of WP-02 (§7).
 
-With five threads at a time, wave 2 starts in this order, which follows D16: WP-10, WP-21, WP-12, WP-11, WP-13, then WP-14, WP-15, WP-19, WP-18, WP-20. All of WP-20 may run earlier, beside WP-05. In WP-18, everything after the proof step waits for the keep-gate ruling, and so does the third PR of WP-11.
+With five threads at a time, wave 2 starts in this order, which follows D16: WP-10, WP-21, WP-12, WP-11, WP-13, then WP-14, WP-15, WP-19, WP-18, WP-20. All of WP-20 may run earlier, beside WP-05. In WP-18, everything after the proof step waits for the keep-gate ruling, and so does the fourth PR of WP-11.
 
 The longest chain to M2 is WP-00, the first PR of WP-01, the first two of WP-02 with the proof steps beside them, WP-05, the first PR of WP-10, the modules, the second PR of WP-22 and the second of WP-30. A second chain runs through the third PR of WP-02, which waits for the short notes of the spikes and not for their reports, and the second PRs of WP-21 and WP-30. A third also gates M2: the first PR of WP-01, SP-1 with the owner's confirmation, then the second PRs of WP-15 and WP-19, then the first PR of WP-31. A fourth is the design direction, which the second PR of WP-30 waits for. No chain to M2 waits for the report of SP-2, SP-3 or SP-4. M2 needs the second PR of WP-22, although the second PRs of WP-30 and WP-33 do not wait for it.
 
@@ -192,6 +192,8 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-04 | 1 | The fixtures and the checklists | WP-00 PR 2 |
 | WP-05 | 1 | The thinnest real engine and queue, one end-to-end test and the preview environment | WP-02 PR 2 |
 | WP-06 | 1 | The soak harness, covering typed captures first | WP-05; WP-10 PR 1 |
+| WP-06 | 06a | The soak's step in `scripts/verify.sh`, split out of the first PR | WP-06 PR 1 |
+| WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1 |
 | SP-1 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | SP-1 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 | SP-2 | Notes | The code half on `spike/watch-delivery`, and its short note | WP-01 PR 1; WP-04 |
@@ -203,10 +205,12 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | SP-5 | Notes | The code half on `spike/mac-hotkey`, and its short note | WP-01 PR 1 |
 | SP-5 | 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
+| WP-10 | 10a | The store's tests leave no file outside their own folders | WP-10 PR 1 |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
-| WP-11 | 2 | The engine's kill points in the soak, and a follower placed by the capture it follows | WP-11 PR 1; WP-06; the contract pull request that gives `NewCapture` the capture it follows |
-| WP-11 | 3 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
+| WP-11 | 2 | A follower placed by the capture it follows, the engine as the one applier of a press, live words and levels, a stored recording's peaks, and the moments with no kill seam | WP-11 PR 1; the contract pull request that gives `NewCapture` the capture it follows |
+| WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
+| WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
@@ -214,10 +218,11 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-13 | 1 | The whole package | WP-05 |
 | WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-14 | 1 | The whole package | WP-05 |
-| WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05 |
+| WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05; the contract pull request for the purge of an unreadable item's files |
 | WP-15 | 2 | The hooks for background execution on iOS | SP-1 |
 | WP-16 | 1 | The whole package | WP-10 PR 2 |
 | WP-17 | 1 | The outbox, and the coordinator that records, converts and sends | WP-02 PR 3 |
+| WP-17 | 17a | The Watch's own entry point, over a stand-in for an iPhone that is never in reach, and the endings a recording comes to by itself. Pull request 71, merged. | WP-17 PR 1 |
 | WP-17 | 2 | The transport | SP-2; WP-02 PR 3 |
 | WP-18 | Proof step | Recognition of the ink fixtures, and a short note saying whether the draft `InkRecogniser` port fits the real API's streaming, cancellation and errors. It runs early and is not held. | WP-01 PR 1; WP-04 |
 | WP-18 | 1 | Everything after the proof step. Held until the keep-gate ruling. | WP-18 proof step; the ruling; WP-05; WP-02 PR 3 |
@@ -227,6 +232,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-19 | 4 | The OpenSketch intent. Held until the keep-gate ruling. | the ruling |
 | WP-20 | 1 | The whole package | WP-02 PR 2 |
 | WP-21 | 1 | A skeleton that does not depend on the design direction: the theme layer, the view models with their tests, and the components | WP-05 |
+| WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
@@ -234,7 +240,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
 | WP-31 | 2 | The Sketch control and the Home Screen and Lock Screen widgets. Held until the keep-gate ruling. | the ruling |
-| WP-32 | 1 | A skeleton that does not depend on the design direction: the owner records on the Watch and sees "Saved" on the Watch | WP-12 PR 1; WP-17 PR 1; WP-21 PR 1 |
+| WP-32 | 1 | A skeleton that does not depend on the design direction: the owner records on the Watch and sees "Saved" on the Watch | WP-12 PR 1; WP-17a; WP-21 PR 1 |
 | WP-32 | 2 | The Watch app, built from the direction's structure sheet, with its first complication family and its control | SP-2; the design direction; WP-17 PR 2; WP-19 PR 3; WP-21 PR 2 |
 | WP-32 | 3 | The complication families beyond the first and the Smart Stack widget. Held until the keep-gate ruling. | the ruling |
 | WP-33 | 1 | A skeleton that does not depend on the design direction: a line typed on the Mac is found in the stream after relaunch | WP-21 PR 1 |
@@ -242,7 +248,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-34 | 1 | `status`, `add`, `list`, the error contract and the access switch | WP-05 |
 | WP-34 | 2 | The other commands | WP-10 PR 2; WP-20 |
 | WP-34 | 3 | The MCP server, and the embedding of the tool in the Mac app | WP-34 PR 2; SP-3 for the embedding |
-| WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-11 PR 3; WP-21 PR 2; WP-30 PR 2 |
+| WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-11 PR 4; WP-21 PR 2; WP-30 PR 2 |
 | WP-40 | 1 | The theme: the tokens translated from the handoff, and `DESIGN.md` | the ruling; the accepted handoff |
 | WP-40 | 40a | The iPhone's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-30 PR 2 |
 | WP-40 | 40b | The iPad's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-35 |
@@ -262,17 +268,17 @@ These rules sit beside the table:
 - A row that waits for notes waits for the short note of a spike or of a proof step (§7), and not for the report.
 - "The ruling" is the keep-gate ruling (§5).
 - A row names the PR wherever a package ships in several. Elsewhere, a package named without a number means its last PR.
-- The PRs of WP-11, WP-12 and WP-15 that add kill points merge after WP-06.
+- The PRs of WP-11, WP-12 and WP-15 that add kill points merge after WP-06 PR 2, in which the soak's child runs a recording.
 - The first PRs of WP-30 and WP-33 merge after WP-22 PR 1, and each carries the UI smoke test on `.live` on its platform.
 - `scripts/check-plan.sh` fails on a cycle, on a row that names a package without a PR where the package has several, and on a milestone that needs a held PR.
 
 ### The hold until the ruling
 
-Until the keep-gate ruling, nothing that the cut order names is built, and wave 4 does not start. That holds back WP-35; everything in WP-18 after its proof step; the third PR of WP-11, which runs drawings through the engine; the Sketch control of WP-31 and the OpenSketch intent of WP-19; the Home Screen and Lock Screen widgets of WP-31; WP-32's complication families beyond the first and its Smart Stack widget; and WP-40, WP-41, WP-42 and WP-43.
+Until the keep-gate ruling, nothing that the cut order names is built, and wave 4 does not start. That holds back WP-35; everything in WP-18 after its proof step; the fourth PR of WP-11, which runs drawings through the engine; the Sketch control of WP-31 and the OpenSketch intent of WP-19; the Home Screen and Lock Screen widgets of WP-31; WP-32's complication families beyond the first and its Smart Stack widget; and WP-40, WP-41, WP-42 and WP-43.
 
 The hold names PRs, so that no milestone waits for a held part. Each held part of WP-11, WP-19, WP-31 and WP-32 is that package's last PR:
 
-- WP-11 ships in three PRs. The first runs typed and voice captures through the engine, and the second adds its kill points to the soak. The third, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
+- WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second places a follower by the capture it follows, makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks and gives the engine its missing kill seams. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
 - WP-19's fourth PR is the OpenSketch intent.
 - WP-31 ships in two PRs. The first has the controls, the Live Activity and the Action Button tip. The second, held, has the Sketch control and the Home Screen and Lock Screen widgets.
 - WP-32 ships in three PRs. Its third, held, has the complication families beyond the first and the Smart Stack widget.
@@ -405,10 +411,19 @@ A thread that finds its brief wrong or blocked stops and says so. It does not wi
 
 The orchestrator runs a serial queue and binds each result to a base, a head and a tree. Merges follow the dependency order in §6, inside the queue's own order. The merge gate, the merge queue and the orchestrator's state follow docs/architecture.md §18.
 
+A pull request beside a package's planned ones, which no row of its brief names, gets a row before it is gated. The row goes in the package's "Starts after" table, labelled with the package's number and a letter, as the parts of WP-40 are, such as 21a, and a section under Build says what it holds. Its squash subject starts with the package's ID and a colon. The tools count a package's merged pull requests in the order of its brief's rows, from the squash subjects that start with its ID, so a pull request with no row would shift every later one: its package would look merged too early, and the next gate would ask for the tests of a pull request that is not built.
+
+Knot is one person's app. Paolo said so on 2026-11-21: "Let's not overoptimize for simultaneous inputs, it's not a team app, it's an individual app". The rule below is the orchestrator's reading of that sentence, not his words:
+
+- A finding that needs several surfaces, or two devices, acting inside the same fraction of a second is recorded as a known limit, unless a capture is lost.
+- A reviewer ranks such a finding low, and says plainly when a sequence needs more than one person can do.
+- A fix of that kind that costs more than a small change goes to Paolo first.
+- One person's ordinary sequences across surfaces stay in scope.
+
 ### 8.5 Contracts and shared files
 
 - Once WP-02's last PR has merged, a change to KnotCore's public API goes in its own small PR on a `contract/…` branch, with the fakes updated. Until then WP-02's own PRs write that API, and its third PR only adds to what its second published: once WP-05 has started, a change that breaks that API goes in a contract PR even from WP-02. The orchestrator merges a contract PR first and tells the threads that depend on it to merge `main` into their branches. A contract PR that only adds merges in the normal queue. One that breaks keeps the two fixed times a day of docs/architecture.md §18.
-- `Package.swift`, `Package.resolved`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, and `docs/checklists/` after WP-04 merges. A package that needs a change there asks for it in its PR description. The orchestrator's own PRs count as WP-00, which owns these paths and every path that no brief owns, and `Fixtures/` too once WP-04 has merged, outside the results folders of WP-13 and WP-14. `scripts/ownership-extra.txt` lists what a package owns beyond its brief, and only the orchestrator edits it. The ownership check reads only the package and the path from that file: the review holds the orchestrator to the conditions that its third field states.
+- `Package.swift`, `Package.resolved`, `project.yml`, `AGENTS.md`, `PLAN.md`, `docs/plan/`, `docs/reviews/`, `docs/orchestrator.md`, `docs/product-spec.md` and `docs/architecture.md` belong to the orchestrator. So does `scripts/` after WP-01 merges, `docs/checklists/` after WP-04 merges, and `docs/errors.md`, the catalog's document, after WP-02 merges. A new error code still comes by a contract PR. A package that needs a change there asks for it in its PR description. The orchestrator's own PRs count as WP-00, which owns these paths and every path that no brief owns, and `Fixtures/` too once WP-04 has merged, outside the results folders of WP-13 and WP-14. `scripts/ownership-extra.txt` lists what a package owns beyond its brief, and only the orchestrator edits it. The ownership check reads only the package and the path from that file: the review holds the orchestrator to the conditions that its third field states.
 - A package edits only the paths it owns, and the gate checks that. Path ownership has stated exceptions:
   - The first PR of WP-01 creates the first files of every module folder: an empty target with one trivial test, the module's live entry point, the crash hosts and the environment factory. It also declares `AppEnvironment` in KnotCore with its `.unavailable` value and nothing else, because the factory returns that value. Each folder belongs to its package from then on.
   - `scripts/release.sh` belongs to WP-43, though the rest of `scripts/` passes to the orchestrator after WP-01.

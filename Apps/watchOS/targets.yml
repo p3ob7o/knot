@@ -19,7 +19,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
     dependencies:
       - package: KnotKit
-        products: [KnotAudio, KnotCore, KnotIntents, KnotLink, KnotUI]
+        products: [KnotAudio, KnotCore, KnotFakes, KnotIntents, KnotLink, KnotUI]
       - target: Widgets-watchOS
 
   Knot-watchOS-UITests:
@@ -28,6 +28,10 @@ targets:
     sources:
       - UITests
       - ../UITestSupport
+      # The launch arguments, so that a test shows a release build ignores them, and the
+      # app group's decision, so that a test covers each row.
+      - Sources/WatchLaunch.swift
+      - Sources/WatchAppGroup.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).watchkitapp.uitests

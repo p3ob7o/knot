@@ -87,9 +87,9 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             } else if latest.id == firstText?.id, record.note.title == nil || record.note.title == "" {
                 // The preview would repeat the first line: it shows what follows it, if anything.
                 let rest = Self.afterFirstLine(of: latest.text)
-                preview = rest.isEmpty ? nil : rest
+                preview = rest.isEmpty ? nil : Self.excerpt(rest)
             } else {
-                preview = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                preview = Self.excerpt(latest.text)
             }
         }
 
@@ -129,6 +129,20 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
         if hasPending { parts.append(localized("Text on its way")) }
         if hasArrived { parts.append(localized("Arrived")) }
         return parts.joined(separator: ". ")
+    }
+
+    /// The longest a preview runs, in characters.
+    public static let previewLength = 140
+
+    /// A short preview of `text`: its lines joined by spaces, cut at a word within
+    /// `previewLength` characters, with an ellipsis when it was cut.
+    static func excerpt(_ text: String) -> String {
+        let joined = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        guard joined.count > previewLength else { return joined }
+        let cut = joined.prefix(previewLength)
+        let atWord = cut.lastIndex(where: \.isWhitespace).map { cut[..<$0] } ?? cut
+        return atWord.trimmingCharacters(in: .whitespaces) + "…"
     }
 
     static func firstLine(of text: String) -> String {
