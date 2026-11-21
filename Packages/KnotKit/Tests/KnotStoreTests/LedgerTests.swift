@@ -312,4 +312,62 @@ import Testing
             #expect(receipt.noteID != (try await stage.note(of: a.id)), "C does not join A's note.")
         }
     }
+
+    /// Each kind of change leaves a row for what it changed, a segment's delete and restore
+    /// too, and a call that changes nothing, or rolls back, leaves none.
+    @Test func eachChangeLeavesItsRow() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 503, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let notes = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        let first = try await notes.record(captures.typed("one two", from: 0, to: 0.5))
+        let secondCapture = captures.typed("three four", from: 1, to: 1.5)
+        let second = try await notes.record(secondCapture)
+        let segment = second.segmentIDs[0]
+        func clear() async throws {
+            try await database.pool.write { db in try db.execute(sql: "DELETE FROM change_log") }
+        }
+        func rows() async throws -> [String] { try await LedgerTests.changeLog(database) }
+
+        try await clear()
+        _ = try await notes.delete(.segment(segment))
+        #expect(try await rows().contains("segment \(segment)"), "A deleted segment.")
+        try await clear()
+        _ = try await notes.restore(.segment(segment))
+        #expect(try await rows().contains("segment \(segment)"), "A restored segment.")
+        try await clear()
+        _ = try await notes.delete(.note(first.noteID))
+        #expect(try await rows() == ["note \(first.noteID)"], "A deleted note.")
+        try await clear()
+        _ = try await notes.restore(.note(first.noteID))
+        #expect(try await rows() == ["note \(first.noteID)"], "A restored note.")
+        try await clear()
+        _ = try await notes.setTitle("Synthetic title", of: first.noteID, ifRevision: nil)
+        #expect(try await rows() == ["note \(first.noteID)"], "A title.")
+        try await clear()
+        _ = try await notes.replaceText(
+            TextReplacement(segment: segment, text: "five six", origin: .edited, writer: .app))
+        #expect(try await rows() == ["segment \(segment)"], "An edit.")
+        try await clear()
+        guard case .moved(let moved) = try await notes.move(segment, from: first.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        #expect(Set(try await rows()).isSuperset(of: ["segment \(segment)", "note \(moved.to.id)"]), "A move.")
+        try await clear()
+        // Calls that change nothing, or roll back, leave no row.
+        _ = try await notes.move(segment, from: first.noteID)
+        _ = try? await notes.move(first.segmentIDs[0], from: first.noteID)
+        _ = try? await notes.replaceText(
+            TextReplacement(
+                segment: segment, text: "seven", origin: .edited, writer: .app,
+                ifRevision: StampedRevision(storeID: database.storeID, generation: database.generation, value: 0)))
+        _ = try await notes.record(secondCapture)
+        let left = try await rows()
+        #expect(left.isEmpty, "Nothing changed: \(left)")
+        expectConsistent(database)
+    }
 }
