@@ -41,9 +41,9 @@ public struct KeptInboxItem: Hashable, Sendable {
 
 /// One file that `Inbox/` keeps for a capture, as `NoteStore.keptFiles(of:)` gives it to a
 /// screen, which opens or shares it from `url` without knowing how `Inbox/` is laid out.
-public struct KeptFile: Hashable, Sendable, Codable {
+public struct KeptFile: Hashable, Sendable {
     /// What the file is, read from its extension.
-    public enum Role: Hashable, Sendable, Codable {
+    public enum Role: Hashable, Sendable {
         /// The item's manifest, `<captureID>.json`.
         case manifest
         /// Its payload of this kind: text, a recording or a drawing.
