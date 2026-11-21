@@ -9,13 +9,16 @@ public struct SegmentHandlers {
     public var seek: (Duration) -> Void
     /// The person began editing the text: the edit carries the revision read now.
     public var beginEdit: () -> Void
+    /// The person left the text unchanged: the edit's base ends with it.
+    public var endEdit: () -> Void
 
     public init(
         edit: @escaping (String) -> Void, action: @escaping (SegmentAction) -> Void,
         togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in },
-        beginEdit: @escaping () -> Void = {}
+        beginEdit: @escaping () -> Void = {}, endEdit: @escaping () -> Void = {}
     ) {
         self.beginEdit = beginEdit
+        self.endEdit = endEdit
         self.edit = edit
         self.action = action
         self.togglePlay = togglePlay
@@ -59,16 +62,16 @@ public struct SegmentView: View {
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit)
+                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
             case .ink:
                 InkSegmentPlaceholder(item: item)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit)
+                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
             case .typed:
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit)
+                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
             case .unknown:
                 EmptyView()
             }
@@ -144,6 +147,7 @@ struct SegmentText: View {
     let isShowingOriginal: Bool
     let edit: (String) -> Void
     var beginEdit: () -> Void = {}
+    var endEdit: () -> Void = {}
 
     var body: some View {
         if item.isEditable, !isShowingOriginal {
@@ -169,7 +173,7 @@ struct SegmentText: View {
     }
 
     private func commit() {
-        guard draft != text else { return }
+        guard draft != text else { return endEdit() }
         edit(draft)
     }
 }

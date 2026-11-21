@@ -213,6 +213,49 @@ import Testing
         #expect(model.editConflict(for: .title)?.arrived == "Sunday")
     }
 
+    /// Finding 11. A base ends with its edit, whether or not the edit changed anything: a focus
+    /// that ends unchanged leaves nothing that would make a later edit meet a false conflict.
+    @Test func aFocusWithoutAnEditLeavesNoStaleBase() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("v1"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        let notes = rig.environment.notes
+        // Focus, then a change arrives, and the person sees it.
+        model.beginEditing(segment)
+        _ = try await notes.replaceText(TextReplacement(segment: segment, text: "v2", origin: .edited, writer: .mcp))
+        await model.refresh()
+        #expect(model.items.first?.text == "v2")
+        // Later the person begins a new edit on "v2", which they see.
+        model.beginEditing(segment)
+        model.editText(of: segment, to: "v2 and mine")
+        await settled(model)
+        #expect(model.editConflicts.isEmpty, "\(model.editConflicts)")
+        #expect(try await notes.segment(segment)?.text == "v2 and mine")
+    }
+
+    /// Finding 11, with the field's own end: leaving it unchanged ends the base, so an edit sent
+    /// later without a new focus carries the revision read then.
+    @Test func leavingAFieldUnchangedEndsItsBase() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("v1"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        let notes = rig.environment.notes
+        model.beginEditing(segment)
+        model.endEditing(segment)
+        _ = try await notes.replaceText(TextReplacement(segment: segment, text: "v2", origin: .edited, writer: .mcp))
+        await model.refresh()
+        model.editText(of: segment, to: "v2 and mine")
+        await settled(model)
+        #expect(model.editConflicts.isEmpty, "\(model.editConflicts)")
+        #expect(try await notes.segment(segment)?.text == "v2 and mine")
+    }
+
     /// The re-check found this right: two changes that arrive before the commit leave the
     /// conflict holding the latest.
     @Test func twoChangesBeforeTheCommitHoldTheLatest() async throws {

@@ -138,7 +138,8 @@
                     }
                 },
                 seek: { position in Task { await player.seek(to: position) } },
-                beginEdit: { model.beginEditing(item.id) })
+                beginEdit: { model.beginEditing(item.id) },
+                endEdit: { model.endEditing(item.id) })
         }
     }
 #endif

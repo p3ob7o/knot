@@ -481,16 +481,26 @@ public final class NoteViewModel {
 
     // MARK: Segments and the note
 
-    /// The person began editing a segment: the edit carries the revision they read now.
+    /// The person began editing a segment: the edit carries the revision they read now. Each
+    /// focus begins a new edit, so it replaces any base an earlier focus left.
     public func beginEditing(_ segment: SegmentID) {
-        guard editBases[segment] == nil, let revision = record?.revision(of: segment) else { return }
-        editBases[segment] = revision
+        editBases[segment] = record?.revision(of: segment)
+    }
+
+    /// The person left a segment's field without changing it: no edit is sent, and the base
+    /// ends with it, so no later edit meets a conflict with text the person already saw.
+    public func endEditing(_ segment: SegmentID) {
+        editBases[segment] = nil
     }
 
     /// The person began editing the title: it carries the note's revision they read now.
     public func beginEditingTitle() {
-        guard titleBase == nil else { return }
         titleBase = record?.revision
+    }
+
+    /// The person left the title without changing it.
+    public func endEditingTitle() {
+        titleBase = nil
     }
 
     /// Replaces a segment's text with the person's edit. Edits beat cleaned and raw text. The edit
