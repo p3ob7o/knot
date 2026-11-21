@@ -22,7 +22,13 @@ import Testing
                     "--ends-after", "1600", "--sync-ms", "20",
                 ])
             #expect(run.status == 3, "\(run.output)")
-            #expect(run.output.contains("ended-early ") && run.output.contains(" ending input_lost"), "\(run.output)")
+            // The line names the capture that the host announced, after its first word (finding 27).
+            let lines = run.output.split(separator: "\n").map(String.init)
+            let capture = try #require(lines.first { $0.hasPrefix("capture ") }?.dropFirst("capture ".count))
+            let ended = lines.filter { $0.hasPrefix("ended-early ") }
+            #expect(
+                ended.count == 1 && ended.first?.hasPrefix("ended-early \(capture) frames ") == true, "\(run.output)")
+            #expect(ended.first?.hasSuffix(" ending input_lost") == true, "\(run.output)")
         }
 
         /// Every line of `record` about the recording names its capture, after its first word, in the
