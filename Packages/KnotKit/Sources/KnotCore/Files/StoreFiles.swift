@@ -16,7 +16,7 @@ public struct StoreFiles: Sendable {
     init(locations: StoreLocations, layer: any FileLayer) {
         store = DurableFile(layer: layer, root: locations.storeRoot)
         shared =
-            locations.sharedRoot.standardizedFileURL == locations.storeRoot.standardizedFileURL
+            PathForm.real(locations.sharedRoot) == PathForm.real(locations.storeRoot)
             ? nil : DurableFile(layer: layer, root: locations.sharedRoot)
     }
 
@@ -57,15 +57,11 @@ public struct StoreFiles: Sendable {
         return placer
     }
 
-    /// The `DurableFile` whose root holds `url`. When one root lies inside the other, the
-    /// deeper one wins.
+    /// The `DurableFile` whose root holds `url`, however either is written (`PathForm`). When
+    /// one root lies inside the other, the deeper one wins.
     private func placer(for url: URL) -> DurableFile? {
-        let components = url.standardizedFileURL.pathComponents
-        let holders = [store, shared].compactMap { $0 }.filter { placer in
-            let root = placer.root.pathComponents
-            return components.count >= root.count && Array(components.prefix(root.count)) == root
-        }
-        return holders.max { $0.root.pathComponents.count < $1.root.pathComponents.count }
+        let holders = [store, shared].compactMap { $0 }.filter { (try? $0.componentsBelowRoot(url)) != nil }
+        return holders.max { PathForm.real($0.root).count < PathForm.real($1.root).count }
     }
 }
 
