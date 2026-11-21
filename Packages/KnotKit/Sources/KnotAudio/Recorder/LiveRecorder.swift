@@ -190,8 +190,10 @@ public final class LiveRecorder: Recorder {
 
     private func scan(currentLaunch: LaunchID) throws(KnotError) -> [RecordedAudio] {
         guard layer.entryKind(locations.recording) == .folder else { return [] }
+        let names = try layer.contents(of: locations.recording)
+        removePartials(names)
         var found: [RecordedAudio] = []
-        for name in try layer.contents(of: locations.recording) where name.hasSuffix(".json") {
+        for name in names where name.hasSuffix(".json") {
             guard let id = CaptureID(String(name.dropLast(".json".count))) else { continue }
             let files = SessionFiles(locations: locations, capture: id, layer: layer, store: store)
             let manifest: CaptureManifest
@@ -223,6 +225,23 @@ public final class LiveRecorder: Recorder {
             }
         }
         return found.sorted { $0.captureID < $1.captureID }
+    }
+
+    /// Removes what a death inside `DurableFile.place` left in `Recording/`: a manifest's partial
+    /// file, `.<capture>.json.<uuid>.partial`, of any recording that is not live in this process.
+    /// A partial of a recording that is starting here may be its manifest being placed, and stays.
+    private func removePartials(_ names: [String]) {
+        for name in names where name.hasPrefix(".") && name.hasSuffix(DurableFile.partialSuffix) {
+            let capture = name.dropFirst().split(separator: ".", maxSplits: 1).first.flatMap { CaptureID(String($0)) }
+            if let capture, sessions.withLock({ $0[capture] != nil }) { continue }
+            let url = locations.recording.appending(path: name, directoryHint: .notDirectory)
+            do {
+                try store.remove(url)
+                if let capture { log.capture(capture, "recording_partial_removed") }
+            } catch {
+                log.failure(capture.map { error.about(capture: $0) } ?? error, "recording_partial_kept")
+            }
+        }
     }
 
     // MARK: Conversion and removal

@@ -142,6 +142,40 @@ import Testing
         #expect(exists(working) && exists(folder.locations.recordingManifest(damaged.captureID)))
     }
 
+    /// A manifest's partial file, which a death inside its placement leaves, is removed by
+    /// recovery: nothing is left in `Recording/` once the recording's files are removed.
+    @Test func aPartialManifestIsRemoved() async throws {
+        let folder = try ScratchFolder()
+        let request = request()
+        try writeManifest(folder.locations, request)
+        _ = try writeWorkingFile(at: folder.locations.recordingAudio(request.captureID, format: .caf), frames: 1_600)
+        let partial = folder.locations.recording.appendingPathComponent(
+            ".\(request.captureID).json.\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)")
+        try Data("{\"half".utf8).write(to: partial)
+        let recorder = recorder(folder.locations, input: injected())
+        let orphans = try await recorder.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(orphans.map(\.captureID) == [request.captureID])
+        #expect(!exists(partial))
+        try await recorder.removeWorkingFile(of: request.captureID)
+        #expect(recordingFolder(folder.locations).isEmpty, "\(recordingFolder(folder.locations))")
+    }
+
+    /// A partial file of a recording that is live in this process may be its manifest being
+    /// placed, and stays.
+    @Test func aPartialOfALiveRecordingStays() async throws {
+        let folder = try ScratchFolder()
+        let launch = LaunchID(uuid: UUID())
+        let recorder = recorder(folder.locations, input: injected())
+        let request = request(launch)
+        let session = try await recorder.start(request)
+        let partial = folder.locations.recording.appendingPathComponent(
+            ".\(request.captureID).json.\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)")
+        try Data("{\"half".utf8).write(to: partial)
+        _ = try await recorder.recoverOrphans(currentLaunch: launch)
+        #expect(exists(partial))
+        _ = await session.stop()
+    }
+
     /// No `Recording/` folder yet: nothing to recover.
     @Test func anEmptyStoreHasNoOrphans() async throws {
         let folder = try ScratchFolder()
