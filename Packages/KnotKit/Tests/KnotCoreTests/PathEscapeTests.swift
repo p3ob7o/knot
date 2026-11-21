@@ -126,4 +126,16 @@ import Testing
             #expect(lost.isEmpty, "\(operation) \(text): gone from outside the root: \(lost)")
         }
     }
+
+    /// Finding 5: the root is found in a path as its shortest part whose real path is the
+    /// root's, so a link below the root that points back at the root is a folder to check, and
+    /// is refused, never followed: nothing reaches the root through it.
+    @Test func aLinkBelowTheRootBackToTheRootIsRefused() throws {
+        let tree = try Tree()
+        let durable = DurableFile(layer: PosixFileLayer(), root: tree.root)
+        #expect(
+            performing: { try durable.place(Data("x".utf8), at: tree.path("KnotStore/Self/f7")) },
+            throws: { error in (error as? KnotError)?.context.posixError == ENOTDIR })
+        #expect(!FileManager.default.fileExists(atPath: tree.path("KnotStore/f7").path), "Nothing through the link.")
+    }
 }
