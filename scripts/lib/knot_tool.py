@@ -559,6 +559,12 @@ def cmd_named_tests(source, package=None, branch=None):
 
 
 SWIFT_SOURCES = ("Packages/KnotKit/Sources/", "Apps/")
+# The package's tests, which the lint reads for one rule alone: no test cancels itself.
+SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
+# A test that cancels itself, or one of its cases. Swift Testing prints a cancelled case of a
+# test with arguments as passed, so the gate could not tell it from a run (finding 51); a
+# test that cannot run here says so by a trait, which is printed as skipped.
+TEST_CANCEL = re.compile(r"\bTest\s*(?:\.\s*Case\s*)?\.\s*cancel\s*\(")
 LIBRARY_EXEMPT = ("Packages/KnotKit/Sources/knot/", "Packages/KnotKit/Sources/knot-eval/",
                   "Packages/KnotKit/Sources/KnotStoreCrashHost/", "Packages/KnotKit/Sources/KnotAudioCrashHost/",
                   "Packages/KnotKit/Sources/KnotLinkCrashHost/", "Packages/KnotKit/Sources/KnotInkCrashHost/",
@@ -677,10 +683,10 @@ def copy_problem(path):
     return any(re.search(r" 2(\.[^/.]+)?$", part) for part in path.split("/"))
 
 
-def swift_files():
+def swift_files(prefixes=SWIFT_SOURCES):
     found = []
     for path in lines(git("ls-files")) + lines(git("ls-files", "--others", "--exclude-standard")):
-        if path.endswith(".swift") and path.startswith(SWIFT_SOURCES) and os.path.isfile(path):
+        if path.endswith(".swift") and path.startswith(prefixes) and os.path.isfile(path):
             found.append(path)
     return sorted(set(found))
 
@@ -721,9 +727,18 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
         problems.append(f"lint: {path}:{number}: [{rule}] {message}")
 
     files = only if only else swift_files()
+    tests = [] if only else swift_files(SWIFT_TESTS)
     escapes = {}
     used = {}
-    for path in files:
+    for path in files + tests:
+        if TEST_CANCEL.search("".join(line for _, line, _ in code_lines(path))):
+            for number, line, _ in code_lines(path):
+                if TEST_CANCEL.search(line):
+                    problem(path, number, "test-cancel",
+                            "a test that cannot run here says so by a trait, which is printed as skipped; a "
+                            "cancelled case of a test with arguments is printed as passed")
+        if path in tests:
+            continue
         place = (as_prefix + os.path.basename(path)) if as_prefix else path
         # A fake outside KnotFakes is named Fake… and compiles only under
         # `#if DEBUG || KNOT_FAKES`; the release scan finds such a type by its name.
@@ -809,7 +824,7 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
 
     for line in problems:
         print(line)
-    print(f"lint: {len(files)} Swift files, {len(problems)} problems")
+    print(f"lint: {len(files)} Swift files{f' and {len(tests)} test files' if tests else ''}, {len(problems)} problems")
     return 1 if problems else 0
 
 

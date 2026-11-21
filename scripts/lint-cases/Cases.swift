@@ -75,3 +75,15 @@ struct FakeTransport {}
     // expect: fake-unguarded
     enum FakeBehindNot {}
 #endif
+// A test that cannot run here says so by a trait, which Swift Testing prints as skipped and
+// the gate fails on. A cancellation is printed as passed in a test with arguments, so the
+// lint refuses it (finding 51).
+func cancelsItself() throws {
+    // expect: test-cancel
+    try Test.cancel("the model is not on this Mac")
+    // expect: test-cancel
+    try Test.Case.cancel()
+    // expect: nothing
+    // Test.cancel() in a comment is no call.
+    let note = 1
+}

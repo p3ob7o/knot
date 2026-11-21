@@ -145,7 +145,8 @@ The tree then holds both changes, as the merge queue would. With `--base` at the
 - `URLSession`, `URLRequest`, the `NW` connection, listener, browser and endpoint types, `CFStream`, `CFSocket` and any `http://` or `https://` in code;
 - `eraseDatabaseOnSchemaChange`; a concurrency escape beyond `scripts/concurrency-escapes.txt`;
 - a required-reason API, among them the file-timestamp resource keys, `stat`, `fstat`, `lstat`, `fstatat`, the `getattrlist` family and the `statfs` family, without its reason in the manifest of each target that links it;
-- a file or folder whose name ends in " 2".
+- a file or folder whose name ends in " 2";
+- `Test.cancel(…)` or `Test.Case.cancel(…)`, in the sources and in the package's tests, which it reads for this alone. Swift Testing prints a cancelled case of a test with arguments as passed, so the gate could not tell it from a run. A test that cannot run here says so by a trait, such as `.enabled(if:)`, which Swift Testing prints as skipped, and the gate fails on a skipped test.
 
 It cannot know what a value holds. A value named `noteID` that holds text passes, so does a value logged through a helper of our own, and so does a host reached through an API it does not name. The review reads for those. A comment `knot-lint: allow network` or `knot-lint: allow logged-text` on a line, followed by the reason, lets that line pass, as for a sink that logs a finished line as public by design. The review checks each one. `scripts/lint-cases/Cases.swift` holds a case for each rule and three lines that must pass, and the self-test fails when the lint misses a case or flags one of those lines. It judges the fixture against a privacy manifest of its own, so the result does not change when a package adds a reason to a real manifest.
 
