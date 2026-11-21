@@ -10,7 +10,7 @@ import Testing
 @MainActor
 @Suite struct RecordingTests {
     @Test func voiceOverAnnouncesTheStartAndTheStopAndNothingBetween() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let model = rig.capture(surface: .macPanel)
         await model.refresh()
@@ -40,10 +40,13 @@ import Testing
         #expect(stored?.kind == .voice)
     }
 
+    /// The second tap's time is set by the test, on a clock it moves itself: never by how fast
+    /// the test runs (docs/product-spec.md §4.2, a tap stopped within a second is discarded).
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
-        let model = rig.capture()
+        let clock = FakeClock()
+        let model = rig.capture(pressClock: clock)
         await model.refresh()
         model.toggleRecording()
         await settled(model)
@@ -51,7 +54,7 @@ import Testing
             Issue.record("No recording started: \(String(describing: model.problem))")
             return
         }
-        // The second tap comes well within a second of the first.
+        clock.advance(by: 0.5)
         model.toggleRecording()
         await settled(model)
         #expect(model.recording == .idle)
@@ -60,8 +63,29 @@ import Testing
         #expect(page.notes.isEmpty)
     }
 
+    /// Its sibling, on the same clock: a tap stopped more than a second after the first is kept.
+    @Test func aTapStoppedAfterASecondIsKept() async throws {
+        let rig = await PreviewRig.make()
+        defer { rig.remove() }
+        let clock = FakeClock()
+        let model = rig.capture(pressClock: clock)
+        await model.refresh()
+        model.toggleRecording()
+        await settled(model)
+        guard case .recording(let id) = model.recording else {
+            Issue.record("No recording started: \(String(describing: model.problem))")
+            return
+        }
+        clock.advance(by: 1.5)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recording == .idle)
+        #expect(rig.announcer.heard == [.recordingStarted, .recordingStopped])
+        #expect(try await rig.environment.notes.capture(id)?.outcome == .stored)
+    }
+
     @Test func aPressWhileStartingIsIgnored() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let model = rig.capture()
         model.press(.holdStart)
@@ -80,7 +104,7 @@ import Testing
     }
 
     @Test func startingARecordingEndsTheTypedCaptureInTheSameNote() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let model = rig.capture(surface: .macPanel)
         await model.refresh()
@@ -101,7 +125,7 @@ import Testing
     }
 
     @Test func aRecordingThatCannotStartSaysWhy() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let recorder = try #require(rig.environment.recorder as? ScriptedRecorder)
         recorder.failNextStarts(with: KnotError.microphonePermissionRefused)

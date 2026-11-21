@@ -14,12 +14,9 @@ final class KnotMacLaunchTests: XCTestCase {
     @MainActor
     func testLaunchIntoCaptureTypeAndFindTheLineInTheStream() throws {
         let app = XCUIApplication()
-        // Every development build of the Mac app has one bundle ID, so all of them share one
-        // saved window state: a build that quit with its window closed would launch the next
-        // one with no window. The launch ignores that state. WP-22's launcher carries this once
-        // it is on main.
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
-        app.launch()
+        // Ignores the saved window state, which every development build shares
+        // (`launchForSmokeTest()`).
+        app.launchForSmokeTest()
 
         let field = app.descendants(matching: .any)["Capture field"]
         XCTAssertTrue(field.waitForExistence(timeout: 30), "The capture surface is on screen at launch.")
