@@ -13,15 +13,12 @@ final class RecordScreenTests: XCTestCase {
     /// before.
     @MainActor
     private func launchPreview(gap: Double, _ more: [String] = []) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = [WatchLaunch.previewArgument, WatchLaunch.pressGapArgument, "\(gap)"] + more
-        app.launch()
-        return app
+        XCUIApplication.launchedWatch([WatchLaunch.previewArgument, WatchLaunch.pressGapArgument, "\(gap)"] + more)
     }
 
     @MainActor
     private func status(_ app: XCUIApplication, is text: String) -> Bool {
-        app.staticTexts["knot.status"].waitForExistence(timeout: 30) && app.staticTexts["knot.status"].label == text
+        waitForLabel(app.staticTexts["knot.status"], text)
     }
 
     @MainActor
@@ -77,6 +74,25 @@ final class RecordScreenTests: XCTestCase {
         record.tap()
         XCTAssertTrue(waitForLabel(record, "Stop recording"))
         XCTAssertTrue(status(app, is: "Recording"))
+    }
+}
+
+extension XCUIApplication {
+    /// The settings of the test run that the app takes too: the strict cooperative pool, which
+    /// makes a blocked thread of Swift's pool show up as a hang in the app as in a package test.
+    static let forwardedEnvironment = ["LIBDISPATCH_COOPERATIVE_POOL_STRICT"]
+
+    /// The Watch app, launched with `arguments` and the forwarded settings of this run.
+    @MainActor
+    static func launchedWatch(_ arguments: [String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = arguments
+        let environment = ProcessInfo.processInfo.environment
+        for name in forwardedEnvironment {
+            if let value = environment[name] { app.launchEnvironment[name] = value }
+        }
+        app.launch()
+        return app
     }
 }
 
