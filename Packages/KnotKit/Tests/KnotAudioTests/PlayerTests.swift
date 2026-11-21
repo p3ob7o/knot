@@ -1,0 +1,99 @@
+import AVFAudio
+import Foundation
+import KnotCore
+import KnotFakes
+import KnotTestSupport
+import Testing
+
+@testable import KnotAudio
+
+/// The live player, rendering offline: nothing plays aloud on the build Mac, and a test moves
+/// the audio on itself.
+@Suite struct PlayerTests {
+    /// The live player passes the `AudioPlayer` contract on a working file of two seconds, and
+    /// refuses a file that is not audio with `audio_unreadable`.
+    @Test(.tags(.contract)) func theLivePlayerPassesItsContract() async throws {
+        let folder = try ScratchFolder()
+        let file = folder.file("two-seconds.caf")
+        _ = try writeWorkingFile(at: file, frames: 32_000)
+        let unreadable = folder.file("not-audio.caf")
+        try Data("not audio".utf8).write(to: unreadable)
+        try await AudioPlayerContract.run(file: file, length: .seconds(2), unreadable: unreadable) {
+            LiveAudioPlayer(output: .offline)
+        }
+    }
+
+    /// The live entry point gives the player, and the recording state in the defaults it is
+    /// given, none without them; and the recorder it wires gives its cues through the
+    /// environment's emitter and publishes its recording in that state.
+    @Test func theEntryPointWiresThePlayerTheStateAndTheCues() async throws {
+        let suite = try TestSuite()
+        defer { suite.remove() }
+        var environment = AppEnvironment.unavailable
+        let cues = RecordingCueEmitter()
+        environment.cues = cues
+        let plain = KnotAudioLive.wire(environment)
+        #expect(plain.player is LiveAudioPlayer)
+        #expect(plain.recordingState is UnavailableRecordingStateStore, "With no defaults given, no state store.")
+        let folder = try ScratchFolder()
+        let wired = KnotAudioLive.wire(
+            environment, locations: folder.locations, input: injected(), recordingState: suite.defaults)
+        #expect(wired.recordingState is DefaultsRecordingStateStore)
+        let session = try await wired.recorder.start(request())
+        #expect(wired.recordingState.read().phase == .recording)
+        #expect(await SuiteWait.until("the live cue") { cues.cues == [.recordingLive] })
+        _ = await session.stop()
+        #expect(wired.recordingState.read() == .idle)
+    }
+
+    /// What it renders moves it on: a second rendered is a second played, told as it plays, and
+    /// at the end of the recording it has ended. A play from the end plays again from the start.
+    /// The converted copy, the stored format, plays the same.
+    @Test(arguments: [false, true])
+    func aRecordingPlaysToItsEnd(converted: Bool) async throws {
+        let folder = try ScratchFolder()
+        // Two seconds recorded and, for the stored format, converted, as the app does.
+        let live = recorder(folder.locations, input: injected(frames: 32_000))
+        let session = try await live.start(request())
+        await durable(atLeast: 32_000, of: session)
+        let audio = await session.stop()
+        var file = try #require(audio.workingFile)
+        if converted { file = try await live.convert(audio).file }
+        let player = LiveAudioPlayer(output: .offline)
+        #expect(try await player.load(file) == .seconds(2))
+        await player.play()
+        #expect(await player.renderOffline(16_000) == 16_000)
+        #expect(
+            await SuiteWait.until("the position a second in") {
+                guard case .playing(let at, _) = player.currentState else { return false }
+                return at >= .milliseconds(900)
+            }, "\(player.currentState)")
+        guard case .playing(let at, _) = player.currentState else {
+            Issue.record("It plays on: \(player.currentState)")
+            return
+        }
+        #expect(at <= .seconds(1), "A second rendered is no more than a second played: \(at)")
+        _ = await player.renderOffline(20_000)
+        #expect(
+            await SuiteWait.until("the end") { player.currentState == .ended(.seconds(2)) }, "\(player.currentState)")
+        await player.play()
+        #expect(
+            player.currentState == .playing(at: .zero, of: .seconds(2)),
+            "From the end it plays again from the start: \(player.currentState)")
+        // Half a second rendered from the start is half a second in, never the end.
+        _ = await player.renderOffline(8_000)
+        #expect(
+            await SuiteWait.until("the position half a second in") {
+                guard case .playing(let at, _) = player.currentState else { return false }
+                return at >= .milliseconds(400)
+            }, "\(player.currentState)")
+        guard case .playing(let again, _) = player.currentState, again <= .milliseconds(500) else {
+            Issue.record("Half a second rendered plays half a second: \(player.currentState)")
+            return
+        }
+        // A seek while it plays plays on from there: 600 ms from 1.5 s reach the end.
+        await player.seek(to: .milliseconds(1_500))
+        _ = await player.renderOffline(9_600)
+        #expect(await SuiteWait.until("the end after the seek") { player.currentState == .ended(.seconds(2)) })
+    }
+}
