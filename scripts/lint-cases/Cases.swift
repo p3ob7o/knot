@@ -86,4 +86,8 @@ func cancelsItself() throws {
     // expect: nothing
     // Test.cancel() in a comment is no call.
     let note = 1
+    // expect: nothing
+    let named = "Test.cancel("
+    // expect: nothing
+    _ = "a string with \(note) and Test.cancel("
 }

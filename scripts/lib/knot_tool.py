@@ -564,6 +564,7 @@ SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
 # A test that cancels itself, or one of its cases. Swift Testing prints a cancelled case of a
 # test with arguments as passed, so the gate could not tell it from a run (finding 51); a
 # test that cannot run here says so by a trait, which is printed as skipped.
+STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
 TEST_CANCEL = re.compile(r"\bTest\s*(?:\.\s*Case\s*)?\.\s*cancel\s*\(")
 LIBRARY_EXEMPT = ("Packages/KnotKit/Sources/knot/", "Packages/KnotKit/Sources/knot-eval/",
                   "Packages/KnotKit/Sources/KnotStoreCrashHost/", "Packages/KnotKit/Sources/KnotAudioCrashHost/",
@@ -733,7 +734,9 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
     for path in files + tests:
         if TEST_CANCEL.search("".join(line for _, line, _ in code_lines(path))):
             for number, line, _ in code_lines(path):
-                if TEST_CANCEL.search(line):
+                # A string that names the call is no call: the literals are blanked, as
+                # code_lines blanks the comments.
+                if TEST_CANCEL.search(STRING_LITERAL.sub('""', line)):
                     problem(path, number, "test-cancel",
                             "a test that cannot run here says so by a trait, which is printed as skipped; a "
                             "cancelled case of a test with arguments is printed as passed")
