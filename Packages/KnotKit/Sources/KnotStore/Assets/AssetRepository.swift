@@ -30,7 +30,7 @@ public final class AssetRepository: AssetStore {
         let sha = Self.sha256(data)
         if let stored = try find(url, asset: asset, kind: kind) {
             guard stored.sha256 == sha else { throw KnotError.assetConflict.with(.init(assetID: asset)) }
-            return stored
+            return try settled(stored)
         }
         do {
             try exclusive.place(data, at: url)
@@ -39,7 +39,7 @@ public final class AssetRepository: AssetStore {
             guard let stored = try find(url, asset: asset, kind: kind), stored.sha256 == sha else {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
             }
-            return stored
+            return try settled(stored)
         }
         return StoredFile(asset: asset, kind: kind, url: url, byteCount: Int64(data.count), sha256: sha)
     }
@@ -50,13 +50,13 @@ public final class AssetRepository: AssetStore {
             // The stored file itself, or a retry after the move committed and its source went:
             // nothing to do.
             if source.standardizedFileURL == url.standardizedFileURL || layer.entryKind(source) == nil {
-                return stored
+                return try settled(stored)
             }
             guard try Self.digest(of: source) == stored.sha256 else {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
             }
             try files.remove(source)
-            return stored
+            return try settled(stored)
         }
         let (sha, byteCount) = try Self.digestAndSize(of: source)
         do {
@@ -68,7 +68,7 @@ public final class AssetRepository: AssetStore {
                 throw KnotError.assetConflict.with(.init(assetID: asset))
             }
             try files.remove(source)
-            return stored
+            return try settled(stored)
         }
         return StoredFile(asset: asset, kind: kind, url: url, byteCount: byteCount, sha256: sha)
     }
@@ -91,6 +91,15 @@ public final class AssetRepository: AssetStore {
     }
 
     // MARK: Files
+
+    /// A stored file that a placement finds in place, answered only once it and its folder are
+    /// on the drive: the placement that put it there may have failed at its folder's sync, and a
+    /// retry answers for it (docs/architecture.md §6, rule 7).
+    private func settled(_ stored: StoredFile) throws(KnotError) -> StoredFile {
+        try layer.syncFile(stored.url)
+        try layer.syncFolder(stored.url.deletingLastPathComponent())
+        return stored
+    }
 
     private func find(_ url: URL, asset: AssetID, kind: AssetKind) throws(KnotError) -> StoredFile? {
         guard layer.entryKind(url) == .file else { return nil }

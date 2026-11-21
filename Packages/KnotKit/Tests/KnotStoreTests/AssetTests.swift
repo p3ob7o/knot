@@ -98,4 +98,36 @@ import Testing
         #expect(try await made.assets.find(moved, kind: .audio)?.sha256 == placed.sha256)
         #expect(FileManager.default.fileExists(atPath: source.path), "A refused move keeps its source.")
     }
+
+    /// A placement whose folder's sync failed has not placed its file: a retry syncs it before
+    /// it answers, and fails while the sync does, for a move as for a write.
+    @Test func aRetryFinishesTheFolderSyncThatFailed() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 86)
+        let written: AssetID = made.captures.ids.make()
+        let moved: AssetID = made.captures.ids.make()
+        let assetFolders = [written, moved].map {
+            made.database.locations.asset($0, kind: .audio).deletingLastPathComponent().standardizedFileURL.path
+        }
+        let refusing = Switch(true)
+        let repository = AssetRepository(
+            locations: made.database.locations,
+            layer: HookedFileLayer(refuseSync: { url in
+                refusing.isOn && assetFolders.contains(url.standardizedFileURL.path)
+            }))
+        await expectFailure(.writeFailed) { try await repository.place(Data([3]), as: written, kind: .audio) }
+        await expectFailure(.writeFailed, "A retry answers once the folder is synced.") {
+            try await repository.place(Data([3]), as: written, kind: .audio)
+        }
+        let source = folders.make("source").appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try Data([4]).write(to: source)
+        await expectFailure(.writeFailed) { try await repository.move(source, as: moved, kind: .audio) }
+        await expectFailure(.writeFailed, "A retry answers once the folder is synced.") {
+            try await repository.move(source, as: moved, kind: .audio)
+        }
+        refusing.set(false)
+        #expect(try await repository.place(Data([3]), as: written, kind: .audio).byteCount == 1)
+        #expect(try await repository.move(source, as: moved, kind: .audio).byteCount == 1)
+    }
 }

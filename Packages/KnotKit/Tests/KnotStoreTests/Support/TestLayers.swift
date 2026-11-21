@@ -5,13 +5,14 @@ import Synchronization
 import Testing
 
 /// The system's files, with places where a test pauses a call or makes one fail: before a
-/// folder is made, before a file is synced, before a rename, and at a folder's sync.
+/// folder is made, before a file is synced, before a rename, at a folder's sync and at a rename.
 struct HookedFileLayer: FileLayer {
     let base = PosixFileLayer()
     var beforeCreate: @Sendable (URL) -> Void = { _ in }
     var beforeSyncFile: @Sendable (URL) -> Void = { _ in }
     var beforeRename: @Sendable (URL, URL) -> Void = { _, _ in }
     var refuseSync: @Sendable (URL) -> Bool = { _ in false }
+    var refuseRename: @Sendable (URL, URL) -> Bool = { _, _ in false }
 
     func createFolder(_ url: URL) throws(KnotError) {
         beforeCreate(url)
@@ -27,6 +28,7 @@ struct HookedFileLayer: FileLayer {
 
     func rename(_ source: URL, to destination: URL) throws(KnotError) {
         beforeRename(source, destination)
+        if refuseRename(source, destination) { throw KnotError.writeFailed.with(.init(posixError: EIO)) }
         try base.rename(source, to: destination)
     }
 
@@ -67,4 +69,24 @@ final class Gate: Sendable {
     }
 
     func release() { released.signal() }
+}
+
+/// A switch a test turns on and off while the code under test reads it.
+final class Switch: Sendable {
+    private let state: Mutex<Bool>
+
+    init(_ on: Bool) { state = Mutex(on) }
+
+    var isOn: Bool { state.withLock { $0 } }
+
+    func set(_ on: Bool) { state.withLock { $0 = on } }
+}
+
+/// What the code under test reported, in order.
+final class Recorded: Sendable {
+    private let items = Mutex<[String]>([])
+
+    func add(_ item: String) { items.withLock { $0.append(item) } }
+
+    var all: [String] { items.withLock { $0 } }
 }
