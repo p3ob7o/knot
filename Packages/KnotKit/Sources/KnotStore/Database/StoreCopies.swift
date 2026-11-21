@@ -182,7 +182,7 @@ public enum StoreCopies {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         for name in names
         where name.hasPrefix(".") && name.contains(DurableFile.partialSuffix)
-            && PartialFiles.isLeftover(name, in: folder)
+            && PartialFiles.isLeftover(name)
         {
             try? FileManager.default.removeItem(at: folder.appending(path: name, directoryHint: .notDirectory))
         }

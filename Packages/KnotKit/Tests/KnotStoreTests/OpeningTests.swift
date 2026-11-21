@@ -500,11 +500,13 @@ import Testing
 
     /// The slower of two openers stops with its store whole in its partial file, before it syncs
     /// and publishes it. The faster one finds no store, makes one and records in it. The slower
-    /// then opens the store made first: its partial was its own, and no other open removed it.
-    @Test func aSlowerOpenerWhosePartialIsKeptOpensTheStoreMadeFirst() async throws {
+    /// then opens the store made first: its partial was its own, and no other open removed it,
+    /// with the root's path written with `/private` or without.
+    @Test(arguments: PathWriting.allCases)
+    func aSlowerOpenerWhosePartialIsKeptOpensTheStoreMadeFirst(written: PathWriting) async throws {
         let folders = TemporaryFolders()
         defer { folders.removeAll() }
-        let root = folders.make()
+        let root = folders.make(written: written)
         let locations = StoreLocations.testing(root: root)
         let gate = Gate()
         let layer = HookedFileLayer(beforeSyncFile: { url in

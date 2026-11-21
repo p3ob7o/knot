@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import KnotCore
 
@@ -60,7 +61,7 @@ public final class AssetRepository: AssetStore {
         if let stored = try find(url, asset: asset, kind: kind) {
             // The stored file itself, or a retry after the move committed and its source went:
             // nothing to do.
-            if source.standardizedFileURL == url.standardizedFileURL || layer.entryKind(source) == nil {
+            if layer.entryKind(source) == nil || Self.isSameFile(source, url) {
                 return try settled(stored)
             }
             guard try Self.digest(of: source) == stored.sha256 else {
@@ -138,6 +139,17 @@ public final class AssetRepository: AssetStore {
     /// the stored asset.
     private func removeSource(_ source: URL) {
         try? layer.remove(source)
+    }
+
+    /// Whether two paths name the same file, however each is written: with `/private` or
+    /// without, through a link or not. Each is read as the system resolves it, so that a move
+    /// handed the stored file by another path never takes it for a source and removes it.
+    static func isSameFile(_ one: URL, _ other: URL) -> Bool {
+        guard let first = realpath(one.path, nil) else { return false }
+        defer { free(first) }
+        guard let second = realpath(other.path, nil) else { return false }
+        defer { free(second) }
+        return strcmp(first, second) == 0
     }
 
     /// The conflict rule is on the ID: an asset ID that holds a file of one kind takes no file

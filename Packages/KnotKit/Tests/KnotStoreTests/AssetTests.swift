@@ -251,6 +251,32 @@ import Testing
         #expect(again.sha256 == moved.sha256, "A source that cannot be removed does not fail the move.")
     }
 
+    /// A move handed the stored file itself by another path to it, through a link to the store's
+    /// folder or with `/private` in front, answers the stored file and removes nothing.
+    @Test func aMoveOfTheStoredFileByAnotherPathKeepsIt() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 127)
+        let locations = made.database.locations
+        let stored = locations.asset(made.audio, kind: .audio)
+        let bytes = try Data(contentsOf: stored)
+        let link = folders.make("link").appending(path: "store", directoryHint: .isDirectory)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: locations.storeRoot)
+        let below = String(stored.path.dropFirst(locations.storeRoot.path.count + 1))
+        let throughLink = link.appending(path: below, directoryHint: .notDirectory)
+        let otherForm = URL(
+            fileURLWithPath: stored.path.hasPrefix("/private/")
+                ? String(stored.path.dropFirst("/private".count)) : "/private" + stored.path,
+            isDirectory: false)
+        for source in [throughLink, otherForm, stored] {
+            let moved = try await made.assets.move(source, as: made.audio, kind: .audio)
+            #expect(moved.sha256 == AssetRepository.sha256(bytes))
+            #expect(FileManager.default.fileExists(atPath: stored.path), "The stored file stays: \(source.path)")
+        }
+        #expect(try Data(contentsOf: stored) == bytes)
+        expectConsistent(made.database)
+    }
+
     /// A drawing and a recording placed under one asset ID at once: the drawing stops with its
     /// bytes written, before it is published, while the recording is placed. One ID ends with one
     /// file, and the drawing's placement is refused as a conflict.

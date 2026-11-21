@@ -10,7 +10,10 @@ import Synchronization
 ///
 /// A partial file's name is `.<final name>.p<process ID>.<UUID>.partial`.
 enum PartialFiles {
-    /// The paths of the partial files this process is writing now.
+    /// The names of the partial files this process is writing now. A name is enough: its process
+    /// ID and UUID make it unique, and it reads the same however its folder is written, with
+    /// `/private` or without, through a link or not, before the file exists and after. A path
+    /// would not: `URL.standardizedFileURL` drops a leading `/private` only once the file exists.
     private static let writing = Mutex<Set<String>>([])
 
     /// A new partial file for `final` in `folder`, this process's until `finished(_:)`.
@@ -18,25 +21,24 @@ enum PartialFiles {
         let url = folder.appending(
             path: ".\(final).p\(getpid()).\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
             directoryHint: .notDirectory)
-        let path = url.standardizedFileURL.path
-        writing.withLock { _ = $0.insert(path) }
+        let name = url.lastPathComponent
+        writing.withLock { _ = $0.insert(name) }
         return url
     }
 
     /// The writer of `url` is done with it: published, or removed.
     static func finished(_ url: URL) {
-        let path = url.standardizedFileURL.path
-        writing.withLock { _ = $0.remove(path) }
+        let name = url.lastPathComponent
+        writing.withLock { _ = $0.remove(name) }
     }
 
-    /// Whether the entry `name` in `folder`, a partial file or one of its journals, is what a
-    /// dead writer left: not a file this process is writing, and not one of a process that still
-    /// runs. A name of the older form, with no writer, is a leftover.
-    static func isLeftover(_ name: String, in folder: URL) -> Bool {
+    /// Whether the entry `name`, a partial file or one of its journals, is what a dead writer
+    /// left: not a file this process is writing, and not one of a process that still runs. A
+    /// name of the older form, with no writer, is a leftover.
+    static func isLeftover(_ name: String) -> Bool {
         var base = name
         for suffix in ["-wal", "-shm", "-journal"] where base.hasSuffix(suffix) { base.removeLast(suffix.count) }
-        let path = folder.appending(path: base, directoryHint: .notDirectory).standardizedFileURL.path
-        if writing.withLock({ $0.contains(path) }) { return false }
+        if writing.withLock({ $0.contains(base) }) { return false }
         guard let writer = writer(of: base), writer != getpid() else { return true }
         // Signal 0 only asks whether the process exists. One that exists and is another user's,
         // or the system's, answers with `EPERM`: it runs.

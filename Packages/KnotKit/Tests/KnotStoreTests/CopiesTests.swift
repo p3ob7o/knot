@@ -532,11 +532,13 @@ import Testing
     }
 
     /// An open of the store never removes the partial file of a copy that is being written: a
-    /// daily copy paused before it is published, then an open, and the copy is whole.
-    @Test func anOpenKeepsTheCopyBeingWritten() async throws {
+    /// daily copy paused before it is published, then an open, and the copy is whole, with the
+    /// root's path written with `/private` or without.
+    @Test(arguments: PathWriting.allCases)
+    func anOpenKeepsTheCopyBeingWritten(written: PathWriting) async throws {
         let folders = TemporaryFolders()
         defer { folders.removeAll() }
-        let root = folders.make()
+        let root = folders.make(written: written)
         let made = try await CopiesTests.make(in: root, seed: 122)
         try made.database.close()
         let gate = Gate()

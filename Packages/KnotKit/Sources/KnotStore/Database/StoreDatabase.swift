@@ -293,7 +293,7 @@ public final class StoreDatabase: Sendable {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: locations.storeRoot.path)) ?? []
         for name in names
         where name.hasPrefix(".knot.sqlite.") && name.contains(DurableFile.partialSuffix)
-            && PartialFiles.isLeftover(name, in: locations.storeRoot)
+            && PartialFiles.isLeftover(name)
         {
             try? FileManager.default.removeItem(at: locations.storeRoot.appending(path: name))
         }
