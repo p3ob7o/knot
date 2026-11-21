@@ -11,11 +11,12 @@
 ///
 /// Removals, allowed only under `Policy.full`. A raw word may be left out only when
 /// - it is a filler sound from the closed list (`FidelityWords.fillers`);
-/// - it repeats the word or words that follow it; or
+/// - it repeats the word or words that follow it, none of them a negation, a number, a date
+///   word or a name, whose repeat may be meant; or
 /// - it belongs to a restart of at most `Limits.maxRestartWords` words, after which the
 ///   speaker begins again with the same first `Limits.restartSharedWords` words. A negation, a
 ///   number, a name or a date word in a restart may go only when the same word comes again at
-///   the same place in the words that follow.
+///   the same place in the words that follow, and one for one: removed twice, it comes twice.
 ///
 /// Everything else is refused: a word added, changed or moved, a word removed for no allowed
 /// reason, and a result that removes more than `Limits.maxDropShare` of the raw words that are
@@ -110,6 +111,16 @@ public enum FidelityGuard {
         guard let removals = align(rawWords, cleanWords, spans: spans) else {
             return .rejected(diagnose(rawWords, cleanWords))
         }
+        // A protected word that a restart removed comes again one for one: removed twice, it is
+        // kept twice.
+        var protectedBalance: [String: Int] = [:]
+        let removedPlaces = Set(removals.map(\.rawIndex))
+        for (index, word) in rawWords.enumerated() where word.isProtected {
+            protectedBalance[word.text, default: 0] += removedPlaces.contains(index) ? -1 : 1
+        }
+        if protectedBalance.values.contains(where: { $0 < 0 }) {
+            return .rejected(.protectedWordRemoved)
+        }
         let dropped = removals.filter { $0.rule != .filler }.count
         if content > 0, Double(dropped) / Double(content) > limits.maxDropShare {
             return .rejected(.droppedTooMuch)
@@ -148,8 +159,11 @@ public enum FidelityGuard {
                 let following = content[min(place, content.count)...].prefix(length).map { words[$0] }
                 let span = words[start..<end]
 
+                // A repeat of a negation, a number, a date word or a name is meant ("not not
+                // true", "4 4 1 9"), so it is never removed as a repeat. Only a restart may remove
+                // such a word, below.
                 if length <= limits.maxRepeatWords, following.count == length,
-                    zip(span, following).allSatisfy({ $0.text == $1.text })
+                    zip(span, following).allSatisfy({ $0.text == $1.text }), !span.contains(where: \.isProtected)
                 {
                     spans[start].append(Span(length: length, rule: .repeat))
                     continue
