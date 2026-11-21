@@ -13,6 +13,7 @@ import Synchronization
 public final class NoteRepository: NoteStore {
     public let database: StoreDatabase
     private let signals = ChangeSignals()
+    private let log = KnotLog(.store)
     private let seams = Mutex(Seams())
 
     /// What a test holds back or makes fail.
@@ -683,7 +684,16 @@ public final class NoteRepository: NoteStore {
         var removed = 0
         var assets: [Asset] = []
         while true {
-            let batch = try await write { tx in .commit(try tx.purgeBatch(before: date, limit: Self.purgeBatch)) }
+            let batch: StoreTransaction.PurgeBatch
+            do {
+                batch = try await write { tx in .commit(try tx.purgeBatch(before: date, limit: Self.purgeBatch)) }
+            } catch {
+                // The batches before this one are committed: what they removed is reported, so
+                // that the caller removes their files, and the rest waits for the next purge.
+                guard removed > 0 else { throw error }
+                log.failure(error, "purge_stopped", .number("removed", removed))
+                break
+            }
             removed += batch.removed
             assets += batch.assets
             if !batch.more { break }

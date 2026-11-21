@@ -107,17 +107,49 @@ import Testing
         failed.attempts = 5
         _ = try await notes.saveJob(failed)
 
-        let counts = try await database.pool.read { db in
-            try Dictionary(
-                uniqueKeysWithValues: Row.fetchAll(
-                    db, sql: "SELECT name, value FROM counter WHERE day = ?",
-                    arguments: [StoreDatabase.utcDay(clock.now())]
-                ).map { ($0["name"] as String, $0["value"] as Int) })
-        }
+        let counts = try database.dailyCounts()[StoreDatabase.utcDay(clock.now())] ?? [:]
         #expect(
             counts == [
                 "captures_typed": 4, "captures_voice": 1, "captures_ink": 1, "captures_failed": 1, "new_note": 1,
                 "moves": 1, "returns": 1, "jobs_failed": 1,
             ])
+    }
+
+    /// The purge commits in batches. When a batch fails after others committed, it reports what
+    /// those removed, files included, so that none is forgotten, and the next purge goes on.
+    @Test func aPurgeStoppedHalfWayReportsWhatItRemoved() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 73, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let notes = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        var recorded: [AssetID] = []
+        for index in 0..<150 {
+            var recording = captures.recording(from: Double(index * 10), to: Double(index * 10) + 1)
+            recording.placement = .newNote
+            let receipt = try await notes.record(recording)
+            recorded += try await notes.note(receipt.noteID)?.segments.compactMap(\.assetID) ?? []
+            _ = try await notes.delete(.note(receipt.noteID))
+        }
+        // A disk that fails the second batch: deletes abort once one batch is done.
+        try await database.pool.write { db in
+            try db.execute(
+                sql: """
+                    CREATE TEMP TRIGGER test_fails_second_batch BEFORE DELETE ON main.note
+                    WHEN (SELECT COUNT(*) FROM tombstone WHERE kind = 'note') > \(NoteRepository.purgeBatch)
+                    BEGIN SELECT RAISE(ABORT, 'test'); END
+                    """)
+        }
+        clock.advance(by: 40 * 86_400)
+        let first = try await notes.purge(before: clock.now())
+        #expect(first.removed == NoteRepository.purgeBatch * 2, "One batch: its notes and their segments.")
+        #expect(first.assets.count == NoteRepository.purgeBatch, "Every file of what it removed.")
+        try await database.pool.write { db in try db.execute(sql: "DROP TRIGGER temp.test_fails_second_batch") }
+        let second = try await notes.purge(before: clock.now())
+        #expect(Set(first.assets.map(\.id) + second.assets.map(\.id)) == Set(recorded), "Every file, once.")
+        #expect(try await noteCount(database) == 0)
+        expectConsistent(database)
     }
 }

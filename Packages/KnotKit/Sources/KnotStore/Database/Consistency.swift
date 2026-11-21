@@ -151,3 +151,23 @@ extension StoreDatabase {
         return problems
     }
 }
+
+extension StoreDatabase {
+    /// The keep-gate's daily counts, by UTC day and then by name: captures by kind
+    /// (`captures_typed`, `captures_voice`, `captures_ink`), `captures_failed`, `jobs_failed`,
+    /// `new_note`, `moves` and `returns` (docs/architecture.md §7 and §19). They hold no content,
+    /// and the diagnostics export reads them.
+    public func dailyCounts() throws(KnotError) -> [String: [String: Int]] {
+        do {
+            return try pool.read { db in
+                var counts: [String: [String: Int]] = [:]
+                for row in try Row.fetchAll(db, sql: "SELECT day, name, value FROM counter") {
+                    counts[row["day"] as String, default: [:]][row["name"] as String] = row["value"] as Int
+                }
+                return counts
+            }
+        } catch {
+            throw StoreErrors.knotError(error)
+        }
+    }
+}
