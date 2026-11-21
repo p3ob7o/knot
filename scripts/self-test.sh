@@ -1028,6 +1028,14 @@ cat >"$sl/logs/quoted.log" <<'LOG'
 􀙟  Test plainDisabled() skipped.
 􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
 LOG
+# One test failed: the run's own line says "failed after" too, and the summary counts one
+# failure, not two (finding 65).
+cat >"$sl/logs/failed.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀢄  Test aFailingTest() recorded an issue at A.swift:3:5: Expectation failed: false
+􀢄  Test aFailingTest() failed after 0.002 seconds with 1 issue.
+􀢄  Test run with 2 tests in 1 suite failed after 0.003 seconds with 1 issue.
+LOG
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
     local status=0 run="$sl/run-$1-$2"
     mkdir -p "$run/slots"
@@ -1041,14 +1049,15 @@ gate_skipped="$(skip_loop skipped gate)"
 quick_cancelled="$(skip_loop cancelled quick)"
 gate_lookalike="$(skip_loop lookalike gate)"
 gate_quoted="$(skip_loop quoted gate)"
+quick_failed="$(skip_loop failed quick)"
 if [[ $gate_cancelled == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
     $gate_skipped == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
     $quick_cancelled == "0 ok · tests 2 passed, 0 failed, 1 skipped" &&
     $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" &&
-    $gate_quoted == "1 FAIL · tests 3 passed, 0 failed, 2 skipped" ]]; then
+    $gate_quoted == "1 FAIL · tests 3 passed, 0 failed, 2 skipped" && $quick_failed == *"tests 0 passed, 1 failed, 0 skipped" ]]; then
     pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and counts once; a line that only looks like one counts for nothing"
 else
-    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike', quoted names and a bare skip at the gate '$gate_quoted'"
+    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike', quoted names and a bare skip at the gate '$gate_quoted', one failed test at the quick tier '$quick_failed'"
 fi
 
 # worktree-remove.sh prints no path with the home folder in it, since its lines end in the

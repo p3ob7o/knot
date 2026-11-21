@@ -518,6 +518,14 @@ knot_home_text() {
     printf '%s\n' "$text"
 }
 
+# Prints the lines of a Swift Testing log that report a failed test, each once: an event line
+# of a test, "Test x() failed after …", and not the run's own "Test run with … failed after".
+#   knot_failed_tests <log>
+knot_failed_tests() {
+    LC_ALL=C grep -E '^[^[:cntrl:][:print:]]+  Test .+ failed after [0-9.]+ seconds' "$1" |
+        LC_ALL=C grep -v -E '^[^[:cntrl:][:print:]]+  Test run with ' || true
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.

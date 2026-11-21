@@ -1004,7 +1004,7 @@ count_tests() {
     for n in $(grep -E 'Test run with [0-9]+ tests? .* passed' "$log" | sed -E 's/.*Test run with ([0-9]+) tests?.*/\1/'); do
         TESTS_PASSED=$((TESTS_PASSED + n))
     done
-    TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
+    TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
     TESTS_SKIPPED=$((TESTS_SKIPPED + $(knot_skipped_tests "$log" | grep -c . || true)))
     # XCTest cases, such as UI tests, from knot_xctest_result's lines.
     for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
@@ -1080,7 +1080,7 @@ for step in $STEPS; do
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
         # A failed step's tests count too, so the summary shows its failed cases.
         [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
-        [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
+        [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
         [[ -n $MODULE && $step == package-* ]] && rerun="scripts/verify.sh --module $MODULE"
