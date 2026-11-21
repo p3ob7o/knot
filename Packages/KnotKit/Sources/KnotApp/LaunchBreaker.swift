@@ -8,7 +8,8 @@ import KnotCore
 /// suite: it is there before the store opens, and opening the store is itself a step. A launch
 /// writes "entered" before the step and "left" after it, so an "entered" that a later launch
 /// finds is a launch that died inside the step. A skip is written too, so the launch after a
-/// skip runs the step again: a step that keeps dying runs at every third launch.
+/// skip runs the step again. A step that dies at every run therefore goes entered, entered,
+/// skipped: it runs at two launches in three, and is skipped at every third.
 struct LaunchBreaker: Sendable {
     enum Mark: String {
         case entered, left, skipped
