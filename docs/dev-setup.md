@@ -164,7 +164,7 @@ It cannot know what a value holds. A value named `noteID` that holds text passes
 | `xcodebuild -version`, when a script chooses the pinned Xcode | 120 seconds | `KNOT_XCODE_ANSWER_LIMIT` |
 | `scripts/sim.sh boot`, which shuts the simulator down at its limit | 300 seconds | `KNOT_SIM_BOOT_LIMIT` |
 | The Mac app's first window, in `launch`; each window probe has 15 seconds, and never more than the time left | 60 seconds | `KNOT_APP_START_LIMIT` |
-| `swift test`, in `package-test`, `contract-two-targets`, `perf` and `tsan` | 50 minutes | `KNOT_SWIFT_TEST_LIMIT` |
+| `swift test`, in `package-test`, `contract-two-targets`, `perf`, `tsan` and `soak`, the soak's by WP-06 | 50 minutes | `KNOT_SWIFT_TEST_LIMIT` |
 | `swift test` under the strict cooperative pool, in `package-test-strict` | 30 minutes | `KNOT_STRICT_TEST_LIMIT` |
 | The model report, in the nightly run | 10 minutes | `KNOT_MODEL_REPORT_LIMIT` |
 | The scripts' self-test, in `self-test` | 10 minutes | `KNOT_SELF_TEST_LIMIT` |
