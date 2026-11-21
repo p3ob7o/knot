@@ -12,6 +12,13 @@
 
 source "$(dirname "$0")/lib/common.sh"
 
+# The self-test checks the scripts, so every file it reads comes from the checkout the scripts
+# come from, never from the tree that KNOT_TREE or --tree names: the plan, the fixtures'
+# manifest, the pinned Xcode, the apps' manifests, project.yml and the nightly workflow. A
+# trial of these scripts on another tree, or main's scripts on a candidate, then judges the
+# scripts alone, whatever that tree holds (docs/dev-setup.md).
+KNOT_SELF="$(cd "$KNOT_SCRIPTS/.." && pwd -P)"
+
 FAILED=0
 pass() { printf 'ok    %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAILED=1; }
@@ -96,8 +103,8 @@ fi
 # 3. The plan check catches a brief with a missing heading, and passes on the plan as it is.
 plan="$scratch/plan"
 mkdir -p "$plan/docs" "$plan/scripts/lib"
-cp "$KNOT_ROOT/PLAN.md" "$plan/"
-cp -R "$KNOT_ROOT/docs/plan" "$plan/docs/"
+cp "$KNOT_SELF/PLAN.md" "$plan/"
+cp -R "$KNOT_SELF/docs/plan" "$plan/docs/"
 cp "$KNOT_SCRIPTS/check-plan.sh" "$plan/scripts/"
 cp "$KNOT_SCRIPTS/lib/fail.sh" "$plan/scripts/lib/"
 if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
@@ -116,7 +123,7 @@ else
 fi
 
 # 4. The gate's helper reads the plan as it states it.
-cd "$KNOT_ROOT"
+cd "$KNOT_SELF"
 # The helper comes from the scripts' own folder; the plan it reads, from the tree.
 if python3 -I -B - "$KNOT_SCRIPTS/lib" <<'PY'
 import sys
@@ -179,6 +186,34 @@ assert k.named_test_required("WP-11", "1", one) and not k.named_test_required("W
 assert not k.named_test_required("WP-11", None, one)
 assert k.named_test_required("WP-11", "2", one * 2) and not k.named_test_required("WP-11", None, one * 2)
 assert k.named_test_required("WP-11", None, one * 3)
+# And the command holds to it (finding 41): named-tests itself, with a given list of merged
+# pull requests, on a list of made-up tests that no code holds. At WP-11's first pull request
+# the test given to it is required and missing, and the others wait; at its second, the test
+# given to that one joins it, and the package's own still waits.
+import contextlib, io, os, tempfile
+with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as named:
+    named.write("# made-up tests\n"
+                "WP-11 PR 1\tselftest-given-to-pr-one\tA test the first pull request holds\n"
+                "WP-11\tselftest-given-to-pr-two\tWP-11 PR 2 adds a test the second holds\n"
+                "WP-11\tselftest-given-to-package\tA test for the package's end\n"
+                "WP-14 PR 1\tselftest-given-to-wp14-pr-one\tA test WP-14's first code pull request holds\n")
+k.NAMED_TESTS, k.code_text = named.name, dict
+def named_missing(branch, merged, package="WP-11"):
+    k.merged_prs = lambda source: list(merged)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = k.cmd_named_tests("git", package, branch)
+    return status, sorted(w.rstrip(",") for w in out.getvalue().split() if w.startswith("selftest-"))
+assert named_missing("wp/11-engine", []) == (1, ["selftest-given-to-pr-one"]), named_missing("wp/11-engine", [])
+assert named_missing("wp/11-engine-2", one) == (1, ["selftest-given-to-pr-one", "selftest-given-to-pr-two"])
+assert named_missing("wp/11-engine-3", one * 2)[1] == ["selftest-given-to-package", "selftest-given-to-pr-one",
+                                                       "selftest-given-to-pr-two"]
+# A note's branch is not the package's code (41b): WP-14's proof step under test leaves the
+# test given to its first code pull request waiting, and that pull request's branch, after
+# the note, requires it.
+assert named_missing("wp/14-note", [], "WP-14") == (0, []), named_missing("wp/14-note", [], "WP-14")
+assert named_missing("wp/14-cleaner", [("WP-14", True)], "WP-14") == (1, ["selftest-given-to-wp14-pr-one"])
+os.unlink(named.name)
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
@@ -220,7 +255,7 @@ lint_fixture() {
     (cd "$1" && python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint --files "$copies/Cases.swift" \
         --as Apps/Extensions/Widgets-iOS/Sources/ --manifest "$fixture_manifest" >"$2") || true
 }
-lint_fixture "$KNOT_ROOT" "$scratch/lint.out"
+lint_fixture "$KNOT_SELF" "$scratch/lint.out"
 if python3 -I - "$copies/Cases.swift" "$scratch/lint.out" <<'PY'
 import re, sys
 fixture, output = sys.argv[1], open(sys.argv[2]).read()
@@ -252,12 +287,31 @@ else
     fail "the lint misses or wrongly flags cases of its fixture: $(tail -n 1 "$scratch/lint.out")"
 fi
 
+# 5a. The lint reads the package's tests for its cancel rule (finding 64): a whole run, not
+#     a fixture, on a scratch repository whose one Swift file is a package test that cancels
+#     itself, beside copies of the apps' manifests, finds it.
+lt="$scratch/lint-tests"
+mkdir -p "$lt/Packages/KnotKit/Tests/SelfTestTests"
+git -C "$lt" init -q -b main
+for manifest in Apps/iOS Apps/macOS Apps/watchOS Apps/Extensions/Widgets-iOS Apps/Extensions/Widgets-watchOS; do
+    mkdir -p "$lt/$manifest"
+    cp "$KNOT_SELF/$manifest/PrivacyInfo.xcprivacy" "$lt/$manifest/"
+done
+printf 'import Testing\n\n@Test func needsAModel() throws {\n    try Test.cancel("the model is not on this Mac")\n}\n' \
+    >"$lt/Packages/KnotKit/Tests/SelfTestTests/Cancels.swift"
+(cd "$lt" && python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" lint >"$lt/out" 2>&1) || true
+if grep -e 'Packages/KnotKit/Tests/SelfTestTests/Cancels.swift:4: \[test-cancel\]' "$lt/out" >/dev/null; then
+    pass "the lint reads the package's tests, and finds a test that cancels itself"
+else
+    fail "the lint on a package test that cancels itself: $(tail -n 3 "$lt/out")"
+fi
+
 # 5b. The fixture's verdict is the same when the tree's manifests change: run again from a
 #     copy whose real manifests declare every required reason, the findings must not move.
 manifests="$scratch/manifests"
 for manifest in Apps/iOS Apps/macOS Apps/watchOS Apps/Extensions/Widgets-iOS Apps/Extensions/Widgets-watchOS; do
     mkdir -p "$manifests/$manifest"
-    python3 -I - "$KNOT_ROOT/$manifest/PrivacyInfo.xcprivacy" "$manifests/$manifest/PrivacyInfo.xcprivacy" <<'PY'
+    python3 -I - "$KNOT_SELF/$manifest/PrivacyInfo.xcprivacy" "$manifests/$manifest/PrivacyInfo.xcprivacy" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], "rb") as f:
     manifest = plistlib.load(f)
@@ -318,7 +372,7 @@ fi
 # On a detached head the gate needs the branch, which tells a note's pull request from a code
 # one: it refuses --package alone, and with neither it asks for --branch, not for either.
 # The scratch tree has no branch to read, as a detached head has none, and the tree's pin.
-cp "$KNOT_ROOT/.xcode-version" "$gate_tree/"
+cp "$KNOT_SELF/.xcode-version" "$gate_tree/"
 status_package=0
 output_package="$("$KNOT_SCRIPTS/verify.sh" --gate --package WP-01 --tree "$gate_tree" 2>&1)" || status_package=$?
 status_none=0
@@ -618,8 +672,8 @@ fi
 # that fails; the fixtures step's own path runs on it.
 st="$scratch/stamp-tree"
 mkdir -p "$st/Fixtures/tools"
-cp "$KNOT_ROOT/Fixtures/manifest.json" "$st/Fixtures/"
-cp "$KNOT_ROOT/.xcode-version" "$st/"
+cp "$KNOT_SELF/Fixtures/manifest.json" "$st/Fixtures/"
+cp "$KNOT_SELF/.xcode-version" "$st/"
 printf '#!/bin/sh\necho "the voices are missing" >&2\nexit 2\n' >"$st/Fixtures/tools/generate.sh"
 chmod +x "$st/Fixtures/tools/generate.sh"
 stamp_status=0
@@ -680,16 +734,14 @@ else
 fi
 
 # Every start in the scripts is wired through a limit (knot_tool.py unbounded-calls): no call
-# of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh, nightly.sh, doctor.sh,
-# which starts every run, lib/common.sh or bootstrap.sh is
-# made without a limit helper. A copy of verify.sh with the hosted run's limit taken off,
-# and one with a wrapper called bare, fail.
+# of swift test, xcrun simctl, xcodebuild or xcb in any script of scripts/ or scripts/lib/,
+# so a new script is read too, is made without a limit helper. A copy of verify.sh with the
+# hosted run's limit taken off, and one with a wrapper called bare, fail.
 wiring="$scratch/wiring"
 mkdir -p "$wiring"
 wiring_check() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" unbounded-calls "$@" >"$wiring/out" 2>&1; }
 real=0
-wiring_check "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/sim.sh" "$KNOT_SCRIPTS/nightly.sh" "$KNOT_SCRIPTS/doctor.sh" \
-    "$KNOT_SCRIPTS/lib/common.sh" "$KNOT_SCRIPTS/bootstrap.sh" || real=$?
+wiring_check "$KNOT_SCRIPTS"/*.sh "$KNOT_SCRIPTS"/lib/*.sh || real=$?
 real_out="$(cat "$wiring/out")"
 sed 's/knot_run_limited "The hosted iOS tests" "\$limit" xcb/xcb/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/hosted.sh"
 sed 's/knot_swift_test_limited package-test package_tests/package_tests/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/wrapper.sh"
@@ -743,7 +795,7 @@ pkill -KILL -f "$lockdir/silent/ioreg" 2>/dev/null || true
 wl="$scratch/lock-loop"
 mkdir -p "$wl/tree" "$wl/slots" "$wl/stubs"
 cp -R "$KNOT_SCRIPTS" "$wl/scripts"
-cp "$KNOT_ROOT/.xcode-version" "$wl/tree/"
+cp "$KNOT_SELF/.xcode-version" "$wl/tree/"
 python3 -I - "$wl/scripts/verify.sh" <<'PY'
 import re, sys
 path = sys.argv[1]
@@ -827,8 +879,8 @@ pkill -KILL -f "$xs/xcodebuild" 2>/dev/null || true
 # which writes no stamp.
 ma="$scratch/make-audio"
 mkdir -p "$ma/Fixtures/tools"
-cp "$KNOT_ROOT/Fixtures/manifest.json" "$ma/Fixtures/"
-cp "$KNOT_ROOT/.xcode-version" "$ma/"
+cp "$KNOT_SELF/Fixtures/manifest.json" "$ma/Fixtures/"
+cp "$KNOT_SELF/.xcode-version" "$ma/"
 cat >"$ma/Fixtures/tools/generate.sh" <<'STUB'
 #!/bin/sh
 echo spoke >>"$(dirname "$0")/../../spoken"
@@ -853,24 +905,70 @@ make_audio || true
 first="$( [[ -f $ma/Fixtures/generated/verify-stamp.txt ]] && echo stamped || echo unstamped) $(spoken)"
 make_audio || true
 second="$(spoken)"
-bootstrap_ok=0
-grep -e 'knot_make_audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null &&
-    ! grep -e 'generate\.sh --audio' -e 'generate.sh" --audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null && bootstrap_ok=1
+# Bootstrap is read as shell, by its calls, not its text: a comment that names the helper is
+# no call of it, and the generator run in any quoting, or as the argument of another command
+# such as bash, is a call.
+bootstrap_ok="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/bootstrap.sh" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+words = [k.command_words(k.shell_words(segment), {}, {}) for _, _, segment in k.shell_segments(open(sys.argv[2]).read())]
+names = [os.path.basename(w[0]) for w in words if w]
+# The generator run in any way, as the command or as an argument, as in `bash generate.sh`.
+generator = any(os.path.basename(word) == "generate.sh" for w in words for word in w)
+print(1 if "knot_make_audio" in names and not generator else 0)
+PY
+)"
 if [[ $first == "stamped 1" && $second == 1 && $bootstrap_ok == 1 ]]; then
     pass "the audio is made in one place, stamped and spoken once, and bootstrap.sh makes it there"
 else
     fail "making the audio: first call '$first', spoken after the second '$second', bootstrap through knot_make_audio: $bootstrap_ok"
 fi
 
-# The hosted nightly run makes this tree's audio before the package tests under Thread
-# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio.
-nightly="$KNOT_ROOT/.github/workflows/nightly.yml"
-fixtures_line=$(grep -n -e 'verify.sh --only fixtures' "$nightly" | head -n 1 | cut -d: -f1 || true)
-tsan_line=$(grep -n -e 'verify.sh --only tsan' "$nightly" | head -n 1 | cut -d: -f1 || true)
-if [[ -n $fixtures_line && -n $tsan_line ]] && ((fixtures_line < tsan_line)); then
-    pass "the hosted nightly run makes the audio before the package tests under Thread Sanitizer"
+# The hosted nightly run makes the tree's audio before the package tests under Thread
+# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio. The
+# gate's lint step checks it on the tree's own workflow (knot_tool.py workflows), since the
+# self-test reads its own checkout. Here the check is run on six workflows: the scripts' own,
+# which passes; and five wrong ones, each refused: tsan before the fixtures (36a), the
+# fixtures step commented out (36b), the fixtures step with `if: false` (43a), the fixtures
+# step in another job (43b), the tsan step with an `if:` of its own, and (finding 62) the tsan
+# job with `if: false`, and `continue-on-error: true` on the fixtures step or on the job.
+nw="$scratch/nightly"
+mkdir -p "$nw"
+python3 -I - "$KNOT_SELF/.github/workflows/nightly.yml" "$nw" <<'PY'
+import os, sys
+text, out = open(sys.argv[1]).read(), sys.argv[2]
+fixtures = "      - name: The fixtures, with this tree's audio\n        run: scripts/verify.sh --only fixtures\n"
+tsan = "      - name: Package tests under Thread Sanitizer\n        run: scripts/verify.sh --only tsan\n"
+if fixtures + tsan not in text:
+    # The scripts' own workflow is not as the variants expect: its own check below says why.
+    sys.exit(0)
+both = fixtures + tsan
+variants = {
+    "tsan-first": text.replace(both, tsan + fixtures),
+    "commented": text.replace(fixtures, "".join("      # " + l[6:] + "\n" for l in fixtures.splitlines())),
+    "if-false": text.replace(fixtures, fixtures.replace("        run:", "        if: false\n        run:")),
+    "other-job": text.replace(fixtures, "") + "  audio:\n    runs-on: xcode-27\n    steps:\n" + fixtures,
+    "tsan-if": text.replace(tsan, tsan.replace("        run:", "        if: github.event_name == 'schedule'\n        run:")),
+    "job-if": text.replace("  tsan:\n    runs-on:", "  tsan:\n    if: false\n    runs-on:"),
+    "fixtures-continue": text.replace(fixtures, fixtures.replace("        run:", "        continue-on-error: true\n        run:")),
+    "job-continue": text.replace("  tsan:\n    runs-on:", "  tsan:\n    continue-on-error: true\n    runs-on:"),
+}
+for name, body in variants.items():
+    assert body != text, name
+    open(os.path.join(out, name + ".yml"), "w").write(body)
+PY
+nightly_ok=0
+python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$KNOT_SELF/.github/workflows/nightly.yml" >"$nw/own.out" 2>&1 || nightly_ok=$?
+nightly_refused=""
+for variant in tsan-first commented if-false other-job tsan-if job-if fixtures-continue job-continue; do
+    python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$nw/$variant.yml" >"$nw/$variant.out" 2>&1 &&
+        nightly_refused="$nightly_refused passed:$variant" || nightly_refused="$nightly_refused refused:$variant"
+done
+if [[ $nightly_ok == 0 && $nightly_refused == " refused:tsan-first refused:commented refused:if-false refused:other-job refused:tsan-if refused:job-if refused:fixtures-continue refused:job-continue" ]]; then
+    pass "the hosted nightly run makes the audio first, in the same job, unconditionally, and each wrong workflow is refused"
 else
-    fail "the hosted nightly run: the fixtures step at line '${fixtures_line:-none}', tsan at '${tsan_line:-none}'"
+    fail "the nightly workflow's check: the scripts' own workflow status $nightly_ok ($(tail -n 1 "$nw/own.out")), the wrong ones:$nightly_refused"
 fi
 
 # A test cancelled at run time counts as one skipped, as a test skipped by its trait does:
@@ -889,6 +987,383 @@ if [[ "$(grep -c . <<<"$skip_lines")" == 2 && $skip_lines == *disabledByARunTime
     pass "a cancelled test counts as skipped, as a skipped one does, each once"
 else
     fail "the skipped and cancelled tests found: $skip_lines"
+fi
+
+# The gate's own check of skipped and cancelled tests, through verify.sh's step loop: a
+# copy of scripts/ in which the doctor is a stand-in, the package tests print a given log in
+# place of running swift test, and the in-step process takes the tier that KNOT_SKIP_TIER
+# names (the gate refuses --only, so this is the one change to its tier). At the gate, a log
+# with a cancelled test, or with a skipped one, fails the step; at the quick tier it passes.
+# Either way the summary counts the test once, though the failing step names it again.
+sl="$scratch/skip-loop"
+mkdir -p "$sl/tree" "$sl/logs"
+cp -R "$KNOT_SCRIPTS" "$sl/scripts"
+cp "$KNOT_SELF/.xcode-version" "$sl/tree/"
+python3 -I - "$sl/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+for old, new in (
+    ('swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \\\n'
+     '            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output"',
+     '{ if [[ -f $KNOT_SKIP_LOG.events ]]; then cp "$KNOT_SKIP_LOG.events" "${EVENT_FLAGS[1]}"; fi; '
+     'cat "$KNOT_SKIP_LOG"; } | tee "$output"'),
+    ("export KNOT_VERIFY_TIER=$TIER", "export KNOT_VERIFY_TIER=${KNOT_SKIP_TIER:-$TIER}"),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+open(path, "w").write(text)
+PY
+cat >"$sl/logs/cancelled.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test cancelledAtRunTime() was cancelled after 0.001 seconds: "the speech model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/skipped.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test disabledByATrait() skipped: "the speech model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+# Lines that only look like a skip: a test's own printed line, a recorded issue's text, and
+# passing tests whose names hold "skipped" or "cancelled after". Each test passed, so the
+# gate passes and the summary counts nothing as skipped.
+cat >"$sl/logs/lookalike.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+recorder: Test session was cancelled after 2 retries, as the fake store asked
+􀢄  Test aRecordedIssue() recorded an issue at A.swift:3:5: Expectation failed: (status → "Test x was cancelled after 1 s") == "ok"
+􁁛  Test "A capture that was cancelled after the disk filled is kept" passed after 0.002 seconds.
+􁁛  Test "A clip skipped by the guard is still on disk" passed after 0.002 seconds.
+􁁛  Test skippedSegmentIsReported() passed after 0.001 seconds.
+	  Test printedByATest() skipped: "a line the test printed, after a tab"
+􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
+LOG
+# Skipped tests as the pinned Xcode prints them, from the review of pull request 63: a
+# display name that holds quotes, and a skip with no comment, which ends with a period.
+cat >"$sl/logs/quoted.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test "He said "hi"" skipped: "quoted display"
+􀙟  Test plainDisabled() skipped.
+􁁛  Test run with 3 tests in 1 suite passed after 0.005 seconds.
+LOG
+# One test failed: the run's own line says "failed after" too, and the summary counts one
+# failure, not two (finding 65).
+cat >"$sl/logs/failed.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀢄  Test aFailingTest() recorded an issue at A.swift:3:5: Expectation failed: false
+􀢄  Test aFailingTest() failed after 0.002 seconds with 1 issue.
+􀢄  Test run with 2 tests in 1 suite failed after 0.003 seconds with 1 issue.
+LOG
+# Each log has the event stream its run would write beside it, <log>.events, which the copy's
+# package tests hand to the step as swift test would (finding 60). The re-check's probe of
+# pull request 63 adds six runs that the console reads wrong: three cancellations, a case
+# cancelled by `try Test` and `.cancel` on the next line, a test cancelled through an alias,
+# and a case cancelled by its task, two of them printed as passed; and three events over two
+# lines, a skip reason, a display name and a cancellation reason. And two runs that print as
+# passed with no stream, and with a stream whose run did not end.
+cat >"$sl/logs/case-cancel-split.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􁁛  Test caseCancelSplit(x:) with 2 test cases passed after 0.001 seconds.
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/alias-cancel.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test aliasCancel() was cancelled after 0.001 seconds: "through an alias"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/case-task-cancel.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􁁛  Test caseTaskCancelled(x:) with 2 test cases passed after 0.001 seconds.
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/reason-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test multiLineReason() skipped: "first line
+second line"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/name-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test "two
+lines" skipped: "r"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cat >"$sl/logs/cancel-two-lines.log" <<'LOG'
+􁁛  Test aPlainTest() passed after 0.001 seconds.
+􀙟  Test cancelMultiLine() was cancelled after 0.001 seconds: "one
+two"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+LOG
+cp "$sl/logs/lookalike.log" "$sl/logs/no-stream.log"
+cp "$sl/logs/lookalike.log" "$sl/logs/no-run-end.log"
+python3 -I - "$sl/logs" <<'PY'
+import json, os, sys
+logs = sys.argv[1]
+def stream(name, tests, events, ended=True):
+    """tests: [(id, name, display name)]; events: [(kind, id, case display name)]"""
+    lines = [{"kind": "test", "payload": {"id": i, "name": n, "displayName": d, "kind": "function"}, "version": 0}
+             for i, n, d in tests]
+    lines.append({"kind": "event", "payload": {"kind": "runStarted"}, "version": 0})
+    for kind, i, case in events:
+        payload = {"kind": kind, "testID": i}
+        if case:
+            payload["_testCase"] = {"displayName": case}
+        lines.append({"kind": "event", "payload": payload, "version": 0})
+    if ended:
+        lines.append({"kind": "event", "payload": {"kind": "runEnded"}, "version": 0})
+    with open(os.path.join(logs, name + ".log.events"), "w") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+plain = ("p", "aPlainTest()", None)
+stream("cancelled", [plain, ("c", "cancelledAtRunTime()", None)], [("testCancelled", "c", None)])
+stream("skipped", [plain, ("s", "disabledByATrait()", None)], [("testSkipped", "s", None)])
+stream("lookalike", [plain, ("a", "aRecordedIssue()", None), ("b", "skippedSegmentIsReported()", None)], [])
+stream("quoted", [plain, ("q", "quoted()", 'He said "hi"'), ("d", "plainDisabled()", None)],
+       [("testSkipped", "q", None), ("testSkipped", "d", None)])
+stream("failed", [plain, ("f", "aFailingTest()", None)], [])
+stream("case-cancel-split", [plain, ("x", "caseCancelSplit(x:)", None)], [("testCaseCancelled", "x", "2")])
+stream("alias-cancel", [plain, ("y", "aliasCancel()", None)], [("testCancelled", "y", None)])
+stream("case-task-cancel", [plain, ("z", "caseTaskCancelled(x:)", None)], [("testCaseCancelled", "z", "2")])
+stream("reason-two-lines", [plain, ("r", "multiLineReason()", None)], [("testSkipped", "r", None)])
+stream("name-two-lines", [plain, ("n", "multiLineName()", "two\nlines")], [("testSkipped", "n", None)])
+stream("cancel-two-lines", [plain, ("m", "cancelMultiLine()", None)], [("testCancelled", "m", None)])
+stream("no-run-end", [plain], [], ended=False)
+PY
+skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
+    local status=0 run="$sl/run-$1-$2"
+    mkdir -p "$run/slots"
+    env KNOT_SKIP_LOG="$sl/logs/$1.log" KNOT_SKIP_TIER="$2" KNOT_TREE="$sl/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$sl/scripts/verify.sh" --only package-test >"$run/out" 2>&1 || status=$?
+    printf '%s %s · %s' "$status" "$(sed -n -E 's/^verify: (ok|FAIL) +package-test.*/\1/p' "$run/out")" \
+        "$(grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" || true)"
+}
+gate_cancelled="$(skip_loop cancelled gate)"
+gate_skipped="$(skip_loop skipped gate)"
+quick_cancelled="$(skip_loop cancelled quick)"
+gate_lookalike="$(skip_loop lookalike gate)"
+gate_quoted="$(skip_loop quoted gate)"
+quick_failed="$(skip_loop failed quick)"
+if [[ $gate_cancelled == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
+    $gate_skipped == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
+    $quick_cancelled == "0 ok · tests 2 passed, 0 failed, 1 skipped" &&
+    $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" &&
+    $gate_quoted == "1 FAIL · tests 3 passed, 0 failed, 2 skipped" && $quick_failed == *"tests 0 passed, 1 failed, 0 skipped" ]]; then
+    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and counts once; a line that only looks like one counts for nothing"
+else
+    fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike', quoted names and a bare skip at the gate '$gate_quoted', one failed test at the quick tier '$quick_failed'"
+fi
+# The event stream decides (finding 60): each of the probe's six runs fails the gate and
+# passes the quick tier with one skipped, though the console printed two of them as passed
+# and three over two lines; a run with no stream, or whose stream did not end, fails at
+# either tier.
+stream_verdicts=""
+for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
+    stream_verdicts="$stream_verdicts $run: $(skip_loop "$run" gate) / $(skip_loop "$run" quick);"
+done
+no_stream="$(skip_loop no-stream quick)"
+no_run_end="$(skip_loop no-run-end quick)"
+expected_verdicts=""
+for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
+    expected_verdicts="$expected_verdicts $run: 1 FAIL · tests 2 passed, 0 failed, 1 skipped / 0 ok · tests 2 passed, 0 failed, 1 skipped;"
+done
+if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* ]]; then
+    pass "the event stream fails the gate on a cancelled case printed as passed and on events over two lines, and a run with no complete stream fails"
+else
+    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end'"
+fi
+
+# worktree-remove.sh prints no path with the home folder in it, since its lines end in the
+# journal: a path under the home folder shows as "the home folder's …". It runs on a scratch
+# repository whose worktree sits in a scratch home folder, with a store of the worktree in the
+# development app's container there, and a stub xcrun that lists one simulator of it.
+wr="$scratch/worktree-remove"
+mkdir -p "$wr/home" "$wr/stub" "$wr/repo"
+git -C "$wr/repo" init -q -b main
+cp -R "$KNOT_SCRIPTS" "$wr/repo/scripts"
+cp "$KNOT_SELF/.xcode-version" "$wr/repo/"
+git -C "$wr/repo" add scripts .xcode-version
+git -C "$wr/repo" -c user.name=self-test -c user.email=self-test@example.invalid commit -q -m scratch
+git -C "$wr/repo" worktree add -q "$wr/home/wt" -b self-test-wt
+wr_tree="$(cd "$wr/home/wt" && pwd -P)"
+wr_id="wt-$(printf '%s' "$wr_tree" | shasum -a 256 | cut -c1-6)"
+mkdir -p "$wr/home/Library/Containers/com.p3ob7o.knot.dev/Data/Library/Application Support/Knot/$wr_id"
+printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] && printf %s\n' "$wr" \
+    "'{\"devices\":{\"r\":[{\"name\":\"$wr_id-iphone\",\"udid\":\"U1\",\"state\":\"Shutdown\"}]}}\\n'" >"$wr/stub/xcrun"
+# With KNOT_WR_FAIL set, the delete fails as simctl does, with a message that names a path
+# under the home folder in its resolved form, as simctl names it.
+printf '[ -n "$KNOT_WR_FAIL" ] && [ "$1 $2" = "simctl delete" ] && { echo "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=513): NSFilePath=$(cd "$HOME" && pwd -P)/Library/Developer/CoreSimulator/Devices/U1" >&2; exit 1; }\nexit 0\n' >>"$wr/stub/xcrun"
+# The failing run's home folder is a link, so that its given and resolved forms differ
+# wherever the self-test runs (finding 64).
+ln -s "$wr/home" "$wr/home-link"
+chmod +x "$wr/stub/xcrun"
+# A refusal names its target with no home folder in it either: a folder under the home
+# folder that is no worktree of the repository.
+mkdir -p "$wr/home/not-a-worktree"
+wr_refused_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" \
+    scripts/worktree-remove.sh "$wr/home/not-a-worktree" >"$wr/refused.out" 2>&1) || wr_refused_status=$?
+# A delete that fails prints simctl's message with no home folder in it either.
+wr_fail_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home-link" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 KNOT_WR_FAIL=1 \
+    scripts/worktree-remove.sh "$wr_tree" >"$wr/fail.out" 2>&1) || wr_fail_status=$?
+wr_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 \
+    scripts/worktree-remove.sh "$wr_tree" >"$wr/out" 2>&1) || wr_status=$?
+wr_home="$(cd "$wr/home" && pwd -P)"
+if [[ $wr_status == 0 && "$(cat "$wr/out")" != *"$wr_home"* && "$(cat "$wr/out")" != *"$wr/home"* &&
+    "$(cat "$wr/out")" != *"~/"* &&
+    "$(cat "$wr/out")" == *"the home folder's Library/Group Containers/"* &&
+    "$(cat "$wr/out")" == *"removed the development store the home folder's Library/Containers/"* &&
+    "$(cat "$wr/out")" == *"deleted the simulator $wr_id-iphone"* && ! -d $wr_tree &&
+    $wr_fail_status != 0 && "$(cat "$wr/fail.out")" == *"FAIL infra-simulator-delete"*"NSFilePath=the home folder's Library/"* &&
+    "$(cat "$wr/fail.out")" != *"$wr_home"* && "$(cat "$wr/fail.out")" != *"$wr/home"* &&
+    $wr_refused_status != 0 && "$(cat "$wr/refused.out")" == *"FAIL worktree-remove-not-worktree"*"the home folder's not-a-worktree"* &&
+    "$(cat "$wr/refused.out")" != *"$wr_home"* && "$(cat "$wr/refused.out")" != *"$wr/home"* ]]; then
+    pass "worktree-remove.sh removes the worktree, its simulator and its store, and prints no path with the home folder in it, simctl's message included"
+else
+    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out"); a failed delete, status $wr_fail_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/fail.out"); a refusal, status $wr_refused_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/refused.out")"
+fi
+
+# The package's tests under the strict cooperative pool (package-test-strict), through
+# verify.sh's loop: a copy of scripts/ whose doctor is a stand-in, and whose in-step process
+# takes the tier that KNOT_POOL_TIER names, with a stub swift whose build passes and whose
+# suite does what KNOT_STUB_MODE says when LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 is set, and
+# passes when it is not. It writes the event stream as swift test does.
+# - hang: with a 3 s limit the step fails, says that a test may be blocking a thread of the
+#   cooperative pool, and names the test that started and did not end, and not the one that
+#   passed; a copy that runs the tests without the variable passes, which this case refuses.
+# - skip-console, cancel-stream (finding 64): at the gate a skip that only the console shows,
+#   and a cancelled case that only the stream shows, each fail the step, since either
+#   reading fails the gate.
+# - fail: a test that fails only under the variable fails the step, and the summary counts
+#   one failure.
+ps="$scratch/pool-strict"
+mkdir -p "$ps/tree" "$ps/stub"
+cp -R "$KNOT_SCRIPTS" "$ps/scripts"
+cp "$KNOT_SELF/.xcode-version" "$ps/tree/"
+python3 -I - "$ps/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+old = "export KNOT_VERIFY_TIER=$TIER"
+assert old in text
+text = text.replace(old, "export KNOT_VERIFY_TIER=${KNOT_POOL_TIER:-$TIER}")
+open(path, "w").write(text)
+PY
+cat >"$ps/stub/swift" <<'SH'
+#!/bin/sh
+for word in "$@"; do [ "$word" = build ] && exit 0; done
+# The event stream, as swift test writes it at --event-stream-output-path, once the run ends.
+stream="" previous=""
+for word in "$@"; do [ "$previous" = --event-stream-output-path ] && stream=$word; previous=$word; done
+mode=pass
+[ "$LIBDISPATCH_COOPERATIVE_POOL_STRICT" = 1 ] && mode=${KNOT_STUB_MODE:-hang}
+printf '%s\n' "􀟈  Test aPlainTest() started." "􁁛  Test aPlainTest() passed after 0.001 seconds." "􀟈  Test aWaitThatBlocks() started."
+[ "$mode" = hang ] && exec sleep 30
+if [ "$mode" = fail ]; then
+    printf '%s\n' "􀢄  Test aWaitThatBlocks() recorded an issue at A.swift:3:5: Expectation failed: false" \
+        "􀢄  Test aWaitThatBlocks() failed after 0.002 seconds with 1 issue." \
+        "􀢄  Test run with 2 tests in 1 suite failed after 0.003 seconds with 1 issue."
+    exit 1
+fi
+printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds."
+[ "$mode" = skip-console ] && printf '%s\n' "􀙟  Test aSkippedOne() skipped: \"only on the console\""
+printf '%s\n' "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
+if [ -n "$stream" ]; then
+    printf '%s\n' '{"kind":"test","payload":{"id":"w","name":"aWaitThatBlocks()","kind":"function"},"version":0}' \
+        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' >"$stream"
+    [ "$mode" = cancel-stream ] &&
+        printf '%s\n' '{"kind":"event","payload":{"kind":"testCaseCancelled","testID":"w","_testCase":{"displayName":"2"}},"version":0}' >>"$stream"
+    printf '%s\n' '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >>"$stream"
+fi
+exit 0
+SH
+chmod +x "$ps/stub/swift"
+pool_strict() { # pool_strict <scripts folder> <name> [mode] [tier]: status, the step's log, the summary
+    local status=0 run="$ps/run-$2"
+    mkdir -p "$run/slots" "$run/tree"
+    cp "$ps/tree/.xcode-version" "$run/tree/"
+    env PATH="$ps/stub:$PATH" KNOT_STRICT_TEST_LIMIT=3 KNOT_STUB_MODE="${3:-hang}" KNOT_POOL_TIER="${4:-}" \
+        KNOT_TREE="$run/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$1/verify.sh" --only package-test-strict >"$run/out" 2>&1 || status=$?
+    echo "$status"
+    cat "$run/tree/.build/logs/verify-package-test-strict.log" 2>/dev/null || true
+    grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" | sed 's/^/summary: /' || true
+    # bash's own notice of the job that the limit ended must reach neither the log nor the
+    # console, since it names the script by its path (finding 63).
+    grep -h -e 'Terminated' "$run/tree/.build/logs/verify-package-test-strict.log" "$run/out" 2>/dev/null | sed 's/^/notice: /' || true
+}
+strict_hang="$(pool_strict "$ps/scripts" hang)"
+cp -R "$ps/scripts" "$ps/unset-scripts"
+sed -i '' 's/env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test/env swift test/' "$ps/unset-scripts/verify.sh"
+strict_unset="$(pool_strict "$ps/unset-scripts" unset)"
+strict_skip_console="$(pool_strict "$ps/scripts" skip-console skip-console gate)"
+strict_cancel_stream="$(pool_strict "$ps/scripts" cancel-stream cancel-stream gate)"
+strict_fail="$(pool_strict "$ps/scripts" fail fail)"
+pkill -KILL -f "$ps/stub/swift" 2>/dev/null || true
+if [[ ${strict_hang%%$'\n'*} == 1 && $strict_hang == *"may be blocking a thread of the cooperative pool"* &&
+    $strict_hang == *"started, not ended: aWaitThatBlocks()"* && $strict_hang != *"not ended: aPlainTest()"* &&
+    $strict_hang != *"notice: "* &&
+    ${strict_unset%%$'\n'*} == 0 ]] && ! cmp -s "$ps/scripts/verify.sh" "$ps/unset-scripts/verify.sh"; then
+    pass "under the strict pool a suite that hangs fails package-test-strict, which names the test that had not ended; without the variable it would pass"
+else
+    fail "package-test-strict through verify's loop: a suite that hangs under the variable: $strict_hang; run without the variable, status ${strict_unset%%$'\n'*}"
+fi
+if [[ ${strict_skip_console%%$'\n'*} == 1 && ${strict_cancel_stream%%$'\n'*} == 1 &&
+    $strict_cancel_stream == *"events: cancelled case: aWaitThatBlocks() (2)"* &&
+    ${strict_fail%%$'\n'*} == 1 && $strict_fail == *"summary: tests 0 passed, 1 failed, 0 skipped"* ]]; then
+    pass "at the gate the strict step fails on a skip the console shows and on a cancelled case the stream shows, and counts its failures once"
+else
+    fail "package-test-strict's skips and failures: a skip on the console alone at the gate: ${strict_skip_console%%$'\n'*}; a cancelled case in the stream alone at the gate: $strict_cancel_stream; a failure: $strict_fail"
+fi
+
+# The step's place in each tier: after package-test in --full and in the gate's leaf and
+# everything depths, and in neither --quick nor the gate of documents alone. A copy of
+# scripts/ whose runner records each step's name and runs nothing, and whose gate takes its
+# depth from KNOT_SELF_TEST_DEPTH, runs each tier on a scratch tree.
+pl="$scratch/step-lists"
+mkdir -p "$pl/tree"
+cp -R "$KNOT_SCRIPTS" "$pl/scripts"
+cp "$KNOT_SELF/.xcode-version" "$pl/tree/"
+python3 -I - "$pl/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+base_check = 'git -C "$KNOT_ROOT" rev-parse --verify --quiet "$BASE^{' + 'commit}" >/dev/null ||'
+for old, new in (
+    ('    options="$(slot_options "$step")"\n    runner="step_${step//-/_}"',
+     '    options=none\n    runner=record_step'),
+    (base_check, 'true ||'),
+    ('depth_out="$(cd "$KNOT_ROOT" && tool depth --base "$BASE")"',
+     'depth_out="$(printf \'depth=%s\\nmac_ui=0\\nsoak=0\\nhosted=0\\nreason=the self-test\\n\' "$KNOT_SELF_TEST_DEPTH")"'),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+text = text.replace("for step in $STEPS; do\n    log=", 'record_step() { echo "$step" >>"$KNOT_STEP_RECORD"; }\nfor step in $STEPS; do\n    log=', 1)
+open(path, "w").write(text)
+PY
+step_list() { # step_list <name> <depth> <verify arguments…>: the steps the tier ran, on one line
+    local name=$1 depth=$2
+    shift 2
+    env -u KNOT_LOCAL_CONFIG KNOT_STEP_RECORD="$pl/$name" KNOT_SELF_TEST_DEPTH="$depth" KNOT_TREE="$pl/tree" \
+        "$pl/scripts/verify.sh" "$@" >"$pl/$name.out" 2>&1 || true
+    tr '\n' ' ' <"$pl/$name" 2>/dev/null || true
+}
+list_quick="$(step_list quick - --quick)"
+list_full="$(step_list full - --full --skip mac-ui)"
+list_leaf="$(step_list leaf leaf --gate --branch wp/01-self-test --package WP-01)"
+list_everything="$(step_list everything everything --gate --branch wp/01-self-test --package WP-01)"
+list_documents="$(step_list documents documents --gate --branch wp/01-self-test --package WP-01)"
+if [[ $list_quick == *"package-test "* && $list_quick != *"package-test-strict"* &&
+    $list_full == *"package-test package-test-strict "* && $list_leaf == *"package-test package-test-strict "* &&
+    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* ]]; then
+    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents"
+else
+    fail "the steps of each tier: quick '$list_quick'; full '$list_full'; gate leaf '$list_leaf'; everything '$list_everything'; documents '$list_documents'"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
@@ -958,6 +1433,171 @@ else
     fail "the UI test judge was right on $cases of 5 logs"
 fi
 
+# When a UI test fails, the step's own log gives the failing case's error lines, by file and
+# line with no folder, and names the longer log, so the gate's failure shows the reason.
+# Through verify.sh's loop: a copy of scripts/ in which the doctor is a stand-in, the project
+# is not generated, xcb prints a made-up failing run into the test log, and a stub ioreg says
+# the screen is unlocked; the Mac UI step runs on a scratch tree with scratch slots.
+ul="$scratch/ui-loop"
+mkdir -p "$ul/tree" "$ul/slots" "$ul/stub"
+cp -R "$KNOT_SCRIPTS" "$ul/scripts"
+cp "$KNOT_SELF/.xcode-version" "$ul/tree/"
+python3 -I - "$ul/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"'),
+                   ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+for old, new in (
+    ('    knot_generate_project\n    ui_tests "The Mac UI tests"', '    ui_tests "The Mac UI tests"'),
+    ('    knot_generate_project\n    knot_run_limited "The hosted iOS tests"', '    knot_run_limited "The hosted iOS tests"'),
+    ("export KNOT_VERIFY_TIER=$TIER", "export KNOT_VERIFY_TIER=${KNOT_UI_TIER:-$TIER}"),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+open(path, "w").write(text)
+PY
+# The hosted step's simulators: a stand-in that names one and boots nothing.
+printf '#!/bin/sh\n[ "$1" = udid ] && echo SELF-TEST-UDID\nexit 0\n' >"$ul/scripts/sim.sh"
+chmod +x "$ul/scripts/sim.sh"
+printf '#!/bin/sh\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><false/></dict></plist>\\n"\n' >"$ul/stub/ioreg"
+chmod +x "$ul/stub/ioreg"
+cat >"$ul/run.log" <<'LOG'
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' started.
+/tmp/self-test-tree/Apps/UITestSupport/AccessibilityAudit.swift:53: error: -[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark] : Element has no description: a made-up button
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' failed (3.204 seconds).
+** TEST FAILED **
+LOG
+ui_status=0
+env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/run.log" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$ul/slots" \
+    "$ul/scripts/verify.sh" --only mac-ui >"$ul/out" 2>&1 || ui_status=$?
+ui_step_log="$(cat "$ul/tree/.build/logs/verify-mac-ui.log" 2>/dev/null || true)"
+if [[ $ui_status != 0 && $ui_step_log == *"AccessibilityAudit.swift:53: error: "*"Element has no description"* &&
+    $ui_step_log == *".build/logs/verify-mac-ui-tests.log"* && $ui_step_log != *"/tmp/self-test-tree/"* &&
+    "$(cat "$ul/out")" == *"AccessibilityAudit.swift:53: error: "* ]]; then
+    pass "a failed UI test's error lines are in the step's log and the run's failure, and the longer log is named"
+else
+    fail "a failed UI test through verify's loop, status $ui_status: the step's log: $ui_step_log"
+fi
+# A run with twenty-five error lines gives twenty, and says that five more are in the long log.
+for n in $(seq 1 25); do
+    echo "/tmp/self-test-tree/Apps/UITestSupport/AccessibilityAudit.swift:$n: error: -[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark] : made-up error $n"
+done >"$ul/many.log"
+echo "Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' failed (3.204 seconds)." >>"$ul/many.log"
+mkdir -p "$ul/many-slots"
+env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/many.log" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$ul/many-slots" \
+    "$ul/scripts/verify.sh" --only mac-ui >"$ul/many.out" 2>&1 || true
+ui_many_log="$(cat "$ul/tree/.build/logs/verify-mac-ui.log" 2>/dev/null || true)"
+if [[ "$(grep -c -e 'made-up error' <<<"$ui_many_log")" == 20 && $ui_many_log == *"5 more error lines are in"* ]]; then
+    pass "a failed UI run's error lines are cut at twenty, and the step says how many more the long log holds"
+else
+    fail "a failed UI run with 25 error lines: the step's log: $ui_many_log"
+fi
+
+# A skipped XCTest case, or a skipped test in the hosted run, is counted as skipped, and at
+# the gate it fails the step, as the package's tests do: in the Mac UI step one case passed
+# and one was skipped, and in the hosted iOS run one test passed and one was skipped. At the
+# quick tier both steps pass, and the summary counts the skipped one.
+cat >"$ul/ui-skip.log" <<'LOG'
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' passed (5.702 seconds).
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testNeedsAnotherMac]' skipped (0.001 seconds).
+** TEST SUCCEEDED **
+LOG
+cat >"$ul/hosted-skip.log" <<'LOG'
+􁁛  Test aHostedTest() passed after 0.001 seconds.
+􀙟  Test aHostedTestWithoutItsModel() skipped: "the model is not on this Mac"
+􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
+** TEST SUCCEEDED **
+LOG
+skip_step() { # skip_step <step> <run log> <tier>: status, the step's line and the summary's tests
+    local status=0 run="$ul/skip-$1-$3"
+    mkdir -p "$run/slots"
+    env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$2" KNOT_UI_TIER="$3" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$ul/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
+    printf '%s %s · %s' "$status" "$(sed -n -E "s/^verify: (ok|FAIL) +$1 .*/\1/p" "$run/out")" \
+        "$(grep -oE 'tests [0-9]+ passed, [0-9]+ failed, [0-9]+ skipped' "$run/out" || true)"
+}
+ui_gate="$(skip_step mac-ui "$ul/ui-skip.log" gate)"
+ui_quick="$(skip_step mac-ui "$ul/ui-skip.log" quick)"
+hosted_gate="$(skip_step ios-hosted "$ul/hosted-skip.log" gate)"
+hosted_quick="$(skip_step ios-hosted "$ul/hosted-skip.log" quick)"
+if [[ $ui_gate == "1 FAIL · tests 1 passed, 0 failed, 1 skipped" && $ui_quick == "0 ok · tests 1 passed, 0 failed, 1 skipped" &&
+    $hosted_gate == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" && $hosted_quick == "0 ok · tests 2 passed, 0 failed, 1 skipped" ]]; then
+    pass "a skipped XCTest case or hosted test is counted, and fails the Mac UI and hosted steps at the gate"
+else
+    fail "skipped UI and hosted tests through verify's loop: Mac UI at the gate '$ui_gate', at the quick tier '$ui_quick'; hosted at the gate '$hosted_gate', at the quick tier '$hosted_quick'"
+fi
+
+# An xcodebuild ended by a signal that the step's limit did not send (finding 66): the step
+# says so, with the signal's number, and does not judge the run as one with no tests; and
+# bash's own notice of the killed command, which names the script by its path, reaches
+# neither the log nor the console. A copy of scripts/ with the real xcb, its doctor a
+# stand-in, no project generated and a stand-in sim.sh, runs the Mac UI step and the hosted
+# step with a stub xcodebuild that writes `** BUILD INTERRUPTED **` and dies by TERM.
+us="$scratch/signal-loop"
+mkdir -p "$us/tree" "$us/stub"
+cp -R "$KNOT_SCRIPTS" "$us/scripts"
+cp "$KNOT_SELF/.xcode-version" "$us/tree/"
+python3 -I - "$us/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+start = text.index("step_doctor() {")
+end = text.index("\n}\n", start) + 3
+text = text[:start] + 'step_doctor() {\n    echo "doctor stand-in"\n}\n' + text[end:]
+for old, new in (
+    ('    knot_generate_project\n    ui_tests "The Mac UI tests"', '    ui_tests "The Mac UI tests"'),
+    ('    knot_generate_project\n    knot_run_limited "The hosted iOS tests"', '    knot_run_limited "The hosted iOS tests"'),
+):
+    assert old in text, old
+    text = text.replace(old, new)
+open(path, "w").write(text)
+PY
+printf '#!/bin/sh\n[ "$1" = udid ] && echo SELF-TEST-UDID\nexit 0\n' >"$us/scripts/sim.sh"
+chmod +x "$us/scripts/sim.sh"
+printf '#!/bin/sh\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><false/></dict></plist>\\n"\n' >"$us/stub/ioreg"
+printf '#!/bin/sh\n[ "$1" = -version ] && exec /usr/bin/xcodebuild -version\necho "** BUILD INTERRUPTED **"\nkill -TERM $$\n' >"$us/stub/xcodebuild"
+chmod +x "$us/stub/ioreg" "$us/stub/xcodebuild"
+signal_step() { # signal_step <step>: status, the step's log, and any notice on the console
+    local status=0 run="$us/run-$1"
+    mkdir -p "$run/slots"
+    env PATH="$us/stub:$PATH" KNOT_TREE="$us/tree" KNOT_SLOT_DIR="$run/slots" \
+        "$us/scripts/verify.sh" --only "$1" >"$run/out" 2>&1 || status=$?
+    echo "$status"
+    cat "$us/tree/.build/logs/verify-$1.log" 2>/dev/null || true
+    grep -h -e 'Terminated' "$run/out" 2>/dev/null | sed 's/^/notice: /' || true
+}
+signal_ui="$(signal_step mac-ui)"
+signal_hosted="$(signal_step ios-hosted)"
+if [[ ${signal_ui%%$'\n'*} == 1 && $signal_ui == *"ended by signal 15 (TERM)"*"did not send"* && $signal_ui != *"xctest: 0 passed"* &&
+    ${signal_hosted%%$'\n'*} == 1 && $signal_hosted == *"ended by signal 15 (TERM)"*"did not send"* && $signal_hosted != *"No hosted test ran"* &&
+    $signal_ui != *"Terminated"* && $signal_hosted != *"Terminated"* ]]; then
+    pass "an xcodebuild ended by a signal from outside the step is named so, with its number, in the UI and hosted steps, and bash's notice of it reaches no log"
+else
+    fail "an xcodebuild ended by a signal from outside: the Mac UI step: $signal_ui; the hosted step: $signal_hosted"
+fi
+
+# sdk-path.sh finds a framework of the SDK, and one that the platform keeps outside it, as
+# XCUIAutomation, which UI tests import, and XCTest are, under the platform's
+# Developer/Library/Frameworks. It prints every folder that declares the framework: the
+# headers, where XCUIApplication is declared, and the Swift module beside them, where
+# SwiftUI declares nearly everything; in the pinned Xcode.
+sdk_sdk="$("$KNOT_SCRIPTS/sdk-path.sh" macos SwiftUI 2>&1 || true)"
+sdk_ui="$("$KNOT_SCRIPTS/sdk-path.sh" macos XCUIAutomation 2>&1 || true)"
+sdk_ios_ui="$("$KNOT_SCRIPTS/sdk-path.sh" ios-simulator XCUIAutomation 2>&1 || true)"
+sdk_ui_headers="$(sed -n '/\/Headers$/p' <<<"$sdk_ui")"
+if [[ $sdk_sdk == */SDKs/*/SwiftUI.framework/Headers*/SwiftUI.framework/Modules/SwiftUI.swiftmodule &&
+    $sdk_ui == */MacOSX.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Headers*XCUIAutomation.framework/Modules/XCUIAutomation.swiftmodule &&
+    -n $sdk_ui_headers && -n "$(grep -l -e '@interface XCUIApplication' "$sdk_ui_headers"/*.h 2>/dev/null || true)" &&
+    $sdk_ios_ui == */iPhoneSimulator.platform/Developer/Library/Frameworks/XCUIAutomation.framework/Headers* ]]; then
+    pass "sdk-path.sh prints the headers and the Swift module of a framework, in the SDK or in the platform's own frameworks"
+else
+    fail "sdk-path.sh: SwiftUI '$sdk_sdk', XCUIAutomation on the Mac '$sdk_ui', on the iOS simulator '$sdk_ios_ui'"
+fi
+
 # XcodeGen is chosen by the scripts, not by PATH (docs/dev-setup.md): KNOT_XCODEGEN, else the
 # pinned release under the build folder's tools/, else xcodegen on PATH, and its version is
 # checked again just before it generates. The stubs answer --version from a file beside them
@@ -976,7 +1616,7 @@ make_xcodegen "$xg/folder/$pinned_dir" pinned "$KNOT_XCODEGEN_VERSION"
 make_xcodegen "$xg/named-wrong" named-wrong 2.48.0
 make_xcodegen "$xg/moving/$pinned_dir" moving "$KNOT_XCODEGEN_VERSION"
 mkdir -p "$xg/empty-folder" "$xg/tree"
-cp "$KNOT_ROOT/project.yml" "$xg/tree/"
+cp "$KNOT_SELF/project.yml" "$xg/tree/"
 # xg_doctor <build folder> <PATH entry> [KNOT_XCODEGEN]: the doctor's XcodeGen line or failure.
 xg_doctor() {
     env -u KNOT_XCODEGEN PATH="$2:$PATH" KNOT_BUILD_FOLDER="$1" ${3:+KNOT_XCODEGEN="$3"} \
