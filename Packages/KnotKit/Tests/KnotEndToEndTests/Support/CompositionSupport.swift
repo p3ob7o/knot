@@ -16,7 +16,9 @@ final class LiveFolder: Sendable {
 
     /// With `KNOT_TEST_PRIVATE_ROOTS=1` the folder is written with `/private` in front, the
     /// other form of the same folder, so that the suite runs in that form too.
-    init() {
+    /// - Parameter settingsSuite: the settings suite of another folder, as two builds with one
+    ///   bundle ID share it; by default one of this folder's own.
+    init(settingsSuite: String? = nil) {
         let temporary = FileManager.default.temporaryDirectory
         let base =
             ProcessInfo.processInfo.environment["KNOT_TEST_PRIVATE_ROOTS"] == "1"
@@ -24,7 +26,7 @@ final class LiveFolder: Sendable {
             ? URL(fileURLWithPath: "/private" + temporary.path, isDirectory: true) : temporary
         container = base.appending(path: "knot-e2e-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
-        settingsSuite = "knot.e2e.\(UUID().uuidString.lowercased())"
+        self.settingsSuite = settingsSuite ?? "knot.e2e.\(UUID().uuidString.lowercased())"
     }
 
     /// The configuration of a development build on the Mac whose container is this folder, as
@@ -44,7 +46,12 @@ final class LiveFolder: Sendable {
     }
 
     /// The breaker of this folder's store, as the composition keeps it.
-    var breaker: LaunchBreaker { LaunchBreaker(suiteName: settingsSuite) }
+    var breaker: LaunchBreaker { LaunchBreaker(suiteName: launchStateSuite) }
+
+    /// The suite of this folder's store's launch state, as the composition names it.
+    var launchStateSuite: String {
+        LiveComposition.launchStateSuite(settingsSuite: settingsSuite, storeRoot: locations.storeRoot)
+    }
 
     /// Where `.live` keeps its store in this folder, as `StoreLocations` says.
     var locations: StoreLocations {
@@ -56,7 +63,9 @@ final class LiveFolder: Sendable {
 
     func remove() {
         try? FileManager.default.removeItem(at: container)
-        UserDefaults(suiteName: settingsSuite)?.removePersistentDomain(forName: settingsSuite)
+        for suite in [settingsSuite, launchStateSuite, "\(settingsSuite).store.none"] {
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        }
     }
 }
 

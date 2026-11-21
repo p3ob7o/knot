@@ -4,8 +4,11 @@ import KnotCore
 /// The breaker of each launch step (docs/architecture.md §13): a step in which the last two
 /// launches died is skipped, and the diagnostics say so.
 ///
-/// It keeps, for each step, what the last launches did with it, in this device's named defaults
-/// suite: it is there before the store opens, and opening the store is itself a step. A launch
+/// It keeps, for each step, what the last launches did with it, in the named defaults suite of
+/// the store's launch state (`LiveComposition.launchStateSuite`): it is there before the store
+/// opens, and opening the store is itself a step. A mark is handed to the system's preferences
+/// with `set(_:forKey:)` before the step runs, and survives the death of the process that wrote
+/// it: no call to `synchronize()`, which the SDK's header calls unnecessary. A launch
 /// writes "entered" before the step and "left" after it, so an "entered" that a later launch
 /// finds is a launch that died inside the step. A skip is written too, so the launch after a
 /// skip runs the step again. A step that dies at every run therefore goes entered, entered,

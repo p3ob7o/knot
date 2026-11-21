@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import KnotAudio
 import KnotCapture
@@ -70,6 +71,11 @@ public final class LiveComposition: Sendable {
     public let timings: SignpostTimings
     public let launchID: LaunchID
     public let deviceID: DeviceID
+    /// The named defaults suite of this store's launch state: the breaker's marks and the
+    /// device ID. It is named for the store's folder, so that two builds that share a bundle ID
+    /// and keep their stores apart, as two worktrees' development builds on one Mac do, never
+    /// share a breaker.
+    public let launchStateSuite: String
     let clock: any WallClock
     let ids: any IDGenerator
     let layer: any FileLayer
@@ -120,6 +126,7 @@ public final class LiveComposition: Sendable {
             KnotLog(.app).failure(error, "launch_no_store_locations")
             // No store and no `Inbox/`: nothing is captured, so no ID is kept either.
             self.deviceID = ids.make()
+            self.launchStateSuite = "\(configuration.settingsSuite).store.none"
             self.locations = nil
             self.locationsError = error
             self.gatedQueue = nil
@@ -131,7 +138,10 @@ public final class LiveComposition: Sendable {
         }
         self.locations = locations
         self.locationsError = nil
-        self.deviceID = DeviceIdentity(suiteName: configuration.settingsSuite).current(ids: ids)
+        let launchStateSuite = Self.launchStateSuite(
+            settingsSuite: configuration.settingsSuite, storeRoot: locations.storeRoot)
+        self.launchStateSuite = launchStateSuite
+        self.deviceID = DeviceIdentity(suiteName: launchStateSuite).current(ids: ids)
 
         environment.notes = GatedNoteStore(gate: gate, timings: timings)
         environment.assets = GatedAssetStore(gate: gate)
@@ -188,6 +198,17 @@ public final class LiveComposition: Sendable {
             environment = KnotAgentLive.wire(environment)
         #endif
         return environment
+    }
+
+    /// The suite of the launch state of the store at `storeRoot`: the settings suite's name, then
+    /// `.store.` and the first 16 hexadecimal digits of the SHA-256 of the store folder's real
+    /// path. The name holds nothing but that digest, and a path written with `/private` in front
+    /// names the same suite, since the folder that holds the store exists by then.
+    static func launchStateSuite(settingsSuite: String, storeRoot: URL) -> String {
+        let real = storeRoot.deletingLastPathComponent().resolvingSymlinksInPath()
+            .appending(path: storeRoot.lastPathComponent).path
+        let digest = SHA256.hash(data: Data(real.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "\(settingsSuite).store.\(digest)"
     }
 
     /// The launch sequence of this composition, which the shell starts once its capture

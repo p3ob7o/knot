@@ -267,6 +267,49 @@ struct CompositionTests {
         #expect(inboxManifests(folder.locations).isEmpty)
     }
 
+    /// Two development builds from two worktrees on one Mac share a bundle ID, so a settings
+    /// suite, and keep their stores in two folders. One build's deaths never skip the other's
+    /// recovery, and each store has its own device ID.
+    @Test("probe-breaker-shared-suite: one store, one breaker")
+    func oneStoreOneBreaker() async throws {
+        let other = LiveFolder()
+        let this = LiveFolder(settingsSuite: other.settingsSuite)
+        defer {
+            other.remove()
+            this.remove()
+        }
+        #expect(this.launchStateSuite != other.launchStateSuite)
+        // The other worktree's build died twice inside recovery.
+        other.breaker.enter(.recovery)
+        other.breaker.enter(.recovery)
+        let composition = this.compose()
+        #expect(composition.launchStateSuite == this.launchStateSuite)
+        let report = try #require(await launch(composition))
+        #expect(report.outcome(of: .recovery) == .done)
+        let otherReport = try #require(await launch(other.compose()))
+        #expect(otherReport.outcome(of: .recovery) == .skipped(.diedTwice))
+        #expect(composition.deviceID != other.compose().deviceID)
+        // The suite's name holds the digest of the store's folder and nothing of it.
+        #expect(!composition.launchStateSuite.contains(this.container.lastPathComponent))
+    }
+
+    @Test("The same store folder, written with /private or without, has one launch state")
+    func launchStateOfBothPathForms() {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let root = folder.locations.storeRoot
+        try? FileManager.default.createDirectory(
+            at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let path = root.path
+        let other =
+            path.hasPrefix("/private/")
+            ? URL(fileURLWithPath: String(path.dropFirst("/private".count)), isDirectory: true)
+            : URL(fileURLWithPath: "/private" + path, isDirectory: true)
+        #expect(
+            LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: root)
+                == LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: other))
+    }
+
     @Test("A store the app creates takes the device ID the engine stamps")
     func deviceIDAgrees() async throws {
         let folder = LiveFolder()
