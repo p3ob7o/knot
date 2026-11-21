@@ -862,6 +862,17 @@ else
     fail "making the audio: first call '$first', spoken after the second '$second', bootstrap through knot_make_audio: $bootstrap_ok"
 fi
 
+# The hosted nightly run makes this tree's audio before the package tests under Thread
+# Sanitizer, since `--only tsan` has no fixtures step and a test will read the audio.
+nightly="$KNOT_ROOT/.github/workflows/nightly.yml"
+fixtures_line=$(grep -n -e 'verify.sh --only fixtures' "$nightly" | head -n 1 | cut -d: -f1 || true)
+tsan_line=$(grep -n -e 'verify.sh --only tsan' "$nightly" | head -n 1 | cut -d: -f1 || true)
+if [[ -n $fixtures_line && -n $tsan_line ]] && ((fixtures_line < tsan_line)); then
+    pass "the hosted nightly run makes the audio before the package tests under Thread Sanitizer"
+else
+    fail "the hosted nightly run: the fixtures step at line '${fixtures_line:-none}', tsan at '${tsan_line:-none}'"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.
