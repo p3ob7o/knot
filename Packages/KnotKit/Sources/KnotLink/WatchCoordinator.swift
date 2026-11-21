@@ -64,6 +64,23 @@ public actor WatchCoordinator {
         case acknowledged(CaptureID)
     }
 
+    /// A recording that ended other than by the caller's own press, stop or discard: at its
+    /// limit, when a call took the audio, when the input went away, when a write failed or the
+    /// disk filled. The Watch shows "stopped early" with its reason.
+    public struct RecordingEndedByItself: Hashable, Sendable {
+        public var captureID: CaptureID
+        /// Why it ended: one of the endings for which `RecordingEnding.endedByItself` is true.
+        public var ending: RecordingEnding
+        /// What became of it: in the outbox, kept in `Recording/`, or ended.
+        public var outcome: StopOutcome
+
+        public init(captureID: CaptureID, ending: RecordingEnding, outcome: StopOutcome) {
+            self.captureID = captureID
+            self.ending = ending
+            self.outcome = outcome
+        }
+    }
+
     private enum Activity {
         case idle
         case starting
@@ -91,6 +108,10 @@ public actor WatchCoordinator {
     /// recording is live. A recording keeps the start written when it began, even when a later
     /// read of its manifest fails.
     private var written: [CaptureID: CaptureManifest] = [:]
+    /// Recordings that ended by themselves, in the order they ended, each with its outcome once
+    /// its finish is done. A report leaves only from the front, so reports go out in order.
+    private var endingsInOrder: [(capture: CaptureID, ending: RecordingEnding, outcome: StopOutcome?)] = []
+    private let endingSubscribers = Subscribers<RecordingEndedByItself>()
 
     /// - Parameters:
     ///   - launchID: this launch. Recovery finishes only the recordings of other launches.
@@ -238,8 +259,37 @@ public actor WatchCoordinator {
             recorded.captureID, "watch_recording_ended_by_itself", .duration("length", recorded.duration),
             .flag("disk_full", recorded.ending == .diskFull), .flag("limit", recorded.ending == .limitReached))
         killPoint(.stopped)
-        _ = await finish(recorded)
-        await finishUnfinished(except: recorded.captureID)
+        let capture = recorded.captureID
+        endingsInOrder.append((capture, recorded.ending, nil))
+        let outcome =
+            await finish(recorded) ?? .kept(capture, KnotError.illegalTransition.about(capture: capture))
+        if let index = endingsInOrder.firstIndex(where: { $0.capture == capture && $0.outcome == nil }) {
+            endingsInOrder[index].outcome = outcome
+        }
+        reportEndings()
+        await finishUnfinished(except: capture)
+    }
+
+    /// Reports, from the front, every recording that ended by itself and has reached where it
+    /// will stay. One whose finish is still under way holds back those that ended after it.
+    private func reportEndings() {
+        while let first = endingsInOrder.first, let outcome = first.outcome {
+            endingsInOrder.removeFirst()
+            log.capture(first.capture, "watch_recording_ended_by_itself_reported")
+            endingSubscribers.yield(
+                RecordingEndedByItself(captureID: first.capture, ending: first.ending, outcome: outcome))
+        }
+    }
+
+    /// The recordings that end other than by the caller's own press, stop or discard, each
+    /// reported once, in the order they ended, and only after the recording is where it will
+    /// stay: in the outbox, kept in `Recording/`, or ended. A listener is told only what ends
+    /// after it subscribes, and nothing that ended before: what is still on the Watch is in the
+    /// link's counts. Recordings that earlier launches left are not reported here, since
+    /// `launch()` finishes them and the counts show them. A listener that goes away changes
+    /// nothing for the recording.
+    public nonisolated func endings() -> AsyncStream<RecordingEndedByItself> {
+        endingSubscribers.stream()
     }
 
     /// Discards the recording, as an accidental press. Returns its capture, or `nil` when

@@ -205,7 +205,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
-| WP-11 | 2 | The engine's kill points in the soak | WP-11 PR 1; WP-06 |
+| WP-11 | 2 | The engine's kill points in the soak, and a follower placed by the capture it follows | WP-11 PR 1; WP-06; the contract pull request that gives `NewCapture` the capture it follows |
 | WP-11 | 3 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
@@ -263,6 +263,7 @@ These rules sit beside the table:
 - "The ruling" is the keep-gate ruling (§5).
 - A row names the PR wherever a package ships in several. Elsewhere, a package named without a number means its last PR.
 - The PRs of WP-11, WP-12 and WP-15 that add kill points merge after WP-06.
+- The first PRs of WP-30 and WP-33 merge after WP-22 PR 1, and each carries the UI smoke test on `.live` on its platform.
 - `scripts/check-plan.sh` fails on a cycle, on a row that names a package without a PR where the package has several, and on a milestone that needs a held PR.
 
 ### The hold until the ruling
