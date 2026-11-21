@@ -90,4 +90,40 @@ import Testing
         try files.remove(tree.path("KnotStore/Missing/f.json"))
         try files.removePartials(in: tree.path("KnotStore/Missing"))
     }
+
+    /// The targets that try to leave the root: by `..`, through a link below it, and both.
+    static let escapes = [
+        "KnotStore/../outside/f", "KnotStore/A/../../outside/f", "KnotStore/Leak/../f",
+        "KnotStore/./A/..//../outside/f", "KnotStore/Leak/sub/f", "KnotStore/A/Last/f", "KnotStore/Self/f",
+    ]
+
+    enum Operation: String, CaseIterable { case place, move, remove, removePartials }
+
+    /// Finding 3: whatever a check decides, the layer is given the path that was checked, so
+    /// nothing lands outside the root and nothing outside it goes: for every target that tries
+    /// to leave it, a placement and a move add nothing outside the root, and a removal and a
+    /// removal of partials take nothing from outside it.
+    @Test(arguments: Operation.allCases)
+    func nothingLandsOutsideTheRoot(operation: Operation) throws {
+        for text in Self.escapes {
+            let tree = try Tree()
+            let durable = DurableFile(layer: PosixFileLayer(), root: tree.root)
+            let before = tree.outsideTheRoot()
+            let target = tree.path(text)
+            switch operation {
+            case .place: try? durable.place(Data("x".utf8), at: target)
+            case .move: try? durable.move(tree.source, to: target)
+            case .remove:
+                let folder = target.deletingLastPathComponent()
+                for name in ["v1", "v2"] { try? durable.remove(folder.appending(path: name)) }
+            case .removePartials: try? durable.removePartials(in: target.deletingLastPathComponent())
+            }
+            let after = tree.outsideTheRoot()
+            let added = after.subtracting(before).sorted()
+            // A move takes its source from outside the root, as a received file comes from.
+            let lost = before.subtracting(after).filter { operation != .move || $0 != "src/s.bin" }.sorted()
+            #expect(added.isEmpty, "\(operation) \(text): new outside the root: \(added)")
+            #expect(lost.isEmpty, "\(operation) \(text): gone from outside the root: \(lost)")
+        }
+    }
 }
