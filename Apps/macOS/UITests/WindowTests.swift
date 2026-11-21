@@ -36,11 +36,10 @@ final class KnotMacWindowTests: XCTestCase {
         try await openAgain()
         waitForWindowOnScreen(true, "Opening the app again shows the window.")
 
-        // Close the window and quit, through the app menu's Quit item, which works whichever
-        // app is in front: the next launch shows the window again.
+        // Close the window and quit with ⌘Q: the next launch shows the window again.
         closeTheWindow(of: app)
         bringToFront(app)
-        app.menuItems["terminate:"].click()
+        app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 30), "The app quit.")
         app.launch()
         XCTAssertTrue(field.waitForExistence(timeout: 30))
@@ -81,20 +80,20 @@ final class KnotMacWindowTests: XCTestCase {
 
     /// Brings the app to the front and waits until it is there. Another thread's launch step
     /// can start a build with the same bundle ID, and a newly started app comes to the front:
-    /// a click on the menu bar would then reach that app's menu.
+    /// a key would then reach that app.
     @MainActor
     private func bringToFront(_ app: XCUIApplication) {
         app.activate()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30), "The app is in front.")
     }
 
-    /// Closes the main window with the Window menu's Close item, which brings the app forward
-    /// and closes its key window, and waits until the window is off screen. A click on the
-    /// title bar's close button did not always close it while another app was in front.
+    /// Closes the main window with ⌘W, and waits until the window is off screen. The test
+    /// uses keys, not the menu bar: synthesized clicks on the menu bar did not open its menus on
+    /// the build Mac.
     @MainActor
     private func closeTheWindow(of app: XCUIApplication) {
         bringToFront(app)
-        app.menuItems["performClose:"].click()
+        app.typeKey("w", modifierFlags: .command)
         waitForWindowOnScreen(false, "The window closed.")
     }
 
