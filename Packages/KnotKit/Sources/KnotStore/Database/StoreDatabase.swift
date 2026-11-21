@@ -88,6 +88,8 @@ public final class StoreDatabase: Sendable {
     let files: StoreFiles
     /// The same placing, with a rename that never replaces what another writer published.
     let publishing: StoreFiles
+    /// The file layer the store places with, which syncs what it finds already placed.
+    let fileLayer: any FileLayer
     let hooks: StoreHooks
     let clock: any WallClock
     let ids: any IDGenerator
@@ -104,6 +106,7 @@ public final class StoreDatabase: Sendable {
         self.pool = pool
         self.files = files
         self.publishing = locations.durableFiles(layer: ExclusiveRenameLayer(base: layer))
+        self.fileLayer = layer
         self.hooks = hooks
         self.clock = clock
         self.ids = ids

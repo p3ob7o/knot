@@ -546,6 +546,33 @@ import Testing
         for url in leftovers { #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
         for url in live { #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
     }
+
+    /// A daily copy whose folder's sync failed has not been made: a retry syncs it before it
+    /// answers, and fails while the sync does.
+    @Test func aDailyCopyRetryFinishesTheFolderSync() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 124)
+        try made.database.close()
+        let copies = StoreCopies.folder(made.database.locations).standardizedFileURL.path
+        let refusing = Switch(true)
+        let syncs = Recorded()
+        let layer = HookedFileLayer(refuseSync: { url in
+            guard url.standardizedFileURL.path == copies else { return false }
+            syncs.add(url.lastPathComponent)
+            return refusing.isOn
+        })
+        let database = try StoreDatabase.open(
+            locations: made.database.locations, role: .app, clock: made.clock, fileLayer: layer)
+        await expectFailure(.writeFailed) { try database.makeDailyCopy() }
+        let tried = syncs.all.count
+        await expectFailure(.writeFailed, "A retry answers once the folder is synced.") { try database.makeDailyCopy() }
+        #expect(syncs.all.count > tried)
+        refusing.set(false)
+        let copy = try database.makeDailyCopy()
+        #expect(FileManager.default.fileExists(atPath: copy.path))
+    }
 }
 
 extension StoreCopies {

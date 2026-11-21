@@ -422,7 +422,9 @@ struct RestoreJournal: Codable, Hashable, Sendable {
 
 extension StoreDatabase {
     /// Makes today's copy, once a day, and keeps the newest seven (docs/architecture.md §7).
-    /// Returns the copy, made now or earlier today.
+    /// Returns the copy, made now or earlier today, once it and its folder are on the drive: a
+    /// copy whose folder's sync failed is found in place by the retry, which syncs it before it
+    /// answers (§6, rule 7).
     @discardableResult
     public func makeDailyCopy() throws(KnotError) -> URL {
         let day = Self.utcDay(clock.now())
@@ -431,6 +433,8 @@ extension StoreDatabase {
             if !FileManager.default.fileExists(atPath: copy.path) {
                 try StoreCopies.makeCopy(of: pool, to: copy, files: files, publishing: publishing, hooks: hooks)
             }
+            try fileLayer.syncFile(copy)
+            try fileLayer.syncFolder(copy.deletingLastPathComponent())
             // Today's copy is kept whatever its date says, as after a clock set back, with the
             // newest six others.
             let others = StoreCopies.copies(locations, prefix: "daily-").filter {
