@@ -116,4 +116,33 @@ import Testing
         #expect(r.logs.lines.filter { $0.hasPrefix("discard_end_not_taken capture=\(id)") }.isEmpty)
         #expect(refusals.withLock { $0 } == asked, "Once refused for good, the end is not asked again.")
     }
+
+    /// The orchestrator's remark on `settleRefused`, from the last round of pull request 58. A
+    /// discarded recording's pending end that the store refuses for good, with
+    /// `capture_id_conflict`, whose row the engine then cannot read: a row that was not read is
+    /// not known to have ended, so the end is not logged as settled. The line says that the row
+    /// could not be read, with the read's code.
+    @Test func pendingEndWhoseRowCannotBeReadIsNotLoggedAsSettled() async throws {
+        let r = Rig()
+        let reads = Mutex(false)
+        var store = ChaosStore(store: r.notes) {}
+        store.beforeEnd = { end throws(KnotError) in
+            if end.outcome == .discardedEmpty { throw KnotError.captureIDConflict }
+        }
+        store.refuseCaptureRead = { _ throws(KnotError) in
+            if reads.withLock({ $0 }) { throw KnotError.storeBusy }
+        }
+        let engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+                deadline: .patient, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs)))
+        let recording = try await r.beginRecording(on: engine)
+        let id = recording.captureID
+        reads.withLock { $0 = true }
+        _ = try await engine.discard(id)
+        await engine.retryConversions()
+        #expect(r.logs.lines.contains("pending_end_row_not_read capture=\(id) code=store_busy"))
+        #expect(r.logs.lines.filter { $0.hasPrefix("discard_end_settled capture=\(id)") }.isEmpty)
+    }
 }

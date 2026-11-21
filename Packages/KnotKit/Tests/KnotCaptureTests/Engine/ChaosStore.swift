@@ -11,6 +11,8 @@ struct ChaosStore: NoteStore {
     let beforeCaptureRead: @Sendable () async -> Void
     /// Run before each end the store is asked for: it may refuse it.
     var beforeEnd: (@Sendable (CaptureEnd) throws(KnotError) -> Void)? = nil
+    /// Run before each read of a capture's row: it may refuse it.
+    var refuseCaptureRead: (@Sendable (CaptureID) throws(KnotError) -> Void)? = nil
 
     func cursor() async throws(KnotError) -> StoreCursor {
         return try await store.cursor()
@@ -39,6 +41,7 @@ struct ChaosStore: NoteStore {
     }
     func capture(_ id: CaptureID) async throws(KnotError) -> Capture? {
         await beforeCaptureRead()
+        try refuseCaptureRead?(id)
         return try await store.capture(id)
     }
     func note(_ id: NoteID) async throws(KnotError) -> NoteRecord? {

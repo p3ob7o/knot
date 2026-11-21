@@ -1025,13 +1025,18 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// A pending end the store refuses for good, with `capture_id_conflict`, settled by reading the
     /// row (finding 81). A row that has ended, failed or stored or discarded, needs no end: the
     /// pending one goes, with one log line that names the capture and the code. A row still open
-    /// is another fault, and is logged as one; recovery ends it at the next launch.
+    /// is another fault, and is logged as one; recovery ends it at the next launch. A row that
+    /// could not be read is not known to have ended: the line says so, with the read's code, and
+    /// recovery ends the row at the next launch if it is still open.
     private func settleRefused(_ id: CaptureID, _ error: KnotError, event: StaticString) async {
         let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
-        if case .answered(let row?) = answer, row.outcome == .open {
+        switch answer {
+        case .answered(let row?) where row.outcome == .open:
             log.failure(error.about(capture: id), "pending_end_refused_while_open")
-        } else {
+        case .answered:
             log.capture(id, event, .code(error.code))
+        default:
+            log.capture(id, "pending_end_row_not_read", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
         }
     }
 
