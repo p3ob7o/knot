@@ -1,8 +1,8 @@
 # Cleanup results, synthetic set
 
-WP-14 owns this folder. It writes the first results; WP-04 only made the place and states the format.
+WP-14 owns this folder. It writes the first results; WP-04 only made the place and stated the format, which WP-14's first pull request extended with the punctuation-only results and the titles.
 
-`knot-eval --set synthetic` cleans every case of [`../../cleanup/cases.json`](../../cleanup/cases.json) and writes `synthetic.json` here. The results are text, so the file is committed.
+`knot-eval cleanup --set synthetic`, or `knot-eval --set synthetic`, cleans every case of [`../../cleanup/cases.json`](../../cleanup/cases.json) twice, with full cleanup and with punctuation only, as the app cleans it through `ModelCleaner`, proposes a title for each, and writes `synthetic.json` here. The results are text, so the file is committed. With greedy sampling, two runs on the same model write the same file, but for its date.
 
 The synthetic cleanup set is text and uses no audio. A result that runs on transcripts of the generated audio records the macOS build whose voices made that audio, as `audio.osBuild` from `Fixtures/generated/manifest.json`, because another build gives other audio and so other transcripts. A pull request that changes the cleanup instructions, the guard or the cases reruns the command, commits the new file and states the results before and after.
 
@@ -18,11 +18,11 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
   "set": "synthetic",
   "casesSha256": "<SHA-256 of Fixtures/cleanup/cases.json>",
   "model": {
-    "name": "SystemLanguageModel.default",
+    "name": "<SystemLanguageModel.variant.displayName>",
     "osBuild": "<build of the Mac that ran it>",
     "sampling": "greedy"
   },
-  "instructionsSha256": "<SHA-256 of the cleanup instructions>",
+  "instructionsSha256": "<SHA-256 of the three instructions, full, punctuation only and title, joined by a line \"--\">",
   "guardSha256": "<SHA-256 of the guard's table of allowed differences>",
   "date": "<YYYY-MM-DD>",
   "results": [
@@ -38,7 +38,15 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
       "matchedForbidden": [],
       "removed": [],
       "meaningChanged": false,
-      "pass": true
+      "pass": true,
+      "title": "<the proposed title that passed the title check, or null>",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "<the model's body under punctuation only, before the guard>",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
     }
   ],
   "summary": {
@@ -46,18 +54,22 @@ One JSON object, indented by two spaces, keys in the order shown, so that a chan
     "punctuationOnly": { "cases": 4, "pass": 0, "meaningChanged": 0 },
     "other": { "cases": 13, "pass": 0, "meaningChanged": 0 },
     "guardRejected": 0,
-    "declined": 0
+    "declined": 0,
+    "punctuationOnlyMode": { "cleaned": 0, "rejected": 0, "declined": 0, "meaningChanged": 0, "meaningCriticalPass": 0 }
   }
 }
 ```
 
 - One entry per case, in the order of `cases.json`.
-- `outcome` is `cleaned`, `declined` (a refusal, or an empty or malformed result) or `rejected` (the guard refused it). `guard` is `accepted`, or `rejected:` followed by the guard's reason code.
+- `outcome` is `cleaned`, `declined` (a refusal, a guardrail violation, or an empty or malformed result) or `rejected` (the guard refused it). `guard` is `accepted`, `rejected:` followed by the guard's reason code, or `not_run` for a decline, which the guard never sees.
 - `finalText` is `modelOutput` when the guard accepted it, and the raw transcript otherwise.
 - `keptAll` and `matchedForbidden` are measured on `finalText`. `pass` is `keptAll` with no forbidden match.
 - `meaningChanged` is measured on `modelOutput`: a lost `keep` phrase or a forbidden match. It shows what the model did even when the guard saved the note.
 - `removed` lists the words of `raw` that `finalText` leaves out.
 - `summary.punctuationOnly` counts the `punctuation` cases, which are also in `meaningCritical`.
+- The top-level fields of a result score full cleanup. `punctuationOnly` scores the same case under punctuation only, by the same rules, and `summary.punctuationOnlyMode` counts those: the owner chooses between full cleanup, punctuation only and off.
+- `title` is what `ModelCleaner` proposes for the full cleanup's final text, after KnotCore's `TitleRule.fits`.
+- The command prints counts only. A meaning-critical case whose `pass` was `true` in the file it replaces is printed by its ID, and the command then exits with status 1.
 
 ## What the results decide
 

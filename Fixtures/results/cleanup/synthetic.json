@@ -1,0 +1,803 @@
+{
+  "schema": 1,
+  "set": "synthetic",
+  "casesSha256": "9c52a9549bbe49f50a56fa1e8aa53a358f0938d0fa4ea1a31962fb0672a02b99",
+  "model": {
+    "name": "AFM 3 Core Advanced",
+    "osBuild": "26C5047e",
+    "sampling": "greedy"
+  },
+  "instructionsSha256": "30b05e267993d5820150e2e450b0c56b9121aa5f3d47e0588e993bea9939fe1a",
+  "guardSha256": "082796503319bee246abc08eb10950f2e61bbdad9d84cc0b4f756064aa4d3107",
+  "date": "2026-11-21",
+  "results": [
+    {
+      "id": "c01",
+      "meaningCritical": true,
+      "categories": [
+        "negation",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "So I don't think we should sign the lease yet, not until the landlord fixes the heating.",
+      "guard": "accepted",
+      "finalText": "So I don't think we should sign the lease yet, not until the landlord fixes the heating.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "um",
+        "uh"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": null,
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Um, so I don't think we should sign the lease yet, uh, not until the landlord fixes the heating.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c02",
+      "meaningCritical": true,
+      "categories": [
+        "negation",
+        "restart"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "It's not, it's not the blue folder, it's the green one.",
+      "guard": "accepted",
+      "finalText": "It's not, it's not the blue folder, it's the green one.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "It's not the blue folder",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "It's not, it's not the blue folder, it's the green one.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c03",
+      "meaningCritical": true,
+      "categories": [
+        "negation"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Remind me to not reply to the email from the Bank until I've called them.",
+      "guard": "accepted",
+      "finalText": "Remind me to not reply to the email from the Bank until I've called them.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Bank Email Reply",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Remind me to not reply to the email from the bank until I've called them.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c04",
+      "meaningCritical": true,
+      "categories": [
+        "amount",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Pay the Plumber 240 dollars, and 50 cents for the parts.",
+      "guard": "accepted",
+      "finalText": "Pay the Plumber 240 dollars, and 50 cents for the parts.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "um"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Pay the Plumber",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Pay the Plumber 240 dollars, um, and 50 cents for the parts.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c05",
+      "meaningCritical": true,
+      "categories": [
+        "amount",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "We need forty two chairs and six tables for the hall.",
+      "guard": "accepted",
+      "finalText": "We need forty two chairs and six tables for the hall.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "uh"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "chairs tables hall",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "We need forty two chairs and, uh, six tables for the hall.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c06",
+      "meaningCritical": true,
+      "categories": [
+        "date"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "The dentist moved my appointment to the 14th of March, at 9:30.",
+      "guard": "accepted",
+      "finalText": "The dentist moved my appointment to the 14th of March, at 9:30.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "appointment moved",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "The dentist moved my appointment to the 14th of March at 9:30.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c07",
+      "meaningCritical": true,
+      "categories": [
+        "date",
+        "negation"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "The flight is next Friday, the 3rd, not Thursday.",
+      "guard": "accepted",
+      "finalText": "The flight is next Friday, the 3rd, not Thursday.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Flight next Friday",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "The flight is next Friday, the 3rd, not Thursday.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c08",
+      "meaningCritical": true,
+      "categories": [
+        "name",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Send the draft to Siobhan and copy Mateus on it.",
+      "guard": "accepted",
+      "finalText": "Send the draft to Siobhan and copy Mateus on it.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "uh"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Send draft to Siobhan",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Send the draft to Siobhan and copy uh Mateus on it.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c09",
+      "meaningCritical": true,
+      "categories": [
+        "name",
+        "date"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Ask Dr Okafor whether Lena can start on the 2nd.",
+      "guard": "accepted",
+      "finalText": "Ask Dr Okafor whether Lena can start on the 2nd.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Ask Dr Okafor",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Ask Dr Okafor whether Lena can start on the 2nd.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c10",
+      "meaningCritical": true,
+      "categories": [
+        "self-correction",
+        "date"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Let's meet at the Café on Tuesday, no Wednesday at 10.",
+      "guard": "accepted",
+      "finalText": "Let's meet at the Café on Tuesday, no Wednesday at 10.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Meet at Café Tuesday",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Let's meet at the café on Tuesday, no Wednesday at 10.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c11",
+      "meaningCritical": true,
+      "categories": [
+        "self-correction",
+        "amount"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Buy 2, no 3 bags of rice.",
+      "guard": "accepted",
+      "finalText": "Buy 2, no 3 bags of rice.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Buy 2 bags rice",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Buy 2, no 3 bags of rice.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c12",
+      "meaningCritical": true,
+      "categories": [
+        "self-correction",
+        "amount"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "The door code is 4 7 1 9. Sorry, 4 7 9 1.",
+      "guard": "accepted",
+      "finalText": "The door code is 4 7 1 9. Sorry, 4 7 9 1.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": null,
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "The door code is 4 7 1 9, sorry, 4 7 9 1.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c13",
+      "meaningCritical": true,
+      "categories": [
+        "punctuation",
+        "amount",
+        "negation"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "No more than five people can come to the tasting.",
+      "guard": "accepted",
+      "finalText": "No more than five people can come to the tasting.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "No more than five",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "No more than five people can come to the tasting.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c14",
+      "meaningCritical": true,
+      "categories": [
+        "punctuation",
+        "name"
+      ],
+      "outcome": "rejected",
+      "modelOutput": "Invite Anna Maria, Joe to the dinner.",
+      "guard": "rejected:removalNotAllowed",
+      "finalText": "invite Anna Maria and Joe to the dinner",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": true,
+      "pass": true,
+      "title": "invite Anna Maria Joe dinner",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Invite Anna Maria, and Joe to the dinner.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c15",
+      "meaningCritical": true,
+      "categories": [
+        "punctuation",
+        "amount"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Meet at ten thirty two. People from Finance are joining.",
+      "guard": "accepted",
+      "finalText": "Meet at ten thirty two. People from Finance are joining.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Meet at ten thirty two",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Meet at ten thirty two. People from Finance are joining.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c16",
+      "meaningCritical": true,
+      "categories": [
+        "punctuation",
+        "negation"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "I'm not sure we should cancel the booking.",
+      "guard": "accepted",
+      "finalText": "I'm not sure we should cancel the booking.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "cancel the booking",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "I'm not sure we should cancel the booking.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c17",
+      "meaningCritical": false,
+      "categories": [
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "So I want to like try the new running route tomorrow morning, you know the one by the river.",
+      "guard": "accepted",
+      "finalText": "So I want to like try the new running route tomorrow morning, you know the one by the river.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "um",
+        "uh",
+        "uh"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "new running route",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Um so uh I want to uh like try the new running route tomorrow morning, you know the one by the river?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c18",
+      "meaningCritical": false,
+      "categories": [
+        "repeat"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "The meeting with the design team went well.",
+      "guard": "accepted",
+      "finalText": "The meeting with the design team went well.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "the",
+        "the"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "meeting with design team",
+      "punctuationOnly": {
+        "outcome": "rejected",
+        "modelOutput": "The meeting with the design team went well.",
+        "guard": "rejected:removalNotAllowed",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c19",
+      "meaningCritical": false,
+      "categories": [
+        "restart"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "We should book the hotel this week.",
+      "guard": "accepted",
+      "finalText": "We should book the hotel this week.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "we",
+        "should"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "book hotel this week",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "We should, we should book the hotel this week.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c20",
+      "meaningCritical": false,
+      "categories": [
+        "list"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Shopping list: Eggs, milk, bread, two lemons, and coffee.",
+      "guard": "accepted",
+      "finalText": "Shopping list: Eggs, milk, bread, two lemons, and coffee.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Shopping list",
+      "punctuationOnly": {
+        "outcome": "rejected",
+        "modelOutput": "Shopping list:  \n- Eggs  \n- Milk  \n- Bread  \n- Two lemons  \n- Coffee?",
+        "guard": "rejected:removalNotAllowed",
+        "meaningChanged": true,
+        "pass": true
+      }
+    },
+    {
+      "id": "c21",
+      "meaningCritical": false,
+      "categories": [
+        "list"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Three things for the trip:  \nFirst, the passport.  \nSecond, the charger.  \nThird, the blue jacket.",
+      "guard": "accepted",
+      "finalText": "Three things for the trip:  \nFirst, the passport.  \nSecond, the charger.  \nThird, the blue jacket.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Three things for trip",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Three things for the trip:  \nFirst, the passport.  \nSecond, the charger.  \nThird, the blue jacket.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c22",
+      "meaningCritical": false,
+      "categories": [
+        "paragraphs",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Okay, two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
+      "guard": "accepted",
+      "finalText": "Okay, two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "um"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": null,
+      "punctuationOnly": {
+        "outcome": "rejected",
+        "modelOutput": "Okay, two things about the garden:  \n- The tomato plants need staking before the weekend.  \n- The hose by the shed is leaking.  \n\num, separate thing:  \n- The neighbours asked if they can borrow the ladder on Sunday.  \n</transcript",
+        "guard": "rejected:changed",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c23",
+      "meaningCritical": false,
+      "categories": [
+        "question"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Do we still have the spare key for the bike lock, or did it go with the old bike?",
+      "guard": "accepted",
+      "finalText": "Do we still have the spare key for the bike lock, or did it go with the old bike?",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Spare key bike lock",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Do we still have the spare key for the bike lock, or did it go with the old bike?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c24",
+      "meaningCritical": false,
+      "categories": [
+        "already-clean"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Water the plants.",
+      "guard": "accepted",
+      "finalText": "Water the plants.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Water the plants",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Water the plants.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c25",
+      "meaningCritical": false,
+      "categories": [
+        "single-filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Um",
+      "guard": "accepted",
+      "finalText": "Um",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": null,
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Um.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c26",
+      "meaningCritical": false,
+      "categories": [
+        "run-on",
+        "filler"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "So this morning I went to the market and then I got the bread and then I saw that the fish stall had moved to the other end and then I ran into the neighbours and they said the street party is on the last Saturday of the month and we should bring chairs.",
+      "guard": "accepted",
+      "finalText": "So this morning I went to the market and then I got the bread and then I saw that the fish stall had moved to the other end and then I ran into the neighbours and they said the street party is on the last Saturday of the month and we should bring chairs.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [
+        "uh"
+      ],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "street party",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "So this morning I went to the market and then I got the bread and then I saw that the fish stall had moved to the other end and uh then I ran into the neighbours and they said the street party is on the last Saturday of the month and we should bring chairs?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c27",
+      "meaningCritical": false,
+      "categories": [
+        "restart"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Can you pick up, can you grab the parcel from the Post Office?",
+      "guard": "accepted",
+      "finalText": "Can you pick up, can you grab the parcel from the Post Office?",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Parcel from Post Office",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Can you pick up? Can you grab the parcel from the Post Office?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c28",
+      "meaningCritical": false,
+      "categories": [
+        "casing"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "Remind me to update the iOS app, and check the API keys tonight.",
+      "guard": "accepted",
+      "finalText": "Remind me to update the iOS app, and check the API keys tonight.",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "Update iOS app check API keys",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "Remind me to update the iOS app and check the API keys tonight?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c29",
+      "meaningCritical": false,
+      "categories": [
+        "filler",
+        "amount",
+        "date"
+      ],
+      "outcome": "rejected",
+      "modelOutput": "I'd like to book a table for 4 on Saturday.",
+      "guard": "rejected:removalNotAllowed",
+      "finalText": "I'd like to like book a table for 4 on Saturday",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "book table for 4",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "I'd like to like book a table for 4 on Saturday.",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    },
+    {
+      "id": "c30",
+      "meaningCritical": true,
+      "categories": [
+        "filler-lookalike"
+      ],
+      "outcome": "cleaned",
+      "modelOutput": "You know the answer better than I do, so just decide?",
+      "guard": "accepted",
+      "finalText": "You know the answer better than I do, so just decide?",
+      "keptAll": true,
+      "matchedForbidden": [],
+      "removed": [],
+      "meaningChanged": false,
+      "pass": true,
+      "title": "You know the answer",
+      "punctuationOnly": {
+        "outcome": "cleaned",
+        "modelOutput": "You know the answer better than I do, so just decide?",
+        "guard": "accepted",
+        "meaningChanged": false,
+        "pass": true
+      }
+    }
+  ],
+  "summary": {
+    "meaningCritical": {
+      "cases": 17,
+      "pass": 17,
+      "meaningChanged": 1
+    },
+    "punctuationOnly": {
+      "cases": 4,
+      "pass": 4,
+      "meaningChanged": 1
+    },
+    "other": {
+      "cases": 13,
+      "pass": 13,
+      "meaningChanged": 0
+    },
+    "guardRejected": 2,
+    "declined": 0,
+    "punctuationOnlyMode": {
+      "cleaned": 27,
+      "rejected": 3,
+      "declined": 0,
+      "meaningChanged": 1,
+      "meaningCriticalPass": 17
+    }
+  }
+}
