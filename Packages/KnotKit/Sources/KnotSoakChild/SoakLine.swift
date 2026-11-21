@@ -33,7 +33,7 @@
         /// The child waits at this kill point to be killed.
         case stopped(String)
         /// An error a part logged: its category and its line of IDs and codes.
-        case log(String)
+        case logged(String)
         /// The launch ran its part to the end, and exits.
         case done
 
@@ -70,7 +70,7 @@
             case .discarding(let index, let capture): "discarding \(index) \(capture)"
             case .refused(let index, let code): "refused \(index) \(code)"
             case .stopped(let point): "stopped \(point)"
-            case .log(let line): "log \(line)"
+            case .logged(let line): "log " + line
             case .done: "done"
             }
         }
@@ -109,7 +109,7 @@
                 guard fields.count == 3, let index = int(1), !fields[2].isEmpty else { return nil }
                 return .refused(index: index, code: fields[2])
             case "stopped": return fields.count == 2 && !fields[1].isEmpty ? .stopped(fields[1]) : nil
-            case "log": return fields.count >= 3 ? .log(fields.dropFirst().joined(separator: " ")) : nil
+            case "log": return fields.count >= 3 ? .logged(fields.dropFirst().joined(separator: " ")) : nil
             case "done": return fields.count == 1 ? .done : nil
             default: return nil
             }

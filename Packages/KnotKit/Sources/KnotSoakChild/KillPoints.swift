@@ -134,7 +134,7 @@
 
         func write(_ record: LogRecord) {
             if echoesAll || record.level == .error || record.level == .fault {
-                Say.line(SoakLine.log("\(record.category.rawValue) \(record.line)").rendered)
+                Say.line(SoakLine.logged(record.category.rawValue + " " + record.line).rendered)
             }
             arming.pass("log:\(record.event)")
         }
