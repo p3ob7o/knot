@@ -235,7 +235,9 @@ public enum StoreCopies {
                     guard manager.fileExists(atPath: from.path) else { continue }
                     try fileLayer.rename(from, to: staging.appending(path: name, directoryHint: .isDirectory))
                 }
-                try fileLayer.syncFolder(staging)
+                // Every file and folder of the new store is on the drive before it is published
+                // (docs/architecture.md §6, rule 7).
+                try syncTree(staging, layer: fileLayer)
                 if manager.fileExists(atPath: aside.path) { try fileLayer.syncFolder(aside) }
                 // Published in one step: the store's place is never empty to a later open.
                 guard try ExclusiveRename.move(staging, to: root) else { throw KnotError.writeFailed }
@@ -256,6 +258,24 @@ public enum StoreCopies {
             }
         } catch {
             throw StoreErrors.knotError(error)
+        }
+    }
+
+    /// Syncs every file under `folder`, then every folder, the deepest first, `folder` last.
+    static func syncTree(_ folder: URL, layer: any FileLayer) throws {
+        var folders: [URL] = [folder]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey]
+        let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: keys)
+        while let url = walker?.nextObject() as? URL {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            if values.isDirectory == true {
+                folders.append(url)
+            } else if values.isRegularFile == true {
+                try layer.syncFile(url)
+            }
+        }
+        for url in folders.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
+            try layer.syncFolder(url)
         }
     }
 

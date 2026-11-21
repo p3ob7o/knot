@@ -218,6 +218,56 @@ import Testing
         }
         #expect(left.isEmpty, "Nothing is left of the restore but the store set aside: \(left)")
     }
+
+    /// A restore puts every file and folder of the new store on the drive before it publishes
+    /// it: the database, each recording and drawing, and each of their folders.
+    @Test func aRestoreSyncsTheNewStoreBeforeItPublishesIt() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 88)
+        _ = try await made.assets.place(Data("synthetic drawing".utf8), as: made.captures.ids.make(), kind: .ink)
+        let copy = try made.database.makeDailyCopy()
+        try made.database.close()
+        let locations = made.database.locations
+        let parent = locations.storeRoot.deletingLastPathComponent().standardizedFileURL.path + "/"
+        let staging = "\(StoreLocations.rootFolderName)-restoring-"
+        // A sync counts when it is made in the folder the new store is built in, before it
+        // takes the store's place.
+        @Sendable func built(_ url: URL) -> String? {
+            let path = url.standardizedFileURL.path
+            guard path.hasPrefix(parent) else { return nil }
+            let parts = path.dropFirst(parent.count).split(separator: "/", omittingEmptySubsequences: true)
+            guard let first = parts.first, first.hasPrefix(staging) else { return nil }
+            return parts.dropFirst().joined(separator: "/")
+        }
+        let syncedFiles = Recorded()
+        let syncedFolders = Recorded()
+        let layer = HookedFileLayer(
+            beforeSyncFile: { url in if let path = built(url) { syncedFiles.add(path) } },
+            refuseSync: { url in
+                if let path = built(url) { syncedFolders.add(path) }
+                return false
+            })
+        _ = try StoreCopies.restore(copy, at: locations, clock: made.clock, fileLayer: layer)
+        var files: Set<String> = [locations.database.lastPathComponent]
+        var expectedFolders: Set<String> = ["", "Assets"]
+        let assets = locations.storeRoot.appending(path: "Assets", directoryHint: .isDirectory)
+        let walker = FileManager.default.enumerator(at: assets, includingPropertiesForKeys: [.isDirectoryKey])
+        while let url = walker?.nextObject() as? URL {
+            let path = "Assets/" + url.standardizedFileURL.path.dropFirst(assets.standardizedFileURL.path.count + 1)
+            if (try url.resourceValues(forKeys: [.isDirectoryKey])).isDirectory == true {
+                expectedFolders.insert(path)
+            } else {
+                files.insert(path)
+            }
+        }
+        #expect(files.count >= 3, "The database, a recording and a drawing: \(files)")
+        #expect(files.subtracting(syncedFiles.all).isEmpty, "Files not synced: \(files.subtracting(syncedFiles.all))")
+        #expect(
+            expectedFolders.subtracting(syncedFolders.all).isEmpty,
+            "Folders not synced: \(expectedFolders.subtracting(syncedFolders.all))")
+    }
 }
 
 extension StoreCopies {
