@@ -21,7 +21,7 @@ enum SpeechCommand {
             return await run(
                 options, transcriber: SpeechAnalyzerTranscriber(locale: SpeechEvaluation.locale), output: .standard)
         #else
-            SpeechOutput.standard.error("Speech is not on this platform.")
+            SpeechOutput.standard.problem("Speech is not on this platform.")
             return EvalExit.modelMissing
         #endif
     }
@@ -42,10 +42,10 @@ enum SpeechCommand {
             }
             return EvalExit.ok
         } catch let stop as SpeechStop {
-            output.error(stop.message)
+            output.problem(stop.message)
             return stop.status
         } catch {
-            output.error("failed: \(type(of: error))")
+            output.problem("failed: \(type(of: error))")
             return EvalExit.failed
         }
     }
@@ -75,7 +75,7 @@ struct SpeechOutput: Sendable {
 
     func line(_ text: String) { write(text, false) }
 
-    func error(_ text: String) { write("knot-eval speech: \(text)", true) }
+    func problem(_ text: String) { write("knot-eval speech: \(text)", true) }
 
     static func number(_ value: Double?, places: Int = 3) -> String {
         guard let value else { return "-" }
@@ -363,7 +363,7 @@ enum SpeechEvaluation {
         // Any other name could say something about its recording, so it is neither read nor printed.
         let names = all.filter { readAloudKey($0) != nil || isNote($0) }
         if all.count > names.count {
-            output.error("left out \(all.count - names.count) recordings whose names are not of the two forms.")
+            output.problem("left out \(all.count - names.count) recordings whose names are not of the two forms.")
         }
         guard !names.isEmpty else {
             throw SpeechStop.inputMissing(
