@@ -195,18 +195,24 @@ with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as named:
     named.write("# made-up tests\n"
                 "WP-11 PR 1\tselftest-given-to-pr-one\tA test the first pull request holds\n"
                 "WP-11\tselftest-given-to-pr-two\tWP-11 PR 2 adds a test the second holds\n"
-                "WP-11\tselftest-given-to-package\tA test for the package's end\n")
+                "WP-11\tselftest-given-to-package\tA test for the package's end\n"
+                "WP-14 PR 1\tselftest-given-to-wp14-pr-one\tA test WP-14's first code pull request holds\n")
 k.NAMED_TESTS, k.code_text = named.name, dict
-def named_missing(branch, merged):
+def named_missing(branch, merged, package="WP-11"):
     k.merged_prs = lambda source: list(merged)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        status = k.cmd_named_tests("git", "WP-11", branch)
+        status = k.cmd_named_tests("git", package, branch)
     return status, sorted(w.rstrip(",") for w in out.getvalue().split() if w.startswith("selftest-"))
 assert named_missing("wp/11-engine", []) == (1, ["selftest-given-to-pr-one"]), named_missing("wp/11-engine", [])
 assert named_missing("wp/11-engine-2", one) == (1, ["selftest-given-to-pr-one", "selftest-given-to-pr-two"])
 assert named_missing("wp/11-engine-3", one * 2)[1] == ["selftest-given-to-package", "selftest-given-to-pr-one",
                                                        "selftest-given-to-pr-two"]
+# A note's branch is not the package's code (41b): WP-14's proof step under test leaves the
+# test given to its first code pull request waiting, and that pull request's branch, after
+# the note, requires it.
+assert named_missing("wp/14-note", [], "WP-14") == (0, []), named_missing("wp/14-note", [], "WP-14")
+assert named_missing("wp/14-cleaner", [("WP-14", True)], "WP-14") == (1, ["selftest-given-to-wp14-pr-one"])
 os.unlink(named.name)
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
@@ -881,14 +887,17 @@ first="$( [[ -f $ma/Fixtures/generated/verify-stamp.txt ]] && echo stamped || ec
 make_audio || true
 second="$(spoken)"
 # Bootstrap is read as shell, by its calls, not its text: a comment that names the helper is
-# no call of it, and the generator called in any quoting is a call.
+# no call of it, and the generator run in any quoting, or as the argument of another command
+# such as bash, is a call.
 bootstrap_ok="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/bootstrap.sh" <<'PY'
 import os, sys
 sys.path.insert(0, sys.argv[1])
 import knot_tool as k
 words = [k.command_words(k.shell_words(segment), {}, {}) for _, _, segment in k.shell_segments(open(sys.argv[2]).read())]
 names = [os.path.basename(w[0]) for w in words if w]
-print(1 if "knot_make_audio" in names and "generate.sh" not in names else 0)
+# The generator run in any way, as the command or as an argument, as in `bash generate.sh`.
+generator = any(os.path.basename(word) == "generate.sh" for w in words for word in w)
+print(1 if "knot_make_audio" in names and not generator else 0)
 PY
 )"
 if [[ $first == "stamped 1" && $second == 1 && $bootstrap_ok == 1 ]]; then
@@ -911,7 +920,9 @@ import os, sys
 text, out = open(sys.argv[1]).read(), sys.argv[2]
 fixtures = "      - name: The fixtures, with this tree's audio\n        run: scripts/verify.sh --only fixtures\n"
 tsan = "      - name: Package tests under Thread Sanitizer\n        run: scripts/verify.sh --only tsan\n"
-assert fixtures in text and tsan in text
+if fixtures + tsan not in text:
+    # The scripts' own workflow is not as the variants expect: its own check below says why.
+    sys.exit(0)
 both = fixtures + tsan
 variants = {
     "tsan-first": text.replace(both, tsan + fixtures),
@@ -1057,6 +1068,12 @@ printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] &
 # under the home folder.
 printf '[ -n "$KNOT_WR_FAIL" ] && [ "$1 $2" = "simctl delete" ] && { echo "An error was encountered processing the command (domain=NSCocoaErrorDomain, code=513): NSFilePath=$HOME/Library/Developer/CoreSimulator/Devices/U1" >&2; exit 1; }\nexit 0\n' >>"$wr/stub/xcrun"
 chmod +x "$wr/stub/xcrun"
+# A refusal names its target with no home folder in it either: a folder under the home
+# folder that is no worktree of the repository.
+mkdir -p "$wr/home/not-a-worktree"
+wr_refused_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" \
+    scripts/worktree-remove.sh "$wr/home/not-a-worktree" >"$wr/refused.out" 2>&1) || wr_refused_status=$?
 # A delete that fails prints simctl's message with no home folder in it either.
 wr_fail_status=0
 (cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 KNOT_WR_FAIL=1 \
@@ -1071,10 +1088,12 @@ if [[ $wr_status == 0 && "$(cat "$wr/out")" != *"$wr_home"* && "$(cat "$wr/out")
     "$(cat "$wr/out")" == *"removed the development store the home folder's Library/Containers/"* &&
     "$(cat "$wr/out")" == *"deleted the simulator $wr_id-iphone"* && ! -d $wr_tree &&
     $wr_fail_status != 0 && "$(cat "$wr/fail.out")" == *"FAIL infra-simulator-delete"*"NSFilePath=the home folder's Library/"* &&
-    "$(cat "$wr/fail.out")" != *"$wr_home"* && "$(cat "$wr/fail.out")" != *"$wr/home"* ]]; then
+    "$(cat "$wr/fail.out")" != *"$wr_home"* && "$(cat "$wr/fail.out")" != *"$wr/home"* &&
+    $wr_refused_status != 0 && "$(cat "$wr/refused.out")" == *"FAIL worktree-remove-not-worktree"*"the home folder's not-a-worktree"* &&
+    "$(cat "$wr/refused.out")" != *"$wr_home"* && "$(cat "$wr/refused.out")" != *"$wr/home"* ]]; then
     pass "worktree-remove.sh removes the worktree, its simulator and its store, and prints no path with the home folder in it, simctl's message included"
 else
-    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out"); a failed delete, status $wr_fail_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/fail.out")"
+    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out"); a failed delete, status $wr_fail_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/fail.out"); a refusal, status $wr_refused_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/refused.out")"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
