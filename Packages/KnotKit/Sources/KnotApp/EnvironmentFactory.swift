@@ -57,7 +57,9 @@ public enum EnvironmentFactory {
 
     private static func makeApp(shell: ShellPorts) -> AppComposition {
         #if DEBUG
-            if LiveConfiguration.selectsPreview(ProcessInfo.processInfo.arguments) {
+            if LiveConfiguration.selectsPreview(
+                ProcessInfo.processInfo.arguments, flavour: LiveConfiguration.currentFlavour())
+            {
                 let environment = shell.apply(to: .preview)
                 return AppComposition(
                     environment: environment, live: nil,

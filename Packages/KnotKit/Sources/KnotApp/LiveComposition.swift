@@ -112,6 +112,7 @@ public final class LiveComposition: Sendable {
 
         let locations: StoreLocations
         do throws(KnotError) {
+            if let refusal = configuration.refusal { throw refusal }
             locations = try StoreLocations.resolve(
                 flavour: configuration.flavour, platform: configuration.platform,
                 appContainer: configuration.appContainer, appGroup: configuration.appGroup,

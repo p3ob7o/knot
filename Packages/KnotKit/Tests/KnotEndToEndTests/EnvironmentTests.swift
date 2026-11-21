@@ -90,15 +90,50 @@ struct EnvironmentTests {
         }
     }
 
-    @Test("Only a debug build honours the launch arguments for .preview and a temporary store")
+    @Test("A debug development build honours the launch arguments for .preview and a temporary store")
     func launchArguments() {
-        #expect(LiveConfiguration.selectsPreview(["Knot", "-KnotPreview"]))
-        #expect(!LiveConfiguration.selectsPreview(["Knot"]))
-        #expect(LiveConfiguration.temporaryStoreName(in: ["Knot", "-KnotTemporaryStore", "smoke-1"]) == "smoke-1")
-        for refused in ["../up", ".hidden", "", "a/b", String(repeating: "x", count: 65), "é"] {
-            #expect(LiveConfiguration.temporaryStoreName(in: ["-KnotTemporaryStore", refused]) == nil, "\(refused)")
+        #expect(LiveConfiguration.selectsPreview(["Knot", "-KnotPreview"], flavour: .dev))
+        #expect(!LiveConfiguration.selectsPreview(["Knot"], flavour: .dev))
+        #expect(
+            LaunchArguments.read(["Knot", "-KnotTemporaryStore", "smoke-1"], flavour: .dev).temporaryStore
+                == .named("smoke-1"))
+        #expect(LaunchArguments.read(["Knot"], flavour: .dev).temporaryStore == .none)
+        for refused in ["../up", ".hidden", "", "a/b", String(repeating: "x", count: 65), "é", "-KnotPreview"] {
+            #expect(
+                LaunchArguments.read(["-KnotTemporaryStore", refused], flavour: .dev).temporaryStore == .refused,
+                "\(refused)")
         }
-        #expect(LiveConfiguration.temporaryStoreName(in: ["-KnotTemporaryStore"]) == nil)
+        #expect(LaunchArguments.read(["-KnotTemporaryStore"], flavour: .dev).temporaryStore == .refused)
+    }
+
+    @Test("A milestone build honours neither launch argument, whatever its configuration")
+    func milestoneBuildHonoursNoArgument() {
+        let arguments = ["Knot", "-KnotPreview", "-KnotTemporaryStore", "smoke-1"]
+        #expect(!LiveConfiguration.selectsPreview(arguments, flavour: .milestone))
+        #expect(
+            LaunchArguments.read(arguments, flavour: .milestone)
+                == LaunchArguments(preview: false, temporaryStore: .none))
+        #expect(LaunchArguments.read(["-KnotTemporaryStore", "../up"], flavour: .milestone).temporaryStore == .none)
+    }
+
+    /// A temporary store asked for by a name that is refused gets no store place, never the
+    /// build's default container, where a UI test would then write.
+    @Test("A refused temporary-store name gets no store, and says why")
+    func refusedTemporaryStoreGetsNoStore() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var configuration = folder.configuration()
+        configuration.refusal = .devStoreFolderInvalid
+        let composition = LiveComposition(configuration: configuration, seams: .forTests)
+        #expect(composition.locations == nil)
+        let report = try #require(await launch(composition))
+        #expect(report.outcome(of: .openStore) == .failed(KnotError.devStoreFolderInvalid.code))
+        await #expect(throws: KnotError.devStoreFolderInvalid) {
+            try await composition.environment.engine.begin(
+                CaptureRequest(kind: .typed, surface: .app, text: "a synthetic line for no store"))
+        }
+        // Nothing was made in the build's container.
+        #expect((try FileManager.default.contentsOfDirectory(atPath: folder.container.path)).isEmpty)
     }
 
     /// The app a UI test starts through `KnotLauncher` (Apps/UITestSupport) carries the mark

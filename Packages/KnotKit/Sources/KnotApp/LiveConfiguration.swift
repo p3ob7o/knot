@@ -37,11 +37,15 @@ public struct LiveConfiguration: Sendable {
     public var settingsSuite: String
     /// What the diagnostics export says about the build.
     public var build: BuildInfo
+    /// Why this build has no store place whatever `StoreLocations` would say: a temporary store
+    /// was asked for with a name that is refused. Such a build gets no store, never the default
+    /// one, where a UI test would then write.
+    public var refusal: KnotError?
 
     public init(
         flavour: StoreLocations.Flavour, platform: StoreLocations.Platform, appContainer: URL,
         appGroup: StoreLocations.AppGroup, devStoreFolder: String?, environment: [String: String],
-        milestoneLevel: MilestoneLevel?, settingsSuite: String, build: BuildInfo
+        milestoneLevel: MilestoneLevel?, settingsSuite: String, build: BuildInfo, refusal: KnotError? = nil
     ) {
         self.flavour = flavour
         self.platform = platform
@@ -52,6 +56,7 @@ public struct LiveConfiguration: Sendable {
         self.milestoneLevel = milestoneLevel
         self.settingsSuite = settingsSuite
         self.build = build
+        self.refusal = refusal
     }
 
     /// The configuration of this process, read from the main bundle and the launch arguments.
@@ -62,7 +67,7 @@ public struct LiveConfiguration: Sendable {
             return text
         }
         let bundleID = Bundle.main.bundleIdentifier ?? "knot"
-        let flavour: StoreLocations.Flavour = value("KnotFlavour") == "milestone" ? .milestone : .dev
+        let flavour = currentFlavour()
         // The build's configuration says whether it has an app group. The local signing
         // configuration of every agent, simulator and gate build carries neither the group nor
         // iCloud, and `KnotSyncAvailable` is `NO` there: both follow `KNOT_SIGNING`.
@@ -76,14 +81,18 @@ public struct LiveConfiguration: Sendable {
         }
         var appContainer = URL.applicationSupportDirectory
         var settingsSuite = "\(bundleID).v1.device"
-        #if DEBUG
-            if let name = temporaryStoreName(in: ProcessInfo.processInfo.arguments) {
-                appContainer = FileManager.default.temporaryDirectory
-                    .appending(path: "KnotTemporaryStore", directoryHint: .isDirectory)
-                    .appending(path: name, directoryHint: .isDirectory)
-                settingsSuite = "\(bundleID).v1.temporary.\(name)"
-            }
-        #endif
+        var refusal: KnotError?
+        switch LaunchArguments.read(ProcessInfo.processInfo.arguments, flavour: flavour).temporaryStore {
+        case .none:
+            break
+        case .named(let name):
+            appContainer = FileManager.default.temporaryDirectory
+                .appending(path: "KnotTemporaryStore", directoryHint: .isDirectory)
+                .appending(path: name, directoryHint: .isDirectory)
+            settingsSuite = "\(bundleID).v1.temporary.\(name)"
+        case .refused:
+            refusal = .devStoreFolderInvalid
+        }
         return LiveConfiguration(
             flavour: flavour, platform: .current, appContainer: appContainer, appGroup: appGroup,
             devStoreFolder: value("KnotDevStoreFolder"), environment: ProcessInfo.processInfo.environment,
@@ -92,32 +101,64 @@ public struct LiveConfiguration: Sendable {
             build: BuildInfo(
                 version: value("CFBundleShortVersionString") ?? "unversioned",
                 build: value("CFBundleVersion") ?? "unknown", flavour: flavour,
-                milestoneLevel: value("KnotMilestoneLevel").flatMap(MilestoneLevel.init(infoValue:))))
+                milestoneLevel: value("KnotMilestoneLevel").flatMap(MilestoneLevel.init(infoValue:))),
+            refusal: refusal)
     }
 
-    /// True when the launch arguments select `.preview`, which only a debug build honours.
-    public static func selectsPreview(_ arguments: [String]) -> Bool {
+    /// The flavour the main bundle's Info.plist names: `milestone`, or `dev` for anything else.
+    public static func currentFlavour() -> StoreLocations.Flavour {
+        (Bundle.main.infoDictionary?["KnotFlavour"] as? String) == "milestone" ? .milestone : .dev
+    }
+
+    /// True when the launch arguments select `.preview`: only in a debug build that is not a
+    /// milestone build.
+    public static func selectsPreview(_ arguments: [String], flavour: StoreLocations.Flavour) -> Bool {
+        LaunchArguments.read(arguments, flavour: flavour).preview
+    }
+}
+
+/// What a build makes of its launch arguments. Only a debug build honours them, and a milestone
+/// build never does, whatever its configuration.
+public struct LaunchArguments: Hashable, Sendable {
+    public enum TemporaryStore: Hashable, Sendable {
+        case none
+        case named(String)
+        /// Asked for with a name that is not one path component of letters, digits, `.`, `_`
+        /// and `-`, at most 64 characters, not starting with a dot or a dash, or with no name at all.
+        case refused
+    }
+
+    public var preview: Bool
+    public var temporaryStore: TemporaryStore
+
+    public static func read(_ arguments: [String], flavour: StoreLocations.Flavour) -> LaunchArguments {
         #if DEBUG
-            arguments.contains(previewArgument)
+            guard flavour != .milestone else { return LaunchArguments(preview: false, temporaryStore: .none) }
+            var temporaryStore = TemporaryStore.none
+            if let index = arguments.firstIndex(of: LiveConfiguration.temporaryStoreArgument) {
+                if index + 1 < arguments.count, let name = Self.accepted(arguments[index + 1]) {
+                    temporaryStore = .named(name)
+                } else {
+                    temporaryStore = .refused
+                }
+            }
+            return LaunchArguments(
+                preview: arguments.contains(LiveConfiguration.previewArgument), temporaryStore: temporaryStore)
         #else
-            false
+            return LaunchArguments(preview: false, temporaryStore: .none)
         #endif
     }
 
     #if DEBUG
-        /// The name that follows `-KnotTemporaryStore`, when it is one path component of letters,
-        /// digits, `.`, `_` and `-` that does not start with a dot, at most 64 characters.
-        static func temporaryStoreName(in arguments: [String]) -> String? {
-            guard let index = arguments.firstIndex(of: temporaryStoreArgument), index + 1 < arguments.count else {
-                return nil
-            }
-            let name = arguments[index + 1]
+        private static func accepted(_ name: String) -> String? {
             let allowed = name.unicodeScalars.allSatisfy { scalar in
                 scalar.isASCII
                     && (scalar.properties.isAlphabetic || ("0"..."9").contains(scalar)
                         || "._-".unicodeScalars.contains(scalar))
             }
-            guard allowed, !name.isEmpty, name.count <= 64, !name.hasPrefix(".") else { return nil }
+            guard allowed, !name.isEmpty, name.count <= 64, !name.hasPrefix("."), !name.hasPrefix("-") else {
+                return nil
+            }
             return name
         }
     #endif
