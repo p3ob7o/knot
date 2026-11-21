@@ -268,6 +268,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func retryConversions() async {
         await endPendingDiscards()
         await retryConversions(dueOnly: false)
+        // A conversion that failed again leaves its row's end pending: made now.
+        await endPendingDiscards()
     }
 
     private var housekeepingScheduled = false
@@ -330,7 +332,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             firstWrite = entries[capture]?.startFailed == true
             entries[capture]?.answered = true
             entries[capture]?.startFailed = false
-            if firstWrite { await startedAfterAll(capture) }
+            if firstWrite {
+                log.capture(capture, "capture_started_late")
+                await startedAfterAll(capture)
+            }
             return publish(capture)
         }
         if firstWrite, let follows = entries[capture]?.follows { await endFollowed(follows, by: capture, call: call) }
@@ -348,6 +353,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             firstWrite = entries[capture]?.startFailed == true
             let at = firstWrite ? startedAfter(capture) : nil
             let ended = try await endHeld(capture, at: at)
+            if firstWrite { log.capture(capture, "capture_started_late") }
             entries[capture]?.startFailed = false
             entries[capture]?.answered = true
             return ended
@@ -901,6 +907,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                     }
                 }
                 _ = try await endHeld(open, at: startedAt)
+                log.capture(newCapture, "followed_capture_ended", .segment(SegmentID(open)))
             }
         } catch {
             log.failure(error.about(capture: open), "capture_not_ended")
@@ -952,6 +959,21 @@ public actor StandardCaptureEngine: CaptureEngine {
             do throws(KnotError) {
                 _ = try await notes.end(end)
             } catch {
+                // Tried again in the engine's old work, when the store next answers.
+                pendingDiscards.insert(id)
+                log.failure(error.about(capture: id), "late_row_not_ended")
+            }
+        } else if entry.kind == .voice, case .failed(let code) = entry.outcome {
+            // A recording that would not convert, whose row arrives after it ended failed off the
+            // store path: its row ends failed too, now or when the store next answers (settled
+            // point 4).
+            let end = CaptureEnd(
+                captureID: id, endedAt: clock.now(), outcome: .failed(code), revision: entry.durableRevision)
+            do throws(KnotError) {
+                _ = try await notes.end(end)
+                pendingFailures[id] = nil
+            } catch {
+                pendingFailures[id] = end
                 log.failure(error.about(capture: id), "late_row_not_ended")
             }
         } else if entry.outcome != .open {
