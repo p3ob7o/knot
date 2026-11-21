@@ -78,12 +78,12 @@ final class KnotMacWindowTests: XCTestCase {
         XCTAssertEqual(result, .completed, message)
     }
 
-    /// Clicks the main window's close button and waits until the window is off screen.
+    /// Closes the main window with the Window menu's Close item, which brings the app forward
+    /// and closes its key window, and waits until the window is off screen. A click on the
+    /// title bar's close button did not always close it while another app was in front.
     @MainActor
     private func closeTheWindow(of app: XCUIApplication) {
-        let window = app.windows.firstMatch
-        XCTAssertTrue(window.waitForExistence(timeout: 30))
-        window.buttons[XCUIIdentifierCloseWindow].click()
+        app.menuItems["performClose:"].click()
         waitForWindowOnScreen(false, "The window closed.")
     }
 
