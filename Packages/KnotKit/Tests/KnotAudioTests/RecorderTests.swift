@@ -2,6 +2,7 @@ import AVFAudio
 import Foundation
 import KnotCore
 import KnotTestSupport
+import Synchronization
 import Testing
 
 @testable import KnotAudio
@@ -296,6 +297,134 @@ import Testing
         if case .ended(let audio)? = endings.first { #expect(audio.ending == .discarded && audio.workingFile == nil) }
         #expect(recordingFolder(folder.locations).isEmpty, "\(recordingFolder(folder.locations))")
     }
+
+    /// A discard removes the working file first and then the manifest, as the ending and after
+    /// a stop: a death between the two leaves a manifest with no audio, which recovery ends as a
+    /// recording with none, never audio that recovery would store. After finding 21.
+    @Test(arguments: [false, true])
+    func aDiscardRemovesTheWorkingFileFirst(afterAStop: Bool) async throws {
+        let folder = try ScratchFolder()
+        let layer = RemovalLayer()
+        let recorder = LiveRecorder(
+            locations: folder.locations, layer: layer, input: injected(frames: 16_000),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)))
+        let session = try await recorder.start(request())
+        await durable(atLeast: 16_000, of: session)
+        if afterAStop { _ = await session.stop() }
+        await session.discard()
+        let order = layer.removed.filter { $0 == "caf" || $0 == "json" }
+        #expect(order == ["caf", "json"], "Removed in the order \(order)")
+        #expect(recordingFolder(folder.locations).isEmpty, "\(recordingFolder(folder.locations))")
+    }
+
+    /// A removal asked for while the start runs, its input still opening, is refused: the
+    /// capture is the recording's from the start's first step, and its files are made after the
+    /// open. The start then records as if nothing was asked. After finding 21.
+    @Test func aRemovalWhileTheStartRunsIsRefused() async throws {
+        let folder = try ScratchFolder()
+        let opening = Flag()
+        let gate = Flag()
+        let recorder = recorder(
+            folder.locations, input: GatedInput(inner: injected(frames: 16_000), opening: opening, gate: gate))
+        let request = request()
+        let starting = Task { try await recorder.start(request) }
+        #expect(await SuiteWait.until("the input's open") { opening.value })
+        let refused = await #expect(throws: KnotError.self) {
+            try await recorder.removeWorkingFile(of: request.captureID)
+        }
+        #expect(refused?.code == KnotError.illegalTransition.code)
+        gate.set()
+        let session = try await starting.value
+        await durable(atLeast: 16_000, of: session)
+        #expect(await session.stop().frames == 16_000)
+    }
+
+    /// A discard whose removal of the working file the drive refuses says so, in a log line
+    /// with the capture and the error's code, as the ending and after a stop. The working file
+    /// and its manifest stay, and launch recovery removes the leftover of a row that a discard
+    /// ended (finding 20, set aside).
+    @Test(arguments: [false, true])
+    func aDiscardWhoseRemovalFailsSaysSo(afterAStop: Bool) async throws {
+        let folder = try ScratchFolder()
+        let kept = KeptLog()
+        let recorder = LiveRecorder(
+            locations: folder.locations, layer: RemovalLayer(refusing: "caf"), input: injected(frames: 16_000),
+            settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)), log: KnotLog(.audio, sink: kept))
+        let request = request()
+        let session = try await recorder.start(request)
+        await durable(atLeast: 16_000, of: session)
+        if afterAStop { _ = await session.stop() }
+        await session.discard()
+        let lines = kept.lines("recording_files_not_removed")
+        #expect(lines.count == 1, "\(kept.all.map(\.event))")
+        #expect(lines.first?.fields.contains(.capture(request.captureID)) == true, "\(lines)")
+        #expect(lines.first?.fields.contains(.code(KnotError.writeFailed.code)) == true, "\(lines)")
+        #expect(exists(folder.locations.recordingAudio(request.captureID, format: .caf)))
+        #expect(exists(folder.locations.recordingManifest(request.captureID)))
+    }
+}
+
+/// The drive's file layer, which notes the extension of each file it is asked to remove, in
+/// order, and refuses to remove files with the extension `refusing`, as a drive can.
+final class RemovalLayer: FileLayer {
+    private let disk = PosixFileLayer()
+    private let refusing: String?
+    private let seen = Mutex<[String]>([])
+
+    init(refusing: String? = nil) { self.refusing = refusing }
+
+    /// The extensions of the files removed or refused, in order.
+    var removed: [String] { seen.withLock { $0 } }
+
+    func remove(_ url: URL) throws(KnotError) {
+        seen.withLock { $0.append(url.pathExtension) }
+        if url.pathExtension == refusing { throw KnotError.writeFailed.with(ErrorContext(posixError: EPERM)) }
+        try disk.remove(url)
+    }
+
+    func createFolder(_ url: URL) throws(KnotError) { try disk.createFolder(url) }
+    func write(_ data: Data, to url: URL) throws(KnotError) { try disk.write(data, to: url) }
+    func syncFile(_ url: URL) throws(KnotError) { try disk.syncFile(url) }
+    func rename(_ source: URL, to destination: URL) throws(KnotError) { try disk.rename(source, to: destination) }
+    func syncFolder(_ url: URL) throws(KnotError) { try disk.syncFolder(url) }
+    func read(_ url: URL) throws(KnotError) -> Data { try disk.read(url) }
+    func exists(_ url: URL) -> Bool { disk.exists(url) }
+    func entryKind(_ url: URL) -> FileEntryKind? { disk.entryKind(url) }
+    func contents(of folder: URL) throws(KnotError) -> [String] { try disk.contents(of: folder) }
+}
+
+/// Injected audio whose open waits until a test opens its gate, and says that it has begun.
+struct GatedInput: AudioInput {
+    let inner: InjectedAudio
+    let opening: Flag
+    let gate: Flag
+
+    func prepare() async {}
+
+    func open() async throws(KnotError) -> any OpenAudioInput {
+        opening.set()
+        await SuiteWait.until("the gate") { gate.value }
+        return try await inner.open()
+    }
+}
+
+/// A flag that one task sets and another reads.
+final class Flag: Sendable {
+    private let state = Mutex(false)
+    var value: Bool { state.withLock { $0 } }
+    func set() { state.withLock { $0 = true } }
+}
+
+/// A log that keeps its lines for the test to read.
+final class KeptLog: LogSink {
+    private let records = Mutex<[LogRecord]>([])
+
+    func write(_ record: LogRecord) { records.withLock { $0.append(record) } }
+
+    var all: [LogRecord] { records.withLock { $0 } }
+
+    /// The lines of one event.
+    func lines(_ event: String) -> [LogRecord] { all.filter { $0.event == event } }
 }
 
 /// The file layer of the drive, except that syncing a working file fails with `failure`: as a
