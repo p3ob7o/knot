@@ -164,6 +164,95 @@ import Testing
         }
     }
 
+    /// A stop that arrives while the start runs, at either point, takes the tap away and stops
+    /// the engine if the start put them there, once the start is over and before the stop
+    /// returns. The stop is asked for from inside the start, by a hook, and the start goes on only
+    /// once it has been asked for: either by a stop of the recording or by the tap's ending.
+    @Test(arguments: [Inside.tapByStop, .tapByEnding, .startByStop])
+    func aStopDuringTheStartLeavesNothingRunning(inside: Inside) async throws {
+        let (opened, engine, hardware) = try await Self.openStandIn()
+        let stopping = StopTask()
+        let wrongRate = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))
+        engine.whenAt(inside == .startByStop ? .starting : .installingTheTap) { engine in
+            if inside == .tapByEnding, let buffer = Self.silence(wrongRate) {
+                // A buffer the file cannot take: the tap ends the recording, which stops the input.
+                engine.deliver(buffer)
+            } else {
+                stopping.start { await opened.stop() }
+            }
+            Self.waitUntil { opened.stopRequested }
+        }
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        try opened.start(format: format) { delivery in
+            if case .ended = delivery { stopping.start { await opened.stop() } }
+        }
+        await stopping.wait()
+        let expected =
+            inside == .startByStop ? ["installTap", "start", "stop", "removeTap"] : ["installTap", "removeTap"]
+        #expect(engine.calls == expected, "\(engine.calls)")
+        await opened.stop()
+        #expect(engine.calls == expected, "A second stop does nothing more.")
+        #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1, "\(hardware.uses)")
+    }
+
+    /// A stop that came before the start leaves nothing to start: no tap, no engine.
+    @Test func aStopBeforeTheStartLeavesNothingToStart() async throws {
+        let (opened, engine, _) = try await Self.openStandIn()
+        await opened.stop()
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        try opened.start(format: format) { _ in }
+        #expect(engine.calls.isEmpty, "\(engine.calls)")
+    }
+
+    /// A stop after a start that ran whole stops the engine and takes the tap away, once.
+    @Test func aStopAfterTheStartLeavesNothingRunning() async throws {
+        let (opened, engine, _) = try await Self.openStandIn()
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        try opened.start(format: format) { _ in }
+        await opened.stop()
+        await opened.stop()
+        #expect(engine.calls == ["installTap", "start", "stop", "removeTap"], "\(engine.calls)")
+    }
+
+    enum Inside: String, Sendable {
+        case tapByStop
+        case tapByEnding
+        case startByStop
+    }
+
+    /// The microphone opened on a stand-in engine at 48 kHz, which opens nothing.
+    static func openStandIn() async throws -> (OpenMicrophone, StandInEngine, StandInHardware) {
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        let engine = StandInEngine(tapFormat: format)
+        let hardware = StandInHardware(permission: true, engine: engine)
+        let opened = try await MicrophoneInput(hardware: hardware, policy: { nil }).open()
+        return (try #require(opened as? OpenMicrophone), engine, hardware)
+    }
+
+    /// 1,600 frames of silence in `format`.
+    static func silence(_ format: AVAudioFormat) -> AVReadOnlyAudioPCMBuffer? {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1_600) else { return nil }
+        buffer.frameLength = 1_600
+        return AVReadOnlyAudioPCMBuffer(copying: buffer)
+    }
+
+    /// Blocks the calling thread until `condition` holds, for at most `SuiteWait.limit`.
+    static func waitUntil(_ condition: () -> Bool) {
+        let deadline = ContinuousClock.now + SuiteWait.limit
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("Waited \(SuiteWait.limit) inside the start.")
+                return
+            }
+            usleep(500)
+        }
+    }
+
     /// The signs of a process, for the policy's table.
     struct Signs: Sendable, CustomTestStringConvertible {
         var environment: [String: String] = [:]
@@ -180,18 +269,41 @@ import Testing
     }
 }
 
+/// One stop, run in a task of its own the first time it is asked for, and waited for.
+final class StopTask: Sendable {
+    private let task = Mutex<Task<Void, Never>?>(nil)
+
+    func start(_ body: @escaping @Sendable () async -> Void) {
+        task.withLock { task in
+            if task == nil { task = Task { await body() } }
+        }
+    }
+
+    func wait() async {
+        let task = task.withLock { $0 }
+        if let task {
+            _ = await SuiteWait.value("the stop") { await task.value }
+        } else {
+            Issue.record("No stop was asked for.")
+        }
+    }
+}
+
 /// Hardware that opens nothing: it records each use and answers as it was told, and it never
-/// makes an engine.
+/// makes a real engine.
 final class StandInHardware: HardwareAudio {
     private let permission: Bool
     private let session: KnotError?
+    private let engine: StandInEngine?
     private let used = Mutex<[String]>([])
 
     var uses: [String] { used.withLock { $0 } }
 
-    init(permission: Bool = false, session: KnotError? = nil) {
+    /// With no `engine`, making one fails, as it does when there is no input.
+    init(permission: Bool = false, session: KnotError? = nil, engine: StandInEngine? = nil) {
         self.permission = permission
         self.session = session
+        self.engine = engine
     }
 
     func recordPermission() async -> Bool {
@@ -208,8 +320,79 @@ final class StandInHardware: HardwareAudio {
         used.withLock { $0.append("deactivate") }
     }
 
-    func makeEngine() throws(KnotError) -> AVAudioEngine {
+    func makeEngine() throws(KnotError) -> any InputEngine {
         used.withLock { $0.append("engine") }
-        throw KnotError.noInputDevice
+        guard let engine else { throw KnotError.noInputDevice }
+        return engine
+    }
+}
+
+/// An engine that opens nothing. It records each call, and runs a hook inside the tap's
+/// installation or inside the start, so that a test delivers an ending at that point.
+final class StandInEngine: InputEngine {
+    enum Point: Sendable {
+        case installingTheTap
+        case starting
+    }
+
+    let tapFormat: AVAudioFormat
+    let hardwareFormat: AVAudioFormat
+    private let state = Mutex<(calls: [String], tap: (@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?)>(([], nil))
+    private let hook = Mutex<(point: Point, run: @Sendable (StandInEngine) -> Void)?>(nil)
+
+    init(tapFormat: AVAudioFormat, hardwareFormat: AVAudioFormat? = nil) {
+        self.tapFormat = tapFormat
+        self.hardwareFormat = hardwareFormat ?? tapFormat
+    }
+
+    var calls: [String] { state.withLock { $0.calls } }
+
+    /// Runs `body` inside the call at `point`, before that call returns.
+    func whenAt(_ point: Point, _ body: @escaping @Sendable (StandInEngine) -> Void) {
+        hook.withLock { $0 = (point, body) }
+    }
+
+    /// Hands the installed tap a buffer, as the input would.
+    func deliver(_ buffer: AVReadOnlyAudioPCMBuffer) {
+        let tap = state.withLock { $0.tap }
+        tap?(buffer)
+    }
+
+    func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
+        throws(KnotError)
+    {
+        state.withLock {
+            $0.calls.append("installTap")
+            $0.tap = tap
+        }
+        run(at: .installingTheTap)
+    }
+
+    func removeTap() {
+        state.withLock {
+            $0.calls.append("removeTap")
+            $0.tap = nil
+        }
+    }
+
+    func start() throws(KnotError) {
+        state.withLock { $0.calls.append("start") }
+        run(at: .starting)
+    }
+
+    func stop() {
+        state.withLock { $0.calls.append("stop") }
+    }
+
+    func configurationChanges() -> AsyncStream<Void> {
+        AsyncStream { _ in }
+    }
+
+    private func run(at point: Point) {
+        let body = hook.withLock { hook -> (@Sendable (StandInEngine) -> Void)? in
+            guard let hook, hook.point == point else { return nil }
+            return hook.run
+        }
+        body?(self)
     }
 }

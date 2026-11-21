@@ -33,7 +33,7 @@ public struct MicrophoneInput: AudioInput {
         if policy() != nil { throw KnotError.noInputDevice }
         guard await hardware.recordPermission() else { throw KnotError.microphonePermissionRefused }
         try hardware.activateSession()
-        let engine: AVAudioEngine
+        let engine: any InputEngine
         do {
             engine = try hardware.makeEngine()
         } catch {
@@ -42,7 +42,7 @@ public struct MicrophoneInput: AudioInput {
         }
         // The hardware's format: a rate or a channel count of zero means no input is available,
         // and the engine would throw, or raise an exception, at the start.
-        let format = engine.inputNode.outputFormat(forBus: 0)
+        let format = engine.tapFormat
         guard format.sampleRate > 0, format.channelCount > 0 else {
             hardware.deactivateSession()
             throw KnotError.noInputDevice
@@ -60,7 +60,25 @@ protocol HardwareAudio: Sendable {
     func activateSession() throws(KnotError)
     /// Gives the audio session back, on iOS and watchOS.
     func deactivateSession()
-    func makeEngine() throws(KnotError) -> AVAudioEngine
+    func makeEngine() throws(KnotError) -> any InputEngine
+}
+
+/// The engine's input node, as the microphone uses it. A test passes one that opens nothing,
+/// records each call, and lets the test deliver an ending at a point of its choosing.
+protocol InputEngine: Sendable {
+    /// The format the input node's tap delivers: its output format.
+    var tapFormat: AVAudioFormat { get }
+    /// The hardware's format: the input node's input format.
+    var hardwareFormat: AVAudioFormat { get }
+    /// Installs the tap, which hands over each buffer the input delivers.
+    func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
+        throws(KnotError)
+    func removeTap()
+    func start() throws(KnotError)
+    func stop()
+    /// One element each time the engine changes its configuration and stops itself, as when the
+    /// hardware changes.
+    func configurationChanges() -> AsyncStream<Void>
 }
 
 /// The real hardware.
@@ -94,39 +112,113 @@ struct SystemHardwareAudio: HardwareAudio {
         #endif
     }
 
-    func makeEngine() throws(KnotError) -> AVAudioEngine {
-        AVAudioEngine()
+    func makeEngine() throws(KnotError) -> any InputEngine {
+        SystemInputEngine(engine: AVAudioEngine())
+    }
+}
+
+/// `AVAudioEngine`'s input node.
+struct SystemInputEngine: InputEngine {
+    let engine: AVAudioEngine
+
+    var tapFormat: AVAudioFormat { engine.inputNode.outputFormat(forBus: 0) }
+    var hardwareFormat: AVAudioFormat { engine.inputNode.inputFormat(forBus: 0) }
+
+    func installTap(bufferSize: AVAudioFrameCount, _ tap: @escaping @Sendable (AVReadOnlyAudioPCMBuffer) -> Void)
+        throws(KnotError)
+    {
+        do {
+            try engine.inputNode.installAudioTap(onBus: 0, bufferSize: bufferSize, format: nil) { buffer, _ in
+                tap(buffer)
+            }
+        } catch {
+            throw KnotError.noInputDevice.with(ErrorContext(engineCode: (error as NSError).code))
+        }
+    }
+
+    func removeTap() {
+        engine.inputNode.removeTap(onBus: 0)
+    }
+
+    func start() throws(KnotError) {
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            throw KnotError.audioSessionBusy.with(ErrorContext(engineCode: (error as NSError).code))
+        }
+    }
+
+    func stop() {
+        engine.stop()
+    }
+
+    func configurationChanges() -> AsyncStream<Void> {
+        let engine = self.engine
+        return AsyncStream { continuation in
+            let watching = Task {
+                for await _ in NotificationCenter.default.notifications(
+                    named: .AVAudioEngineConfigurationChange, object: engine)
+                {
+                    continuation.yield()
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in watching.cancel() }
+        }
     }
 }
 
 /// The microphone opened for one recording.
+///
+/// The engine is touched in two places only, never at once: inside the start, and inside a stop
+/// that no start is running beside. A stop asked for while the start runs waits for it, and the
+/// start then takes away what it put there. So a stop takes the tap away and stops the engine
+/// whenever it arrives, during the start, after it or twice, and returns only once nothing will
+/// be delivered.
 final class OpenMicrophone: OpenAudioInput {
     let sampleRate: Double
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
-    private let engine: AVAudioEngine
+    private let engine: any InputEngine
     private let hardware: any HardwareAudio
     private let state = Mutex(State())
 
     private struct State {
-        var running = false
-        var closed = false
+        /// True while the start runs.
+        var starting = false
+        /// True once a stop has been asked for.
+        var stopped = false
+        var tapInstalled = false
+        var engineStarted = false
+        var sessionReleased = false
         /// Watches for the engine's configuration change.
         var watcher: Task<Void, Never>?
+        /// Stops asked for while the start runs, waiting for it.
+        var waiting: [CheckedContinuation<Void, Never>] = []
     }
 
-    init(engine: AVAudioEngine, sampleRate: Double, hardware: any HardwareAudio) {
+    init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio) {
         self.engine = engine
         self.sampleRate = sampleRate
         self.hardware = hardware
     }
 
+    /// True once a stop has been asked for, which a test reads to order a stop inside a start.
+    var stopRequested: Bool { state.withLock { $0.stopped } }
+
     func start(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void) throws(KnotError) {
-        let input = engine.inputNode
-        do {
+        // A stop that came first leaves nothing to start.
+        let proceed = state.withLock { state in
+            guard !state.stopped, !state.starting, !state.tapInstalled else { return false }
+            state.starting = true
+            return true
+        }
+        guard proceed else { return }
+        var failure: KnotError?
+        do throws(KnotError) {
             // The tap delivers the hardware's format, every 100 ms or more; each buffer is mixed
             // down to one channel in the working file's format before it is written.
-            try input.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(sampleRate / 10), format: nil) {
-                buffer, _ in
+            try engine.installTap(bufferSize: AVAudioFrameCount(sampleRate / 10)) { buffer in
                 // An empty buffer holds nothing to write and says nothing about the input.
                 guard buffer.frameLength > 0 else { return }
                 guard let mono = Downmix.mono(buffer, into: format) else {
@@ -136,46 +228,74 @@ final class OpenMicrophone: OpenAudioInput {
                 }
                 deliver(.audio(mono))
             }
-        } catch {
-            throw KnotError.noInputDevice.with(ErrorContext(engineCode: (error as NSError).code))
-        }
-        let changes = NotificationCenter.default.notifications(named: .AVAudioEngineConfigurationChange, object: engine)
-        let watcher = Task {
-            // The engine stopped itself because the hardware changed. WP-12's second pull request
-            // restarts it into the file's rate; until then the recording ends here, kept.
-            for await _ in changes {
-                deliver(.ended(.lost))
-                return
+            state.withLock { $0.tapInstalled = true }
+            let changes = engine.configurationChanges()
+            let watcher = Task {
+                // The engine stopped itself because the hardware changed. WP-12's second pull
+                // request restarts it into the file's rate; until then the recording ends, kept.
+                for await _ in changes {
+                    deliver(.ended(.lost))
+                    return
+                }
             }
-        }
-        state.withLock { $0.watcher = watcher }
-        engine.prepare()
-        do {
-            try engine.start()
+            state.withLock { $0.watcher = watcher }
+            // A stop asked for meanwhile: the engine is not started, and the microphone never opens.
+            if !state.withLock({ $0.stopped }) {
+                try engine.start()
+                state.withLock { $0.engineStarted = true }
+            }
         } catch {
-            input.removeTap(onBus: 0)
-            state.withLock { $0.watcher?.cancel() }
-            throw KnotError.audioSessionBusy.with(ErrorContext(engineCode: (error as NSError).code))
+            failure = error
         }
-        state.withLock { $0.running = true }
+        // The start is over. A stop asked for while it ran, or a failure, takes away what it put
+        // there, and the stops that waited for it go on.
+        let (undo, waiting) = state.withLock { state in
+            state.starting = false
+            let undo = state.stopped || failure != nil
+            defer { state.waiting = [] }
+            return (undo, state.waiting)
+        }
+        if undo { tearDown() }
+        for stop in waiting { stop.resume() }
+        if let failure { throw failure }
     }
 
     func stop() async {
-        let (wasRunning, first) = state.withLock { state in
+        let starting = state.withLock { state in
+            state.stopped = true
+            return state.starting
+        }
+        if starting {
+            await withCheckedContinuation { (stop: CheckedContinuation<Void, Never>) in
+                let goOn = state.withLock { state in
+                    guard state.starting else { return true }
+                    state.waiting.append(stop)
+                    return false
+                }
+                if goOn { stop.resume() }
+            }
+        }
+        tearDown()
+        let release = state.withLock { state in
+            defer { state.sessionReleased = true }
+            return !state.sessionReleased
+        }
+        if release { hardware.deactivateSession() }
+    }
+
+    /// Stops the engine and takes the tap away, if they are there, once.
+    private func tearDown() {
+        let (engineStarted, tapInstalled, watcher) = state.withLock { state in
             defer {
-                state.running = false
-                state.closed = true
-                state.watcher?.cancel()
+                state.engineStarted = false
+                state.tapInstalled = false
                 state.watcher = nil
             }
-            return (state.running, !state.closed)
+            return (state.engineStarted, state.tapInstalled, state.watcher)
         }
-        guard first else { return }
-        if wasRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-        hardware.deactivateSession()
+        watcher?.cancel()
+        if engineStarted { engine.stop() }
+        if tapInstalled { engine.removeTap() }
     }
 }
 
