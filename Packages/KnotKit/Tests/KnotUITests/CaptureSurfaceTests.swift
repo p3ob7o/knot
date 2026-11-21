@@ -41,7 +41,7 @@ import Testing
     }
 
     @Test func destinationIsFixedAtTheFirstKeystroke() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let earlier = try #require(try await rig.type("first line"))
         let model = rig.capture()
@@ -69,7 +69,7 @@ import Testing
     }
 
     @Test func anEmptyCaptureLeavesNothing() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let model = rig.capture()
         await model.refresh()
@@ -83,7 +83,7 @@ import Testing
     }
 
     @Test func newNoteForcesANewNoteInsideTheWindow() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let earlier = try #require(try await rig.type("about the roof"))
         let model = rig.capture()
@@ -105,7 +105,7 @@ import Testing
     }
 
     @Test func newNoteEndsTheTypedCaptureWhereItStands() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let model = rig.capture()
         await model.refresh()
@@ -122,7 +122,7 @@ import Testing
     }
 
     @Test func anOpenNoteAppendsToItself() async throws {
-        let rig = PreviewRig()
+        let rig = await PreviewRig.make()
         defer { rig.remove() }
         let older = try #require(try await rig.type("an older note"))
         let newer = try #require(try await rig.type("a newer note", placement: .newNote))
