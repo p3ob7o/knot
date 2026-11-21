@@ -46,12 +46,15 @@ public enum StoreCopies {
     /// another. Under it the version is read again, and a migration whose version is there
     /// already does nothing. Otherwise a checked copy of the store as it is, which is required,
     /// then the migration and its version. The copy is made and checked under the same exclusion,
-    /// so it is of the version the migration replaces, and a copy already there for that version
-    /// is kept, never replaced. The newest pre-migration copy is kept until the following
-    /// migration. A failure leaves the store at the last version it reached whole.
+    /// so it is of the version the migration replaces: it is the copy for that version, and it
+    /// replaces one already there with a rename that replaces in one step. One already there is
+    /// what an attempt left that died before its migration committed, and the store may have
+    /// changed at that version since, as an older build run in between. The newest pre-migration
+    /// copy is kept until the following migration. A failure leaves the store at the last
+    /// version it reached whole.
     static func migrate(
         pool: DatabasePool, from version: Int, migrations: [StoreSchema.Migration], locations: StoreLocations,
-        files: StoreFiles, publishing: StoreFiles, clock: any WallClock, hooks: StoreHooks
+        files: StoreFiles, clock: any WallClock, hooks: StoreHooks
     ) throws {
         for migration in migrations where migration.version > version {
             let kept = try pool.barrierWriteWithoutTransaction { db -> URL? in
@@ -68,8 +71,7 @@ public enum StoreCopies {
                     defer { try? source.close() }
                     try source.read { reader in
                         try makeCopy(
-                            of: reader, to: made, files: files, publishing: publishing, hooks: hooks,
-                            killPoint: .insidePreMigrationCopy)
+                            of: reader, to: made, files: files, hooks: hooks, killPoint: .insidePreMigrationCopy)
                     }
                     try migration.apply(db)
                     try db.execute(sql: "PRAGMA user_version = \(migration.version)")

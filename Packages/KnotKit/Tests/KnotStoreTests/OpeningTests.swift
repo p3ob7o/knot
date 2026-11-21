@@ -370,6 +370,41 @@ import Testing
             ])
     }
 
+    /// The copy made before a migration is the copy for its version: it replaces one that an
+    /// attempt which died before its migration committed left, so the copy kept for the way
+    /// back holds what changed at that version since, as an older build run in between.
+    @Test func aMigrationsCopyReplacesOneAnAttemptLeft() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let locations = StoreLocations.testing(root: root)
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 32, clock: clock)
+        var database = try openStore(in: root, clock: clock, ids: ids)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        _ = try await NoteRepository(database: database).record(
+            captures.typed("A synthetic first line", from: 0, to: 1))
+        try database.close()
+        let failing = StoreSchema.Migration(version: 2) { _ in throw KnotError.diskFull }
+        await expectFailure(.diskFull) { try openStore(in: root, migrations: StoreSchema.migrations + [failing]) }
+        let copy = StoreCopies.preMigrationCopy(locations, from: 1)
+        #expect(FileManager.default.fileExists(atPath: copy.path), "The attempt left its copy.")
+        // An older build, at the same version, records more.
+        database = try openStore(in: root, clock: clock, ids: ids)
+        let later = try await NoteRepository(database: database).record(
+            captures.typed("A synthetic later line", from: 2, to: 3, placement: .newNote))
+        try database.close()
+        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
+        try openStore(in: root, migrations: StoreSchema.migrations + [v2]).close()
+        #expect(try version(of: locations) == 2)
+        let kept = try DatabaseQueue(path: copy.path, configuration: StoreDatabase.configuration(readonly: true))
+        defer { try? kept.close() }
+        let held = try await kept.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM note WHERE id = ?", arguments: [later.noteID.description])
+        }
+        #expect(held == 1, "The kept copy holds the change made at its version.")
+    }
+
     /// Every connection waits five seconds for a lock: the writer and the readers.
     @Test func everyConnectionWaitsFiveSeconds() async throws {
         let folders = TemporaryFolders()
