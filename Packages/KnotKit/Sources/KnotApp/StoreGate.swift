@@ -127,14 +127,26 @@ struct GatedNoteStore: NoteStore {
     /// then every signal the store gives.
     func changeSignals() -> AsyncStream<StoreCursor> {
         gate.relay { ports in
-            AsyncStream { continuation in
-                let task = Task {
-                    if let cursor = try? await ports.notes.cursor() { continuation.yield(cursor) }
-                    for await signal in ports.notes.changeSignals() { continuation.yield(signal) }
-                    continuation.finish()
-                }
-                continuation.onTermination = { _ in task.cancel() }
+            Self.fromOpening(subscribe: { ports.notes.changeSignals() }, current: { try? await ports.notes.cursor() })
+        }
+    }
+
+    /// The store's current value once it opens, so that a view that read nothing before reads
+    /// again, then every signal after it. It subscribes before it reads the value, so a commit
+    /// that lands while the value is read, as recovery's ingest of a line typed before a kill
+    /// can, is signalled and never missed.
+    static func fromOpening<Element: Sendable>(
+        subscribe: @escaping @Sendable () -> AsyncStream<Element>,
+        current: @escaping @Sendable () async -> Element?
+    ) -> AsyncStream<Element> {
+        AsyncStream { continuation in
+            let signals = subscribe()
+            let task = Task {
+                if let value = await current() { continuation.yield(value) }
+                for await signal in signals { continuation.yield(signal) }
+                continuation.finish()
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
