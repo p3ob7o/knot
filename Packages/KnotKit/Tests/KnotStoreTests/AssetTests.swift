@@ -61,4 +61,41 @@ import Testing
         #expect(try await made.assets.find(made.audio, kind: .audio) != nil)
         expectConsistent(made.database)
     }
+
+    /// Two placements of one asset at once, in one process or two: the first to publish its
+    /// file wins, the other is refused as a conflict, and the stored bytes are the first's.
+    @Test func twoPlacementsAtOnceKeepTheFirstBytes() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 85)
+        let written: AssetID = made.captures.ids.make()
+        let moved: AssetID = made.captures.ids.make()
+        let source = folders.make("source").appending(path: "recording.m4a", directoryHint: .notDirectory)
+        try Data([1]).write(to: source)
+        let writeGate = Gate()
+        let moveGate = Gate()
+        // The slower placement stops with its bytes written and synced, before its rename.
+        let slower = AssetRepository(
+            locations: made.database.locations,
+            layer: HookedFileLayer(beforeSyncFile: { url in
+                if url.lastPathComponent.hasSuffix(DurableFile.partialSuffix) { writeGate.stop() }
+                if url.standardizedFileURL == source.standardizedFileURL { moveGate.stop() }
+            }))
+        let placing = Task.detached { try await slower.place(Data([1]), as: written, kind: .audio) }
+        defer { writeGate.release() }
+        #expect(await writeGate.untilReached())
+        let first = try await made.assets.place(Data([2]), as: written, kind: .audio)
+        writeGate.release()
+        await expectFailure(.assetConflict) { try await placing.value }
+        #expect(try await made.assets.find(written, kind: .audio)?.sha256 == first.sha256)
+
+        let moving = Task.detached { try await slower.move(source, as: moved, kind: .audio) }
+        defer { moveGate.release() }
+        #expect(await moveGate.untilReached())
+        let placed = try await made.assets.place(Data([2]), as: moved, kind: .audio)
+        moveGate.release()
+        await expectFailure(.assetConflict) { try await moving.value }
+        #expect(try await made.assets.find(moved, kind: .audio)?.sha256 == placed.sha256)
+        #expect(FileManager.default.fileExists(atPath: source.path), "A refused move keeps its source.")
+    }
 }

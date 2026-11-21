@@ -22,3 +22,32 @@ enum ExclusiveRename {
         throw base.with(ErrorContext(posixError: number))
     }
 }
+
+/// A file layer whose rename never replaces: a rename onto a place that is taken fails with
+/// `EEXIST` and changes nothing. `DurableFile` places through it where a placement must not
+/// replace a file that another one published. Its rename acts on the system's files, whatever
+/// the base layer; everything else is the base layer's.
+struct ExclusiveRenameLayer: FileLayer {
+    let base: any FileLayer
+
+    /// True for the failure of a rename onto a place that was taken.
+    static func isTaken(_ error: KnotError) -> Bool {
+        error.code == KnotError.writeFailed.code && error.context.posixError == EEXIST
+    }
+
+    func rename(_ source: URL, to destination: URL) throws(KnotError) {
+        guard try ExclusiveRename.move(source, to: destination) else {
+            throw KnotError.writeFailed.with(ErrorContext(posixError: EEXIST))
+        }
+    }
+
+    func createFolder(_ url: URL) throws(KnotError) { try base.createFolder(url) }
+    func write(_ data: Data, to url: URL) throws(KnotError) { try base.write(data, to: url) }
+    func syncFile(_ url: URL) throws(KnotError) { try base.syncFile(url) }
+    func syncFolder(_ url: URL) throws(KnotError) { try base.syncFolder(url) }
+    func remove(_ url: URL) throws(KnotError) { try base.remove(url) }
+    func read(_ url: URL) throws(KnotError) -> Data { try base.read(url) }
+    func exists(_ url: URL) -> Bool { base.exists(url) }
+    func entryKind(_ url: URL) -> FileEntryKind? { base.entryKind(url) }
+    func contents(of folder: URL) throws(KnotError) -> [String] { try base.contents(of: folder) }
+}

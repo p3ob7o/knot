@@ -9,15 +9,20 @@ import KnotCore
 /// renames and syncs the folder, so a file is on the drive before `place` or `move` returns and
 /// before the row that points to it is committed (§6, rule 7). A file's place comes from its ID
 /// and kind alone. A stored file is never replaced: the same ID with other content is refused.
+/// Its rename is exclusive, so of two placements at once, in one process or two, the first to
+/// publish its file wins, and the other is answered by what is there.
 public final class AssetRepository: AssetStore {
     private let locations: StoreLocations
     private let layer: any FileLayer
     private let files: StoreFiles
+    /// The same placing, with a rename that never replaces a file another placement published.
+    private let exclusive: StoreFiles
 
     public init(locations: StoreLocations, layer: any FileLayer = PosixFileLayer()) {
         self.locations = locations
         self.layer = layer
         self.files = locations.durableFiles(layer: layer)
+        self.exclusive = locations.durableFiles(layer: ExclusiveRenameLayer(base: layer))
     }
 
     public func place(_ data: Data, as asset: AssetID, kind: AssetKind) async throws(KnotError) -> StoredFile {
@@ -27,7 +32,15 @@ public final class AssetRepository: AssetStore {
             guard stored.sha256 == sha else { throw KnotError.assetConflict.with(.init(assetID: asset)) }
             return stored
         }
-        try files.place(data, at: url)
+        do {
+            try exclusive.place(data, at: url)
+        } catch  where ExclusiveRenameLayer.isTaken(error) {
+            // Another placement published first: the same content is the stored file.
+            guard let stored = try find(url, asset: asset, kind: kind), stored.sha256 == sha else {
+                throw KnotError.assetConflict.with(.init(assetID: asset))
+            }
+            return stored
+        }
         return StoredFile(asset: asset, kind: kind, url: url, byteCount: Int64(data.count), sha256: sha)
     }
 
@@ -46,7 +59,17 @@ public final class AssetRepository: AssetStore {
             return stored
         }
         let (sha, byteCount) = try Self.digestAndSize(of: source)
-        try files.move(source, to: url)
+        do {
+            try exclusive.move(source, to: url)
+        } catch  where ExclusiveRenameLayer.isTaken(error) {
+            // Another placement published first: the same content is the stored file, and the
+            // source goes; other content is refused, and the source stays.
+            guard let stored = try find(url, asset: asset, kind: kind), stored.sha256 == sha else {
+                throw KnotError.assetConflict.with(.init(assetID: asset))
+            }
+            try files.remove(source)
+            return stored
+        }
         return StoredFile(asset: asset, kind: kind, url: url, byteCount: byteCount, sha256: sha)
     }
 
