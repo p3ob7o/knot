@@ -521,7 +521,7 @@ struct RestoreJournal: Codable, Hashable, Sendable {
     /// read, busy or failing, nothing changes, the journal stays, and the error that stopped the
     /// reading is thrown: the open refuses, and the next one tries again. Either database alone
     /// is enough to tell, so a store too damaged to read, the one a restore replaces, never
-    /// holds the restore back.
+    /// holds the restore back, and with no folder at the build's name nothing is read at all.
     static func settle(at locations: StoreLocations, layer: any FileLayer, finishing: Bool = true) throws {
         let manager = FileManager.default
         let file = url(of: locations)
@@ -534,6 +534,10 @@ struct RestoreJournal: Codable, Hashable, Sendable {
             // the store's place. What was built goes.
             if manager.fileExists(atPath: staging.path) { try manager.removeItem(at: staging) }
         case .built:
+            // With no folder at the build's name there is nothing left to publish, to finish or
+            // to remove: the restore is settled, whatever the store's place holds and whether it
+            // can be read, as after a failed restore over a damaged store that removed its build.
+            guard manager.fileExists(atPath: staging.path) else { break }
             switch try journal.whereBuilt(at: locations) {
             case .published:
                 _ = try journal.finish(at: locations, layer: layer)

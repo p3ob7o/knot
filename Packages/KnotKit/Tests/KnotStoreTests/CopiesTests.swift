@@ -297,6 +297,33 @@ import Testing
         try reopened.close()
     }
 
+    /// A restore over a store too damaged to read that removed its build and died before its
+    /// journal went: with no folder at the build's name there is nothing left to publish, to
+    /// finish or to remove, so the restore is settled and its journal goes, whatever the store's
+    /// place holds. A restore over that store then succeeds.
+    @Test func aBuiltJournalWithNoBuildLeftIsSettled() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 130)
+        let copy = folders.make("kept").appending(path: "kept.sqlite", directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: made.database.makeDailyCopy(), to: copy)
+        try made.database.close()
+        let locations = made.database.locations
+        let journal = RestoreJournal(stamp: 3, storeID: made.captures.ids.make(), phase: .built)
+        try journal.write(at: locations, layer: PosixFileLayer())
+        #expect(chmod(locations.database.path, 0) == 0)
+        try RestoreJournal.settle(at: locations, layer: PosixFileLayer())
+        #expect(!RestoreJournal.isPending(at: locations), "The journal goes.")
+        made.clock.advance(by: 60)
+        let restored = try StoreCopies.restore(copy, at: locations, clock: made.clock)
+        let reopened = try openStore(in: root)
+        #expect(reopened.storeID == restored.storeID, "The restore over the unreadable store.")
+        expectConsistent(reopened)
+        try reopened.close()
+        _ = chmod(restored.setAside.appending(path: locations.database.lastPathComponent).path, 0o644)
+    }
+
     /// A restore puts every file and folder of the new store on the drive before it publishes
     /// it: the database, each recording and drawing, and each of their folders.
     @Test func aRestoreSyncsTheNewStoreBeforeItPublishesIt() async throws {
