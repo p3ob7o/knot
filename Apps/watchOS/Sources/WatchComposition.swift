@@ -60,9 +60,9 @@ struct WatchComposition: Sendable {
         }
         environment = KnotAudioLive.wire(environment, locations: locations, input: input)
         environment = KnotUILive.wire(environment)
-        // The link's entry point for the Watch comes with WP-17's pull request ahead of its
-        // second. Until it is on main the composition has no link, and so no coordinator.
-        environment = KnotLinkLive.wire(environment)
+        // The Watch's link, with its outbox in the Watch's own folder. Until WP-17's second pull
+        // request brings the session, no iPhone is in reach: a recording waits in the outbox.
+        environment = KnotLinkLive.wire(environment, locations: locations)
         return coordinated(environment, device: deviceID(in: locations, ids: environment.ids), pressClock: clock)
     }
 
@@ -130,8 +130,9 @@ struct WatchComposition: Sendable {
         private static func preview(_ preview: WatchPreview) -> WatchComposition {
             let root = temporaryFolder("KnotWatchPreview")
             var environment = AppEnvironment.makePreview(root: root)
-            if preview.startFails, let recorder = environment.recorder as? ScriptedRecorder {
-                recorder.failNextStarts(with: KnotError.microphonePermissionRefused)
+            if let recorder = environment.recorder as? ScriptedRecorder {
+                if preview.startFails { recorder.failNextStarts(with: KnotError.microphonePermissionRefused) }
+                if preview.endsAtLimit { recorder.setScript(ScriptedRecorder.Script(endsBySelf: .limitReached)) }
             }
             let system = FakeLinkSystem(receiving: root.appending(path: "Received", directoryHint: .isDirectory))
             environment = KnotLinkLive.wire(

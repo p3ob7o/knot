@@ -4,33 +4,93 @@ import KnotLink
 import KnotUI
 import Observation
 
-/// What the record screen says under its control. Every outcome of a press has words, and
-/// nothing implies that Knot is recording until the recording is live (docs/product-spec.md
-/// §4.5).
+/// What the record screen says under its control. Every outcome of a press has words, and so
+/// has a recording that stopped by itself. Nothing implies that Knot is recording until the
+/// recording is live (docs/product-spec.md §4.5).
 enum RecordStatus: Equatable, Sendable {
     /// Nothing to say: the app has just opened, or a press is starting a recording.
     case ready
     /// The recording is live.
     case recording
-    /// The recording stopped and is kept on the Watch, to be sent to the iPhone.
-    case saved
-    /// The recording stopped and is kept on the Watch, but a step failed for good, so it
-    /// cannot be sent.
-    case savedNotSendable
-    /// A tap-started recording stopped within a second, or one that held no audio.
-    case nothingKept
+    /// The recording stopped at a press, and this became of it.
+    case stopped(RecordFate)
+    /// A tap-started recording stopped within a second: nothing was kept.
+    case tooShort
     /// The recording could not start, for this reason.
     case couldNotStart(RecordFailure)
+    /// The recording stopped by itself, for this reason, and this became of it.
+    case stoppedEarly(EarlyStop, RecordFate)
 
     /// The words on the screen, or `nil` for none.
     var text: String? {
         switch self {
         case .ready: nil
         case .recording: String(localized: "Recording")
+        case .stopped(let fate): fate.text
+        case .tooShort: String(localized: "Too short. Nothing was kept.")
+        case .couldNotStart(let failure): String(localized: "Couldn't start recording. \(failure.text)")
+        case .stoppedEarly(let reason, let fate): String(localized: "Recording stopped. \(reason.text) \(fate.text)")
+        }
+    }
+}
+
+/// What became of a recording that stopped.
+enum RecordFate: Equatable, Sendable {
+    /// Kept on the Watch, to be sent to the iPhone.
+    case saved
+    /// Kept on the Watch, but a step failed for good, so it cannot be sent.
+    case savedNotSendable
+    /// It held no audio, so nothing is kept.
+    case nothingRecorded
+
+    init(_ outcome: WatchCoordinator.StopOutcome) {
+        switch outcome {
+        case .sent, .acknowledged: self = .saved
+        case .kept(_, let error): self = error.isFinal ? .savedNotSendable : .saved
+        case .endedWithoutAudio: self = .nothingRecorded
+        }
+    }
+
+    var text: String {
+        switch self {
         case .saved: String(localized: "Saved")
         case .savedNotSendable: String(localized: "Saved on this Watch. It can't be sent to the iPhone.")
-        case .nothingKept: String(localized: "Too short. Nothing was kept.")
-        case .couldNotStart(let failure): String(localized: "Couldn't start recording. \(failure.text)")
+        case .nothingRecorded: String(localized: "Nothing was kept.")
+        }
+    }
+
+    /// What VoiceOver says of it.
+    var announcement: Announcement { self == .nothingRecorded ? .recordingDiscarded : .recordingStopped }
+}
+
+/// Why a recording stopped by itself (docs/product-spec.md §4.2 and §4.4).
+enum EarlyStop: Equatable, Sendable {
+    case limitReached
+    case interrupted
+    case inputLost
+    case diskFull
+    case writeFailed
+    case other
+
+    init(_ ending: RecordingEnding) {
+        switch ending {
+        case .limitReached: self = .limitReached
+        case .interrupted: self = .interrupted
+        case .inputLost: self = .inputLost
+        case .diskFull: self = .diskFull
+        case .writeFailed: self = .writeFailed
+        case .stopped, .recovered, .discarded: self = .other
+        }
+    }
+
+    var text: String {
+        switch self {
+        case .limitReached: String(localized: "It reached the 30-minute limit.")
+        case .interrupted: String(localized: "A call or another app took the microphone.")
+        case .inputLost: String(localized: "The microphone went away.")
+        case .diskFull: String(localized: "This Watch is full.")
+        case .writeFailed: String(localized: "It couldn't be written further.")
+        case .other: String(localized: "It ended.")
         }
     }
 }
@@ -79,10 +139,22 @@ final class RecordScreenModel {
     @ObservationIgnored private let composition: WatchComposition
     @ObservationIgnored private let announcer: any Announcer
     @ObservationIgnored private var launched = false
+    /// The recordings that ended by themselves, so that a start reported after its own end
+    /// does not show the control as recording.
+    @ObservationIgnored private var endedByThemselves: Set<CaptureID> = []
 
+    /// Subscribes to the coordinator's endings at once, before launch and before the first
+    /// press, since a listener hears only what ends after it subscribes.
     init(composition: WatchComposition, announcer: any Announcer = VoiceOverAnnouncer()) {
         self.composition = composition
         self.announcer = announcer
+        if let endings = composition.coordinator?.endings() {
+            Task { [weak self] in
+                for await ended in endings {
+                    self?.ended(ended)
+                }
+            }
+        }
     }
 
     /// The record control's phase as the control shows it. While a recording starts it shows
@@ -134,25 +206,19 @@ final class RecordScreenModel {
     ) async {
         switch outcome {
         case .started(let capture):
+            // It may have ended by itself already, and said so.
+            guard !endedByThemselves.contains(capture) else { return }
             phase = .recording(capture)
             status = .recording
             announcer.announce(.recordingStarted)
         case .stopped(let stop):
+            let fate = RecordFate(stop)
             phase = .idle
-            switch stop {
-            case .sent, .acknowledged:
-                status = .saved
-                announcer.announce(.recordingStopped)
-            case .kept(_, let error):
-                status = error.isFinal ? .savedNotSendable : .saved
-                announcer.announce(.recordingStopped)
-            case .endedWithoutAudio:
-                status = .nothingKept
-                announcer.announce(.recordingDiscarded)
-            }
+            status = .stopped(fate)
+            announcer.announce(fate.announcement)
         case .discarded:
             phase = .idle
-            status = .nothingKept
+            status = .tooShort
             announcer.announce(.recordingDiscarded)
         case .failedToStart(let error):
             phase = .idle
@@ -164,5 +230,15 @@ final class RecordScreenModel {
             guard let before else { return }
             phase = await coordinator.isRecording ? before : .idle
         }
+    }
+
+    /// A recording that ended by itself: at its limit, by a call, or because its input or its
+    /// drive failed. It is where it will stay when this is told.
+    private func ended(_ ended: WatchCoordinator.RecordingEndedByItself) {
+        endedByThemselves.insert(ended.captureID)
+        let fate = RecordFate(ended.outcome)
+        phase = .idle
+        status = .stoppedEarly(EarlyStop(ended.ending), fate)
+        announcer.announce(fate.announcement)
     }
 }

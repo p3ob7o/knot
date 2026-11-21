@@ -12,7 +12,7 @@ final class RecordScreenTests: XCTestCase {
     /// The app on the preview environment, with each press dated `gap` seconds after the one
     /// before.
     @MainActor
-    private func launchPreview(gap: Double, _ more: [String] = []) -> XCUIApplication {
+    func launchPreview(gap: Double, _ more: [String] = []) -> XCUIApplication {
         XCUIApplication.launchedWatch([WatchLaunch.previewArgument, WatchLaunch.pressGapArgument, "\(gap)"] + more)
     }
 
@@ -22,7 +22,7 @@ final class RecordScreenTests: XCTestCase {
     }
 
     @MainActor
-    private func waitForLabel(_ element: XCUIElement, _ label: String) -> Bool {
+    func waitForLabel(_ element: XCUIElement, _ label: String) -> Bool {
         let predicate = NSPredicate(format: "label == %@", label)
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 30)
             == .completed
@@ -77,6 +77,58 @@ final class RecordScreenTests: XCTestCase {
     }
 }
 
+extension RecordScreenTests {
+    @MainActor
+    func testARecordingThatStopsByItselfSaysWhyAndIsSaved() throws {
+        let app = launchPreview(gap: 2, [WatchLaunch.endsAtLimitArgument])
+        let record = app.buttons["knot.record"]
+        XCTAssertTrue(record.waitForExistence(timeout: 30))
+        record.tap()
+        XCTAssertTrue(
+            waitForLabel(
+                app.staticTexts["knot.status"], "Recording stopped. It reached the 30-minute limit. Saved"))
+        XCTAssertTrue(waitForLabel(record, "Start recording"))
+        try app.auditAccessibility()
+    }
+}
+
+/// The smoke test on the real composition: the live recorder, the coordinator and the outbox,
+/// on injected audio and a temporary store, since a simulator refuses the microphone
+/// (docs/architecture.md §8). Press, wait over a second, press, and "Saved" is on the screen.
+final class RealCompositionSmokeTests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testARecordingOnTheRealCompositionIsSaved() throws {
+        let app = XCUIApplication.launchedWatch([WatchLaunch.injectedAudioArgument])
+        let record = app.buttons["knot.record"]
+        let status = app.staticTexts["knot.status"]
+        XCTAssertTrue(record.waitForExistence(timeout: 30))
+        record.tap()
+        XCTAssertTrue(waitForLabel(record, "Stop recording"))
+        XCTAssertTrue(waitForLabel(status, "Recording"))
+        try app.auditAccessibility()
+        // The second press comes more than a second after the first. A wait of at least that
+        // long is all this needs: a loaded Mac only makes it longer.
+        let atLeastASecond = XCTestExpectation(description: "over a second passes")
+        atLeastASecond.isInverted = true
+        _ = XCTWaiter().wait(for: [atLeastASecond], timeout: 1.5)
+        record.tap()
+        XCTAssertTrue(waitForLabel(status, "Saved"))
+        XCTAssertTrue(waitForLabel(record, "Start recording"))
+        try app.auditAccessibility()
+    }
+
+    @MainActor
+    private func waitForLabel(_ element: XCUIElement, _ label: String) -> Bool {
+        let predicate = NSPredicate(format: "label == %@", label)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 60)
+            == .completed
+    }
+}
+
 extension XCUIApplication {
     /// The settings of the test run that the app takes too: the strict cooperative pool, which
     /// makes a blocked thread of Swift's pool show up as a hang in the app as in a package test.
@@ -101,6 +153,7 @@ final class WatchLaunchTests: XCTestCase {
     func testAReleaseBuildIgnoresEveryArgument() {
         let every = [
             WatchLaunch.previewArgument, WatchLaunch.injectedAudioArgument, WatchLaunch.startFailsArgument,
+            WatchLaunch.endsAtLimitArgument,
             WatchLaunch.pressGapArgument, "2",
         ]
         XCTAssertEqual(WatchLaunch.mode(arguments: every, honoursDebugArguments: false), .live)
@@ -124,6 +177,10 @@ final class WatchLaunchTests: XCTestCase {
                 ],
                 honoursDebugArguments: true),
             .preview(WatchPreview(startFails: true, pressGap: 0.2)))
+        XCTAssertEqual(
+            WatchLaunch.mode(
+                arguments: [WatchLaunch.previewArgument, WatchLaunch.endsAtLimitArgument], honoursDebugArguments: true),
+            .preview(WatchPreview(endsAtLimit: true)))
         // A gap that is not a number of seconds is left out.
         XCTAssertEqual(
             WatchLaunch.mode(
