@@ -29,6 +29,7 @@ What the build Mac has today, for every first message:
 - A hook refuses `git add -A`, `git add -u` and a commit inside a compound command. A thread stages files by name, runs `git commit -F <file>` as a command of its own, and gives `gh pr create` its description with `--body-file`.
 - A thread records each commit in UTC, as `AGENTS.md` says: `TZ=UTC git commit -F <file>`. The hook lets that form through.
 - No hardware microphone, ever. A simulator's microphone is the Mac's own, so no recording path runs in a simulator.
+- No Mac UI test synthesizes an event on this Mac: no click, no key, no menu, no `activate()`. The runner's events are real ones that go to whatever app is in front, and Paolo works at this Mac. A Mac UI test launches, reads the accessibility tree, runs the audit and ends the app, and what it must enter comes through a debug-only launch argument. What needs real typing or clicking is a row of Paolo's checklist, or runs on the hosted runner (docs/architecture.md §17). The main display is whatever Paolo has set: on 2026-11-21 it was a virtual display, mirrored.
 - A test leaves no file outside its own folders, and a file of a defaults suite that a test wrote counts too (docs/architecture.md §17).
 - No suite has a bound that a loaded machine can miss. Every wait of the suites ends through `SuiteWait` after ten minutes, with an issue that names what it waited for, and a test that holds something back bounds its own calls into what it tests the same way (docs/architecture.md §17). On main, three calls in `NoteStoreFakeTests.swift` that are made during a hold do not yet: WP-02's third pull request bounds them.
 - A package test reads `Fixtures/generated/` only through `FixtureFiles`, before any model check, and every run that runs package tests speaks the audio first. A missing fixture fails a test, and a test skips only on a missing model (docs/architecture.md §17).
@@ -61,6 +62,7 @@ A top-level thread does not wake the orchestrator by ending. The RESULT line tha
 - A proof step's code stays on `wp/<number>-proof` with no pull request, and its note merges from `wp/<number>-note`. The orchestrator reads a short note itself, and the squash message says that no second agent did.
 - WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from another model.
 - The implementer fixes the findings. After two rounds the orchestrator decides what is left. It writes every finding it sets aside in the pull request and in the journal.
+- Paolo gave a rule on 2026-11-21, when he dropped finding 85: "Stop focusing on such edge cases." The orchestrator reads it so, and this is its reading, not his words: after a review's second round, a finding that is no lost capture, is not on a milestone checklist's path and is no cheap test of core code is recorded as a known limit, and no further round is run for it. A pull request whose first review found no loss gets one review.
 - A reviewer's test that goes into a suite is run many times and under load before it merges, and is read for two calls started as tasks whose order it relies on: such an order is made with a hook (docs/architecture.md §17). The gate's replay runs a taken test at least 30 times. On 2026-11-20 one such test passed on the build Mac every time and failed the hosted check on `main`.
 
 ## The merge queue
@@ -92,6 +94,8 @@ A pull request that changes the gate, or a contract that others build on, is tri
 At each milestone tag, the build of that tag makes a seeded synthetic store, `KnotStoreCrashHost seed Packages/KnotKit/Tests/KnotStoreTests/SeededStores/<tag>`, and the result is committed, so that later versions are tested against the stores that earlier milestones made (docs/architecture.md §7).
 
 Before a milestone install, before Paolo installs anything, read the built Watch app's entitlements and its provisioning profile for the app group, and the same for each app and each extension. A build that says it has a group and finds no container fails with a typed error (docs/architecture.md §7). Neither a simulator nor a locally signed build can show it.
+
+A milestone build is the Release configuration, `-configuration Release` (docs/dev-setup.md). Its build is rehearsed before the milestone's last pull requests are in, with no flag that lets Xcode change the developer account, such as `-allowProvisioningUpdates`, so that what the signing needs from Paolo, the App IDs and profiles of the milestone identifiers among it, is known early.
 
 ## What needs Paolo
 
