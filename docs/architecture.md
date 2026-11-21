@@ -591,7 +591,7 @@ Rules:
 - `scripts/release.sh` takes the App Store Connect key as a file path only. In a dry run it prints the names of its variables and never their values. After a failed upload it says to check App Store Connect before a retry. It belongs to WP-43.
 - `scripts/sdk-path.sh <platform> <framework>` prints where the Swift interfaces of the pinned Xcode are (§21).
 - Formatting uses `swift format` from the toolchain with the checked-in configuration. After WP-01 merges, `scripts/` belongs to the orchestrator.
-- A launch of the Mac app by a script or a test ignores saved window state: the launch step and the Mac UI tests pass `-ApplePersistenceIgnoreState YES`. Every development build shares one bundle ID, and so one saved window state, so a window closed once on the build Mac's desktop left every later launch with no window, in every worktree and at the gate. A launch that shows no window is read against saved state and the desktop before the code. No agent resets an app's container or its saved state by hand.
+- A launch of the Mac app by a script or a test ignores saved window state: the launch step and the Mac UI tests pass `-ApplePersistenceIgnoreState YES` as the first arguments. The pair is not seen when a flag that takes no value, such as `-KnotPreview`, comes before it. Every development build shares one bundle ID, and so one saved window state, so a window closed once on the build Mac's desktop left every later launch with no window, in every worktree and at the gate. A launch that shows no window is read against saved state and the desktop before the code. No agent resets an app's container or its saved state by hand.
 
 **The gate's depth.** A fixed table maps the changed paths to a depth, and the gate applies it without anyone choosing:
 
