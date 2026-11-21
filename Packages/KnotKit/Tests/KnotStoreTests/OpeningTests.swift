@@ -410,6 +410,93 @@ import Testing
         }
         return digests
     }
+
+    /// A write-ahead log the open cannot read refuses the open with the error that stopped the
+    /// reading, and the store's folder stays as it was: the open never falls through to the store.
+    @Test func aLogThatCannotBeReadRefusesTheOpenUntouched() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 121)
+        try await made.database.pool.writeWithoutTransaction { db in
+            _ = try db.checkpoint(.truncate)
+            try db.execute(sql: "PRAGMA user_version = 99")
+        }
+        let locations = StoreLocations.testing(root: folders.make())
+        try FileManager.default.copyItem(at: made.database.locations.storeRoot, to: locations.storeRoot)
+        try? FileManager.default.removeItem(atPath: locations.database.path + "-shm")
+        let log = locations.database.path + "-wal"
+        let before = try Self.digests(locations.storeRoot)
+        #expect(before.keys.contains("knot.sqlite-wal"))
+        #expect(chmod(log, 0) == 0)
+        await expectFailure(.writeFailed) { try StoreDatabase.open(locations: locations, role: .app) }
+        #expect(chmod(log, 0o644) == 0)
+        #expect(try Self.digests(locations.storeRoot) == before, "The folder is as it was.")
+    }
+
+    /// The version is read from the log as SQLite reads it, from the newest committed image of
+    /// the first page: after each of several commits, with the log cut short at each frame and
+    /// within one, with a frame spoiled, and after the log started again over older frames. Each
+    /// time, the version read is the one SQLite reads from a copy of the two files.
+    @Test func theLogIsReadAsSQLiteReadsIt() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let database = try openStore(in: folders.make())
+        let main = database.locations.database
+        let log = URL(fileURLWithPath: main.path + "-wal")
+        try await database.pool.writeWithoutTransaction { db in try db.execute(sql: "PRAGMA wal_autocheckpoint = 0") }
+        func headerVersion() throws -> Int {
+            let header = try Data(contentsOf: main).prefix(100)
+            return header.withUnsafeBytes {
+                Int(Int32(bitPattern: UInt32(bigEndian: $0.loadUnaligned(fromByteOffset: 60, as: UInt32.self))))
+            }
+        }
+        func sqliteReads(_ piece: Data) throws -> Int {
+            let place = folders.make("sqlite")
+            let copy = place.appending(path: "knot.sqlite", directoryHint: .notDirectory)
+            try FileManager.default.copyItem(at: main, to: copy)
+            try piece.write(to: URL(fileURLWithPath: copy.path + "-wal"))
+            let queue = try DatabaseQueue(path: copy.path)
+            defer { try? queue.close() }
+            return try queue.read { try Int.fetchOne($0, sql: "PRAGMA user_version") ?? 0 }
+        }
+        func check(_ label: String) throws {
+            let data = try Data(contentsOf: log)
+            guard data.count > 32 else { return }
+            let pageSize = data.withUnsafeBytes {
+                Int(UInt32(bigEndian: $0.loadUnaligned(fromByteOffset: 8, as: UInt32.self)))
+            }
+            var cuts: Set<Int> = [0, 16, 32, data.count]
+            var offset = 32
+            while offset + 24 + pageSize <= data.count {
+                cuts.formUnion([offset + 24 + pageSize / 2, offset + 24 + pageSize])
+                offset += 24 + pageSize
+            }
+            var pieces = cuts.sorted().map { data.prefix($0) }
+            // A spoiled byte in the last frame's page.
+            var spoiled = data
+            spoiled[data.count - pageSize / 2] ^= 0xFF
+            pieces.append(spoiled)
+            for piece in pieces {
+                let place = folders.make("log").appending(path: "log", directoryHint: .notDirectory)
+                try piece.write(to: place)
+                let read = try WriteAheadLog.committedVersion(of: place) ?? headerVersion()
+                #expect(read == (try sqliteReads(piece)), "\(label), \(piece.count) of \(data.count) bytes")
+            }
+        }
+        for version in 2...5 {
+            try await database.pool.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA user_version = \(version)")
+                try db.execute(sql: "INSERT INTO setting (key, value) VALUES ('synthetic_\(version)', 'x')")
+            }
+            try check("after version \(version)")
+        }
+        // The log starts again over its older frames once a checkpoint has carried them all.
+        try await database.pool.writeWithoutTransaction { db in _ = try db.checkpoint(.passive) }
+        try await database.pool.writeWithoutTransaction { db in try db.execute(sql: "PRAGMA user_version = 6") }
+        try check("after the log started again")
+        #expect(try WriteAheadLog.committedVersion(of: log) == 6)
+        try database.close()
+    }
 }
 
 /// A later schema version that adds one table, for the tests of migrating.
