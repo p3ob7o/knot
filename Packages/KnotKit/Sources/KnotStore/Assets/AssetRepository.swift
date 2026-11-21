@@ -223,11 +223,14 @@ public final class LocalAssetFetcher: AssetFetcher {
         }
         try await assets.verify(asset.id, kind: asset.kind, sha256: asset.sha256)
         progress(1)
-        // The successful return is the boundary: a fetch cancelled before it, in its last
-        // progress report too, changes nothing, and the row says where the file was.
-        if Task.isCancelled { throw KnotError.cancelled.with(.init(assetID: asset.id)) }
         var local = asset
         local.availability = .local
+        // The row changes last, after the last progress report. A fetch cancelled before then,
+        // in that report too, changes nothing, and what holds the row as it was is GRDB: it
+        // refuses the write of a cancelled task with `CancellationError` before the write runs
+        // (`SerializedDatabase.execute` checks the task first), and interrupts one that a
+        // cancellation meets, which then rolls back. `aFetchCancelledAtItsEndKeepsTheRowAsItWas`
+        // fails when the row changes before the last report.
         if asset.availability != .local { try await notes.markAvailable(local) }
         return local
     }
