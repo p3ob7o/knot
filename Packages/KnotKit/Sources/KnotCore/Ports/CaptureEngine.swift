@@ -32,6 +32,35 @@ public protocol CaptureEngine: Sendable {
     /// acknowledged (§5): tests and the soak treat nothing else as saved. When the consumer
     /// goes away, its subscription ends; no capture is affected.
     func states() -> AsyncStream<CaptureState>
+
+    /// The live view of an open recording, for the screen only: its levels, and its words so far
+    /// from the transcriber's live path. Nothing in it is saved, acknowledged or logged, and none
+    /// of it counts toward a durable revision. The stream ends when the capture ends, at once for
+    /// a capture that is not an open recording of this engine, and when its consumer goes away,
+    /// which affects nothing else. A slow consumer gets the newest values: older levels and older
+    /// transcripts are dropped, since each transcript holds all the text so far.
+    ///
+    /// Live text starts with the first consumer, and never before. A consumer that comes later
+    /// gets the words so far first, where the engine still has them. Levels flow whatever the
+    /// text does. Whether live text goes on after the last consumer has gone is the engine's
+    /// choice: a consumer relies on nothing about it.
+    func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent>
+}
+
+extension CaptureEngine {
+    /// Unavailable until the engine implements it: a stream that ends at once.
+    public func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> { AsyncStream { $0.finish() } }
+}
+
+/// What the live view of an open recording shows (`CaptureEngine.live(_:)`).
+public enum LiveCaptureEvent: Hashable, Sendable {
+    /// One per buffer of input, as the recorder reports it; each from 0 to 1.
+    case level(peak: Float, average: Float)
+    /// The words so far.
+    case transcript(LiveTranscript)
+    /// Live text stopped, or never started, with the reason's code: speech is not ready, or not
+    /// available here, or the live stream failed. Levels go on.
+    case transcriptUnavailable(ErrorCode)
 }
 
 /// A capture someone starts.

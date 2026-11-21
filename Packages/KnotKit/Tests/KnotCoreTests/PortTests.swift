@@ -57,6 +57,8 @@ import Testing
         }
         var states = environment.engine.states().makeAsyncIterator()
         #expect(await states.next() == nil, "No capture state is published.")
+        var liveView = environment.engine.live(capture).makeAsyncIterator()
+        #expect(await liveView.next() == nil, "An engine with no live view ends its stream at once.")
 
         await #expect(throws: KnotError.portUnavailable) { try await environment.queue.resume() }
         await #expect(throws: KnotError.portUnavailable.with(.init(segmentID: segment))) {
