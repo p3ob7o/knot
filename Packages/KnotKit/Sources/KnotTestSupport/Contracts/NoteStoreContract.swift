@@ -105,6 +105,7 @@ public enum NoteStoreContract {
         Check(name: "gone-note", run: anInboxItemWhoseNoteIsGoneStartsANewNote),
         Check(name: "failed-recording-retry", run: aFailedRecordingsRetryIsStored),
         Check(name: "failed-recording-empty", run: aFailedRecordingThatHoldsNoFrameEndsEmpty),
+        Check(name: "late-recording-end", run: aLateRecordingTakesItsOwnEnd),
         Check(name: "blank-repeat", run: aRepeatOfABlankCaptureChangesNothing),
         Check(name: "saved-at-record", run: theFirstSaveIsOnTheRowAfterRecord),
         Check(name: "run-not-last", run: aRunThatIsNotTheLastLeavesTheTranscriptGoing),
@@ -2143,6 +2144,72 @@ public enum NoteStoreContract {
         #expect(try await h.store.jobs(for: SegmentID(start.id)).isEmpty, "No job is written for it.")
         #expect(try await h.store.end(empty).outcome == .discardedEmpty, "The same end again changes nothing.")
         #expect(try await h.store.openCaptures().isEmpty)
+    }
+
+    /// A recording whose store call commits after a newer capture began, the race of §6 rule 6,
+    /// is recorded as ended at the newer one's start, with no content and not open. It holds
+    /// nothing until its file comes, and its own end applies to it as to an open one: discarded
+    /// as empty, failed with its code and then stored by a retry, or stored with its file.
+    public static func aLateRecordingTakesItsOwnEnd(_ make: NoteStoreFactory) async throws {
+        enum End: CaseIterable { case empty, failed, file }
+        for end in End.allCases {
+            let h = await Harness(make)
+            let how = "\(end)"
+            // The recording begins in the app; its store call is slow. A typed capture begins in
+            // the Mac panel 12 seconds later, and its call commits first.
+            let recording = h.recordingStart(at: 10, surface: .app)
+            var panel = h.typedDraft("Typing in the panel now", at: 10.2)
+            panel.origin = CaptureOrigin(source: .device(h.device), surface: .macPanel)
+            let now = try await h.store.record(panel)
+            let late = try await h.store.record(recording)
+            let row = try #require(try await h.row(recording.id))
+            #expect(row.outcome == .stored && row.endedAt == h.at(10.2), "Ended at the newer one's start, \(how).")
+            #expect(row.contentHash == nil, "With no content, \(how).")
+            #expect(late.noteID != now.noteID, "Placed at its own start, \(how).")
+            #expect(try await h.store.openCaptures().map(\.id) == [panel.id], "It is not open, \(how).")
+            let first = SegmentID(recording.id)
+            let asset = h.asset(.audio, for: recording.id)
+            let stored = CaptureEnd(
+                captureID: recording.id, endedAt: h.at(10.5), outcome: .stored(.file(asset, duration: .seconds(18))),
+                revision: 0)
+            switch end {
+            case .empty:
+                let empty = CaptureEnd(
+                    captureID: recording.id, endedAt: h.at(10), outcome: .discardedEmpty, revision: 0)
+                let receipt = try await h.store.end(empty)
+                #expect(receipt.outcome == .discardedEmpty, "The recording ends empty.")
+                #expect(try await h.row(recording.id)?.outcome == .discardedEmpty)
+                #expect(try await h.store.segment(first) == nil, "Nothing of it is in the stream.")
+                // Its note held nothing else: it is emptied, hidden and out of the stream, as an
+                // open recording's is (`anEmptyCaptureLeavesAnEmptiedNote`).
+                #expect(
+                    try await h.store.note(late.noteID)?.isShown != true,
+                    "Its note, which held nothing else, is not shown.")
+                let shown = try await h.store.stream(after: nil, limit: 10).notes.map(\.note.id)
+                #expect(!shown.contains(late.noteID) && shown.contains(now.noteID), "Only the newer note is shown.")
+                #expect(try await h.store.end(empty) == receipt, "A repeat changes nothing.")
+                #expect(try await h.store.segment(first) == nil)
+            case .failed:
+                let code = KnotError.conversionFailed.code
+                let failed = CaptureEnd(captureID: recording.id, endedAt: h.at(10), outcome: .failed(code), revision: 0)
+                #expect(try await h.store.end(failed).outcome == .failed(code), "The recording ends failed.")
+                #expect(try await h.row(recording.id)?.outcome == .failed(code))
+                #expect(try await h.store.segment(first)?.segment.state == .voice(.failed(.record, code)))
+                #expect(try await h.store.end(stored).outcome == .stored, "A later end with its file stores it.")
+            case .file:
+                #expect(try await h.store.end(stored).outcome == .stored, "Its end with its file stores it.")
+            }
+            if end != .empty {
+                #expect(try await h.row(recording.id)?.contentHash != nil, "The row holds its content, \(how).")
+                let segment = try #require(try await h.store.segment(first)).segment
+                #expect(segment.state == .voice(.recorded) && segment.assetID == asset.id, "Recorded, \(how).")
+                #expect(
+                    try await h.store.jobs(for: first).map(\.id) == [.transcribe(of: first)],
+                    "With its transcribe job, \(how).")
+            }
+            #expect(try await h.row(panel.id)?.outcome == .open, "The newer capture is untouched, \(how).")
+            #expect(try await h.text(SegmentID(panel.id)) == "Typing in the panel now")
+        }
     }
 
     /// Content is judged after the emptiness rule: empty against empty is the same content. A

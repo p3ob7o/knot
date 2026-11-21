@@ -24,10 +24,12 @@ public protocol Transcriber: Sendable {
     /// the runs together cover the file and end. Only a phrase still open at the end of the
     /// window makes the run read more than its budget.
     ///
-    /// Silence is not a phrase. A window that holds no speech is a run with no pieces, whose
-    /// resume time is after the window, or `nil` at the end of the file: silence never makes a
-    /// run read more than its budget, so a long silence is read in runs of the budget, and
-    /// each of them moves on.
+    /// Silence is not a phrase, and never makes a run read more than its budget: a long
+    /// silence is read in runs of at most the budget, and each of them moves on. A run that
+    /// finishes no phrase has no pieces. Its resume time is `nil` at the end of the file, and
+    /// otherwise after its offset and no later than the end of its window. It may lie before
+    /// that end, so that speech which begins in the window is whole in the next run: a word
+    /// that begins at the window's edge can be too short there to be heard.
     ///
     /// A file with no frames, or with no words, gives no pieces: read to its end, it is ready
     /// with empty text, which is not an error. Errors: a deferral while the model is
