@@ -69,6 +69,14 @@
 
             var isGreen: Bool { problems.isEmpty }
 
+            /// The same verdict, saying that its store is kept in `folder`.
+            func keeping(_ folder: URL) -> Verdict {
+                Verdict(
+                    seed: seed, problems: problems, launches: launches, captures: captures,
+                    acknowledgements: acknowledgements, duration: duration, stoppedByTimeBox: stoppedByTimeBox,
+                    keptStore: folder.path)
+            }
+
             /// How many launches a kill ended.
             var kills: Int { launches.filter { $0.ending == .killedAtPoint || $0.ending == .killedAnywhere }.count }
 

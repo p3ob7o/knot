@@ -13,21 +13,28 @@
             _ fault: String, seed: UInt64, killPoints: [SoakKillPoint] = SoakKillPoint.typedCaptures, captures: Int = 30
         ) async throws -> Set<String> {
             var configuration = CaptureLedgerSoak.Configuration(seed: seed, captures: captures, killPoints: killPoints)
-            let control = try await run(configuration, "\(fault)-control")
+            let control = try await run(configuration, "\(fault)-control", expectGreen: true)
             #expect(control.isGreen, "The run is red with no fault:\n\(control.report)")
             configuration.fault = fault
-            let verdict = try await run(configuration, fault)
+            let verdict = try await run(configuration, fault, expectGreen: false)
             print("\(fault): \(verdict.summary)")
             #expect(!verdict.isGreen, "The soak stays green with the fault \(fault):\n\(verdict.report)")
             return Set(verdict.problems.map(\.code))
         }
 
-        private func run(_ configuration: CaptureLedgerSoak.Configuration, _ name: String) async throws
-            -> CaptureLedgerSoak.Verdict
+        /// Runs the soak in a folder of its own, which goes when the run came out as expected. A
+        /// run that did not, a red control or a fault the soak missed, keeps its store, and its
+        /// report names where.
+        private func run(_ configuration: CaptureLedgerSoak.Configuration, _ name: String, expectGreen: Bool)
+            async throws -> CaptureLedgerSoak.Verdict
         {
             let folder = SoakFolders.make(name)
-            defer { SoakFolders.remove(folder) }
-            return try await CaptureLedgerSoak(configuration: configuration).run(in: folder)
+            let verdict = try await CaptureLedgerSoak(configuration: configuration).run(in: folder)
+            if verdict.isGreen == expectGreen {
+                SoakFolders.remove(folder)
+                return verdict
+            }
+            return verdict.keeping(folder)
         }
 
         /// The engine says a save is durable before it writes it, and writes it at the capture's
