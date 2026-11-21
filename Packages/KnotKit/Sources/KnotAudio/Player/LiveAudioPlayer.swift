@@ -46,6 +46,8 @@ public final class LiveAudioPlayer: AudioPlayer {
         var subscribers: [UUID: AsyncStream<PlaybackState>.Continuation] = [:]
         /// Tells where a playing recording stands.
         var ticker: (any DispatchSourceTimer)?
+        /// The asset the loaded file is, when its name gives one, for the log.
+        var asset: AssetID?
     }
 
     public convenience init() {
@@ -85,6 +87,8 @@ public final class LiveAudioPlayer: AudioPlayer {
             engine.prepare()
             let frames = audio.length
             let length = Duration.seconds(Double(frames) / format.sampleRate)
+            // A stored recording is named by its asset's ID; any other name gives none.
+            let asset = AssetID(file.deletingPathExtension().lastPathComponent)
             let previous = state.withLock { state in
                 defer {
                     state.engine = engine
@@ -94,6 +98,7 @@ public final class LiveAudioPlayer: AudioPlayer {
                     state.rate = format.sampleRate
                     state.length = length
                     state.segment += 1
+                    state.asset = asset
                 }
                 return (state.engine, state.node)
             }
@@ -141,6 +146,16 @@ public final class LiveAudioPlayer: AudioPlayer {
         }
     }
 
+    /// A play the engine refused, with the loaded file's asset when its name gives one.
+    private func logNotStarted(_ error: any Error) {
+        let failure = KnotError.audioUnreadable.with(ErrorContext(engineCode: (error as NSError).code))
+        if let asset = state.withLock({ $0.asset }) {
+            log.failure(failure, "player_not_started", .asset(asset))
+        } else {
+            log.failure(failure, "player_not_started")
+        }
+    }
+
     public func states() -> AsyncStream<PlaybackState> {
         let (stream, continuation) = AsyncStream.makeStream(of: PlaybackState.self)
         let id = UUID()
@@ -180,8 +195,7 @@ public final class LiveAudioPlayer: AudioPlayer {
         do {
             if !engine.isRunning { try engine.start() }
         } catch {
-            log.failure(
-                KnotError.audioUnreadable.with(ErrorContext(engineCode: (error as NSError).code)), "player_not_started")
+            logNotStarted(error)
             publish(.paused(at: position, of: length))
             return
         }
@@ -200,8 +214,7 @@ public final class LiveAudioPlayer: AudioPlayer {
             try node.playAudio()
         } catch {
             _ = halt()
-            log.failure(
-                KnotError.audioUnreadable.with(ErrorContext(engineCode: (error as NSError).code)), "player_not_started")
+            logNotStarted(error)
             publish(.paused(at: position, of: length))
             return
         }
