@@ -60,6 +60,8 @@ enum AccessibilityAudit {
     struct StructuralExclusion: Sendable {
         /// Why it is excluded.
         let reason: String
+        /// The one audit type it covers, or `nil` for every type.
+        var type: XCUIAccessibilityAuditType? = nil
         let applies: @Sendable (Element) -> Bool
     }
 
@@ -70,10 +72,44 @@ enum AccessibilityAudit {
     /// group inside it and left this one faulted. Its children are audited, and every other issue
     /// fails as before, on the Mac too.
     static let windowContent = StructuralExclusion(
-        reason: "The window's content as SwiftUI hosts it on the Mac, whose children are audited."
+        reason: "The window's content as SwiftUI hosts it on the Mac, whose children are audited.",
+        type: .sufficientElementDescription
     ) { element in
         element.kind == .group && element.identifier.isEmpty && element.label.isEmpty
             && element.parentKind == .window && element.parentFrame.map { $0.isClose(to: element.frame) } == true
+    }
+
+    /// On the Mac, a column that `NavigationSplitView` hosts: a group with no identifier and no
+    /// label whose parent is a split group. WP-33's audit of the Mac skeleton faulted the
+    /// sidebar's column as "Element has no description", on the path application > window >
+    /// group > split group. The app does not name it, and its children are audited. The one
+    /// rule covers the sidebar's column and the detail's. WP-41 makes the whole app's audit
+    /// clean and revisits it.
+    static let splitViewColumn = StructuralExclusion(
+        reason: "A column that NavigationSplitView hosts on the Mac, which the app does not name and whose "
+            + "children are audited.",
+        type: .sufficientElementDescription
+    ) { element in
+        element.kind == .group && element.identifier.isEmpty && element.label.isEmpty
+            && element.ancestry.last == .splitGroup
+    }
+
+    /// On the Mac, the window's title, which the system draws in the toolbar: a static text with
+    /// no identifier whose parent is the window and which lies in the window's title bar, at its
+    /// top edge. The system dims it while the window is not the key window, as it is in a test
+    /// that does not bring the app to the front, and the app sets none of its colours. WP-33's
+    /// audit of the Mac skeleton faulted it as "Contrast failed". Only the contrast audit is
+    /// excluded: every other issue on the title still fails. WP-41 revisits it.
+    static let windowTitle = StructuralExclusion(
+        reason: "The window's title, which the system draws in the toolbar and dims while the window is not "
+            + "key; the app sets none of its colours.",
+        type: .contrast
+    ) { element in
+        guard element.kind == .staticText, element.identifier.isEmpty, element.parentKind == .window,
+            let window = element.parentFrame
+        else { return false }
+        return abs(element.frame.minY - window.minY) <= 0.5 && element.frame.height <= 60
+            && element.frame.minX >= window.minX - 0.5 && element.frame.maxX <= window.maxX + 0.5
     }
 
     /// On iOS, an element of the system keyboard, such as a cell of its prediction bar, which
@@ -102,11 +138,37 @@ enum AccessibilityAudit {
     }
 
     #if os(macOS)
-        static let structuralExclusions: [StructuralExclusion] = [windowContent]
+        static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn, windowTitle]
     #elseif os(iOS)
         static let structuralExclusions: [StructuralExclusion] = [systemKeyboard]
     #else
         static let structuralExclusions: [StructuralExclusion] = []
+    #endif
+
+    /// An issue that names no element: the audit raised it for an element it could not resolve,
+    /// so no exclusion by name or by structure can judge it. Only an issue of the type named
+    /// here is skipped; every other issue that names no element still fails.
+    struct ElementlessExclusion: Sendable {
+        /// The audit type it covers.
+        let type: XCUIAccessibilityAuditType
+        /// Why it is excluded.
+        let reason: String
+    }
+
+    #if os(macOS)
+        /// On the Mac, a "Parent/Child mismatch" that names no element. WP-33's audit of the Mac
+        /// skeleton's split-view window raised it, with `issue.element` nil, and the app's tree
+        /// was the same before and after the audit: the system raises it for an element it does
+        /// not resolve. WP-41 makes the audit of the whole app clean. The audit type exists on
+        /// macOS only (`XCUIAccessibilityAuditTypes.h`).
+        static let unresolvedParentChild = ElementlessExclusion(
+            type: .parentChild,
+            reason: "A Parent/Child mismatch the system raises on the Mac for an element it does not resolve. "
+                + "The tree is the same before and after the audit. WP-41 makes the whole app's audit clean.")
+
+        static let elementlessExclusions: [ElementlessExclusion] = [unresolvedParentChild]
+    #else
+        static let elementlessExclusions: [ElementlessExclusion] = []
     #endif
 
     /// The exclusions that name no element or give no reason. An empty identifier would match
@@ -118,18 +180,22 @@ enum AccessibilityAudit {
     }
 
     /// True when an issue of `type` on `element` is excluded: by one of `listed` that names its
-    /// element and gives its reason, or by one of `structural`.
+    /// element and gives its reason, or by one of `structural`. An issue that names no element
+    /// is excluded only by one of `elementless` of exactly its type.
     static func isExcluded(
         _ type: XCUIAccessibilityAuditType, on element: Element?, listed: [Exclusion] = exclusions,
-        structural: [StructuralExclusion] = structuralExclusions
+        structural: [StructuralExclusion] = structuralExclusions,
+        elementless: [ElementlessExclusion] = elementlessExclusions
     ) -> Bool {
-        guard let element else { return false }
+        guard let element else {
+            return elementless.contains { $0.type == type && !$0.reason.allSatisfy(\.isWhitespace) }
+        }
         let bad = malformed(listed)
         let byName = listed.contains { exclusion in
             !bad.contains { $0.identifier == exclusion.identifier && $0.reason == exclusion.reason }
                 && type.contains(exclusion.type) && element.identifier == exclusion.identifier
         }
-        return byName || structural.contains { $0.applies(element) }
+        return byName || structural.contains { ($0.type == nil || $0.type == type) && $0.applies(element) }
     }
 
     static func name(of kind: XCUIElement.ElementType) -> String {
@@ -268,6 +334,155 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
     func hostedContent() -> AccessibilityAudit.Element {
         AccessibilityAudit.Element(
             kind: .group, identifier: "", label: "", frame: windowFrame, parentKind: .window, parentFrame: windowFrame)
+    }
+
+    #if os(macOS)
+        func testAParentChildMismatchWithNoElementIsExcludedOnTheMac() {
+            XCTAssertTrue(AccessibilityAudit.isExcluded(.parentChild, on: nil))
+            XCTAssertTrue(
+                AccessibilityAudit.isExcluded(
+                    .parentChild, on: nil, elementless: [AccessibilityAudit.unresolvedParentChild]))
+            // With no elementless exclusion, it fails.
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: nil, elementless: []))
+            // One without a reason never applies.
+            let unexplained = AccessibilityAudit.ElementlessExclusion(type: .parentChild, reason: " ")
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: nil, elementless: [unexplained]))
+        }
+
+        func testAParentChildMismatchOnANamedElementStillFails() {
+            let button = AccessibilityAudit.Element(
+                kind: .button, identifier: "some.button", label: "Some",
+                frame: CGRect(x: 900, y: 500, width: 44, height: 44), parentKind: nil, parentFrame: nil)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: button))
+        }
+    #endif
+
+    func testEveryOtherIssueWithNoElementStillFails() {
+        var types: [XCUIAccessibilityAuditType] = [
+            .contrast, .elementDetection, .hitRegion, .sufficientElementDescription,
+        ]
+        #if os(macOS)
+            types.append(.action)
+        #else
+            types += [.dynamicType, .textClipped, .trait]
+        #endif
+        for type in types {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: nil), "\(type.rawValue)")
+        }
+    }
+
+    /// A column of a split view, as the helper sees it: a group under the window's hosted
+    /// content and a split group.
+    func splitViewColumn(frame: CGRect) -> AccessibilityAudit.Element {
+        var column = AccessibilityAudit.Element(
+            kind: .group, identifier: "", label: "", frame: frame, parentKind: nil, parentFrame: nil)
+        column.ancestry = [.application, .window, .group, .splitGroup]
+        return column
+    }
+
+    func testBothColumnsOfASplitViewAreExcludedOnTheMacOnly() {
+        let sidebar = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        let detail = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 960, height: 640))
+        for column in [sidebar, detail] {
+            let excluded = AccessibilityAudit.isExcluded(.sufficientElementDescription, on: column)
+            #if os(macOS)
+                XCTAssertTrue(excluded)
+            #else
+                XCTAssertFalse(excluded)
+            #endif
+            // The rule itself, whatever the platform.
+            XCTAssertTrue(AccessibilityAudit.splitViewColumn.applies(column))
+        }
+    }
+
+    /// The issue types that exist on every platform, besides a missing description.
+    let otherTypes: [XCUIAccessibilityAuditType] = [.contrast, .hitRegion, .elementDetection]
+
+    func testAColumnWithAnotherIssueStillFails() {
+        let column = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        for type in otherTypes {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: column), "\(type.rawValue)")
+        }
+        #if os(macOS)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: column))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.action, on: column))
+        #endif
+    }
+
+    func testTheWindowContentWithAnotherIssueStillFails() {
+        for type in otherTypes {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: hostedContent()), "\(type.rawValue)")
+        }
+        #if os(macOS)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.parentChild, on: hostedContent()))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.action, on: hostedContent()))
+        #endif
+    }
+
+    func testAGroupWithNoDescriptionOutsideASplitGroupStillFails() {
+        var group = splitViewColumn(frame: CGRect(x: 600, y: 300, width: 100, height: 40))
+        group.ancestry = [.application, .window, .group, .splitGroup, .group, .scrollView]
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(group))
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.sufficientElementDescription, on: group))
+        // With no ancestry known, the rule does not apply either.
+        group.ancestry = []
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(group))
+    }
+
+    func testANamedOrLabelledGroupUnderASplitGroupIsNotExcluded() {
+        var named = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        named.identifier = "stream.column"
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(named))
+        var labelled = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        labelled.label = "Notes"
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(labelled))
+        // Another kind under a split group is not a column.
+        var button = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 40, height: 40))
+        button.kind = .button
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(button))
+    }
+
+    /// The window's title as the helper sees it: a static text, the window's child, in its title
+    /// bar at its top edge.
+    func windowTitle() -> AccessibilityAudit.Element {
+        let window = CGRect(x: 545, y: 272, width: 960, height: 640)
+        return AccessibilityAudit.Element(
+            kind: .staticText, identifier: "", label: "", frame: CGRect(x: 829, y: 272, width: 672, height: 52),
+            parentKind: .window, parentFrame: window)
+    }
+
+    func testTheWindowTitleIsExcludedForContrastOnTheMacOnly() {
+        let excluded = AccessibilityAudit.isExcluded(.contrast, on: windowTitle())
+        #if os(macOS)
+            XCTAssertTrue(excluded)
+        #else
+            XCTAssertFalse(excluded)
+        #endif
+        // The rule itself, whatever the platform.
+        XCTAssertTrue(AccessibilityAudit.windowTitle.applies(windowTitle()))
+    }
+
+    func testATextOfTheAppWithFailedContrastStillFails() {
+        // A text inside the window's content: its parent is not the window.
+        let text = AccessibilityAudit.Element(
+            kind: .staticText, identifier: "", label: "", frame: CGRect(x: 561, y: 372, width: 81, height: 16),
+            parentKind: nil, parentFrame: nil)
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: text))
+        // A text that is the window's child but lies below the title bar's top edge.
+        var lower = windowTitle()
+        lower.frame = CGRect(x: 829, y: 400, width: 672, height: 20)
+        XCTAssertFalse(AccessibilityAudit.windowTitle.applies(lower))
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: lower))
+        // A text with an identifier is the app's.
+        var named = windowTitle()
+        named.identifier = "note.title"
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: named))
+    }
+
+    func testTheWindowTitleWithAnotherIssueStillFails() {
+        for type: XCUIAccessibilityAuditType in [.hitRegion, .sufficientElementDescription, .elementDetection] {
+            XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: windowTitle()), "\(type.rawValue)")
+        }
     }
 
     func testTheWindowContentIsExcludedOnTheMacOnly() {
