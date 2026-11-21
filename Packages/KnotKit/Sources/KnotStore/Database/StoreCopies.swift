@@ -96,9 +96,9 @@ public enum StoreCopies {
     ) throws {
         let folder = destination.deletingLastPathComponent()
         try files.makeFolder(folder)
-        let partial = folder.appending(
-            path: ".\(destination.lastPathComponent).\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
-            directoryHint: .notDirectory)
+        // Named for this process, and its own while it writes: no open removes it meanwhile.
+        let partial = PartialFiles.make(for: destination.lastPathComponent, in: folder)
+        defer { PartialFiles.finished(partial) }
         do {
             let counts = try reader.read { db -> [String: Int] in
                 let counts = try tableCounts(db)
@@ -150,10 +150,14 @@ public enum StoreCopies {
         }
     }
 
-    /// Removes what a copy cut short by a kill left: hidden partial files and their journals.
+    /// Removes what a copy cut short by a kill left: hidden partial files and their journals,
+    /// those of a dead writer only (`PartialFiles`).
     static func removePartials(in folder: URL) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        for name in names where name.hasPrefix(".") && name.contains(DurableFile.partialSuffix) {
+        for name in names
+        where name.hasPrefix(".") && name.contains(DurableFile.partialSuffix)
+            && PartialFiles.isLeftover(name, in: folder)
+        {
             try? FileManager.default.removeItem(at: folder.appending(path: name, directoryHint: .notDirectory))
         }
     }

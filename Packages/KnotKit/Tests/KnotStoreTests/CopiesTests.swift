@@ -491,6 +491,61 @@ import Testing
         }
         #expect(try version(of: StoreLocations.testing(root: root)) == 2, "No checked copy, no migration.")
     }
+
+    /// An open of the store never removes the partial file of a copy that is being written: a
+    /// daily copy paused before it is published, then an open, and the copy is whole.
+    @Test func anOpenKeepsTheCopyBeingWritten() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 122)
+        try made.database.close()
+        let gate = Gate()
+        let layer = HookedFileLayer(beforeSyncFile: { url in
+            let name = url.lastPathComponent
+            if name.hasPrefix(".daily-"), name.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
+        })
+        let database = try StoreDatabase.open(
+            locations: made.database.locations, role: .app, clock: made.clock, fileLayer: layer)
+        let copy = Task.detached { try database.makeDailyCopy() }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        try openStore(in: root).close()
+        gate.release()
+        let url = try await copy.value
+        #expect(try StoreCopies.tableCounts(in: url)["note"] == 2)
+    }
+
+    /// An open removes the partial files of copies that a dead process left, and keeps those
+    /// whose writer still runs. A partial's name says which process writes it.
+    @Test func anOpenRemovesOnlyTheLeftoversOfTheDead() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 123)
+        try made.database.close()
+        let locations = made.database.locations
+        let copies = StoreCopies.folder(locations)
+        try FileManager.default.createDirectory(at: copies, withIntermediateDirectories: true)
+        var dead: Int32 = 99_998
+        while kill(dead, 0) == 0 || errno != ESRCH { dead -= 1 }
+        let alive = getppid()
+        func partial(_ folder: URL, _ name: String, _ writer: Int32?) throws -> URL {
+            let tag = writer.map { ".p\($0)" } ?? ""
+            let url = folder.appending(
+                path: ".\(name)\(tag).\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
+                directoryHint: .notDirectory)
+            try Data("synthetic".utf8).write(to: url)
+            return url
+        }
+        let leftovers = [
+            try partial(copies, "daily-2026-01-01.sqlite", dead), try partial(copies, "daily-2026-01-02.sqlite", nil),
+        ]
+        let live = [try partial(copies, "daily-2026-01-03.sqlite", alive)]
+        try openStore(in: root).close()
+        for url in leftovers { #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
+        for url in live { #expect(FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)") }
+    }
 }
 
 extension StoreCopies {
