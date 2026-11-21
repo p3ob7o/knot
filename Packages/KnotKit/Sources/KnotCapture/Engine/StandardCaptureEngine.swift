@@ -112,6 +112,9 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// their rows are ended as empty when the store next answers. Recovery ends them at the
     /// next launch otherwise, since no file is left.
     private var pendingDiscards: Set<CaptureID> = []
+    /// Recordings that would not convert, whose rows the store did not mark failed: each row is
+    /// ended as failed when the store next answers (settled point 4), without a relaunch.
+    private var pendingFailures: [CaptureID: CaptureEnd] = [:]
     /// Recordings whose conversion failed, with what `convert` needs to try again.
     private struct PendingConversion {
         let audio: RecordedAudio
@@ -269,7 +272,8 @@ public actor StandardCaptureEngine: CaptureEngine {
 
     /// Runs the old work after the current call has returned, once at a time.
     private func scheduleHousekeeping() {
-        guard !housekeepingScheduled, !pendingDiscards.isEmpty || !pendingConversions.isEmpty else { return }
+        guard !housekeepingScheduled, !pendingDiscards.isEmpty || !pendingFailures.isEmpty || !pendingConversions.isEmpty
+        else { return }
         housekeepingScheduled = true
         Task.detached { [weak self] in await self?.housekeeping() }
     }
@@ -652,6 +656,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             return
         }
         pendingConversions[id] = nil
+        pendingFailures[id] = nil
         await reach(.afterRecordingMoved, id)
         let asset = Asset(
             id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
@@ -700,17 +705,20 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func failRecording(_ id: CaptureID, endedAt: Date, _ error: KnotError) async throws(KnotError) {
         log.failure(error, "recording_not_stored")
         entries[id]?.session = nil
+        let end = CaptureEnd(
+            captureID: id, endedAt: endedAt, outcome: .failed(error.code), revision: entries[id]?.durableRevision ?? 0)
         if case .store = entries[id]?.path {
-            let end = CaptureEnd(
-                captureID: id, endedAt: endedAt, outcome: .failed(error.code),
-                revision: entries[id]?.durableRevision ?? 0)
             let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
             if case .answered = answer {
                 entries[id]?.outcome = .failed(error.code)
+                pendingFailures[id] = nil
                 return
             }
             fallBack(id, answer)
         }
+        // A row the engine made is ended by the engine, as failed, when the store next answers;
+        // a capture with no row yet is stored by ingest, from its item, once it converts.
+        if entries[id]?.hasRow == true { pendingFailures[id] = end }
         entries[id]?.outcome = .failed(error.code)
     }
 
@@ -903,7 +911,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
     }
 
-    /// Ends as empty the rows of recordings discarded while the store did not take the end.
+    /// Ends the rows of recordings whose end the store did not take: as empty after a discard, as
+    /// failed after a conversion that failed.
     private func endPendingDiscards() async {
         for id in pendingDiscards {
             let end = CaptureEnd(
@@ -921,6 +930,18 @@ public actor StandardCaptureEngine: CaptureEngine {
                 // The store did not take it this time: the next call, or the app coming forward,
                 // tries again.
                 log.capture(id, "discard_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
+            }
+        }
+        for (id, end) in pendingFailures {
+            let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
+            switch answer {
+            case .answered:
+                pendingFailures[id] = nil
+                log.capture(id, "recording_failed_row_ended")
+            case .refused(let error) where error.code == KnotError.notFound.code:
+                pendingFailures[id] = nil
+            default:
+                log.capture(id, "failed_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
             }
         }
     }

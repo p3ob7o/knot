@@ -32,4 +32,23 @@ import Testing
                 (try? await r.notes.segment(SegmentID(begun.captureID)))?.segment.text == "keep obsolete"
             })
     }
+
+    // MARK: 64
+
+    /// Finding 64. A recording on the store path whose conversion fails, and whose row the store
+    /// will not mark failed, goes to the `Inbox/` path; its retry of the conversion fails again.
+    /// Settled point 4: the row ends as failed and the file is kept. The engine ends it, when the
+    /// store next answers, in its old work, without a relaunch.
+    @Test func unconvertibleRecordingEndsItsRowFailed() async throws {
+        let r = Rig()
+        let recording = try await r.beginRecording()
+        r.recorder.failNextConversions(with: .conversionFailed, .conversionFailed)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let state = try await r.engine.end(recording.captureID)
+        #expect(state.outcome == .failed(KnotError.conversionFailed.code))
+        await r.engine.retryConversions()
+        #expect(try await r.notes.capture(recording.captureID)?.outcome == .failed(KnotError.conversionFailed.code))
+        #expect(r.layer.exists(r.locations.recordingManifest(recording.captureID)), "The file is kept.")
+        #expect(try await r.notes.openCaptures().isEmpty)
+    }
 }
