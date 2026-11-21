@@ -126,8 +126,10 @@ public actor LaunchSequence {
         }
         var recovered: [String: Int] = [:]
         let recovery = await step(.recovery, into: &report) { () throws(KnotError) -> Void in
+            self.composition.recoveryLatch.recoveryRuns()
             recovered = try await self.recover(ports)
         }
+        if recovery == .skipped(.diedTwice) { composition.recoveryLatch.recoverySkipped() }
         report.recovered = recovered
         guard recovery == .done else {
             skip(.resumeJobs, .recoveryDidNotEnd, into: &report)

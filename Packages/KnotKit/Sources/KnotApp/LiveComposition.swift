@@ -74,6 +74,9 @@ public final class LiveComposition: Sendable {
     let ids: any IDGenerator
     let layer: any FileLayer
     let gatedQueue: LaunchGatedQueue?
+    /// Whether this launch's recovery has run, which decides when `Inbox/`'s items of earlier
+    /// launches may be ingested.
+    let recoveryLatch: RecoveryLatch
     let ingest: InboxIngest?
     private let sequence = LaunchSequenceBox()
 
@@ -120,6 +123,7 @@ public final class LiveComposition: Sendable {
             self.locations = nil
             self.locationsError = error
             self.gatedQueue = nil
+            self.recoveryLatch = RecoveryLatch()
             self.ingest = nil
             self.environment = Self.wireModules(environment)
             sequence.make(for: self)
@@ -147,9 +151,13 @@ public final class LiveComposition: Sendable {
             cleaner: environment.cleaner, clock: clock, ids: ids, autoDrain: StraightThroughRunner())
         let gatedQueue = LaunchGatedQueue(queue)
         environment.queue = gatedQueue
+        let launch = launchID
+        let recoveryLatch = RecoveryLatch()
+        self.recoveryLatch = recoveryLatch
         let ingest = InboxIngest(
             notes: environment.notes, assets: environment.assets, recorder: environment.recorder, queue: gatedQueue,
-            clock: clock, launchID: launchID, locations: locations, layer: layer)
+            clock: clock, launchID: launchID, locations: locations, layer: layer,
+            holds: { [recoveryLatch] manifest in recoveryLatch.holds(manifest, launch: launch) })
         let engine = StandardCaptureEngine(
             notes: environment.notes, assets: environment.assets, recorder: environment.recorder, queue: gatedQueue,
             clock: clock, ids: ids, deviceID: deviceID, launchID: launchID, locations: locations, layer: layer,
@@ -203,6 +211,41 @@ public final class LiveComposition: Sendable {
 
     /// The diagnostics exporter of this composition.
     public var diagnostics: DiagnosticsExporter { DiagnosticsExporter(composition: self) }
+}
+
+/// Holds the items of earlier launches in `Inbox/` until this launch's recovery runs, and for
+/// the whole launch when the breaker skips recovery (docs/architecture.md §13): an item that
+/// killed ingest twice is then not ingested again in this launch, whoever asks, the engine
+/// included, which ingests `Inbox/` as soon as a capture ends on that path. This launch's own
+/// items are never held.
+final class RecoveryLatch: Sendable {
+    enum Phase: Sendable {
+        /// Recovery has not begun: its own ingest takes the earlier launches' items.
+        case notYet
+        case ran
+        /// The breaker skipped recovery in this launch.
+        case skippedByBreaker
+    }
+
+    private let phase = Mutex(Phase.notYet)
+
+    var current: Phase { phase.withLock { $0 } }
+
+    func recoveryRuns() { phase.withLock { $0 = .ran } }
+
+    func recoverySkipped() { phase.withLock { $0 = .skippedByBreaker } }
+
+    /// The code an item is kept with, or `nil` when it may be ingested now.
+    func holds(_ manifest: CaptureManifest, launch: LaunchID) -> ErrorCode? {
+        guard manifest.launchID != launch else { return nil }
+        switch current {
+        case .ran: return nil
+        // Recovery runs next and ingests the item; a run of ingest before it stops there.
+        case .notYet: return KnotError.storeNotOpen.code
+        // The step died twice: the code of a step that did, as for a job.
+        case .skippedByBreaker: return KnotError.jobDiedTwice.code
+        }
+    }
 }
 
 /// The ports an app shell implements, which the composition puts in the environment before it

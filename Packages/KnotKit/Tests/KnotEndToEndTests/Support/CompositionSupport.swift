@@ -43,6 +43,9 @@ final class LiveFolder: Sendable {
         LiveComposition(configuration: configuration(level: level), shell: shell, seams: seams)
     }
 
+    /// The breaker of this folder's store, as the composition keeps it.
+    var breaker: LaunchBreaker { LaunchBreaker(suiteName: settingsSuite) }
+
     /// Where `.live` keeps its store in this folder, as `StoreLocations` says.
     var locations: StoreLocations {
         // A development build on the Mac, as `configuration()` describes it.

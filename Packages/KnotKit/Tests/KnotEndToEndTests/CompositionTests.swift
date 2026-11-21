@@ -192,7 +192,7 @@ struct CompositionTests {
     func breakerSkipsAStepThatDiedTwice() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
-        let breaker = LaunchBreaker(suiteName: folder.settingsSuite)
+        let breaker = folder.breaker
         // Two launches that entered the step and never left it.
         breaker.enter(.openStore)
         breaker.enter(.openStore)
@@ -215,7 +215,7 @@ struct CompositionTests {
     func jobsWaitForRecovery() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
-        let breaker = LaunchBreaker(suiteName: folder.settingsSuite)
+        let breaker = folder.breaker
         breaker.enter(.recovery)
         breaker.enter(.recovery)
         let composition = folder.compose()
@@ -225,6 +225,46 @@ struct CompositionTests {
         #expect(report.outcome(of: .resumeJobs) == .skipped(.recoveryDidNotEnd))
         #expect(report.outcome(of: .startSync) == .skipped(.recoveryDidNotEnd))
         #expect(composition.gatedQueue?.isReleased == false)
+    }
+
+    /// The breaker holds for the whole launch: with recovery skipped after two deaths, the
+    /// engine, which ingests `Inbox/` as soon as a capture of this launch ends on that path, does
+    /// not ingest an earlier launch's item, which may be the one that killed ingest twice.
+    @Test("probe-breaker-bypass: a recovery skipped by its breaker leaves earlier launches' items alone")
+    func breakerHoldsForTheWholeLaunch() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let earlier = folder.compose()
+        let left = try await typeLine("a synthetic line an earlier launch left", in: earlier)
+        #expect(inboxManifests(folder.locations).count == 1)
+        let breaker = folder.breaker
+        breaker.enter(.recovery)
+        breaker.enter(.recovery)
+
+        let composition = folder.compose()
+        // Typed before this launch's store opened, ended after the launch.
+        let state = try await typeLine("a synthetic line of this launch", in: composition)
+        let report = try #require(await launch(composition))
+        #expect(report.outcome(of: .recovery) == .skipped(.diedTwice))
+        _ = try await composition.environment.engine.end(state.captureID)
+        // Waits for the ingest the engine started, then scans `Inbox/` once more, as anyone may.
+        _ = await composition.ingest?.ingestAllInLaunchOrder()
+        _ = await composition.ingest?.ingest(left.captureID)
+
+        #expect(try await streamTexts(composition) == ["a synthetic line of this launch."])
+        #expect(try await composition.environment.notes.capture(left.captureID) == nil)
+        #expect(inboxManifests(folder.locations).map(\.lastPathComponent) == ["\(left.captureID).json"])
+        #expect(breaker.history(.recovery).last == .skipped)
+
+        // The next launch runs recovery, which takes the earlier item.
+        let next = folder.compose()
+        let nextReport = try #require(await launch(next))
+        #expect(nextReport.outcome(of: .recovery) == .done)
+        #expect(
+            try await streamTexts(next).sorted() == [
+                "a synthetic line an earlier launch left.", "a synthetic line of this launch.",
+            ])
+        #expect(inboxManifests(folder.locations).isEmpty)
     }
 
     @Test("A store the app creates takes the device ID the engine stamps")
