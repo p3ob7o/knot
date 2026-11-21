@@ -134,21 +134,32 @@ private func piece(_ text: String, _ from: Double, _ to: Double) -> TranscriptPi
             == .run(Array(phrases.prefix(2)), resumeAt: .seconds(14)))
 }
 
-@Test func onlyAPhraseOpenAtTheEdgeMakesTheWindowLonger() {
-    // The window's only phrase may run on past its edge: a first phrase longer than the budget
-    // is taken whole by reading on, and nothing else reads past the budget.
+@Test func onlyAPhraseOpenFromTheWindowsStartMakesTheWindowLonger() {
+    // A first phrase longer than the budget is taken whole by reading on: the window's one
+    // phrase, open from its start, or from within half a second of it, to its edge.
     #expect(
         SpeechRunCut.decide([piece("one", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
     #expect(
-        SpeechRunCut.decide([piece("one", 13, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+        SpeechRunCut.decide([piece("one", 10.4, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
+    #expect(SpeechRunCut.longer(.seconds(3)) == .seconds(6))
+}
+
+@Test func aLonePhraseThatBeganLaterAndIsOpenEndsTheRunWithNone() {
+    // Nothing else reads past the budget: a phrase that began later in the window ends the run
+    // with no phrases, and the next run starts where it starts.
+    #expect(
+        SpeechRunCut.decide([piece("one", 13, 14.8)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(13)))
+    #expect(
+        SpeechRunCut.decide([piece("one", 10.6, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
+            == .run([], resumeAt: .seconds(10.6)))
     // A last phrase open at the edge that starts where the run starts would not move on.
     #expect(
         SpeechRunCut.decide(
             [piece("a", 10, 10), piece("b", 10, 15)], start: .seconds(10), cut: .seconds(15), reachedEnd: false)
             == .extend)
-    #expect(SpeechRunCut.longer(.seconds(3)) == .seconds(6))
 }
 
 @Test func phrasesWithoutWordsAreDroppedAndNeighboursNeverOverlap() {

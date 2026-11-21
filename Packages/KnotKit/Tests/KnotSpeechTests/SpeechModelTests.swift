@@ -43,7 +43,7 @@ import Testing
 
         /// The file in runs of `budget`, as the queue runs it, each with what it read. Each run
         /// is checked against the budget: its first window is at most the budget, and a window is
-        /// read again longer only when its one phrase reaches its edge.
+        /// read again longer only when its one phrase is open from its start to its edge.
         static func runs(_ url: URL, budget: Duration) async throws -> [Run] {
             let seen = Mutex<[(range: Range<Duration>, phrases: [TranscriptPiece])]>([])
             let transcriber = transcriber(
@@ -67,8 +67,9 @@ import Testing
                     let spoken = SpeechRunCut.normalise(window.phrases, from: window.range.lowerBound)
                     #expect(
                         spoken.count == 1
+                            && spoken[0].range.lowerBound <= window.range.lowerBound + SpeechRunCut.edge
                             && spoken[0].range.upperBound >= window.range.upperBound - SpeechRunCut.edge,
-                        "A window was read again longer though it did not end inside its one phrase.")
+                        "A window was read again longer though its one phrase was not open from its start to its end.")
                 }
                 guard let next = run.resumeAt else { break }
                 #expect(next > offset, "Every run moves on.")
@@ -260,6 +261,29 @@ import Testing
             #expect(first.run.resumeAt == budget - SpeechRunCut.edge, "The next run starts just before its edge.")
             #expect(first.window == .zero..<budget, "It read its budget, and no more.")
             #expect(runs.prefix { $0.run.pieces.isEmpty }.count >= 8, "Each window of the silence is read once.")
+            let (whole, _) = try await SpeechClips.timedRun(file)
+            #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file is lost between runs.")
+        }
+
+        @Test(arguments: [(4.0, 3.0, 5), (40.0, 30.0, 60)])
+        func aShortPhraseOpenAtAWindowsEndNeverDoublesIt(_ pattern: (Double, Double, Int)) async throws {
+            // The review's file: silence, then speech that crosses the window's end, six times over,
+            // with a budget longer than the speech. Each window holds one phrase open at its end
+            // that began later than its start, so no window may be longer than the budget.
+            let (quiet, speech, budget) = pattern
+            let scratch = try SpeechScratch()
+            var block: [(path: String, seconds: Double?)] = []
+            var left = quiet
+            while left > 0 {
+                block.append((SpeechClips.silence, min(10, left)))
+                left -= 10
+            }
+            block.append((SpeechClips.clean, speech))
+            let file = try SpeechClips.join(Array(Array(repeating: block, count: 6).joined()), into: scratch.folder)
+            let runs = try await SpeechClips.runs(file, budget: .seconds(budget))
+            let longest = runs.flatMap(\.windows).map { $0.range.upperBound - $0.range.lowerBound }.max() ?? .zero
+            #expect(
+                longest <= .seconds(budget) + .milliseconds(1), "A run read \(longest) with a budget of \(budget) s.")
             let (whole, _) = try await SpeechClips.timedRun(file)
             #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file is lost between runs.")
         }

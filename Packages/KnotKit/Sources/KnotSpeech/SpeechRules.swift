@@ -78,14 +78,15 @@ public struct SpeechFacts: Hashable, Sendable {
 /// - A phrase that ended more than `edge` before the window's end is whole, and a run keeps it.
 ///   The next run starts where the run's last phrase ended.
 /// - A phrase that ends within `edge` of the window's end may be cut there. A run leaves it for
-///   the next run, which starts where it starts. When it is the window's only phrase, the window
-///   is read again twice as long: that alone makes a window longer than the budget.
+///   the next run, which starts where it starts. When it is the window's only phrase and began
+///   within `edge` of the window's start, it is a first phrase longer than the budget, and the
+///   window is read again twice as long: that alone makes a window longer than the budget.
 public enum SpeechRunCut {
     /// What to do with the phrases of one window.
     public enum Decision: Hashable, Sendable {
         /// The run ends: these phrases, and where the next run starts, or `nil` at the end.
         case run([TranscriptPiece], resumeAt: Duration?)
-        /// The window's only phrase is still open at its edge: read a window twice as long.
+        /// The window's only phrase is open from its start to its edge: read a window twice as long.
         case extend
     }
 
@@ -108,9 +109,15 @@ public enum SpeechRunCut {
             // Every phrase ended before the edge: all of them are whole.
             return .run(pieces, resumeAt: last.range.upperBound > start ? last.range.upperBound : edgeOfWindow)
         }
-        // The last phrase may be cut at the edge.
-        guard pieces.count >= 2, last.range.lowerBound > start else { return .extend }
-        return .run(Array(pieces.dropLast()), resumeAt: last.range.lowerBound)
+        // The last phrase may be cut at the edge: it is left for the next run.
+        if pieces.count >= 2, last.range.lowerBound > start {
+            return .run(Array(pieces.dropLast()), resumeAt: last.range.lowerBound)
+        }
+        // The window's one phrase is open at its edge. Only a phrase open from the window's
+        // start, a first phrase longer than the budget, makes the window longer. One that began
+        // later ends the run with no phrases, and the next run starts where it starts.
+        if last.range.lowerBound <= start + edge { return .extend }
+        return .run([], resumeAt: last.range.lowerBound)
     }
 
     /// The phrases with words, in order, none before `start` and none overlapping the one
@@ -126,7 +133,8 @@ public enum SpeechRunCut {
         return out
     }
 
-    /// The window that follows one whose only phrase was open at its edge: twice as long.
+    /// The window that follows one whose only phrase was open from its start to its edge: twice
+    /// as long.
     public static func longer(_ window: Duration) -> Duration { window * 2 }
 
     /// The shortest window a run reads. A budget below it, or none at all for zero, would read
