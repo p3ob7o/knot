@@ -124,6 +124,15 @@ public final class LiveComposition: Sendable {
             }
         } catch {
             KnotLog(.app).failure(error, "launch_no_store_locations")
+            // No store place: the store's ports answer with the place's own code, as a store
+            // that failed to open answers with its, and so does a capture, which nothing can
+            // keep: a milestone build whose group container is missing shows its true code.
+            gate.fail(error)
+            environment.notes = GatedNoteStore(gate: gate, timings: timings)
+            environment.assets = GatedAssetStore(gate: gate)
+            environment.settings = GatedSettingsStore(gate: gate)
+            environment.fetcher = GatedAssetFetcher(gate: gate)
+            environment.engine = RefusingCaptureEngine(error: error)
             // No store and no `Inbox/`: nothing is captured, so no ID is kept either.
             self.deviceID = ids.make()
             self.launchStateSuite = "\(configuration.settingsSuite).store.none"
@@ -232,6 +241,25 @@ public final class LiveComposition: Sendable {
 
     /// The diagnostics exporter of this composition.
     public var diagnostics: DiagnosticsExporter { DiagnosticsExporter(composition: self) }
+}
+
+/// The engine of a build with no store place: every capture is refused with the place's code,
+/// since neither the store nor `Inbox/` has anywhere to be. The surface keeps the text and says
+/// that it could not save (docs/product-spec.md §4.4).
+struct RefusingCaptureEngine: CaptureEngine {
+    let error: KnotError
+
+    func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState { throw error }
+
+    func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        throw error
+    }
+
+    func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw error }
+
+    func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw error }
+
+    func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
 }
 
 /// Holds the items of earlier launches in `Inbox/` until this launch's recovery runs, and for

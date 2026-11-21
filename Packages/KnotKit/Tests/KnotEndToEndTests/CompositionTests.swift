@@ -325,15 +325,45 @@ struct CompositionTests {
         #expect(relaunched.uiContext.sync == .notInThisBuild)
     }
 
-    @Test("A build whose configuration names no usable store place composes, and says why")
-    func noStoreLocations() async throws {
+    enum NoPlace: String, CaseIterable, Sendable {
+        case noDevStoreFolder = "no development store folder"
+        case groupContainerMissing = "group container missing"
+    }
+
+    /// A build whose configuration names no usable store place says so where the person is: the
+    /// stream and a save answer with the place's own code, as the launch report does.
+    @Test("probe-no-store-place: the stream and a save say why there is no store", arguments: NoPlace.allCases)
+    func noStorePlace(_ place: NoPlace) async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
         var configuration = folder.configuration()
-        configuration.devStoreFolder = nil
+        let expected: KnotError
+        switch place {
+        case .noDevStoreFolder:
+            configuration.devStoreFolder = nil
+            expected = .devStoreFolderInvalid
+        case .groupContainerMissing:
+            // A build that says it has an app group and was given no container.
+            configuration.appGroup = .present(container: nil)
+            expected = .groupContainerMissing
+        }
         let composition = LiveComposition(configuration: configuration, seams: .forTests)
         #expect(composition.locations == nil)
         let report = try #require(await launch(composition))
-        #expect(report.outcome(of: .openStore) == .failed(KnotError.devStoreFolderInvalid.code))
+        #expect(report.outcome(of: .openStore) == .failed(expected.code))
+        #expect(report.storeProblem == expected.code)
+        var streamCode: ErrorCode?
+        do { _ = try await composition.environment.notes.stream(after: nil, limit: 10) } catch {
+            streamCode = error.code
+        }
+        #expect(streamCode == expected.code)
+        var saveCode: ErrorCode?
+        do {
+            _ = try await composition.environment.engine.begin(
+                CaptureRequest(kind: .typed, surface: .app, text: "a synthetic line with no store place"))
+        } catch {
+            saveCode = error.code
+        }
+        #expect(saveCode == expected.code)
     }
 }
