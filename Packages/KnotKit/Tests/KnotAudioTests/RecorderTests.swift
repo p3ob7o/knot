@@ -195,6 +195,21 @@ import Testing
         #expect(WorkingFileReader.samples(of: try #require(audio.workingFile)) == synthetic(16_000))
     }
 
+    /// A final sync that fails is the result's ending, over a stop and over the limit:
+    /// `disk_full` when the volume has no room, `write_failed` otherwise. The file is kept, and
+    /// read back whole.
+    @Test(arguments: [(false, ENOSPC), (true, ENOSPC), (false, EIO), (true, EIO)])
+    func aFailedFinalSyncIsTheEnding(atTheLimit: Bool, failure: Int32) async throws {
+        let folder = try ScratchFolder()
+        let recorder = LiveRecorder(
+            locations: folder.locations, layer: FailingFinalSync(failure: failure), input: FloatInput(frames: 16_000),
+            settings: LiveRecorder.Settings(syncInterval: .seconds(3_600)))
+        let session = try await recorder.start(request(limit: .seconds(atTheLimit ? 1 : 2)))
+        let audio = await session.stop()
+        #expect(audio.ending == (failure == ENOSPC ? .diskFull : .writeFailed), "\(audio)")
+        #expect(audio.frames == 16_000 && audio.workingFile != nil)
+    }
+
     /// A stop that cannot read its file back says the recording could not be saved further, and
     /// names the file, with the last length the session read from it: it never answers that the
     /// recording holds nothing.
@@ -226,6 +241,31 @@ import Testing
         if case .ended(let audio)? = endings.first { #expect(audio.ending == .discarded && audio.workingFile == nil) }
         #expect(recordingFolder(folder.locations).isEmpty, "\(recordingFolder(folder.locations))")
     }
+}
+
+/// The file layer of the drive, except that syncing a working file fails with `failure`: as a
+/// full volume, or a failing drive, answers the last sync of a recording.
+struct FailingFinalSync: FileLayer {
+    let failure: Int32
+    private let disk = PosixFileLayer()
+
+    init(failure: Int32) { self.failure = failure }
+
+    func syncFile(_ url: URL) throws(KnotError) {
+        guard url.pathExtension != "caf" else {
+            throw (failure == ENOSPC ? KnotError.diskFull : KnotError.writeFailed).with(.init(posixError: failure))
+        }
+        try disk.syncFile(url)
+    }
+    func createFolder(_ url: URL) throws(KnotError) { try disk.createFolder(url) }
+    func write(_ data: Data, to url: URL) throws(KnotError) { try disk.write(data, to: url) }
+    func rename(_ source: URL, to destination: URL) throws(KnotError) { try disk.rename(source, to: destination) }
+    func syncFolder(_ url: URL) throws(KnotError) { try disk.syncFolder(url) }
+    func remove(_ url: URL) throws(KnotError) { try disk.remove(url) }
+    func read(_ url: URL) throws(KnotError) -> Data { try disk.read(url) }
+    func exists(_ url: URL) -> Bool { disk.exists(url) }
+    func entryKind(_ url: URL) -> FileEntryKind? { disk.entryKind(url) }
+    func contents(of folder: URL) throws(KnotError) -> [String] { try disk.contents(of: folder) }
 }
 
 /// An input that delivers 32-bit floats, as the microphone does: the synthetic signal, scaled.

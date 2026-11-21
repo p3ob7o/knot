@@ -252,10 +252,10 @@ final class LiveSession: RecordingSession {
             try files.layer.syncFile(files.workingFile)
         } catch {
             // The file is kept, but its end may not be on the drive: nothing more is durable, and
-            // a stop says that the recording could not be saved further.
+            // the failure is the result's ending, as the periodic sync tells it.
             log.failure(error.about(capture: captureID), "recording_sync_failed")
             synced = false
-            if ending == .stopped { ending = .writeFailed }
+            ending = Self.failed(ending, error.code == KnotError.diskFull.code ? .diskFull : .writeFailed)
         }
         // The length is read from the file, never counted from what was written. Only a file
         // that is not there, or one that was read, says how much audio the recording holds: a
