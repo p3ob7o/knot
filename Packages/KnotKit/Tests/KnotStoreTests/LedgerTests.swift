@@ -248,4 +248,40 @@ import Testing
         #expect(try await made.notes.note(made.typed.noteID) == nil)
         expectConsistent(database)
     }
+
+    /// A late save kept as a conflict copy, whose copy a person then deleted, and a newer save
+    /// of the same capture: the newer content shows again, on both stores.
+    @Test func aNewerSaveBringsBackADeletedKeptCopy() async throws {
+        try await BothStores.run(seed: 504) { stage, log in
+            let store = stage.store
+            let capture = stage.typed("first synthetic words", from: 0, to: 1)
+            await log.step("record") { try await store.record(capture) }
+            await log.step("edit") {
+                try await store.replaceText(
+                    TextReplacement(
+                        segment: SegmentID(capture.id), text: "a person's synthetic words", origin: .edited,
+                        writer: .app))
+            }
+            stage.clock.set(stage.at(2))
+            await log.step("late save") {
+                try await store.end(
+                    CaptureEnd(
+                        captureID: capture.id, endedAt: stage.at(2), outcome: .stored(.text("second")), revision: 2))
+            }
+            let copy = SegmentID.keptSave(of: capture.id)
+            await log.step("copy") { try await store.segment(copy) }
+            await log.step("delete copy") { try await store.delete(.segment(copy)) }
+            stage.clock.set(stage.at(3))
+            await log.step("newer save") {
+                try await store.end(
+                    CaptureEnd(
+                        captureID: capture.id, endedAt: stage.at(3), outcome: .stored(.text("third")), revision: 3))
+            }
+            let shown = try await store.segment(copy)
+            #expect(shown?.segment.text == "third", "\(type(of: store))")
+            #expect(shown?.segment.deletedAt == nil, "The newer save shows again, \(type(of: store))")
+            await log.step("copy after") { shown }
+            await log.step("search") { try await store.search("third", limit: 5) }
+        }
+    }
 }
