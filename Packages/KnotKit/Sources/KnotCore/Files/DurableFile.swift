@@ -107,9 +107,12 @@ public struct DurableFile: Sendable {
     }
 
     /// Removes a file and syncs its folder, so the removal stays. A path outside the root is
-    /// refused, and the layer is given the path that was checked.
+    /// refused, and the layer is given the path that was checked. A link or a file in the place
+    /// of a folder below the root is refused, as `makeFolder` refuses it; a folder that is not
+    /// there holds nothing to remove, and is no error.
     public func remove(_ url: URL) throws(KnotError) {
         let target = try below(url)
+        guard try foldersAreThere(down: target.deletingLastPathComponent()) else { return }
         try layer.remove(target)
         try layer.syncFolder(target.deletingLastPathComponent())
     }
@@ -190,10 +193,25 @@ public struct DurableFile: Sendable {
     /// given to the layer as it was checked.
     public func removePartials(in folder: URL) throws(KnotError) {
         let checked = try below(folder)
+        guard try foldersAreThere(down: checked) else { return }
         for name in try layer.contents(of: checked) where name.hasPrefix(".") && name.hasSuffix(Self.partialSuffix) {
             try layer.remove(checked.appending(path: name, directoryHint: .notDirectory))
         }
         try layer.syncFolder(checked)
+    }
+
+    /// Whether every folder from the root down to `folder` is there, as a removal meets them:
+    /// false at the first one that is not, below which nothing is there to remove. A link or a
+    /// file in a folder's place is refused with `write_failed` and `ENOTDIR`, never followed.
+    private func foldersAreThere(down folder: URL) throws(KnotError) -> Bool {
+        for each in try chain(to: folder) {
+            switch layer.entryKind(each) {
+            case .folder?: continue
+            case nil: return false
+            default: throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
+            }
+        }
+        return true
     }
 
     /// The store's root and every folder below it down to `url`. A path outside the root is refused.

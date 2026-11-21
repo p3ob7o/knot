@@ -67,4 +67,26 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: tree.path("v2").path), "v2, beside the root, is not removed.")
         #expect(FileManager.default.fileExists(atPath: tree.path(".q.partial").path), "Nor the partial beside it.")
     }
+
+    /// Finding 6, of the orchestrator, from the review's table: `remove` and `removePartials`
+    /// refuse a path with a link among its folders below the root, as `place` does, with the
+    /// same error, and a folder that is not there is nothing to remove, and no error.
+    @Test func removeRefusesALinkBelowTheRoot() throws {
+        let tree = try Tree()
+        let files = StoreLocations.testing(root: tree.scratch).durableFiles(layer: PosixFileLayer())
+        for (text, act) in [
+            ("KnotStore/Leak/v1", { (url: URL) throws(KnotError) in try files.remove(url) }),
+            ("KnotStore/A/Last/v1", { (url: URL) throws(KnotError) in try files.remove(url) }),
+            ("KnotStore/Leak", { (url: URL) throws(KnotError) in try files.removePartials(in: url) }),
+            ("KnotStore/A/Last", { (url: URL) throws(KnotError) in try files.removePartials(in: url) }),
+        ] {
+            #expect("\(text)", performing: { try act(tree.path(text)) }, throws: { error in
+                (error as? KnotError)?.context.posixError == ENOTDIR
+            })
+        }
+        #expect(FileManager.default.fileExists(atPath: tree.path("outside/v1").path), "v1, outside, is not removed.")
+        #expect(FileManager.default.fileExists(atPath: tree.path("outside/.p.partial").path))
+        try files.remove(tree.path("KnotStore/Missing/f.json"))
+        try files.removePartials(in: tree.path("KnotStore/Missing"))
+    }
 }
