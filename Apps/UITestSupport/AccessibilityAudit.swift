@@ -76,6 +76,20 @@ enum AccessibilityAudit {
             && element.parentKind == .window && element.parentFrame.map { $0.isClose(to: element.frame) } == true
     }
 
+    /// On the Mac, a column that `NavigationSplitView` hosts: a group with no identifier and no
+    /// label whose parent is a split group. WP-33's audit of the Mac skeleton faulted the
+    /// sidebar's column as "Element has no description", on the path application > window >
+    /// group > split group. The app does not name it, and its children are audited. The one
+    /// rule covers the sidebar's column and the detail's. WP-41 makes the whole app's audit
+    /// clean and revisits it.
+    static let splitViewColumn = StructuralExclusion(
+        reason: "A column that NavigationSplitView hosts on the Mac, which the app does not name and whose "
+            + "children are audited."
+    ) { element in
+        element.kind == .group && element.identifier.isEmpty && element.label.isEmpty
+            && element.ancestry.last == .splitGroup
+    }
+
     /// On iOS, an element of the system keyboard, such as a cell of its prediction bar, which
     /// WP-30's audit faulted on the iPad as "Element has no description". It is the system's
     /// interface, drawn in the keyboard's own window: never a screen of the app and never an
@@ -102,7 +116,7 @@ enum AccessibilityAudit {
     }
 
     #if os(macOS)
-        static let structuralExclusions: [StructuralExclusion] = [windowContent]
+        static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn]
     #elseif os(iOS)
         static let structuralExclusions: [StructuralExclusion] = [systemKeyboard]
     #else
@@ -333,6 +347,53 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
         for type in types {
             XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: nil), "\(type.rawValue)")
         }
+    }
+
+    /// A column of a split view, as the helper sees it: a group under the window's hosted
+    /// content and a split group.
+    func splitViewColumn(frame: CGRect) -> AccessibilityAudit.Element {
+        var column = AccessibilityAudit.Element(
+            kind: .group, identifier: "", label: "", frame: frame, parentKind: nil, parentFrame: nil)
+        column.ancestry = [.application, .window, .group, .splitGroup]
+        return column
+    }
+
+    func testBothColumnsOfASplitViewAreExcludedOnTheMacOnly() {
+        let sidebar = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        let detail = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 960, height: 640))
+        for column in [sidebar, detail] {
+            let excluded = AccessibilityAudit.isExcluded(.sufficientElementDescription, on: column)
+            #if os(macOS)
+                XCTAssertTrue(excluded)
+            #else
+                XCTAssertFalse(excluded)
+            #endif
+            // The rule itself, whatever the platform.
+            XCTAssertTrue(AccessibilityAudit.splitViewColumn.applies(column))
+        }
+    }
+
+    func testAGroupWithNoDescriptionOutsideASplitGroupStillFails() {
+        var group = splitViewColumn(frame: CGRect(x: 600, y: 300, width: 100, height: 40))
+        group.ancestry = [.application, .window, .group, .splitGroup, .group, .scrollView]
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(group))
+        XCTAssertFalse(AccessibilityAudit.isExcluded(.sufficientElementDescription, on: group))
+        // With no ancestry known, the rule does not apply either.
+        group.ancestry = []
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(group))
+    }
+
+    func testANamedOrLabelledGroupUnderASplitGroupIsNotExcluded() {
+        var named = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        named.identifier = "stream.column"
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(named))
+        var labelled = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 280, height: 640))
+        labelled.label = "Notes"
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(labelled))
+        // Another kind under a split group is not a column.
+        var button = splitViewColumn(frame: CGRect(x: 545, y: 272, width: 40, height: 40))
+        button.kind = .button
+        XCTAssertFalse(AccessibilityAudit.splitViewColumn.applies(button))
     }
 
     func testTheWindowContentIsExcludedOnTheMacOnly() {
