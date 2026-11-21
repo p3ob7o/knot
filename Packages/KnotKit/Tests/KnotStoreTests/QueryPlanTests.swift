@@ -23,21 +23,24 @@ import Testing
         func clear() { seen.withLock { $0 = [] } }
     }
 
-    /// The tables a query may not scan whole: every table that grows with the notes.
-    static let largeTables: Set<String> = [
-        "note", "segment", "capture", "asset", "job", "segment_history", "tombstone", "change_log", "revision_floor",
-        "counter", "segment_search", "title_search",
+    /// What a query may scan whole, because it does not grow with the notes: one constant row,
+    /// the schema, the configuration of each full-text table, and `page`, the stream's page
+    /// of rows, which its own query reads through `note_stream` to the page's limit. Any other
+    /// scan, by a table's name or by an alias, is a scan of a table that grows.
+    static let smallScans: Set<String> = [
+        "CONSTANT ROW", "sqlite_master", "page", "main.segment_search_config", "main.title_search_config",
     ]
 
     /// The partial indexes whose scan reads only the rows a query wants.
     static let boundedIndexes = ["capture_open", "note_stream"]
 
-    /// The plan lines of one statement that scan a large table whole.
+    /// The plan lines of one statement that scan whole what grows with the notes. Every scan is
+    /// one unless it is shown to read only what it wants.
     static func unindexedScans(in plan: [String]) -> [String] {
         plan.filter { line in
             guard line.hasPrefix("SCAN ") else { return false }
-            let table = line.dropFirst("SCAN ".count).split(separator: " ").first.map(String.init) ?? ""
-            guard largeTables.contains(table) else { return false }
+            let scanned = String(line.dropFirst("SCAN ".count))
+            if smallScans.contains(scanned) { return false }
             // A scan through an index reads the whole index, unless the index is partial and
             // holds only what the query wants: the open captures, or the shown notes in the
             // stream's order, which a page reads to its limit and no further.
