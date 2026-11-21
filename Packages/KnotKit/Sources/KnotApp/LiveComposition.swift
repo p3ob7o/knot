@@ -191,6 +191,16 @@ public final class LiveComposition: Sendable {
         await launch.run()
     }
 
+    /// What the view models need to know of this device and this build: the device ID the
+    /// engine stamps on every capture, the same across launches on the same store, and whether
+    /// the build can sync, which it cannot until a package fills the sync engine and the build's
+    /// `sync` gate is open.
+    public var uiContext: UIContext {
+        let canSync = environment.gates.isOpen(.sync) && !(environment.sync is UnavailableSyncEngine)
+        // Whether the device is signed in to iCloud is the sync engine's to say, WP-16's.
+        return UIContext(thisDevice: deviceID, sync: canSync ? .available(signedInToICloud: false) : .notInThisBuild)
+    }
+
     /// The diagnostics exporter of this composition.
     public var diagnostics: DiagnosticsExporter { DiagnosticsExporter(composition: self) }
 }

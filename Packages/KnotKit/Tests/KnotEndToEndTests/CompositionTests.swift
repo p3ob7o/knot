@@ -3,6 +3,7 @@ import GRDB
 import KnotCapture
 import KnotFakes
 import KnotTestSupport
+import KnotUI
 import Testing
 
 @testable import KnotApp
@@ -234,7 +235,11 @@ struct CompositionTests {
         _ = try #require(await launch(composition))
         let ports = try composition.gate.ports()
         #expect(ports.opened.database.deviceID == composition.deviceID)
-        #expect(folder.compose().deviceID == composition.deviceID)
+        let relaunched = folder.compose()
+        #expect(relaunched.deviceID == composition.deviceID)
+        // The shell's context carries the same ID, and no sync in this build.
+        #expect(relaunched.uiContext.thisDevice == composition.deviceID)
+        #expect(relaunched.uiContext.sync == .notInThisBuild)
     }
 
     @Test("A build whose configuration names no usable store place composes, and says why")

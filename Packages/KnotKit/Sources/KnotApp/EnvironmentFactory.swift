@@ -1,5 +1,6 @@
 import Foundation
 import KnotCore
+import KnotUI
 import Synchronization
 
 #if DEBUG
@@ -16,7 +17,7 @@ import Synchronization
 /// ```swift
 /// private let app = EnvironmentFactory.app(shell: ShellPorts(cues: MyCues()))
 /// // …
-/// RootView(environment: app.environment)
+/// RootView(environment: app.environment, context: app.context)
 ///     .task { _ = await app.runLaunchSequence() }
 /// ```
 ///
@@ -57,11 +58,14 @@ public enum EnvironmentFactory {
     private static func makeApp(shell: ShellPorts) -> AppComposition {
         #if DEBUG
             if LiveConfiguration.selectsPreview(ProcessInfo.processInfo.arguments) {
-                return AppComposition(environment: shell.apply(to: .preview), live: nil)
+                let environment = shell.apply(to: .preview)
+                return AppComposition(
+                    environment: environment, live: nil,
+                    context: UIContext(thisDevice: environment.ids.make(), sync: .notInThisBuild))
             }
         #endif
         let live = LiveComposition(configuration: .current(), shell: shell)
-        return AppComposition(environment: live.environment, live: live)
+        return AppComposition(environment: live.environment, live: live, context: live.uiContext)
     }
 }
 
@@ -71,6 +75,9 @@ public struct AppComposition: Sendable {
     public let environment: AppEnvironment
     /// The live composition, `nil` on `.preview`.
     public let live: LiveComposition?
+    /// The context the view models take: on `.live`, this device's ID as the engine stamps it,
+    /// kept across launches, and whether the build can sync. On `.preview`, an ID of the process.
+    public let context: UIContext
 
     /// Runs the launch sequence once the capture surface is on screen, and returns its report:
     /// `nil` on `.preview`, which has no launch. A second call waits for the first.
