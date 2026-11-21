@@ -77,8 +77,10 @@
         @Test func skippedRecoveryLeavesARowOpen() async throws {
             let codes = try await soak(
                 "skipped-recovery", seed: 65, killPoints: [.step("after_checkpoint", passes: 1...6)])
-            // The next launch's report of what its recovery left says so first.
-            #expect(codes.contains("recovery_left_row_open"), "\(codes.sorted())")
+            // The next launch's report of what its recovery left says so first: a row still open,
+            // or an item still in `Inbox/`, as the kill left the capture.
+            #expect(
+                !codes.isDisjoint(with: ["recovery_left_row_open", "recovery_left_inbox_items"]), "\(codes.sorted())")
         }
 
         /// The engine answers a capture as begun and saved, and writes none of it.

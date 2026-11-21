@@ -137,7 +137,10 @@ struct SoakWitness {
         case .quit:
             if !recoveryReported { problem("recovery_not_reported") }
             if parsed.last != .done || intents.count != range.count {
-                problem("launch_did_not_finish", "intents=\(intents.count)", "of=\(range.count)")
+                let last = lines.last?.split(separator: " ").first.map(String.init) ?? "nothing"
+                problem(
+                    "launch_did_not_finish", "intents=\(intents.count)", "of=\(range.count)",
+                    "last=\(SoakLine.parse(lines.last ?? "") == nil ? "unreadable" : last)")
             }
             if !stops.isEmpty { problem("stopped_and_quit") }
         case .killedAtPoint(let armed):
@@ -171,6 +174,7 @@ struct SoakWitness {
 
         // 2. Every segment that originated on this device has a capture row.
         let segments = try Self.segments(in: locations)
+        let pieces = Self.pieces(segments)
         let device = SegmentOrigin.device(database.deviceID)
         for segment in segments where segment.origin == device {
             guard let capture = segment.capture else {
@@ -208,7 +212,8 @@ struct SoakWitness {
                             ids: [capture.description, "index=\(index)", "save=\(save.save)"], launch: save.launch))
                 }
                 let found = try await expectation(
-                    capture, index: index, planned: planned, saves: saves, notes: notes)
+                    capture, index: index, planned: planned, saves: saves, pieces: pieces[capture] ?? [],
+                    notes: notes)
                 problems += found.problems
                 if found.stored { stored.append(capture) }
             }
@@ -232,7 +237,8 @@ struct SoakWitness {
     /// script, at or after the last save acknowledged; the end's own once the end was
     /// acknowledged.
     private func expectation(
-        _ capture: CaptureID, index: Int, planned: SoakScript.Capture, saves: [Acknowledgement], notes: NoteRepository
+        _ capture: CaptureID, index: Int, planned: SoakScript.Capture, saves: [Acknowledgement],
+        pieces: [SegmentRow], notes: NoteRepository
     ) async throws -> (problems: [Problem], stored: Bool) {
         var problems: [Problem] = []
         let latest = saves.max { ($0.save, $0.revision) < ($1.save, $1.revision) }
@@ -268,10 +274,16 @@ struct SoakWitness {
                 problem("acknowledged_discard_stored")
                 return (problems, true)
             }
-            guard let text = try await storedText(of: capture, notes: notes) else {
+            // Every piece, read in order: each the piece its position names, with no gap.
+            guard !pieces.isEmpty else {
                 problem("stored_capture_without_text")
                 return (problems, true)
             }
+            for (position, piece) in pieces.enumerated()
+            where piece.piece != position || piece.id != SegmentID.piece(position, of: capture).description {
+                problem("pieces_out_of_order", ["piece=\(piece.piece)", "position=\(position)"])
+            }
+            let text = pieces.map(\.text).joined()
             // The texts the store may hold: from the last acknowledged save on, or only the
             // last once the end was acknowledged.
             let first = endAcknowledged ? planned.texts.count - 1 : min(latest?.save ?? 0, planned.texts.count - 1)
@@ -326,9 +338,14 @@ struct SoakWitness {
         return bytes.count == save.bytes && digest(bytes) == save.digest
     }
 
-    /// The text the store holds for a capture.
-    private func storedText(of capture: CaptureID, notes: NoteRepository) async throws -> String? {
-        try await notes.segment(SegmentID(capture))?.text
+    /// The live pieces of each capture, by position: not deleted, and not conflict copies.
+    static func pieces(_ segments: [SegmentRow]) -> [CaptureID: [SegmentRow]] {
+        var pieces: [CaptureID: [SegmentRow]] = [:]
+        for segment in segments where !segment.deleted && segment.conflictOf == nil {
+            guard let capture = segment.capture else { continue }
+            pieces[capture, default: []].append(segment)
+        }
+        return pieces.mapValues { $0.sorted { $0.piece < $1.piece } }
     }
 
     static func digest(_ data: Data) -> String {
@@ -342,8 +359,10 @@ struct SoakWitness {
         let origin: SegmentOrigin
         let piece: Int
         let conflictOf: String?
+        let deleted: Bool
+        let text: String
         /// The first word of its text: the script's token for its capture.
-        let token: String?
+        var token: String? { text.split(separator: " ", maxSplits: 1).first.map(String.init) }
     }
 
     /// Every segment in the store, read on a connection of the witness's own that only reads.
@@ -353,13 +372,15 @@ struct SoakWitness {
         let queue = try DatabaseQueue(path: locations.database.path, configuration: configuration)
         defer { try? queue.close() }
         return try queue.read { db in
-            try Row.fetchAll(db, sql: "SELECT id, capture_id, origin, piece, conflict_of, text FROM segment").map {
+            try Row.fetchAll(
+                db, sql: "SELECT id, capture_id, origin, piece, conflict_of, deleted_at, text FROM segment"
+            ).map {
                 row in
                 let text: String = row["text"]
                 return SegmentRow(
                     id: row["id"], capture: (row["capture_id"] as String?).flatMap(CaptureID.init),
                     origin: SegmentOrigin(rawValue: row["origin"]), piece: row["piece"], conflictOf: row["conflict_of"],
-                    token: text.split(separator: " ", maxSplits: 1).first.map(String.init))
+                    deleted: (row["deleted_at"] as Double?) != nil, text: text)
             }
         }
     }

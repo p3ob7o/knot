@@ -31,7 +31,9 @@
     ///
     /// The text is synthetic. It begins with a token that names the capture,
     /// `s<seed>c<index>`, which no save changes. A save may add a word, replace the last word
-    /// or one in the middle, or take the last word away.
+    /// or one in the middle, or take the last word away. Some captures carry a body longer than
+    /// one segment can hold (`Limits.segmentTextBytes`), which the store keeps as several
+    /// pieces; capture `alwaysLong` always does, so that every script holds one.
     struct SoakScript {
         /// When the script's clock starts.
         static let base = Date(timeIntervalSince1970: 1_795_000_000)
@@ -93,6 +95,10 @@
             "umber", "velvet", "willow", "xenon", "yarrow", "zephyr",
         ]
 
+        /// Every capture whose index this gives carries a body past one piece: so that even a
+        /// short script holds one.
+        static let alwaysLong = 2
+
         init(seed: UInt64, count: Int) {
             self.seed = seed
             var captures: [Capture] = []
@@ -115,12 +121,13 @@
                     ? (previous?.surface == .app ? .macPanel : .app)
                     : (Int.random(in: 0..<4, using: &random) == 0 ? .macPanel : .app)
                 let placement: CapturePlacement = Int.random(in: 0..<10, using: &random) == 0 ? .newNote : .window
-                let blank = Int.random(in: 0..<14, using: &random) == 0
+                let blank = index != Self.alwaysLong && Int.random(in: 0..<14, using: &random) == 0
+                let long = !blank && (index == Self.alwaysLong || Int.random(in: 0..<40, using: &random) == 0)
                 let updates = Int.random(in: 0...6, using: &random)
                 let texts =
                     blank
                     ? Self.blankTexts(updates: updates, random: &random)
-                    : Self.texts(token: "s\(seed)c\(index)", updates: updates, random: &random)
+                    : Self.texts(token: "s\(seed)c\(index)", long: long, updates: updates, random: &random)
                 let pauses = (0...updates).map { _ in [0.2, 0.6, 1.5, 4].randomElement(using: &random)! }
                 let roll = Int.random(in: 0..<100, using: &random)
                 let ending: Ending =
@@ -151,10 +158,23 @@
             return texts
         }
 
-        /// The texts of a capture's saves: the token, then words that the saves add, replace and
-        /// take away. The token is never touched.
-        private static func texts(token: String, updates: Int, random: inout SeededRandom) -> [String] {
-            let head = token
+        /// The texts of a capture's saves: the token, a body for a long capture, then words
+        /// that the saves add, replace and take away. The token is never touched.
+        private static func texts(token: String, long: Bool, updates: Int, random: inout SeededRandom) -> [String] {
+            var head = token
+            if long {
+                // Past one piece, or past two: lines of words, so that a piece can end at a line
+                // break, as the store's split prefers.
+                let target = Limits.segmentTextBytes * Int.random(in: 1...2, using: &random) + 4_096
+                var body = ""
+                var line = 0
+                while body.utf8.count < target {
+                    line += 1
+                    body += (1...12).map { _ in words.randomElement(using: &random)! }.joined(separator: " ")
+                    body += line % 7 == 0 ? "\n\n" : "\n"
+                }
+                head += "\n" + body
+            }
             var tail: [String] = [words.randomElement(using: &random)!]
             func text() -> String { ([head] + tail).joined(separator: " ") }
             var texts = [text()]
