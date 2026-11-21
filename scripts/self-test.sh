@@ -896,6 +896,7 @@ fi
 # place of running swift test, and the in-step process takes the tier that KNOT_SKIP_TIER
 # names (the gate refuses --only, so this is the one change to its tier). At the gate, a log
 # with a cancelled test, or with a skipped one, fails the step; at the quick tier it passes.
+# Either way the summary counts the test once, though the failing step names it again.
 sl="$scratch/skip-loop"
 mkdir -p "$sl/tree" "$sl/logs"
 cp -R "$KNOT_SCRIPTS" "$sl/scripts"
@@ -951,9 +952,11 @@ gate_cancelled="$(skip_loop cancelled gate)"
 gate_skipped="$(skip_loop skipped gate)"
 quick_cancelled="$(skip_loop cancelled quick)"
 gate_lookalike="$(skip_loop lookalike gate)"
-if [[ $gate_cancelled == "1 FAIL"* && $gate_skipped == "1 FAIL"* && $quick_cancelled == "0 ok"* &&
+if [[ $gate_cancelled == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
+    $gate_skipped == "1 FAIL · tests 2 passed, 0 failed, 1 skipped" &&
+    $quick_cancelled == "0 ok · tests 2 passed, 0 failed, 1 skipped" &&
     $gate_lookalike == "0 ok · tests 3 passed, 0 failed, 0 skipped" ]]; then
-    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and a line that only looks like one counts for nothing"
+    pass "through verify's loop, a cancelled or a skipped test fails the gate's package tests, passes the quick tier, and counts once; a line that only looks like one counts for nothing"
 else
     fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike'"
 fi

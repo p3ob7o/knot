@@ -418,8 +418,9 @@ step_package_test() {
     # The gate requires the on-device models, so a test skipped because a model is missing,
     # or cancelled at run time, fails it (docs/architecture.md §17).
     if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        # Indented, so that the summary, which reads this step's log, counts each test once.
         echo "The gate requires every test to run. Skipped or cancelled:"
-        knot_skipped_tests "$output"
+        knot_skipped_tests "$output" | sed 's/^/    /'
         return 1
     fi
 }
