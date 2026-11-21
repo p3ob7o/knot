@@ -153,19 +153,23 @@ public actor StandardCaptureEngine: CaptureEngine {
     #if DEBUG || KNOT_FAKES
         /// The engine of the kill tests and the soak's child: `killPoint` is awaited at each
         /// `EngineKillPoint`, with the capture's ID. A hook that never returns stops the engine
-        /// there, as a kill would. Only a debug build, or one that sets `KNOT_FAKES`, has it.
+        /// there, as a kill would. `stopsInsideWrite` is asked at the one point that falls inside
+        /// a write that cannot wait, `betweenTypedManifestAndPayload`: true stops the write there,
+        /// and the engine then awaits `killPoint`. Only a debug build, or one that sets
+        /// `KNOT_FAKES`, has them.
         public init(
             notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
             clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, launchID: LaunchID,
             locations: StoreLocations, layer: any FileLayer, deadline: StoreDeadline = .standard,
             ingest: InboxIngest? = nil, log: KnotLog = KnotLog(.capture),
-            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void
+            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void,
+            stopsInsideWrite: (@Sendable (EngineKillPoint, CaptureID) -> Bool)? = nil
         ) {
             self.init(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
                 ingest: ingest, log: log)
-            killPoints.set(killPoint)
+            killPoints.set(killPoint, stops: stopsInsideWrite)
         }
     #endif
 
@@ -173,6 +177,15 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func reach(_ point: EngineKillPoint, _ capture: CaptureID) async {
         #if DEBUG || KNOT_FAKES
             await killPoints.reach(point, capture)
+        #endif
+    }
+
+    /// Whether a write stops at `point`, which falls inside it. A release build never stops.
+    private nonisolated func stopsInsideWrite(_ point: EngineKillPoint, _ capture: CaptureID) -> Bool {
+        #if DEBUG || KNOT_FAKES
+            return killPoints.stops(point, capture)
+        #else
+            return false
         #endif
     }
 
@@ -244,7 +257,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             // A recording starts first: one whose microphone cannot open never starts, and ends
             // nothing. Its request names the capture it follows, so the recorder's first manifest
             // write carries the link that every later item carries too (finding 54).
-            if request.kind == .voice { try await startRecorder(id) }
+            if request.kind == .voice {
+                try await startRecorder(id)
+                await reach(.afterRecordingManifest, id)
+            }
             // A capture that follows one on the `Inbox/` path goes the same way, so that ingest
             // places it after that capture.
             var sameWay: ErrorCode?
@@ -397,6 +413,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                     entries[capture]?.revision += 1
                     throw error
                 }
+                await reach(.afterDiscard, capture)
             default:
                 try await discardRecording(capture)
             }
@@ -409,7 +426,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func beginTyped(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         if sameWay {
-            try writeTypedItem(id, endedAt: nil)
+            try await writeTypedItem(id, endedAt: nil)
             log.capture(id, "capture_began", .flag("store_path", false))
             return publish(id)
         }
@@ -428,7 +445,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[id]?.path = .inbox(answer.fallbackCode ?? KnotError.storeNotOpen.code)
             watchLate(answer, of: id)
             do throws(KnotError) {
-                try writeTypedItem(id, endedAt: nil)
+                try await writeTypedItem(id, endedAt: nil)
             } catch {
                 // Nothing reached a disk. The capture stays, with nothing durable: the surface
                 // keeps the text, and its next begin on the same surface is this capture's
@@ -556,7 +573,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             }
         }
         // The `Inbox/` path.
-        try writeTypedItem(id, endedAt: ending)
+        try await writeTypedItem(id, endedAt: ending)
         if ending != nil {
             entries[id]?.outcome = CaptureText.isEmpty(entry.text) ? .discardedEmpty : .stored
             log.capture(id, "capture_ended", .flag("store_path", false))
@@ -574,14 +591,22 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// Writes a typed capture's item in `Inbox/`, with the time of this save, where ingest ends
     /// the draft if a death leaves it open. Throws when it did not reach the drive; the save is
     /// then not acknowledged.
-    private func writeTypedItem(_ id: CaptureID, endedAt: Date?) throws(KnotError) {
+    private func writeTypedItem(_ id: CaptureID, endedAt: Date?) async throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let manifest = CaptureManifest(
             captureID: id, kind: .typed, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, placement: entry.placement, shownNoteID: entry.shownNote,
             revision: entry.revision, followsCaptureID: entry.follows, lastSavedAt: clock.now())
         do throws(KnotError) {
-            try inbox.writeTyped(manifest, text: entry.text)
+            let whole = try inbox.writeTyped(manifest, text: entry.text) {
+                stopsInsideWrite(.betweenTypedManifestAndPayload, id)
+            }
+            if !whole {
+                // A kill test's seam: the manifest is placed and the payload is not. A test that
+                // lets the engine go on sees it place the whole item.
+                await reach(.betweenTypedManifestAndPayload, id)
+                try inbox.writeTyped(manifest, text: entry.text)
+            }
         } catch {
             log.failure(error.about(capture: id), "inbox_write_failed")
             throw error.about(capture: id)
@@ -693,6 +718,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// failed, and is tried again (docs/architecture.md §8).
     private func storeRecording(_ id: CaptureID, audio: RecordedAudio, endedAt: Date) async throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
+        await reach(.beforeConversion, id)
         let stored: StoredFile
         let duration: Duration
         do throws(KnotError) {
@@ -703,6 +729,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             // The working file stays as the recording (docs/architecture.md §8), and the
             // conversion is tried again.
             pendingConversions[id] = PendingConversion(audio: audio, endedAt: endedAt, triedAt: clock.now())
+            await reach(.afterFailedConversion, id)
             try await failRecording(id, endedAt: endedAt, error.about(capture: id))
             return
         }
@@ -748,6 +775,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
         entries[id]?.outcome = .stored
         entries[id]?.session = nil
+        await reach(.afterRecordingEnded, id)
         log.capture(id, "recording_ended", .flag("store_path", false), .duration("length", duration))
         runIngest(id)
     }
@@ -775,7 +803,10 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     private func discardRecording(_ id: CaptureID) async throws(KnotError) {
-        if let session = entries[id]?.session { await session.discard() }
+        if let session = entries[id]?.session {
+            await session.discard()
+            await reach(.afterDiscard, id)
+        }
         entries[id]?.session = nil
         entries[id]?.outcome = .discardedEmpty
         if case .store = entries[id]?.path {
@@ -931,6 +962,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         Task.detached { [weak self] in
             let committed: Bool
             if case .success = await late.value { committed = true } else { committed = false }
+            if committed { await self?.reach(.beforeLateAnswer, id) }
             await self?.lateAnswer(of: id, committed: committed)
         }
     }

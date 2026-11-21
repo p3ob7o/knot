@@ -40,21 +40,30 @@ struct InboxItems: Sendable {
     /// Places a typed capture's item: the manifest, then the text. The two placings hold the
     /// store's item lock, so that ingest never removes an item between them: a payload placed after
     /// its item was taken and removed would be left with no manifest.
-    func writeTyped(_ manifest: CaptureManifest, text: String) throws(KnotError) {
+    ///
+    /// `stopsAfterManifest` is asked between the two, holding the lock: true leaves the item as a
+    /// kill there would, with the manifest and not the payload, and returns false. It is the
+    /// engine's kill seam, and a build with no kill points never answers true.
+    @discardableResult
+    func writeTyped(
+        _ manifest: CaptureManifest, text: String, stopsAfterManifest: () -> Bool = { false }
+    ) throws(KnotError) -> Bool {
         var manifest = manifest
         let payload = Data(text.utf8)
         manifest.payloadByteCount = Int64(payload.count)
         manifest.payloadSHA256 = Self.sha256(payload)
         let encoded = try manifest.encoded()
-        try itemLock.mutex.withLock { _ throws(KnotError) in
+        return try itemLock.mutex.withLock { _ throws(KnotError) -> Bool in
             try files.place(encoded, at: locations.inboxManifest(manifest.captureID))
             #if DEBUG
                 Self.afterManifestPlaced.withLock { $0 }?(manifest.captureID, itemLock)
             #endif
+            if stopsAfterManifest() { return false }
             // A payload already on the drive with the same bytes is not placed again: it is durable.
             let url = locations.inboxPayload(manifest.captureID, kind: .typed)
-            if layer.entryKind(url) == .file, (try? layer.read(url)) == payload { return }
+            if layer.entryKind(url) == .file, (try? layer.read(url)) == payload { return true }
             try files.place(payload, at: url)
+            return true
         }
     }
 
