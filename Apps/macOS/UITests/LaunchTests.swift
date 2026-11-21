@@ -5,7 +5,7 @@ final class KnotMacLaunchTests: XCTestCase {
     @MainActor
     func testLaunchShowsTheMark() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.launchForSmokeTest()
         XCTAssertTrue(app.images["knot.mark"].waitForExistence(timeout: 30))
         try app.auditAccessibility()
     }

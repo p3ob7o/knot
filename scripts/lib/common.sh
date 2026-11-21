@@ -507,7 +507,9 @@ knot_start_app() {
     app_errors="$(mktemp)"
     # The app is started directly and waited for: a version that ran it in a disowned
     # subshell hung the self-test on a hosted runner.
-    "$app" >/dev/null 2>"$app_errors" &
+    # It ignores saved window state: development builds from every worktree share one bundle ID
+    # and so one saved window state, and a window that was closed once stays closed for all of them.
+    "$app" -ApplePersistenceIgnoreState YES >/dev/null 2>"$app_errors" &
     pid=$!
     deadline=$(($(knot_now) + seconds))
     while (($(knot_now) < deadline)); do
