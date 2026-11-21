@@ -8,7 +8,9 @@
 /// - punctuation, and hyphens between letters, so "forty-two" is the two words "forty two". An
 ///   apostrophe, a minus sign and a point before a digit belong to their word (`FidelityWords`);
 /// - paragraph and line breaks, and list markers at the start of a line: "-" and "•", and
-///   "1." or "1)" counting from 1 by one, which may also be the speaker's own number kept.
+///   "1." or "1)" counting from 1 by one. A number the speaker said never becomes a marker; a
+///   number at a line's start stands for the raw number only where the raw text ends a
+///   sentence straight after it.
 ///
 /// Removals, allowed only under `Policy.full`. A raw word may be left out only when
 /// - it is a filler sound from the closed list (`FidelityWords.fillers`);
@@ -216,7 +218,7 @@ public enum FidelityGuard {
     /// list marker either matched with the speaker's own number or skipped. Returns the removed
     /// words, or nil when there is none.
     static func align(_ raw: [FidelityWord], _ clean: [FidelityWord], spans: [[Span]]) -> [FidelityRemoval]? {
-        let markers = clean.filter(\.isMarker).count
+        let markers = clean.filter(\.countsOn).count
         // State (i, j): the first i raw words and the first j clean words are read. Its offset
         // t = i - j is the raw words removed less the markers skipped, between -markers and the
         // most that can be removed.
@@ -233,12 +235,14 @@ public enum FidelityGuard {
             for t in stride(from: min(highest, i), through: lowest, by: -1) where steps[index(i, t)] != 0 {
                 let j = i - t
                 guard j >= 0, j <= clean.count else { continue }
+                // A marker stands for the speaker's number only where the raw text ends a sentence
+                // straight after it: never "2 eggs" as "2. eggs".
                 if i < raw.count, j < clean.count, raw[i].text == clean[j].text,
-                    steps[index(i + 1, t)] == 0
+                    !clean[j].isMarker || raw[i].endsSentence, steps[index(i + 1, t)] == 0
                 {
                     steps[index(i + 1, t)] = Step.match
                 }
-                if j < clean.count, clean[j].isMarker, t - 1 >= lowest, steps[index(i, t - 1)] == 0 {
+                if j < clean.count, clean[j].countsOn, t - 1 >= lowest, steps[index(i, t - 1)] == 0 {
                     steps[index(i, t - 1)] = Step.skipMarker
                 }
                 guard i < raw.count else { continue }
@@ -275,8 +279,7 @@ public enum FidelityGuard {
     /// Why no allowed reading exists.
     static func diagnose(_ raw: [FidelityWord], _ cleanAndMarkers: [FidelityWord]) -> FidelityRejection {
         // A marker the guard could have skipped is no word of the speaker's.
-        let rawTexts = Set(raw.map(\.text))
-        let clean = cleanAndMarkers.filter { !$0.isMarker || rawTexts.contains($0.text) }
+        let clean = cleanAndMarkers.filter { !$0.countsOn }
         var balance: [String: Int] = [:]
         for word in raw { balance[word.text, default: 0] += 1 }
         for word in clean { balance[word.text, default: 0] -= 1 }

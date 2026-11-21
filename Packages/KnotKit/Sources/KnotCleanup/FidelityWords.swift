@@ -6,15 +6,25 @@ public struct FidelityWord: Sendable, Hashable {
     /// Whether the word is a negation, a number, a name or a date word, which only a restart
     /// may remove, and only when the same word comes again at the same place.
     public let isProtected: Bool
-    /// True for a list marker the cleaned text added: a number at the start of a line,
-    /// followed by "." or ")" and a space, that counts on from the last marker. The guard may
-    /// read it as the speaker's own number kept, or as a marker that holds no word.
+    /// True for a number in the shape of a list marker in a cleaned text: one or two digits at
+    /// the start of a line, followed by "." or ")" and a space. It is never the speaker's number
+    /// turned into a marker: it stands for a raw number only where the raw text has a sentence
+    /// end straight after that number, as in "we need chairs. 10. no 12.".
     public let isMarker: Bool
+    /// True for a marker that counts on from 1, by one, which the model may have added: the
+    /// guard may skip it, since it holds no word.
+    public let countsOn: Bool
+    /// True for a word followed straight away by ".", "!" or "?" that ends a sentence.
+    public var endsSentence: Bool
 
-    public init(text: String, isProtected: Bool, isMarker: Bool = false) {
+    public init(
+        text: String, isProtected: Bool, isMarker: Bool = false, countsOn: Bool = false, endsSentence: Bool = false
+    ) {
         self.text = text
         self.isProtected = isProtected
         self.isMarker = isMarker
+        self.countsOn = isMarker && countsOn
+        self.endsSentence = endsSentence
     }
 }
 
@@ -66,10 +76,10 @@ public enum FidelityWords {
     /// and dashes between letters included.
     ///
     /// With `listMarkers`, a number of one or two digits at the start of a line, followed by
-    /// "." or ")" and a space, is a list marker when it counts from 1, by one: "1.", then "2.",
-    /// and a new list from "1." again. It is a word with `isMarker`, which the guard may match
-    /// with the speaker's own number or skip. Any other number there, such as "12." or "10."
-    /// first, is an ordinary word.
+    /// "." or ")" and a space, is a word with `isMarker`. When it counts from 1, by one ("1.",
+    /// then "2.", and a new list from "1." again), it also `countsOn`: a marker the model may
+    /// have added, which the guard may skip. Any marker may stand for the speaker's number only
+    /// where the raw text ends a sentence straight after it, so "2 eggs" never becomes "2. eggs".
     ///
     /// A word written with a capital is a name unless it starts the text, a line or a
     /// sentence, or is "I" or one of its contractions.
@@ -78,9 +88,10 @@ public enum FidelityWords {
         var lastMarker = 0
         for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             var body = line
-            if listMarkers, let (number, rest) = listMarker(line), number == 1 || number == lastMarker + 1 {
-                lastMarker = number
-                words.append(FidelityWord(text: String(number), isProtected: true, isMarker: true))
+            if listMarkers, let (number, rest) = listMarker(line) {
+                let countsOn = number == 1 || number == lastMarker + 1
+                if countsOn { lastMarker = number }
+                words.append(FidelityWord(text: String(number), isProtected: true, isMarker: true, countsOn: countsOn))
                 body = rest
             }
             let characters = Array(body)
@@ -127,6 +138,7 @@ public enum FidelityWords {
                     let abbreviation = character == "." && follows && titles.contains(lastWord ?? "")
                     if ".!?".contains(character) && !abbreviation {
                         sentenceStart = true
+                        if follows { words[words.count - 1].endsSentence = true }
                     }
                 }
             }

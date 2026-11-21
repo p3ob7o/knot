@@ -61,6 +61,14 @@ let reviewRefused: [GuardExample] = [
     GuardExample(row: "possessive", raw: "tell Anna tell Anna's mum", cleaned: "Tell Anna's mum.", verdict: "refused"),
     GuardExample(
         row: "one-shared-word", raw: "I want to I need to leave", cleaned: "I need to leave.", verdict: "refused"),
+    // A number the speaker said never becomes a marker: a quantity is not a place in a list, and
+    // no rule tells a spoken count from a numbering (the orchestrator's correction of ruling 7).
+    GuardExample(row: "2-dot", raw: "2 eggs", cleaned: "2. eggs", verdict: "refused"),
+    GuardExample(
+        row: "1-egg-2-lemons", raw: "buy 1 egg 2 lemons", cleaned: "Buy:\n1. egg\n2. lemons", verdict: "refused"),
+    GuardExample(
+        row: "digit-list", raw: "packing 1 the passport 2 the charger",
+        cleaned: "Packing:\n1. the passport\n2. the charger", verdict: "refused"),
 ]
 
 /// Correct cleanings the guard lets through.
@@ -68,9 +76,6 @@ let reviewAccepted: [GuardExample] = [
     GuardExample(row: "nfd", raw: "meet at the caf\u{00E9}", cleaned: "Meet at the cafe\u{0301}.", verdict: "accepted"),
     GuardExample(row: "curly", raw: "don't go", cleaned: "Don\u{2019}t go.", verdict: "accepted"),
     GuardExample(row: "nbsp", raw: "call anna now", cleaned: "Call\u{00A0}Anna now.", verdict: "accepted"),
-    GuardExample(
-        row: "digit-list", raw: "packing 1 the passport 2 the charger",
-        cleaned: "Packing:\n1. the passport\n2. the charger", verdict: "accepted"),
     GuardExample(
         row: "paragraph-number", raw: "we need chairs. 10. no 12.", cleaned: "We need chairs.\n\n10. No, 12.",
         verdict: "accepted"),
@@ -99,7 +104,6 @@ let reviewLimits: [GuardExample] = [
     // Letter case and punctuation that change a word's sense.
     GuardExample(row: "case-us", raw: "tell us about it", cleaned: "Tell US about it.", verdict: "accepted"),
     GuardExample(row: "case-may", raw: "we may go", cleaned: "We May go.", verdict: "accepted"),
-    GuardExample(row: "2-dot", raw: "2 eggs", cleaned: "2. eggs", verdict: "accepted"),
 ]
 
 @Test(arguments: reviewRefused)

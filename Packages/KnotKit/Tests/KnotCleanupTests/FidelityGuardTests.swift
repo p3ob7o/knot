@@ -222,12 +222,15 @@ func aSignAPointAndAnApostropheBelongToTheirWord(_ raw: String, _ cleaned: Strin
 @Test func aNumberedMarkerIsAMarkerOnlyAtTheStartOfALineCountingFromOne() {
     let words = FidelityWords.words(in: "1. eggs\n 2) milk\n12. tea\n1. bread\nbuy 2. jam", listMarkers: true)
     #expect(words.map(\.text) == ["1", "eggs", "2", "milk", "12", "tea", "1", "bread", "buy", "2", "jam"])
-    #expect(words.map(\.isMarker) == [true, false, true, false, false, false, true, false, false, false, false])
+    #expect(words.map(\.isMarker) == [true, false, true, false, true, false, true, false, false, false, false])
+    // "12." has a marker's shape but counts on from nothing: the guard may not skip it.
+    #expect(words.map(\.countsOn) == [true, false, true, false, false, false, true, false, false, false, false])
     #expect(FidelityWords.words(in: "1. eggs", listMarkers: false).map(\.isMarker) == [false, false])
 }
 
-/// A marker the model adds counts from 1, by one, at the start of a line, with a space after
-/// it; a number the speaker said that becomes a marker is the speaker's number kept (finding 7).
+/// A marker the model adds counts from 1, by one, at the start of a line, with a space after it
+/// (finding 7). A number the speaker said never becomes a marker (the orchestrator's correction
+/// of ruling 7): only a number the raw text ends a sentence with may stand at a line's start.
 @Test(arguments: [
     ("buy eggs bread", "Buy:\n12. eggs\n2. bread", false),
     ("buy eggs", "Buy:\n100. eggs", false),
@@ -236,9 +239,13 @@ func aSignAPointAndAnApostropheBelongToTheirWord(_ raw: String, _ cleaned: Strin
     ("buy eggs bread", "Buy: 1. eggs 2. bread", false),
     ("buy eggs bread", "Buy:\n1. eggs\n2. bread", true),
     ("buy eggs bread", "Buy:\n1) eggs\n2) bread", true),
-    ("packing 1 the passport 2 the charger", "Packing:\n1. the passport\n2. the charger", true),
+    ("packing 1 the passport 2 the charger", "Packing:\n1. the passport\n2. the charger", false),
+    ("buy 1 egg 2 lemons", "Buy:\n1. egg\n2. lemons", false),
+    ("buy 2 eggs", "Buy\n2. eggs", false),
+    ("buy 2 eggs", "2. eggs", false),
     ("we need chairs. 10. no 12.", "We need chairs.\n\n10. No, 12.", true),
-    ("buy 2 eggs", "Buy\n2. eggs", true),
+    ("we need chairs. 1. no 2.", "We need chairs.\n\n1. No, 2.", true),
+    ("we need chairs 10 no 12", "We need chairs.\n\n10. No, 12.", false),
     ("two lists eggs milk then tea jam", "Two lists:\n1. eggs\n2. milk\nThen:\n1. tea\n2. jam", true),
 ])
 func aMarkerTheModelAddsCountsFromOne(_ raw: String, _ cleaned: String, _ accepted: Bool) {
