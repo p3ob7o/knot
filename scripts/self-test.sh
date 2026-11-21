@@ -875,9 +875,17 @@ make_audio || true
 first="$( [[ -f $ma/Fixtures/generated/verify-stamp.txt ]] && echo stamped || echo unstamped) $(spoken)"
 make_audio || true
 second="$(spoken)"
-bootstrap_ok=0
-grep -e 'knot_make_audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null &&
-    ! grep -e 'generate\.sh --audio' -e 'generate.sh" --audio' "$KNOT_SCRIPTS/bootstrap.sh" >/dev/null && bootstrap_ok=1
+# Bootstrap is read as shell, by its calls, not its text: a comment that names the helper is
+# no call of it, and the generator called in any quoting is a call.
+bootstrap_ok="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/bootstrap.sh" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+words = [k.command_words(k.shell_words(segment), {}, {}) for _, _, segment in k.shell_segments(open(sys.argv[2]).read())]
+names = [os.path.basename(w[0]) for w in words if w]
+print(1 if "knot_make_audio" in names and "generate.sh" not in names else 0)
+PY
+)"
 if [[ $first == "stamped 1" && $second == 1 && $bootstrap_ok == 1 ]]; then
     pass "the audio is made in one place, stamped and spoken once, and bootstrap.sh makes it there"
 else
