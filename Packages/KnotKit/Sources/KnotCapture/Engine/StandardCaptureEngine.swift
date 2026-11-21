@@ -663,6 +663,13 @@ public actor StandardCaptureEngine: CaptureEngine {
         try await storeRecording(id, audio: audio, endedAt: endedAt)
     }
 
+    /// The same error, saying that the recording or the drawing is kept on the drive.
+    private static func keeping(_ error: KnotError) -> KnotError {
+        KnotError(
+            code: error.code, errorClass: error.errorClass, next: error.next, retry: error.retry,
+            written: .contentKept, exitStatus: error.exitStatus, context: error.context)
+    }
+
     /// The error of a recording that ended because a write failed.
     private static func failure(of ending: RecordingEnding) -> KnotError? {
         switch ending {
@@ -725,9 +732,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             try inbox.writeRecording(manifest)
         } catch {
             // The recording is on the drive twice, its working file and its stored asset, and
-            // recovery finds the working file at the next launch.
+            // recovery finds the working file at the next launch. The error says so: what is on
+            // the drive when the call throws, never `nothing` (finding 70).
             log.failure(error.about(capture: id), "inbox_write_failed")
-            throw error.about(capture: id)
+            throw Self.keeping(error).about(capture: id)
         }
         entries[id]?.outcome = .stored
         entries[id]?.session = nil

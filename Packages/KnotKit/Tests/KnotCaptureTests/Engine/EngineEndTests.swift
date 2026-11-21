@@ -104,4 +104,21 @@ import Testing
         #expect(end.durableRevision == external.storedRevision)
         #expect(try await r.notes.segment(SegmentID(a.captureID))?.segment.text == "new")
     }
+
+    // MARK: 70
+
+    /// Finding 70. The converted recording is moved into the `AssetStore`, then the fallback item's
+    /// write finds the disk full. The error says what is on the drive when the call throws: the
+    /// recording is kept, never `nothing`.
+    @Test func recordingEndThatFailsSaysTheFileIsKept() async throws {
+        let r = Rig()
+        let recorder = DiskFillsAfterConversion(r.recorder, layer: r.layer)
+        let engine = r.engine(recorder: recorder)
+        let recording = try await r.beginRecording(on: engine)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        recorder.armed.withLock { $0 = true }
+        let error = try #require(await expectError(.diskFull) { try await engine.end(recording.captureID) })
+        #expect(error.written == .contentKept)
+        #expect(try await r.assets.find(AssetID(recording.captureID), kind: .audio) != nil)
+    }
 }
