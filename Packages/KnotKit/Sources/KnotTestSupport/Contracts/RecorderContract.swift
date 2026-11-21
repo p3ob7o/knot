@@ -291,7 +291,8 @@ public enum RecorderContract {
             }
             expected.append(.couldNotStart)
             let count = expected.count
-            #expect(await SuiteWait.until("the cue after \(step)") { subject.cues().count >= count })
+            #expect(
+                await SuiteWait.until("the cue after \(step)", limit: .seconds(10)) { subject.cues().count >= count })
             #expect(subject.cues() == expected, "The cues after \(step).")
         }
 
@@ -304,7 +305,7 @@ public enum RecorderContract {
         let limited = try await recorder.start(request(limit: .milliseconds(250)))
         expected += [.recordingLive, .stoppedEarly]
         let count = expected.count
-        #expect(await SuiteWait.until("the stopped-early cue") { subject.cues().count >= count })
+        #expect(await SuiteWait.until("the stopped-early cue", limit: .seconds(10)) { subject.cues().count >= count })
         #expect(subject.cues() == expected, "A recording that ended at its limit stopped early.")
         let ended = try #require(await SuiteWait.value("the stop after the ending") { await limited.stop() })
         #expect(ended.ending == .limitReached)

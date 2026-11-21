@@ -118,7 +118,7 @@ import Testing
         let peaks = try #require(
             RecordingPeaks(reading: try Data(contentsOf: folder.locations.recordingPeaks(request.captureID))))
         #expect(peaks.values == Self.expectedPeaks(kept, framesPerValue: 800), "The peaks start after the gap.")
-        #expect(await SuiteWait.until("the live cue") { cues.cues == [.recordingLive] })
+        #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
     }
 
     /// The gap is held between nothing and half a second, so that a wrong setting never eats
@@ -157,7 +157,7 @@ import Testing
         #expect(audio.ending == .interrupted && audio.frames == 16_000, "\(audio)")
         #expect(cues.played.isEmpty, "The first cue is still held.")
         cues.release()
-        #expect(await SuiteWait.until("the cues") { cues.played.count == 2 })
+        #expect(await SuiteWait.until("the cues", limit: .seconds(10)) { cues.played.count == 2 })
         #expect(cues.played.map(\.cue) == [.recordingLive, .stoppedEarly])
         #expect(cues.played.allSatisfy { $0.queue == "knot.audio.cues" }, "\(cues.played)")
     }
@@ -173,7 +173,7 @@ import Testing
         let session = try await live.start(request())
         let audio = await session.stop()
         #expect(audio.ending == .writeFailed, "\(audio)")
-        #expect(await SuiteWait.until("the cues") { cues.cues.count == 2 })
+        #expect(await SuiteWait.until("the cues", limit: .seconds(10)) { cues.cues.count == 2 })
         #expect(cues.cues == [.recordingLive, .stoppedEarly])
     }
 

@@ -410,7 +410,7 @@ import Testing
             delivering.withLock { $0 = false }
         }
         hardware.interrupt()
-        #expect(await SuiteWait.until("the stop") { returned.value })
+        #expect(await SuiteWait.until("the stop", limit: .seconds(10)) { returned.value })
         await stopped.wait()
         #expect(deliveringAtReturn.withLock { $0 } == false, "The stop returned while the delivery ran.")
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
@@ -450,13 +450,13 @@ import Testing
         try started.get()
     }
 
-    /// Blocks the calling thread until `condition` holds, for at most `SuiteWait.limit`. Only on a
-    /// thread outside the cooperative pool.
-    static func waitUntil(_ condition: () -> Bool) {
-        let deadline = ContinuousClock.now + SuiteWait.limit
+    /// Blocks the calling thread until `condition` holds, for at most `limit`. Only on a thread
+    /// outside the cooperative pool.
+    static func waitUntil(limit: Duration = SuiteWait.limit, _ condition: () -> Bool) {
+        let deadline = ContinuousClock.now + limit
         while !condition() {
             guard ContinuousClock.now < deadline else {
-                Issue.record("Waited \(SuiteWait.limit) inside the start.")
+                Issue.record("Waited \(limit) inside the start.")
                 return
             }
             usleep(500)

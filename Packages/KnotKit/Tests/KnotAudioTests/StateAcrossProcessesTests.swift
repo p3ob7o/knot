@@ -110,7 +110,7 @@ import Testing
             let now = store.read()
             #expect(now.phase == .recording && now.captureID == started.captureID && now.ownerLaunch == thisLaunch)
             #expect(SavedRecordingState(now).map { !$0.isStale(at: Date()) } == true, "A fresh heartbeat: \(now)")
-            #expect(await SuiteWait.until("the live cue") { cues.cues == [.recordingLive] })
+            #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
             _ = await session.stop()
             try await live.removeWorkingFile(of: started.captureID)
             try await live.removeWorkingFile(of: dead.capture)

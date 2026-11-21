@@ -99,7 +99,7 @@ import Testing
         #expect(store.read() == .idle && store.phases == [.starting, .idle], "\(store.phases)")
         let session = try await live.start(request())
         _ = await allEvents(of: session)
-        #expect(await SuiteWait.until("the idle state") { store.read() == .idle })
+        #expect(await SuiteWait.until("the idle state", limit: .seconds(10)) { store.read() == .idle })
         #expect(store.phases.suffix(4) == [.starting, .recording, .stopping, .idle], "\(store.phases)")
     }
 

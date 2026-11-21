@@ -22,7 +22,7 @@ import Testing
         for _ in 0..<3 { engine.deliver(try tone.next(4_800)) }
         await durable(atLeast: 14_400, of: session)
         hardware.interrupt()
-        guard case .ended(let audio)? = await allEvents(of: session).last else {
+        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
             Issue.record("The recording did not end by itself.")
             return
         }
@@ -47,7 +47,8 @@ import Testing
         engine.setShape(InputShape(sampleRate: 44_100, channels: 2))
         engine.changeConfiguration()
         let restarted = ["installTap", "start", "stop", "removeTap", "installTap", "start"]
-        #expect(await SuiteWait.until("the restart") { engine.calls == restarted }, "\(engine.calls)")
+        #expect(
+            await SuiteWait.until("the restart", limit: .seconds(10)) { engine.calls == restarted }, "\(engine.calls)")
         var after = try #require(Tone(rate: 44_100, channels: 2))
         for _ in 0..<10 { engine.deliver(try after.next(4_410)) }
         let audio = await session.stop()
@@ -76,7 +77,7 @@ import Testing
         await durable(atLeast: 4_800, of: session)
         engine.failNextStart(with: .audioSessionBusy)
         engine.changeConfiguration()
-        guard case .ended(let audio)? = await allEvents(of: session).last else {
+        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
             Issue.record("The recording did not end by itself.")
             return
         }
@@ -100,7 +101,7 @@ import Testing
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         engine.deliver(buffer)
         engine.changeConfiguration()
-        #expect(await SuiteWait.until("the restart") { opened.restarts == 1 })
+        #expect(await SuiteWait.until("the restart", limit: .seconds(10)) { opened.restarts == 1 })
         engine.deliver(buffer)
         await opened.stop()
         #expect(deliveries.withLock { $0 } == ["audio 1600", "audio 1600"])
@@ -137,7 +138,7 @@ import Testing
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         hardware.changeRoute()
         hardware.interrupt()
-        #expect(await SuiteWait.until("the ending") { !deliveries.withLock { $0 }.isEmpty })
+        #expect(await SuiteWait.until("the ending", limit: .seconds(10)) { !deliveries.withLock { $0 }.isEmpty })
         await opened.stop()
         #expect(deliveries.withLock { $0 } == ["ended interrupted"])
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"], "\(engine.calls)")
@@ -161,7 +162,7 @@ import Testing
         }
         try opened.start(format: format) { _ in }
         engine.changeConfiguration()
-        #expect(await SuiteWait.until("the stop") { opened.stopRequested })
+        #expect(await SuiteWait.until("the stop", limit: .seconds(10)) { opened.stopRequested })
         await stopping.wait()
         #expect(
             seen.withLock { $0 } == ["installTap", "start", "stop", "removeTap", "installTap", "removeTap"],

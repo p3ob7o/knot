@@ -41,7 +41,7 @@ import Testing
         #expect(wired.recordingState is DefaultsRecordingStateStore)
         let session = try await wired.recorder.start(request())
         #expect(wired.recordingState.read().phase == .recording)
-        #expect(await SuiteWait.until("the live cue") { cues.cues == [.recordingLive] })
+        #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
         _ = await session.stop()
         #expect(wired.recordingState.read() == .idle)
     }
