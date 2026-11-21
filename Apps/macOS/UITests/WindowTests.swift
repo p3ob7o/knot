@@ -21,7 +21,10 @@ final class KnotMacWindowTests: XCTestCase {
 
     @MainActor
     func testTheMainWindowIsThereAtLaunchWhateverWasSaved() {
-        let app = XCUIApplication()
+        // Through the launcher, for the agent's mark and `.preview`, without the window-state pair
+        // it adds to every launch: this test is about that state.
+        let app = KnotLauncher.application(.preview)
+        app.launchArguments = KnotLauncher.arguments(for: .preview)
         app.launch()
         XCTAssertTrue(
             app.descendants(matching: .any)["Capture field"].waitForExistence(timeout: 30),

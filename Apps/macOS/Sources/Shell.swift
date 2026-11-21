@@ -8,25 +8,22 @@ import Observation
 /// take, and the launch sequence to start once the capture surface is on screen
 /// (docs/architecture.md §3 and §13). The shell computes no path and opens no store itself:
 /// where the store is, and which folder a development build uses, is `StoreLocations` and the
-/// composition's.
-///
-/// `make()` is the one place that changes when the composition of WP-22's first pull request
-/// is on main: it then calls `EnvironmentFactory.app(shell:)` and takes the environment, the
-/// context and the launch sequence from what that returns.
+/// composition's. A build with no usable place for its store answers every read and save with
+/// that place's own error, which the window shows by its code.
 struct Composition: Sendable {
     let environment: AppEnvironment
     let context: UIContext
     let runLaunchSequence: @Sendable () async -> Void
 
+    /// The one call to the factory. The skeleton implements none of the shell's ports yet: the
+    /// cues and where an Open intent lands come with WP-33's second pull request, and the Live
+    /// Activity is the iPhone's and the iPad's.
     @MainActor
     static func make() -> Composition {
-        let environment = EnvironmentFactory.make()
-        // Main's factory gives no context and has no launch sequence. The context's device ID
-        // only decides whether a recording's text is made here or elsewhere, and no recording
-        // runs in this skeleton.
+        let app = EnvironmentFactory.app(shell: ShellPorts())
         return Composition(
-            environment: environment, context: UIContext(thisDevice: environment.ids.make(), sync: .notInThisBuild),
-            runLaunchSequence: {})
+            environment: app.environment, context: app.context,
+            runLaunchSequence: { _ = await app.runLaunchSequence() })
     }
 }
 
