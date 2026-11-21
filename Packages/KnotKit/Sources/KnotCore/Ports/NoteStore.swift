@@ -45,7 +45,8 @@ public protocol NoteStore: Sendable {
     /// Rule 15 applies in the order the captures began. A capture whose store call commits
     /// after a newer capture began on this device, the race of §6 rule 6, never ends that
     /// capture: it is recorded as ended at the newer one's start, takes its later saves by
-    /// revision, and is placed by the note it showed or by the append rule at its own start.
+    /// revision, and is placed by the note it showed or by the append rule at its own start. A
+    /// recording takes its own end, as `end(_:)` says.
     ///
     /// A capture that follows the window goes to the note its surface showed, whenever it names
     /// one and that note can still take it: not deleted, a live segment left, and not closed by
@@ -133,10 +134,13 @@ public protocol NoteStore: Sendable {
     /// capture, by `end` or `ingest`, stores it through the same precedence: a person's text
     /// since the failure stays, and the retry's content is kept as a conflict copy. A failed
     /// recording or drawing ended `discarded_empty`, as launch recovery ends a recording that it
-    /// reads at last and finds to hold no frame, is discarded as an open one is. A segment's
-    /// revision is the store's own: never taken from a producer's content revision, and it
-    /// only rises. A recording that ends stored with no file, or a negative revision, is refused
-    /// with `capture_invalid`; a drawing ended as it stands goes on to recognition.
+    /// reads at last and finds to hold no frame, is discarded as an open one is. A recording that
+    /// was recorded as ended before its file, at a newer capture's start, holds nothing until its
+    /// file comes: its own end applies as to an open one, stored with its file, failed with its
+    /// code, or discarded as empty. A segment's revision is the store's own: never taken from a
+    /// producer's content revision, and it only rises. A recording that ends stored with no file,
+    /// or a negative revision, is refused with `capture_invalid`; a drawing ended as it stands goes
+    /// on to recognition.
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt
 
     /// The captures whose rows are open, of every launch. Recovery finishes those of other

@@ -118,7 +118,9 @@ public struct LaunchRecovery: Sendable {
     /// manifest goes, except that a failed row ends empty only when its working file was read
     /// and holds no frame. A failed row whose working file is missing stays failed, and its
     /// manifest stays. Audio that will not convert ends its row as failed, and the working file
-    /// and its manifest stay for the retry: the audio a person spoke is never thrown away.
+    /// and its manifest stay for the retry: the audio a person spoke is never thrown away. A row
+    /// recorded as ended before its file is finished as an open one is: its working file goes only
+    /// for a row that holds its content, or a discarded one.
     /// Returns `nil` for a recording whose row must be made after every other row has ended.
     private func finishRecording(_ recording: RecordedAudio, cyclic: Bool, kept: [CaptureID: ErrorCode]) async
         -> Outcome?
@@ -127,8 +129,10 @@ public struct LaunchRecovery: Sendable {
         do throws(KnotError) {
             let row = try await notes.capture(id)
             switch row?.outcome {
-            case .stored?, .discardedEmpty?:
+            case .stored? where row?.awaitsItsFile != true, .discardedEmpty?:
                 // Ingest, or the end before the death, stored it: only the working file is left.
+                // A row recorded as ended before its file is not stored: it holds nothing yet,
+                // and it is finished as an open one is.
                 try await recorder.removeWorkingFile(of: id)
                 return .workingFileRemoved
             default:
@@ -137,7 +141,7 @@ public struct LaunchRecovery: Sendable {
             let fileIsThere = recording.workingFile.map { layer.entryKind($0) == .file } == true
             let hasAudio = recording.frames > 0 && fileIsThere
             guard hasAudio else {
-                if let row, row.outcome != .open, !fileIsThere {
+                if let row, case .failed = row.outcome, !fileIsThere {
                     // A failed row had audio, as one whose conversion failed: its working file
                     // gone is not a recording with no audio. It stays failed, and nothing of it
                     // is removed.
@@ -221,7 +225,7 @@ public struct LaunchRecovery: Sendable {
     private func failConversion(_ row: Capture, _ recording: RecordedAudio, _ error: KnotError) async throws(KnotError)
         -> Outcome
     {
-        if row.outcome == .open {
+        if row.outcome == .open || row.awaitsItsFile {
             _ = try await notes.end(
                 CaptureEnd(
                     captureID: row.id, endedAt: row.startedAt.addingTimeInterval(seconds(recording.duration)),
@@ -328,4 +332,11 @@ public struct LaunchRecovery: Sendable {
         let (seconds, attoseconds) = duration.components
         return TimeInterval(seconds) + TimeInterval(attoseconds) / 1e18
     }
+}
+
+extension Capture {
+    /// A recording recorded as ended before its file, at a newer capture's start (the race of
+    /// §6 rule 6): stored with no content, it holds nothing until its file comes, and its own end
+    /// applies to it as to an open one.
+    fileprivate var awaitsItsFile: Bool { kind == .voice && outcome == .stored && contentHash == nil }
 }
