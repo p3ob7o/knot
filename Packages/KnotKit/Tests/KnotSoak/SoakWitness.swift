@@ -224,11 +224,10 @@ struct SoakWitness {
             }
         }
 
-        // Nothing waits in `Inbox/` once the last launch has recovered.
-        let left =
-            ((try? FileManager.default.contentsOfDirectory(atPath: locations.inbox.path)) ?? [])
-            .filter { !$0.hasPrefix(".") }
-        if !left.isEmpty { problems.append(Problem(code: "inbox_items_left", ids: ["count=\(left.count)"])) }
+        // Nothing waits in `Inbox/` once the last launch has recovered: every entry counts,
+        // whatever its name, and a folder that cannot be listed is red too.
+        problems += Self.inboxProblems(
+            InboxEntries.list(locations), known: partials, red: SoakRules.inboxPartialsAreRed)
         return problems
     }
 
