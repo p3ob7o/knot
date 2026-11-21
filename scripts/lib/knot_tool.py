@@ -877,11 +877,16 @@ def cmd_unended_tests(log):
 NIGHTLY = ".github/workflows/nightly.yml"
 
 
+JOB_KEYS = {}
+
+
 def workflow_jobs(text):
     """The jobs of a workflow, as {job: [step]}, each step a dict of its keys, with a block
-    value such as `run: |` joined into one string. It reads the plain layout of this
+    value such as `run: |` joined into one string. A job's own keys, such as `if:` and
+    `continue-on-error:`, are in JOB_KEYS of the returned dict, by job. It reads the plain layout of this
     repository's workflows (two spaces a level, a step as `- name:` or `- uses:`), not every
     form YAML allows, and comment lines count for nothing."""
+    JOB_KEYS.clear()
     jobs, job, steps, step, block, in_jobs = {}, None, None, None, None, False
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -900,9 +905,15 @@ def workflow_jobs(text):
         if indent == 2 and line.rstrip().endswith(":"):
             job = line.strip()[:-1]
             jobs[job], steps, step = [], None, None
+            JOB_KEYS[job] = {}
             continue
         if job and indent == 4 and line.strip() == "steps:":
             steps = jobs[job]
+            continue
+        if job and indent == 4 and ":" in line:
+            key, value = line.strip().split(":", 1)
+            JOB_KEYS[job][key] = value.strip()
+            steps, step = None, None
             continue
         if steps is not None and line.lstrip().startswith("- "):
             step = {}
@@ -921,7 +932,8 @@ def workflow_jobs(text):
 def cmd_workflows(path=NIGHTLY):
     """The tree's nightly workflow makes the tree's audio before the package tests under
     Thread Sanitizer: in the job that runs `scripts/verify.sh --only tsan`, a step whose run
-    is `scripts/verify.sh --only fixtures` comes first, and neither step has a condition.
+    is `scripts/verify.sh --only fixtures` comes first, and neither the two steps nor the job
+    has a condition or continue-on-error.
     `--only tsan` has no fixtures step, and the tests that read the audio need it. The gate's
     lint step runs this on the tree; the self-test, on wrong workflows of its own."""
     problems = []
@@ -944,6 +956,13 @@ def cmd_workflows(path=NIGHTLY):
         for name, at in (("fixtures", fixtures), ("tsan", tsan)):
             if at is not None and "if" in steps[at]:
                 problems.append(f"the {name} step of the job {job} has a condition, if: {steps[at]['if']}")
+            if at is not None and "continue-on-error" in steps[at]:
+                problems.append(f"the {name} step of the job {job} has continue-on-error: {steps[at]['continue-on-error']}")
+        # A condition or continue-on-error on the job itself would leave the run green with
+        # no sanitizer run, or with one that failed (finding 62).
+        for key in ("if", "continue-on-error"):
+            if key in JOB_KEYS.get(job, {}):
+                problems.append(f"the job {job} has {key}: {JOB_KEYS[job][key]}")
     if not found:
         problems.append("no job runs scripts/verify.sh --only tsan")
     for problem in problems:

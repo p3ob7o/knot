@@ -912,7 +912,8 @@ fi
 # self-test reads its own checkout. Here the check is run on six workflows: the scripts' own,
 # which passes; and five wrong ones, each refused: tsan before the fixtures (36a), the
 # fixtures step commented out (36b), the fixtures step with `if: false` (43a), the fixtures
-# step in another job (43b), and the tsan step with an `if:` of its own.
+# step in another job (43b), the tsan step with an `if:` of its own, and (finding 62) the tsan
+# job with `if: false`, and `continue-on-error: true` on the fixtures step or on the job.
 nw="$scratch/nightly"
 mkdir -p "$nw"
 python3 -I - "$KNOT_SELF/.github/workflows/nightly.yml" "$nw" <<'PY'
@@ -930,6 +931,9 @@ variants = {
     "if-false": text.replace(fixtures, fixtures.replace("        run:", "        if: false\n        run:")),
     "other-job": text.replace(fixtures, "") + "  audio:\n    runs-on: xcode-27\n    steps:\n" + fixtures,
     "tsan-if": text.replace(tsan, tsan.replace("        run:", "        if: github.event_name == 'schedule'\n        run:")),
+    "job-if": text.replace("  tsan:\n    runs-on:", "  tsan:\n    if: false\n    runs-on:"),
+    "fixtures-continue": text.replace(fixtures, fixtures.replace("        run:", "        continue-on-error: true\n        run:")),
+    "job-continue": text.replace("  tsan:\n    runs-on:", "  tsan:\n    continue-on-error: true\n    runs-on:"),
 }
 for name, body in variants.items():
     assert body != text, name
@@ -938,11 +942,11 @@ PY
 nightly_ok=0
 python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$KNOT_SELF/.github/workflows/nightly.yml" >"$nw/own.out" 2>&1 || nightly_ok=$?
 nightly_refused=""
-for variant in tsan-first commented if-false other-job tsan-if; do
+for variant in tsan-first commented if-false other-job tsan-if job-if fixtures-continue job-continue; do
     python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" workflows --file "$nw/$variant.yml" >"$nw/$variant.out" 2>&1 &&
         nightly_refused="$nightly_refused passed:$variant" || nightly_refused="$nightly_refused refused:$variant"
 done
-if [[ $nightly_ok == 0 && $nightly_refused == " refused:tsan-first refused:commented refused:if-false refused:other-job refused:tsan-if" ]]; then
+if [[ $nightly_ok == 0 && $nightly_refused == " refused:tsan-first refused:commented refused:if-false refused:other-job refused:tsan-if refused:job-if refused:fixtures-continue refused:job-continue" ]]; then
     pass "the hosted nightly run makes the audio first, in the same job, unconditionally, and each wrong workflow is refused"
 else
     fail "the nightly workflow's check: the scripts' own workflow status $nightly_ok ($(tail -n 1 "$nw/own.out")), the wrong ones:$nightly_refused"
