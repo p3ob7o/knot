@@ -96,6 +96,13 @@ extension StoreDatabase {
                 problems.append(ConsistencyProblem(code: "piece_not_its_capture", ids: [id.description]))
             }
         }
+        // A note that holds a segment that is not in progress is a record to send.
+        try report(
+            "note_not_sendable",
+            """
+            SELECT note.id FROM note WHERE sendable = 0 AND EXISTS (SELECT 1 FROM segment
+                WHERE segment.note_id = note.id AND segment.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing'))
+            """)
         // Job rows agree: every stored recording with a file has its transcribe job.
         for row in try Row.fetchAll(
             db,

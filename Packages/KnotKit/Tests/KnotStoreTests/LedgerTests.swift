@@ -152,4 +152,57 @@ import Testing
         #expect(try await noteCount(database) == 0)
         expectConsistent(database)
     }
+
+    /// "None for a draft or a recording in progress" (docs/architecture.md §7): a draft that
+    /// starts its own note, and a recording that does, leave no row while they are open and
+    /// none when they end with nothing kept. Once one ends with something kept, its note and
+    /// its segment have a row each.
+    @Test func theNoteOfACaptureInProgressHasNoRow() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 98, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let notes = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        var draft = captures.draft("Half a synthetic thought", at: 0)
+        draft.placement = .newNote
+        let receipt = try await notes.record(draft)
+        _ = try await notes.checkpoint(
+            CaptureCheckpoint(captureID: draft.id, text: "Half a synthetic thought more", revision: 2))
+        #expect(try await LedgerTests.changeLog(database).isEmpty, "An open draft's note \(receipt.noteID).")
+        _ = try await notes.end(
+            CaptureEnd(captureID: draft.id, endedAt: captures.at(1), outcome: .discardedEmpty, revision: 3))
+        #expect(try await LedgerTests.changeLog(database).isEmpty, "A draft that kept nothing.")
+
+        let recordingID: CaptureID = ids.make()
+        clock.set(captures.at(10))
+        let started = try await notes.record(
+            NewCapture(
+                id: recordingID, kind: .voice, origin: CaptureOrigin(source: .device(database.deviceID), surface: .app),
+                launchID: captures.launch, placement: .newNote, startedAt: captures.at(10), body: .none))
+        #expect(try await LedgerTests.changeLog(database).isEmpty, "A recording in progress, note \(started.noteID).")
+        clock.set(captures.at(11))
+        _ = try await notes.end(
+            CaptureEnd(
+                captureID: recordingID, endedAt: captures.at(11),
+                outcome: .stored(.file(captures.asset(.audio, for: recordingID), duration: .seconds(60))), revision: 1))
+        #expect(
+            try await LedgerTests.changeLog(database)
+                == [
+                    "note \(started.noteID)", "segment \(started.segmentIDs[0])",
+                ].sorted())
+
+        var kept = captures.draft("A synthetic kept thought", at: 20)
+        kept.placement = .newNote
+        let keptReceipt = try await notes.record(kept)
+        _ = try await notes.end(
+            CaptureEnd(
+                captureID: kept.id, endedAt: captures.at(21), outcome: .stored(.text("A synthetic kept thought")),
+                revision: 2))
+        let rows = try await LedgerTests.changeLog(database)
+        #expect(rows.contains("note \(keptReceipt.noteID)") && rows.contains("segment \(keptReceipt.segmentIDs[0])"))
+        #expect(rows.count == 4, "\(rows)")
+        expectConsistent(database)
+    }
 }

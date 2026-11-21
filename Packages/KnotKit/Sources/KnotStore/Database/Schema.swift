@@ -62,7 +62,10 @@ public enum StoreSchema {
             last_capture_ended_at REAL NOT NULL,
             closed_at REAL,
             deleted_at REAL,
-            revision INTEGER NOT NULL
+            revision INTEGER NOT NULL,
+            -- 1 once the note has held a segment that is not a draft or a recording in
+            -- progress: from then on it is a record sync sends, and before it is none.
+            sendable INTEGER NOT NULL DEFAULT 0 CHECK (sendable IN (0, 1))
         );
         CREATE INDEX note_stream ON note (last_capture_ended_at DESC, id DESC) WHERE deleted_at IS NULL;
         CREATE INDEX note_revision ON note (revision);
@@ -223,19 +226,37 @@ public enum StoreSchema {
             PRIMARY KEY (record_type, record_id)
         ) WITHOUT ROWID;
 
-        CREATE TRIGGER change_log_note_insert AFTER INSERT ON note BEGIN
+        -- A note is a record to send once it holds a segment that is not in progress, and from
+        -- then on: the note of a draft or of a recording in progress has no row, and has none
+        -- after the capture ends with nothing kept. A transaction writes a note and its segments
+        -- in either order, so both a note's insert and a segment's write may make it one.
+        CREATE TRIGGER note_sendable_insert AFTER INSERT ON note
+        WHEN NEW.sendable = 0 AND EXISTS (SELECT 1 FROM segment WHERE segment.note_id = NEW.id
+            AND segment.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing')) BEGIN
+            UPDATE note SET sendable = 1 WHERE id = NEW.id;
+        END;
+        CREATE TRIGGER note_sendable_segment_insert AFTER INSERT ON segment
+        WHEN NEW.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing') BEGIN
+            UPDATE note SET sendable = 1 WHERE id = NEW.note_id AND sendable = 0;
+        END;
+        CREATE TRIGGER note_sendable_segment_update AFTER UPDATE OF state, note_id ON segment
+        WHEN NEW.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing') BEGIN
+            UPDATE note SET sendable = 1 WHERE id = NEW.note_id AND sendable = 0;
+        END;
+        CREATE TRIGGER change_log_note_insert AFTER INSERT ON note WHEN NEW.sendable = 1 BEGIN
             INSERT INTO change_log (record_type, record_id) SELECT 'note', NEW.id
                 WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'note' AND record_id = NEW.id);
         END;
         CREATE TRIGGER change_log_note_update AFTER UPDATE ON note
-        WHEN OLD.title IS NOT NEW.title OR OLD.title_origin IS NOT NEW.title_origin
+        WHEN NEW.sendable = 1 AND (OLD.sendable IS NOT NEW.sendable
+            OR OLD.title IS NOT NEW.title OR OLD.title_origin IS NOT NEW.title_origin
             OR OLD.title_edited_at IS NOT NEW.title_edited_at OR OLD.created_at IS NOT NEW.created_at
             OR OLD.last_capture_ended_at IS NOT NEW.last_capture_ended_at OR OLD.closed_at IS NOT NEW.closed_at
-            OR OLD.deleted_at IS NOT NEW.deleted_at BEGIN
+            OR OLD.deleted_at IS NOT NEW.deleted_at) BEGIN
             INSERT INTO change_log (record_type, record_id) SELECT 'note', NEW.id
                 WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'note' AND record_id = NEW.id);
         END;
-        CREATE TRIGGER change_log_note_delete AFTER DELETE ON note BEGIN
+        CREATE TRIGGER change_log_note_delete AFTER DELETE ON note WHEN OLD.sendable = 1 BEGIN
             INSERT INTO change_log (record_type, record_id) SELECT 'note', OLD.id
                 WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'note' AND record_id = OLD.id);
         END;
