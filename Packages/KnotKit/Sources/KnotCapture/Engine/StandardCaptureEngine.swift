@@ -1103,6 +1103,12 @@ public actor StandardCaptureEngine: CaptureEngine {
 }
 
 /// One call of the engine, and the line it holds: the engine's record of who holds what.
+///
+/// The record holds only if every call site passes on the call it was given. Each public entry
+/// makes one and hands it down; a helper, or a task a call starts, that is handed a fresh
+/// `EngineCall()` in its place takes the line again unseen, and no `line_nested` is logged. The
+/// suite does not catch that: a task handed a fresh call passes every test. A reader of a change
+/// checks it at the call sites.
 final class EngineCall: Sendable {
     private let line = Mutex<CaptureID?>(nil)
 
