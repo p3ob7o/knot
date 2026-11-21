@@ -234,7 +234,9 @@ import Testing
         }
         let format = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
-        try opened.start(format: format) { delivery in
+        // The hook holds the start's thread while it waits for the stop: off the cooperative pool,
+        // so that the stop's task always has a thread to run on, however busy the pool is.
+        try await Self.startOffThePool(opened, format: format) { delivery in
             if case .ended = delivery { stopping.start { await opened.stop() } }
         }
         await stopping.wait()
@@ -315,7 +317,26 @@ import Testing
         return AVReadOnlyAudioPCMBuffer(copying: buffer)
     }
 
-    /// Blocks the calling thread until `condition` holds, for at most `SuiteWait.limit`.
+    /// Runs the microphone's start on a thread of Dispatch's, not of the cooperative pool, and
+    /// returns once it has returned.
+    static func startOffThePool(
+        _ opened: OpenMicrophone, format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void
+    ) async throws {
+        let started: Result<Void, KnotError> = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                do throws(KnotError) {
+                    try opened.start(format: format, deliver: deliver)
+                    continuation.resume(returning: .success(()))
+                } catch {
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
+        try started.get()
+    }
+
+    /// Blocks the calling thread until `condition` holds, for at most `SuiteWait.limit`. Only on a
+    /// thread outside the cooperative pool.
     static func waitUntil(_ condition: () -> Bool) {
         let deadline = ContinuousClock.now + SuiteWait.limit
         while !condition() {
