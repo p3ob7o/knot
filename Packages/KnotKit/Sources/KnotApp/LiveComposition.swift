@@ -50,12 +50,16 @@ public final class LiveComposition: Sendable {
         /// Called with each module's name and the environment its live entry point is given,
         /// just before it is called.
         public var wiring: (@Sendable (String, AppEnvironment) -> Void)?
+        /// Where the launch state of the suite it is given is kept, instead of that defaults
+        /// suite, so that a test leaves nothing in the account's preferences.
+        public var launchState: (@Sendable (String) -> any LaunchStateStorage)?
 
         public init(
             input: (any AudioInput)? = nil, transcriber: (any Transcriber)? = nil,
             deadline: StoreDeadline = .standard, migrations: [StoreSchema.Migration]? = nil,
             storeHooks: StoreHooks = StoreHooks(), installSpeechModel: Bool = true, recorder: (any Recorder)? = nil,
-            wiring: (@Sendable (String, AppEnvironment) -> Void)? = nil
+            wiring: (@Sendable (String, AppEnvironment) -> Void)? = nil,
+            launchState: (@Sendable (String) -> any LaunchStateStorage)? = nil
         ) {
             self.input = input
             self.transcriber = transcriber
@@ -65,6 +69,7 @@ public final class LiveComposition: Sendable {
             self.installSpeechModel = installSpeechModel
             self.recorder = recorder
             self.wiring = wiring
+            self.launchState = launchState
         }
     }
 
@@ -84,6 +89,8 @@ public final class LiveComposition: Sendable {
     /// and keep their stores apart, as two worktrees' development builds on one Mac do, never
     /// share a breaker.
     public let launchStateSuite: String
+    /// The launch state, kept in `launchStateSuite`.
+    let launchState: any LaunchStateStorage
     let clock: any WallClock
     let ids: any IDGenerator
     let layer: any FileLayer
@@ -144,7 +151,9 @@ public final class LiveComposition: Sendable {
             environment.engine = RefusingCaptureEngine(error: error)
             // No store and no `Inbox/`: nothing is captured, so no ID is kept either.
             self.deviceID = ids.make()
-            self.launchStateSuite = "\(configuration.settingsSuite).store.none"
+            let noStore = "\(configuration.settingsSuite).store.none"
+            self.launchStateSuite = noStore
+            self.launchState = seams.launchState?(noStore) ?? DefaultsLaunchState(suiteName: noStore)
             self.locations = nil
             self.locationsError = error
             self.gatedQueue = nil
@@ -159,7 +168,9 @@ public final class LiveComposition: Sendable {
         let launchStateSuite = Self.launchStateSuite(
             settingsSuite: configuration.settingsSuite, storeRoot: locations.storeRoot)
         self.launchStateSuite = launchStateSuite
-        self.deviceID = DeviceIdentity(suiteName: launchStateSuite).current(ids: ids)
+        let launchState = seams.launchState?(launchStateSuite) ?? DefaultsLaunchState(suiteName: launchStateSuite)
+        self.launchState = launchState
+        self.deviceID = DeviceIdentity(storage: launchState).current(ids: ids)
 
         environment.notes = GatedNoteStore(gate: gate, timings: timings)
         environment.assets = GatedAssetStore(gate: gate)

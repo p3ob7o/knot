@@ -46,7 +46,7 @@ final class LiveFolder: Sendable {
     }
 
     /// The breaker of this folder's store, as the composition keeps it.
-    var breaker: LaunchBreaker { LaunchBreaker(suiteName: launchStateSuite) }
+    var breaker: LaunchBreaker { LaunchBreaker(storage: MemoryLaunchState(suiteName: launchStateSuite)) }
 
     /// The suite of this folder's store's launch state, as the composition names it.
     var launchStateSuite: String {
@@ -61,10 +61,18 @@ final class LiveFolder: Sendable {
             environment: [:])
     }
 
+    /// Removes the folder and the test's launch state. The launch state is kept in memory, and
+    /// the store's settings are only read, so no test writes to the account's Preferences folder;
+    /// a preference file named after the test's suite, if one is there, is removed too. Each test
+    /// calls it in a `defer`, so it runs after a failed expectation or a thrown error too.
     func remove() {
         try? FileManager.default.removeItem(at: container)
-        for suite in [settingsSuite, launchStateSuite, "\(settingsSuite).store.none"] {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        MemoryLaunchState.remove(prefix: settingsSuite)
+        let preferences = FileManager.default.homeDirectoryForCurrentUser.appending(
+            path: "Library/Preferences", directoryHint: .isDirectory)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
+        for file in files where file.hasPrefix(settingsSuite) && file.hasSuffix(".plist") {
+            try? FileManager.default.removeItem(at: preferences.appending(path: file))
         }
     }
 }
@@ -76,7 +84,8 @@ extension LiveComposition.Seams {
     /// refuses at once or answers `store_busy` after its own busy timeout.
     static var forTests: Self {
         LiveComposition.Seams(
-            transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false)
+            transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false,
+            launchState: { MemoryLaunchState(suiteName: $0) })
     }
 }
 
@@ -132,4 +141,47 @@ final class HookHold: Sendable {
     }
 
     func release() { semaphore.signal() }
+}
+
+/// The launch state of the tests, in memory and by suite name, as the defaults suites would hold
+/// it for the length of the test process: no test writes to the account's preferences. Each
+/// test's suites are its own, named for a fresh UUID.
+struct MemoryLaunchState: LaunchStateStorage {
+    private static let suites = Mutex<[String: [String: MemoryValue]]>([:])
+
+    private enum MemoryValue: Sendable {
+        case lists([String: [String]])
+        case text(String)
+    }
+
+    let suiteName: String
+
+    func lists(_ name: String) -> [String: [String]] {
+        Self.suites.withLock { suites in
+            if case .lists(let value)? = suites[suiteName]?[name] { return value }
+            return [:]
+        }
+    }
+
+    func setLists(_ value: [String: [String]], _ name: String) {
+        Self.suites.withLock { $0[suiteName, default: [:]][name] = .lists(value) }
+    }
+
+    func text(_ name: String) -> String? {
+        Self.suites.withLock { suites in
+            if case .text(let value)? = suites[suiteName]?[name] { return value }
+            return nil
+        }
+    }
+
+    func setText(_ value: String, _ name: String) {
+        Self.suites.withLock { $0[suiteName, default: [:]][name] = .text(value) }
+    }
+
+    /// Forgets every suite whose name begins with `prefix`.
+    static func remove(prefix: String) {
+        suites.withLock { suites in
+            for name in suites.keys where name.hasPrefix(prefix) { suites[name] = nil }
+        }
+    }
 }

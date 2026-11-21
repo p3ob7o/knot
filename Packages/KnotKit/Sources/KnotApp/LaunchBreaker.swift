@@ -6,9 +6,7 @@ import KnotCore
 ///
 /// It keeps, for each step, what the last launches did with it, in the named defaults suite of
 /// the store's launch state (`LiveComposition.launchStateSuite`): it is there before the store
-/// opens, and opening the store is itself a step. A mark is handed to the system's preferences
-/// with `set(_:forKey:)` before the step runs, and survives the death of the process that wrote
-/// it: no call to `synchronize()`, which the SDK's header calls unnecessary. A launch
+/// opens, and opening the store is itself a step (`DefaultsLaunchState`). A launch
 /// writes "entered" before the step and "left" after it, so an "entered" that a later launch
 /// finds is a launch that died inside the step. A skip is written too, so the launch after a
 /// skip runs the step again. A step that dies at every run therefore goes entered, entered,
@@ -22,7 +20,7 @@ struct LaunchBreaker: Sendable {
     static let kept = 4
     private static let entryName = "v1.launch.breaker"
 
-    let suiteName: String
+    let storage: any LaunchStateStorage
 
     /// True when the last two launches died inside `step`.
     func shouldSkip(_ step: LaunchStep) -> Bool {
@@ -41,23 +39,19 @@ struct LaunchBreaker: Sendable {
     }
 
     func history(_ step: LaunchStep) -> [Mark] {
-        let all = defaults?.dictionary(forKey: Self.entryName) as? [String: [String]] ?? [:]
-        return (all[step.rawValue] ?? []).compactMap(Mark.init(rawValue:))
+        (storage.lists(Self.entryName)[step.rawValue] ?? []).compactMap(Mark.init(rawValue:))
     }
-
-    private var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
 
     private func append(_ mark: Mark, to step: LaunchStep) {
         update(step) { $0.append(mark) }
     }
 
     private func update(_ step: LaunchStep, _ change: (inout [Mark]) -> Void) {
-        guard let defaults else { return }
-        var all = defaults.dictionary(forKey: Self.entryName) as? [String: [String]] ?? [:]
+        var all = storage.lists(Self.entryName)
         var marks = (all[step.rawValue] ?? []).compactMap(Mark.init(rawValue:))
         change(&marks)
         all[step.rawValue] = marks.suffix(Self.kept).map(\.rawValue)
-        defaults.set(all, forKey: Self.entryName)
+        storage.setLists(all, Self.entryName)
     }
 }
 
@@ -72,19 +66,50 @@ struct LaunchBreaker: Sendable {
 struct DeviceIdentity: Sendable {
     private static let entryName = "v1.device.id"
 
-    let suiteName: String
+    let storage: any LaunchStateStorage
 
     /// The kept ID, or a new one, kept.
     func current(ids: any IDGenerator) -> DeviceID {
-        let defaults = UserDefaults(suiteName: suiteName)
-        if let text = defaults?.string(forKey: Self.entryName), let id = DeviceID(text) { return id }
+        if let text = storage.text(Self.entryName), let id = DeviceID(text) { return id }
         let id: DeviceID = ids.make()
-        defaults?.set(id.description, forKey: Self.entryName)
+        storage.setText(id.description, Self.entryName)
         return id
     }
 
     /// Keeps the store's ID for the launches that follow.
     func adopt(_ id: DeviceID) {
-        UserDefaults(suiteName: suiteName)?.set(id.description, forKey: Self.entryName)
+        storage.setText(id.description, Self.entryName)
     }
+}
+
+/// Where a store's launch state is kept: the breaker's marks and the device ID.
+public protocol LaunchStateStorage: Sendable {
+    func lists(_ name: String) -> [String: [String]]
+    func setLists(_ value: [String: [String]], _ name: String)
+    func text(_ name: String) -> String?
+    func setText(_ value: String, _ name: String)
+}
+
+/// The launch state in a named defaults suite, `LiveComposition.launchStateSuite`. A value is
+/// handed to the system's preferences with `set(_:forKey:)` before the step it marks runs, and
+/// survives the death of the process that wrote it: no call to `synchronize()`, which the SDK's
+/// header calls unnecessary.
+public struct DefaultsLaunchState: LaunchStateStorage {
+    public let suiteName: String
+
+    public init(suiteName: String) {
+        self.suiteName = suiteName
+    }
+
+    private var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
+
+    public func lists(_ name: String) -> [String: [String]] {
+        defaults?.dictionary(forKey: name) as? [String: [String]] ?? [:]
+    }
+
+    public func setLists(_ value: [String: [String]], _ name: String) { defaults?.set(value, forKey: name) }
+
+    public func text(_ name: String) -> String? { defaults?.string(forKey: name) }
+
+    public func setText(_ value: String, _ name: String) { defaults?.set(value, forKey: name) }
 }

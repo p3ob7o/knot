@@ -21,9 +21,9 @@ struct EnvironmentTests {
         let folder = LiveFolder()
         defer { folder.remove() }
         // `.live` as the app composes it, KnotSpeech's transcriber included. Nothing is opened.
-        let composition = LiveComposition(
-            configuration: folder.configuration(platform: platform),
-            seams: LiveComposition.Seams(installSpeechModel: false))
+        var seams = LiveComposition.Seams.forTests
+        seams.transcriber = nil
+        let composition = LiveComposition(configuration: folder.configuration(platform: platform), seams: seams)
         #expect(composition.locations != nil)
         let unavailable = UnavailablePorts.of(composition.environment)
         let allowed = UnavailablePorts.allowed(at: UnavailablePorts.comingMilestone, on: platform)

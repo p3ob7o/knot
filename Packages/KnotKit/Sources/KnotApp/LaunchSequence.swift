@@ -92,7 +92,7 @@ public actor LaunchSequence {
 
     init(composition: LiveComposition) {
         self.composition = composition
-        self.breaker = LaunchBreaker(suiteName: composition.launchStateSuite)
+        self.breaker = LaunchBreaker(storage: composition.launchState)
     }
 
     /// Runs the steps, once.
@@ -215,7 +215,7 @@ public actor LaunchSequence {
         case .success(let opened):
             _ = composition.gate.open(opened)
             if opened.database.deviceID != composition.deviceID {
-                DeviceIdentity(suiteName: composition.launchStateSuite).adopt(opened.database.deviceID)
+                DeviceIdentity(storage: composition.launchState).adopt(opened.database.deviceID)
                 log.log(.notice, "launch_device_id_from_store")
             }
         case .failure(let error):
