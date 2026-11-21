@@ -107,6 +107,57 @@ import Testing
         #expect(try await notes.segment(b)?.text == "second line, changed elsewhere")
     }
 
+    /// Finding 9. A write to a segment that succeeds ends that segment's conflict, so "Keep
+    /// mine" can no longer write the older draft over the newer edit.
+    @Test func anEditAfterAConflictEndsTheConflict() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("call the plumber"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        let notes = rig.environment.notes
+
+        model.beginEditing(segment)
+        _ = try await notes.replaceText(
+            TextReplacement(segment: segment, text: "call the plumber today", origin: .edited, writer: .commandLine))
+        await model.refresh()
+        model.editText(of: segment, to: "call the electrician")
+        await settled(model)
+        #expect(model.editConflict(for: .segment(segment)) != nil)
+
+        // The field shows the draft; the person edits it again, and that edit is written.
+        model.beginEditing(segment)
+        model.editText(of: segment, to: "call the electrician at nine")
+        await settled(model)
+        #expect(try await notes.segment(segment)?.text == "call the electrician at nine")
+        #expect(model.editConflicts.isEmpty, "\(model.editConflicts)")
+
+        // A late tap on the banner that was there writes nothing.
+        model.keepMyEdit(.segment(segment))
+        await settled(model)
+        #expect(try await notes.segment(segment)?.text == "call the electrician at nine")
+    }
+
+    @Test func aTitleWrittenAfterItsConflictEndsTheConflict() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("errands"))
+        let model = rig.open(note)
+        await model.refresh()
+        model.beginEditingTitle()
+        _ = try await rig.environment.notes.setTitle("Saturday", of: note, ifRevision: nil)
+        await model.refresh()
+        model.setTitle("Shopping")
+        await settled(model)
+        #expect(model.editConflict(for: .title) != nil)
+        model.beginEditingTitle()
+        model.setTitle("Shopping on Saturday")
+        await settled(model)
+        #expect(model.editConflict(for: .title) == nil)
+        #expect(try await rig.environment.notes.note(note)?.note.title == "Shopping on Saturday")
+    }
+
     /// The re-check found this right: two changes that arrive before the commit leave the
     /// conflict holding the latest.
     @Test func twoChangesBeforeTheCommitHoldTheLatest() async throws {

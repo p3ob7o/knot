@@ -538,6 +538,8 @@ public final class NoteViewModel {
             segment: segment, text: text, origin: .edited, writer: .app, ifRevision: ifRevision)
         do {
             _ = try await environment.notes.replaceText(replacement)
+            // A write that succeeds ends the segment's conflict: the person decided by writing.
+            editConflicts[.segment(segment)] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
             editConflicts[.segment(segment)] = EditConflict(
@@ -555,6 +557,7 @@ public final class NoteViewModel {
         let value = title.flatMap { CaptureText.isEmpty($0) ? nil : $0 }
         do {
             _ = try await environment.notes.setTitle(value, of: id, ifRevision: ifRevision)
+            editConflicts[.title] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
             editConflicts[.title] = EditConflict(target: .title, draft: value, arrived: record?.note.title)
