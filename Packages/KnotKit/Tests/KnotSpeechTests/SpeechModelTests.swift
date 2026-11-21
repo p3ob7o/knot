@@ -87,6 +87,38 @@ import Testing
             }
         }
 
+        /// The words of `whole` that the runs' words lack, by a minimum edit alignment that
+        /// prefers a substitution: all of them, and those missing right where a run begins.
+        /// `starts` holds the index in `runs` of each run's first word.
+        static func missing(runs: [String], whole: [String], starts: Set<Int>) -> (all: Int, atJoins: Int) {
+            var cost = Array(repeating: Array(repeating: 0, count: runs.count + 1), count: whole.count + 1)
+            for i in 0...whole.count { cost[i][0] = i }
+            for j in 0...runs.count { cost[0][j] = j }
+            if !whole.isEmpty, !runs.isEmpty {
+                for i in 1...whole.count {
+                    for j in 1...runs.count {
+                        let same = whole[i - 1] == runs[j - 1] ? 0 : 1
+                        cost[i][j] = min(cost[i - 1][j - 1] + same, cost[i - 1][j] + 1, cost[i][j - 1] + 1)
+                    }
+                }
+            }
+            var (i, j, all, atJoins) = (whole.count, runs.count, 0, 0)
+            while i > 0 || j > 0 {
+                if i > 0, j > 0, cost[i][j] == cost[i - 1][j - 1] + (whole[i - 1] == runs[j - 1] ? 0 : 1) {
+                    i -= 1
+                    j -= 1
+                } else if i > 0, cost[i][j] == cost[i - 1][j] + 1 {
+                    // A word of the whole missing just before the runs' word at index j.
+                    all += 1
+                    if starts.contains(j) { atJoins += 1 }
+                    i -= 1
+                } else {
+                    j -= 1
+                }
+            }
+            return (all, atJoins)
+        }
+
         /// The words of a transcript, as letters and digits.
         static func words(_ text: String) -> [String] {
             text.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init)
@@ -170,6 +202,32 @@ import Testing
                 let end = try #require(pieces.last).range.upperBound
                 #expect(abs((end - wholeEnd) / .seconds(1)) <= 1.5, "The runs cover what one run covers.")
             }
+        }
+
+        @Test(arguments: [Duration.seconds(60), .seconds(20)])
+        func runsLoseNoWordWhereTheyJoin(_ budget: Duration) async throws {
+            let long = try SpeechClips.url(SpeechClips.long)
+            let (whole, _) = try await SpeechClips.timedRun(long)
+            let runs = try await SpeechClips.runs(long, budget: budget)
+            let wholeWords = SpeechClips.words(whole.text)
+            var runWords: [String] = []
+            var starts: Set<Int> = []
+            for run in runs {
+                if run.offset > .zero { starts.insert(runWords.count) }
+                runWords += SpeechClips.words(run.run.text)
+            }
+            let missing = SpeechClips.missing(runs: runWords, whole: wholeWords, starts: starts)
+            // Measured on this Mac: in runs of 60 s, no join of 10 misses a word, and in runs of
+            // 20 s, 5 joins of 38, where the engine hears a word differently at a run's start. A
+            // run that drops the word after every join misses 8 of 10 and 38 of 38.
+            #expect(starts.count > 5)
+            #expect(
+                missing.atJoins * 4 <= starts.count,
+                "Runs of \(budget) miss a word at \(missing.atJoins) of \(starts.count) joins.")
+            #expect(
+                Double(runWords.count) >= 0.98 * Double(wholeWords.count),
+                "Runs of \(budget) hold \(runWords.count) words, one run \(wholeWords.count).")
+            #expect(SpeechClips.lost(whole, in: runs).isEmpty, "No phrase of the file falls between two runs.")
         }
 
         @Test func silenceLongerThanTheBudgetEndsARunWithNoPhrases() async throws {
