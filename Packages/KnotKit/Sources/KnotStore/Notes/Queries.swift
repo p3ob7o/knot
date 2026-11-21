@@ -240,20 +240,32 @@ extension StoreTransaction {
         return PurgeBatch(removed: removed, assets: assets, more: true)
     }
 
-    /// Removes a segment with its jobs, its history and its asset row, leaving a tombstone.
+    /// Removes a segment with its jobs, its history and its asset row, leaving a tombstone. A
+    /// file that another segment still names, or whose row another segment holds, is not
+    /// returned for removal: its row stays with, or passes to, that segment.
     private func drop(_ segment: Segment, at purgedAt: Date) throws -> [Asset] {
         var assets: [Asset] = []
         let id = segment.id.description
         try db.execute(sql: "DELETE FROM job WHERE segment_id = ?", arguments: [id])
         try db.execute(sql: "DELETE FROM segment_history WHERE segment_id = ?", arguments: [id])
-        if let assetID = segment.assetID, let asset = try asset(assetID) {
-            assets.append(asset)
-            try removeAsset(assetID)
+        var named = try Row.fetchAll(db, sql: "SELECT * FROM asset WHERE segment_id = ?", arguments: [id])
+            .map(AssetRows.decode)
+        if let assetID = segment.assetID, !named.contains(where: { $0.id == assetID }), let asset = try asset(assetID) {
+            named.append(asset)
         }
-        for row in try Row.fetchAll(db, sql: "SELECT * FROM asset WHERE segment_id = ?", arguments: [id]) {
-            let asset = try AssetRows.decode(row)
-            assets.append(asset)
-            try removeAsset(asset.id)
+        for var asset in named {
+            // A row another segment holds is that segment's.
+            if asset.segmentID != segment.id, try self.segment(asset.segmentID) != nil { continue }
+            let other = try String.fetchOne(
+                db, sql: "SELECT id FROM segment WHERE asset_id = ? AND id != ? LIMIT 1",
+                arguments: [asset.id.description, id])
+            if let other, let holder = SegmentID(other) {
+                asset.segmentID = holder
+                try put(asset)
+            } else {
+                assets.append(asset)
+                try removeAsset(asset.id)
+            }
         }
         try db.execute(
             sql: """

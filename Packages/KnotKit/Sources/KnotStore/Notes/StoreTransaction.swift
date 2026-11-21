@@ -257,6 +257,13 @@ final class StoreTransaction {
 
     func put(_ asset: Asset) throws { try AssetRows.upsert(asset, in: db) }
 
+    /// True when a segment other than `segment` names the asset's file.
+    func namesAsset(_ id: AssetID, besides segment: SegmentID) throws -> Bool {
+        try Bool.fetchOne(
+            db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE asset_id = ? AND id != ?)",
+            arguments: [id.description, segment.description]) ?? false
+    }
+
     func removeAsset(_ id: AssetID) throws {
         try db.execute(sql: "DELETE FROM asset WHERE id = ?", arguments: [id.description])
     }

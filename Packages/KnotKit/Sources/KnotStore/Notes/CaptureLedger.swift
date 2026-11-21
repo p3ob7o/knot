@@ -803,6 +803,12 @@ extension StoreTransaction {
     }
 
     private func attach(_ asset: Asset, duration: Duration?, to segmentID: SegmentID) throws {
+        // A placed file belongs to the capture that stored it. Another capture's claim on it is
+        // refused and nothing is written, so that deleting and purging one capture never
+        // removes the file of another.
+        let conflict = KnotError.assetConflict.with(.init(captureID: CaptureID(segmentID), assetID: asset.id))
+        if let held = try self.asset(asset.id), held.segmentID != segmentID { throw conflict }
+        if try namesAsset(asset.id, besides: segmentID) { throw conflict }
         var asset = asset
         asset.segmentID = segmentID
         try put(asset)
