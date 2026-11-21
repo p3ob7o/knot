@@ -27,14 +27,18 @@ struct InboxItems: Sendable {
     let layer: any FileLayer
     let files: StoreFiles
 
+    /// The lock this store's engine and ingest share.
+    private let itemLock: ItemLock
+
     init(locations: StoreLocations, layer: any FileLayer) {
         self.locations = locations
         self.layer = layer
         self.files = locations.durableFiles(layer: layer)
+        self.itemLock = ItemLock.of(inbox: locations.inbox, layer: layer)
     }
 
     /// Places a typed capture's item: the manifest, then the text. The two placings hold the
-    /// items' lock, so that ingest never removes an item between them: a payload placed after
+    /// store's item lock, so that ingest never removes an item between them: a payload placed after
     /// its item was taken and removed would be left with no manifest.
     func writeTyped(_ manifest: CaptureManifest, text: String) throws(KnotError) {
         var manifest = manifest
@@ -42,8 +46,11 @@ struct InboxItems: Sendable {
         manifest.payloadByteCount = Int64(payload.count)
         manifest.payloadSHA256 = Self.sha256(payload)
         let encoded = try manifest.encoded()
-        try Self.lock.withLock { _ throws(KnotError) in
+        try itemLock.mutex.withLock { _ throws(KnotError) in
             try files.place(encoded, at: locations.inboxManifest(manifest.captureID))
+            #if DEBUG
+                Self.afterManifestPlaced.withLock { $0 }?(manifest.captureID)
+            #endif
             // A payload already on the drive with the same bytes is not placed again: it is durable.
             let url = locations.inboxPayload(manifest.captureID, kind: .typed)
             if layer.entryKind(url) == .file, (try? layer.read(url)) == payload { return }
@@ -51,8 +58,15 @@ struct InboxItems: Sendable {
         }
     }
 
-    /// Orders the engine's writing of an item and ingest's removal of one, in this process.
-    private static let lock = Mutex(())
+    /// The removals that wait for the lock now, by capture: a test reads it to know that ingest
+    /// waits for the engine's writing of that capture's item.
+    static let removalsWaiting = Mutex<[CaptureID: Int]>([:])
+
+    #if DEBUG
+        /// Runs after a typed item's manifest is placed and before its payload, holding the lock:
+        /// the test of finding 74 runs an ingest there.
+        static let afterManifestPlaced = Mutex<(@Sendable (CaptureID) -> Void)?>(nil)
+    #endif
 
     /// Places a recording's item: the manifest alone, which names the stored file's digest.
     func writeRecording(_ manifest: CaptureManifest) throws(KnotError) {
@@ -82,7 +96,12 @@ struct InboxItems: Sendable {
 
     /// Removes an item whose content the store holds: the payload, then the manifest.
     func remove(_ capture: CaptureID, kind: SegmentKind) throws(KnotError) {
-        try Self.lock.withLock { _ throws(KnotError) in
+        Self.removalsWaiting.withLock { $0[capture, default: 0] += 1 }
+        try itemLock.mutex.withLock { _ throws(KnotError) in
+            Self.removalsWaiting.withLock { waiting in
+                waiting[capture, default: 1] -= 1
+                if waiting[capture] == 0 { waiting[capture] = nil }
+            }
             let payload = locations.inboxPayload(capture, kind: kind)
             if layer.entryKind(payload) != nil { try files.remove(payload) }
             let manifest = locations.inboxManifest(capture)
@@ -178,4 +197,26 @@ extension AssetID {
     /// The asset of a capture's recording or drawing: the capture's own ID, so that a retry
     /// after a death finds the file it placed (docs/architecture.md §4).
     static func ofCapture(_ capture: CaptureID) -> AssetID { AssetID(capture) }
+}
+
+/// Orders the engine's writing of an item and ingest's removal of one, for one store's `Inbox/`
+/// in this process. The engine and ingest of a store reach it through the same file layer and
+/// folder, so they share it, and no other store waits for it.
+final class ItemLock: Sendable {
+    let mutex = Mutex(())
+
+    private static let locks = Mutex<[String: ItemLock]>([:])
+
+    /// The lock of the `Inbox/` at `inbox`, as `layer` reaches it: a layer that is an object is
+    /// told apart by its identity, as a test's file layer in memory is from another test's.
+    static func of(inbox: URL, layer: any FileLayer) -> ItemLock {
+        var key = inbox.standardizedFileURL.path
+        if type(of: layer as Any) is AnyClass { key += "|\(ObjectIdentifier(layer as AnyObject).hashValue)" }
+        return locks.withLock { locks in
+            if let lock = locks[key] { return lock }
+            let lock = ItemLock()
+            locks[key] = lock
+            return lock
+        }
+    }
 }
