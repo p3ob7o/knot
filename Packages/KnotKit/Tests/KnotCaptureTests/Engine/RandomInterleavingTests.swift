@@ -211,6 +211,19 @@ private struct Check {
         }
     }
 
+    /// A stated limit, not a fault: a discarded recording that stays in the stream with its audio.
+    /// It needs a full disk, a store that is not open and a late answer together, which the owner
+    /// leaves as they are. The recording's end carries its file to the store and misses its
+    /// deadline; the fallback's `Inbox/` write finds the disk full, and the end throws with the
+    /// file kept (finding 70). The person discards it, and the engine answers `discardedEmpty`.
+    /// Then the end's held store call commits: the row is stored with the audio, and the store
+    /// refuses the end as empty with `capture_id_conflict`, as it refuses any end of a row that
+    /// holds its file. Nothing is lost; a recording the person discarded is kept.
+    static func endCommittedLate(_ capture: CaptureID, _ segment: SegmentRead, _ logs: RecordingSink) -> Bool {
+        segment.segment.assetID != nil && logs.logged("capture_fell_back", capture)
+            && logs.logged("inbox_write_failed", capture) && logs.logged("store_answered_late", capture)
+    }
+
     /// Every recording ended as its last call answered.
     func recordings() async throws {
         for (capture, outcome) in ledger.recordings() {
@@ -222,7 +235,7 @@ private struct Check {
                     fail("recording \(capture) was answered stored, and has no asset or no job", about: [capture])
                 }
             case .discardedEmpty:
-                if let segment, segment.segment.deletedAt == nil {
+                if let segment, segment.segment.deletedAt == nil, !Self.endCommittedLate(capture, segment, rig.logs) {
                     fail("recording \(capture) was discarded, and is in the stream", about: [capture])
                 }
             default:

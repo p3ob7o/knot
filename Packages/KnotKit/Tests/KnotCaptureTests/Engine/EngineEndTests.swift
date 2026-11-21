@@ -65,6 +65,13 @@ import Testing
         await r.notes.failNextCaptureWrites(with: .storeBusy)
         let state = try await r.engine.end(recording.captureID)
         #expect(state.outcome == .failed(KnotError.conversionFailed.code))
+        // The end schedules the engine's old work, which ends the row failed with the first code.
+        // It runs detached: the test waits for it, so that it does not send the same pending end
+        // as the call below, whose late answer could clear the end the retried conversion leaves.
+        #expect(
+            await eventually("the old work to end the row failed") {
+                r.logs.logged("recording_failed_row_ended", recording.captureID)
+            })
         await r.engine.retryConversions()
         for _ in 0..<3 {
             let other = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "x"))
