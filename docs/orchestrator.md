@@ -29,6 +29,7 @@ What the build Mac has today, for every first message:
 - A hook refuses `git add -A`, `git add -u` and a commit inside a compound command. A thread stages files by name, runs `git commit -F <file>` as a command of its own, and gives `gh pr create` its description with `--body-file`.
 - A thread records each commit in UTC, as `AGENTS.md` says: `TZ=UTC git commit -F <file>`. The hook lets that form through.
 - No hardware microphone, ever. A simulator's microphone is the Mac's own, so no recording path runs in a simulator.
+- A test leaves no file outside its own folders, and a file of a defaults suite that a test wrote counts too (docs/architecture.md §17).
 - No suite has a bound that a loaded machine can miss. Every wait of the suites ends through `SuiteWait` after ten minutes, with an issue that names what it waited for, and a test that holds something back bounds its own calls into what it tests the same way (docs/architecture.md §17). On main, three calls in `NoteStoreFakeTests.swift` that are made during a hold do not yet: WP-02's third pull request bounds them.
 - A package test reads `Fixtures/generated/` only through `FixtureFiles`, before any model check, and every run that runs package tests speaks the audio first. A missing fixture fails a test, and a test skips only on a missing model (docs/architecture.md §17).
 - The owner's team configuration is on the Mac since 2026-11-20, in a file outside the repository. A thread whose package must sign with the team gets the file's path in `KNOT_LOCAL_CONFIG`, and no other thread does: every other build signs locally. The team's ID is never printed, never logged and never written to a tracked file, a note or a pull request. A thread that has the file runs `scripts/verify.sh --only team-id` before each push, and it does not run the gate, which refuses the variable.
@@ -55,6 +56,7 @@ A top-level thread does not wake the orchestrator by ending. The RESULT line tha
 ## Review
 
 - A fresh reviewer reads the diff against the package's brief and `AGENTS.md`, from a list of points that the orchestrator writes for that pull request. It runs as a delegated task, so its end wakes the orchestrator. It changes nothing, runs what it runs in a scratch clone, and ends with `REVIEW pass` or with `REVIEW changes` and the counts.
+- Knot is one person's app (`PLAN.md` §8.4). A review brief says so: a finding that needs several surfaces, or two devices, acting inside the same fraction of a second is ranked low and recorded as a known limit unless a capture is lost, and the reviewer says plainly when a sequence needs more than one person can do. One person's ordinary sequences across surfaces stay in scope. A fix of that kind that costs more than a small change goes to Paolo first.
 - The orchestrator checks each finding before it passes it on, and rules where the documents are silent. A ruling goes into the documents in a pull request of the orchestrator's own.
 - A proof step's code stays on `wp/<number>-proof` with no pull request, and its note merges from `wp/<number>-note`. The orchestrator reads a short note itself, and the squash message says that no second agent did.
 - WP-02, WP-05, WP-06, WP-10, WP-11, WP-12, WP-15, WP-16 and WP-17 also get a second opinion from another model.
@@ -79,6 +81,8 @@ The gate is `scripts/verify.sh --gate`, and its depth comes from the diff (docs/
 
 The team-ID check is required since 2026-11-20, when Paolo's signing configuration came to the Mac, and it runs at every depth. The orchestrator names the configuration for it with `KNOT_TEAM_CONFIG`, in front of the gate's command. That variable serves the check alone and links nothing into the tree. `KNOT_LOCAL_CONFIG` would link the configuration into the gate worktree and give the gate's app steps build settings that no thread has, so the gate refuses it, and it removes such a link if an earlier run left one. Without a configuration the step is skipped, and the gate fails on a skipped step: its line reads FAILED, and that is what is posted. A thread without the configuration runs `scripts/verify.sh --full`, which reports the step as skipped and ends ok.
 
+When the launch step fails on every branch at once, the first check is the Mac app's saved window state and the desktop, before the code: every development build shares one bundle ID and so one saved window state, and a window closed once left every later launch with no window (docs/architecture.md §18). No agent resets the app's container or its saved state by hand.
+
 Since pull request 38 the packaging step starts `knot-dev` under a time limit, and so does each run of UI tests, and at the limit the step fails and says that a system dialog may be waiting for Paolo (docs/architecture.md §18).
 
 A pull request that changes the gate, or a contract that others build on, is tried on the next pull request in the queue before it merges, by running its scripts with `--tree` on that candidate. On 2026-11-19 this found two faults in the tooling that its own gate could not show. The trial of a scripts pull request runs on the other pull request's head merged locally with the scripts pull request's head, with `--base` at that head. Merged with `main` alone, a self-test check of a file that the scripts pull request changes fails, and without `--base` the ownership step counts the scripts pull request's files as the other package's.
@@ -86,6 +90,8 @@ A pull request that changes the gate, or a contract that others build on, is tri
 ## A milestone build
 
 At each milestone tag, the build of that tag makes a seeded synthetic store, `KnotStoreCrashHost seed Packages/KnotKit/Tests/KnotStoreTests/SeededStores/<tag>`, and the result is committed, so that later versions are tested against the stores that earlier milestones made (docs/architecture.md §7).
+
+Before a milestone install, before Paolo installs anything, read the built Watch app's entitlements and its provisioning profile for the app group, and the same for each app and each extension. A build that says it has a group and finds no container fails with a typed error (docs/architecture.md §7). Neither a simulator nor a locally signed build can show it.
 
 ## What needs Paolo
 
