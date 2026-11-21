@@ -72,3 +72,53 @@ final class WordCounter: Sendable {
     #expect(sentences == ["One.", " Two?", " Three!", "\n", "four 3.5 five"].map { Substring($0) })
     #expect(sentences.joined() == text)
 }
+
+// MARK: - Finding 8: the chunker skips the guard's abbreviations
+
+@Test func theChunkerDoesNotCutAfterATitle() async {
+    let text = "Ask Dr. Okafor about it today please and soon."
+    let pieces = await CleanupChunker.pieces(of: text, maxTokens: 6) { (piece: String) async -> Int in
+        piece.split(whereSeparator: \.isWhitespace).count
+    }
+    #expect(pieces.count > 1)
+    #expect(!pieces.contains { $0.text.trimmingCharacters(in: .whitespaces).hasSuffix("Dr.") })
+    #expect(pieces.map(\.text).joined() == text)
+}
+
+@Test func aSentenceDoesNotEndAfterATitle() {
+    #expect(CleanupChunker.sentences(of: "Ask Dr. Okafor. Then Mrs. Lee.") == ["Ask Dr. Okafor.", " Then Mrs. Lee."])
+    #expect(CleanupChunker.sentences(of: "Call the vet. Mr Lee too.") == ["Call the vet.", " Mr Lee too."])
+}
+
+/// The name after a title is in the same piece as the title, so the guard sees it as a name.
+@Test func theNameAfterATitleIsProtectedInItsOwnPiece() async throws {
+    let text = String(repeating: "we went to the shop and then home. ", count: 20) + "Ask Dr. Okafor about it."
+    let pieces = await CleanupChunker.pieces(of: text, maxTokens: 30) { (piece: String) async -> Int in
+        piece.split(whereSeparator: \.isWhitespace).count
+    }
+    let piece = try #require(pieces.first { $0.text.contains("Okafor") })
+    #expect(piece.text.contains("Dr. Okafor"))
+    #expect(FidelityWords.words(in: piece.text).first { $0.text == "okafor" }?.isProtected == true)
+}
+
+/// Whatever the text and the budget, the pieces put back together are the text.
+@Test(arguments: [3, 5, 8, 40])
+func thePiecesAreTheTextWithNothingDroppedOrDoubled(_ budget: Int) async {
+    let texts = [
+        String(repeating: "eggs milk bread butter ", count: 60),
+        "Ask Dr. Okafor about the 3.5 metres. It costs 1,000 dollars at 9:30.  Two  spaces.\tA tab.\nA line. "
+            + String(repeating: "and then we went on ", count: 30),
+        "...  ?  !",
+        "word",
+        " lead and trail \n\n",
+        "one.\n\n\ntwo.\u{00A0}three. four",
+    ]
+    for text in texts {
+        let pieces = await CleanupChunker.pieces(of: text, maxTokens: budget) { (piece: String) async -> Int in
+            piece.split(whereSeparator: \.isWhitespace).count
+        }
+        let joined = pieces.map(\.text).joined()
+        #expect(joined == text || (text.allSatisfy(\.isWhitespace) && pieces.isEmpty), "budget \(budget)")
+        #expect(CleanupTestTexts.words(joined) == CleanupTestTexts.words(text))
+    }
+}

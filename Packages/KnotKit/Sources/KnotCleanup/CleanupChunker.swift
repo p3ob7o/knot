@@ -18,7 +18,7 @@ public enum CleanupChunker {
     }
 
     /// The sentences of `text`: each ends after ".", "!" or "?" followed by a space, or at a
-    /// line break. A transcript with no punctuation is one sentence. The sentences together
+    /// line break, but not after an abbreviation of the guard's list, such as "Dr.". A transcript with no punctuation is one sentence. The sentences together
     /// are `text`, with nothing left out.
     public static func sentences(of text: String) -> [Substring] {
         var sentences: [Substring] = []
@@ -29,7 +29,8 @@ public enum CleanupChunker {
             let next = text.index(after: index)
             let ends =
                 character.isNewline
-                || (".!?".contains(character) && (next == text.endIndex || text[next].isWhitespace))
+                || (".!?".contains(character) && (next == text.endIndex || text[next].isWhitespace)
+                    && !(character == "." && endsAbbreviation(text[start..<index])))
             if ends {
                 sentences.append(text[start..<next])
                 start = next
@@ -38,6 +39,23 @@ public enum CleanupChunker {
         }
         if start < text.endIndex { sentences.append(text[start...]) }
         return sentences
+    }
+
+    /// True when `before` ends with one of the abbreviations the guard knows, such as "Dr",
+    /// whose full stop ends no sentence: the name after it stays in the same piece, where the
+    /// guard sees its capital as a name's.
+    static func endsAbbreviation(_ before: Substring) -> Bool {
+        let word = before.reversed().prefix { $0.isLetter }
+        guard !word.isEmpty else { return false }
+        let start = before.index(before.endIndex, offsetBy: -word.count)
+        if start > before.startIndex, before[before.index(before: start)].isLetter { return false }
+        return FidelityWords.titles.contains(String(word.reversed()).lowercased())
+    }
+
+    /// True for a word such as "Dr." whose full stop is an abbreviation's.
+    static func isAbbreviation(_ word: Substring) -> Bool {
+        guard word.hasSuffix(".") else { return false }
+        return FidelityWords.titles.contains(word.dropLast().lowercased())
     }
 
     /// Pieces of `text`, in order, whose words together are the words of `text`, each of at
@@ -95,7 +113,10 @@ public enum CleanupChunker {
         if try await count(piece.text) <= maxTokens { return [piece] }
         let words = piece.text.split(separator: " ", omittingEmptySubsequences: false)
         guard words.count > 1 else { return [piece] }
-        let half = words.count / 2
+        var half = words.count / 2
+        // Never between an abbreviation and the name after it.
+        if isAbbreviation(words[half - 1]) { half += half + 1 < words.count ? 1 : -1 }
+        guard half > 0, half < words.count else { return [piece] }
         let first = Piece(text: words[..<half].joined(separator: " ") + " ", endsSentence: false)
         let second = Piece(text: words[half...].joined(separator: " "), endsSentence: piece.endsSentence)
         return try await fit(first, maxTokens: maxTokens, count: count)
@@ -110,7 +131,9 @@ public enum CleanupChunker {
         var parts: [Piece] = []
         var current = ""
         for word in sentence.split(separator: " ", omittingEmptySubsequences: false) {
-            if !current.isEmpty, Double(current.count + word.count + 1) * perCharacter > target {
+            if !current.isEmpty, Double(current.count + word.count + 1) * perCharacter > target,
+                !isAbbreviation(current.dropLast().split(separator: " ").last ?? "")
+            {
                 parts.append(Piece(text: current, endsSentence: false))
                 current = ""
             }
