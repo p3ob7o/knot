@@ -15,6 +15,9 @@ final class WatchedRecorder: Recorder, Sendable {
     /// While set, every removal of a working file fails with `write_failed`, as a death just
     /// before it would leave the file.
     let failRemovals = Mutex(false)
+    /// The recordings this recorder cannot read now, as when their files are protected while the
+    /// device is locked: `recoverOrphans` leaves them where they are and does not return them.
+    let unreadable = Mutex<Set<CaptureID>>([])
     /// Runs as each start returns, with the recording's capture ID.
     let afterStart = Mutex<(@Sendable (CaptureID) -> Void)?>(nil)
     /// While closed, every start waits at it once its manifest and working file are written.
@@ -38,7 +41,8 @@ final class WatchedRecorder: Recorder, Sendable {
     }
 
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
-        try await base.recoverOrphans(currentLaunch: currentLaunch)
+        let hidden = unreadable.withLock { $0 }
+        return try await base.recoverOrphans(currentLaunch: currentLaunch).filter { !hidden.contains($0.captureID) }
     }
 
     func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {

@@ -308,6 +308,67 @@ import Testing
         #expect(again[begun.captureID] == nil)
     }
 
+    /// The review of pull request 57: a recording that is on the drive and that the recorder
+    /// cannot read at one launch is kept, and the next launch stores it. On main the first
+    /// launch ended its row as empty, and the second removed its files.
+    @Test func aRecordingThatCannotBeReadIsKeptForTheNextLaunch() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        #expect(begun.path == .store)
+        // The process dies mid-recording; at the next launch the recorder cannot read the files.
+        let second = r.relaunch()
+        let locked = WatchedRecorder(second.recorder)
+        locked.unreadable.withLock { $0 = [begun.captureID] }
+        let recovery = LaunchRecovery(
+            notes: second.notes, assets: second.assets, recorder: locked, queue: second.queue,
+            launchID: second.launchID, locations: second.locations, layer: second.layer,
+            log: KnotLog(.capture, sink: second.logs))
+        let first = try await recovery.run(ingest: second.ingest)
+        #expect(first[begun.captureID] == .kept(KnotError.deviceLocked.code), "Kept, for the next launch.")
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .open, "Its row is left open.")
+        #expect(r.layer.entryKind(r.locations.recordingManifest(begun.captureID)) == .file)
+        #expect(r.layer.entryKind(r.locations.recordingAudio(begun.captureID, format: .caf)) == .file)
+        // The next launch can read them.
+        let third = second.relaunch()
+        let outcomes = try await third.recovery.run(ingest: third.ingest)
+        #expect(outcomes[begun.captureID] == .ended(.stored), "Stored at the next launch.")
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .stored)
+        #expect(try await r.notes.jobs(for: SegmentID(begun.captureID)).map(\.kind) == [.transcribe])
+        #expect(try await third.recovery.run(ingest: third.ingest).isEmpty, "Then nothing is left.")
+    }
+
+    /// Its mirror: a voice row with nothing of its recording on the drive, neither a manifest
+    /// nor a working file, still ends empty at the next launch.
+    @Test func aRecordingWithNothingOnTheDriveStillEndsEmpty() async throws {
+        let r = Rig()
+        let id: CaptureID = r.ids.make()
+        _ = try await r.notes.record(
+            NewCapture(
+                id: id, kind: .voice, origin: CaptureOrigin(source: .device(r.deviceID), surface: .app),
+                launchID: r.launchID, placement: .window, startedAt: r.clock.now(), body: .none))
+        #expect(r.layer.entryKind(r.locations.recordingManifest(id)) == nil)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[id] == .ended(.discardedEmpty))
+        #expect(try await r.notes.capture(id)?.outcome == .discardedEmpty)
+    }
+
+    /// And the other side of it: a row that a person's discard ended still loses a working file
+    /// that a death left behind, at the next launch.
+    @Test func aDiscardedRowStillLosesAWorkingFileLeftBehind() async throws {
+        let r = Rig()
+        let begun = try await r.beginRecording()
+        _ = try await r.engine.discard(begun.captureID)
+        #expect(try await r.notes.capture(begun.captureID)?.outcome == .discardedEmpty)
+        // A death left the working file and its manifest, as if the discard had not removed them.
+        try r.recorder.leaveOrphan(begun.captureID, launch: r.launchID, frames: 16_000)
+        let next = r.relaunch()
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[begun.captureID] == .workingFileRemoved)
+        #expect(r.layer.entryKind(r.locations.recordingAudio(begun.captureID, format: .caf)) == nil)
+        #expect(r.layer.entryKind(r.locations.recordingManifest(begun.captureID)) == nil)
+    }
+
     /// Finding 20, the review's R3. A recording whose conversion failed keeps its working file
     /// as the recording; the next launch's recovery finds it among the orphans, converts it
     /// again and stores it, and it goes on to transcription.

@@ -255,6 +255,15 @@ public struct LaunchRecovery: Sendable {
     // MARK: Rows without a file
 
     private func finishWithoutFile(_ row: Capture) async -> Outcome {
+        if row.kind == .voice, !nothingOfTheRecordingIsOnTheDrive(row.id) {
+            // The recorder returned no recording, and something of it is on the drive, or the
+            // folder cannot be looked into: it could not be read now, as when its files are
+            // protected while the device is locked. It is kept, its row open and its files
+            // where they are, and the next launch tries again. It is never taken for a
+            // recording with no audio.
+            log.capture(row.id, "recording_kept_unread", .code(KnotError.deviceLocked.code))
+            return .kept(KnotError.deviceLocked.code)
+        }
         let end: CaptureEnd
         switch row.kind {
         case .typed, .ink:
@@ -264,7 +273,7 @@ public struct LaunchRecovery: Sendable {
                 captureID: row.id, endedAt: row.lastSavedAt ?? row.startedAt, outcome: .stored(.none),
                 revision: row.revision)
         default:
-            // A recording whose file nobody found: no audio reached the drive.
+            // A recording of which nothing is on the drive: no audio reached it.
             end = CaptureEnd(
                 captureID: row.id, endedAt: row.startedAt, outcome: .discardedEmpty, revision: row.revision)
         }
@@ -275,6 +284,22 @@ public struct LaunchRecovery: Sendable {
         } catch {
             log.failure(error.about(capture: row.id), "capture_not_recovered")
             return .kept(error.code)
+        }
+    }
+
+    /// True only when neither the recording's manifest nor its working file is at the
+    /// recorder's locations, and `Recording/` could be looked into, or is not there at all. A
+    /// folder that cannot be listed says nothing, and the recording is then kept.
+    private func nothingOfTheRecordingIsOnTheDrive(_ id: CaptureID) -> Bool {
+        let files =
+            [locations.recordingManifest(id)]
+            + RecordingFormat.allCases.map { locations.recordingAudio(id, format: $0) }
+        if files.contains(where: { layer.entryKind($0) != nil }) { return false }
+        do throws(KnotError) {
+            let listed = Set(try layer.contents(of: locations.recording))
+            return !files.contains { listed.contains($0.lastPathComponent) }
+        } catch {
+            return error.context.posixError == ENOENT
         }
     }
 
