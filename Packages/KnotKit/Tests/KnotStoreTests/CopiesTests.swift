@@ -265,12 +265,12 @@ import Testing
         let copy = try made.database.makeDailyCopy()
         try made.database.close()
         let locations = made.database.locations
-        let parent = locations.storeRoot.deletingLastPathComponent().standardizedFileURL.path + "/"
+        let parent = realPath(locations.storeRoot.deletingLastPathComponent()) + "/"
         let staging = "\(StoreLocations.rootFolderName)-restoring-"
         // A sync counts when it is made in the folder the new store is built in, before it
         // takes the store's place.
         @Sendable func built(_ url: URL) -> String? {
-            let path = url.standardizedFileURL.path
+            let path = realPath(url)
             guard path.hasPrefix(parent) else { return nil }
             let parts = path.dropFirst(parent.count).split(separator: "/", omittingEmptySubsequences: true)
             guard let first = parts.first, first.hasPrefix(staging) else { return nil }
@@ -291,7 +291,7 @@ import Testing
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey]
         let walker = FileManager.default.enumerator(at: assets, includingPropertiesForKeys: Array(keys))
         while let url = walker?.nextObject() as? URL {
-            let path = "Assets/" + url.standardizedFileURL.path.dropFirst(assets.standardizedFileURL.path.count + 1)
+            let path = "Assets/" + realPath(url).dropFirst(realPath(assets).count + 1)
             let values = try url.resourceValues(forKeys: keys)
             // A file's bytes and a folder's names are what a sync puts on the drive; an asset's
             // claim is a link, made and synced with the file it names.
@@ -594,11 +594,11 @@ import Testing
         let root = folders.make()
         let made = try await CopiesTests.make(in: root, seed: 124)
         try made.database.close()
-        let copies = StoreCopies.folder(made.database.locations).standardizedFileURL.path
+        let copies = realPath(StoreCopies.folder(made.database.locations))
         let refusing = Switch(true)
         let syncs = Recorded()
         let layer = HookedFileLayer(refuseSync: { url in
-            guard url.standardizedFileURL.path == copies else { return false }
+            guard realPath(url) == copies else { return false }
             syncs.add(url.lastPathComponent)
             return refusing.isOn
         })

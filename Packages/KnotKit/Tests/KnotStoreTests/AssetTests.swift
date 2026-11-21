@@ -79,7 +79,7 @@ import Testing
             locations: made.database.locations,
             layer: HookedFileLayer(beforeSyncFile: { url in
                 if url.lastPathComponent.hasSuffix(DurableFile.partialSuffix) { writeGate.stop() }
-                if url.standardizedFileURL == source.standardizedFileURL { moveGate.stop() }
+                if realPath(url) == realPath(source) { moveGate.stop() }
             }))
         let placing = Task.detached { try await slower.place(Data([1]), as: written, kind: .audio) }
         defer { writeGate.release() }
@@ -108,13 +108,13 @@ import Testing
         let written: AssetID = made.captures.ids.make()
         let moved: AssetID = made.captures.ids.make()
         let assetFolders = [written, moved].map {
-            made.database.locations.asset($0, kind: .audio).deletingLastPathComponent().standardizedFileURL.path
+            realPath(made.database.locations.asset($0, kind: .audio).deletingLastPathComponent())
         }
         let refusing = Switch(true)
         let repository = AssetRepository(
             locations: made.database.locations,
             layer: HookedFileLayer(refuseSync: { url in
-                refusing.isOn && assetFolders.contains(url.standardizedFileURL.path)
+                refusing.isOn && assetFolders.contains(realPath(url))
             }))
         await expectFailure(.writeFailed) { try await repository.place(Data([3]), as: written, kind: .audio) }
         await expectFailure(.writeFailed, "A retry answers once the folder is synced.") {

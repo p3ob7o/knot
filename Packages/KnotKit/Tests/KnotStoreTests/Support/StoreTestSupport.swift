@@ -1,12 +1,26 @@
 import Foundation
 import GRDB
-import KnotCore
 import KnotFakes
 import KnotTestSupport
 import Synchronization
 import Testing
 
+@testable import KnotCore
 @testable import KnotStore
+
+/// How a test writes a folder's path: as the system's temporary folder gives it, or with
+/// `/private` in front, as an app group's container is handed over on a device. Both name the
+/// same folder, and the store answers the same for each.
+enum PathWriting: String, CaseIterable, Sendable {
+    case asGiven
+    case withPrivate
+}
+
+/// The path of what `url` names, the same however it is written, with `/private` or without,
+/// through a link or not, and whether it exists yet or not (`PathForm.real`). A test's hooks
+/// compare paths by it: `URL.standardizedFileURL` drops a leading `/private` only from a path
+/// that exists, so a folder read before it is made would never match itself after.
+func realPath(_ url: URL) -> String { "/" + PathForm.real(url).joined(separator: "/") }
 
 /// The temporary folders a test makes, which it removes when it ends (a test removes the
 /// temporary folder it made).
@@ -25,9 +39,16 @@ final class TemporaryFolders: Sendable {
         for database in databases { expectConsistent(database, sourceLocation: sourceLocation) }
     }
 
-    /// A new empty folder outside every worktree and every synced folder.
-    func make(_ name: String = "store") -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(
+    /// A new empty folder outside every worktree and every synced folder, its path written as
+    /// `written` says. With `KNOT_TEST_PRIVATE_ROOTS=1` every folder is written with `/private`,
+    /// so that the whole suite runs in that form.
+    func make(_ name: String = "store", written: PathWriting = .asGiven) -> URL {
+        let everyPrivate = ProcessInfo.processInfo.environment["KNOT_TEST_PRIVATE_ROOTS"] == "1"
+        let temporary = FileManager.default.temporaryDirectory
+        let base =
+            (everyPrivate || written == .withPrivate) && !temporary.path.hasPrefix("/private/")
+            ? URL(fileURLWithPath: "/private" + temporary.path, isDirectory: true) : temporary
+        let url = base.appending(
             path: "knot-\(name)-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         made.withLock { $0.append(url) }

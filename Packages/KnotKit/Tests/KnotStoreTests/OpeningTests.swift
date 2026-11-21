@@ -75,7 +75,7 @@ import Testing
         let gate = Gate()
         // The slower opener stops after it found no store, as it makes the store's folder.
         let layer = HookedFileLayer(beforeCreate: { url in
-            if url.standardizedFileURL.path == locations.storeRoot.standardizedFileURL.path { gate.stop() }
+            if realPath(url) == realPath(locations.storeRoot) { gate.stop() }
         })
         let slower = Task.detached { try StoreDatabase.open(locations: locations, role: .app, fileLayer: layer) }
         defer { gate.release() }
@@ -319,7 +319,7 @@ import Testing
         while let url = walker?.nextObject() as? URL {
             if (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
                 listed.append(
-                    String(url.standardizedFileURL.path.dropFirst(retired.standardizedFileURL.path.count + 1)))
+                    String(realPath(url).dropFirst(realPath(retired).count + 1)))
             }
         }
         #expect(Set(listed) == Set(files.keys), "Nothing was added to the retired app's folder.")
