@@ -59,8 +59,9 @@ public enum UnavailablePorts {
         let neededFrom: [(EnvironmentPort, MilestoneLevel)] = [
             // The cleaner is not here: WP-14's cleanup merged ahead of M2, and `.live` fills it in
             // every build.
-            // WP-12's second pull request: playback, the recording state and the free space.
-            (.player, .m2), (.recordingState, .m2), (.freeSpace, .m2),
+            // WP-12's second pull request fills playback and the free space in every build. The
+            // recording state waits for a defaults suite, which the composition does not pass yet.
+            (.recordingState, .m2),
             // WP-10's second pull request: the install ID and the notice between processes,
             // which the command line needs at M4.
             (.installIdentity, .m2), (.notifier, .m4),
