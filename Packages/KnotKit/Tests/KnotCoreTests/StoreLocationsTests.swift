@@ -30,6 +30,17 @@ import Testing
         #expect(locations.recording.path == "/containers/app/Library/Application Support/KnotStore/Recording")
     }
 
+    /// A recording's peaks sit beside its working file and its manifest, named by the capture.
+    @Test func aRecordingsPeaksSitBesideItsWorkingFile() {
+        let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/tmp/test-store", isDirectory: true))
+        let capture = CaptureID(uuid: UUID())
+        let peaks = locations.recordingPeaks(capture)
+        #expect(
+            peaks.deletingLastPathComponent()
+                == locations.recordingAudio(capture, format: .caf).deletingLastPathComponent())
+        #expect(peaks.lastPathComponent == "\(capture).peaks")
+    }
+
     @Test func onIOSTheDatabaseStaysInTheAppsOwnContainer() throws {
         let locations = try StoreLocations.resolve(
             flavour: .dev, platform: .iOS, appContainer: app, appGroup: .present(container: group), environment: [:])
