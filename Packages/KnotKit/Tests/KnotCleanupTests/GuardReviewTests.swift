@@ -123,6 +123,22 @@ func theGuardsLimitsAreTheOnesTheNoteStates(_ example: GuardExample) {
     #expect(FidelityGuard.check(raw: example.raw, cleaned: example.cleaned).isAccepted, "\(example.row)")
 }
 
+/// N2 of the re-check: a repeat is refused when either copy is protected. The first copy of a
+/// name may start a sentence, where its capital makes it no name.
+@Test(arguments: [
+    ("We flew there in May. Bora Bora was lovely.", "We flew there in May. Bora was lovely."),
+    ("Bora Bora was lovely in May.", "Bora was lovely in May."),
+    ("Walla Walla is where we met.", "Walla is where we met."),
+])
+func aRepeatIsRefusedWhenEitherCopyIsProtected(_ raw: String, _ cleaned: String) {
+    #expect(FidelityGuard.check(raw: raw, cleaned: cleaned) == .rejected(.protectedWordRemoved))
+}
+
+@Test func aRepeatOfAPlainWordAtASentencesStartStillGoes() {
+    #expect(FidelityGuard.check(raw: "The the meeting went well.", cleaned: "The meeting went well.").isAccepted)
+    #expect(FidelityGuard.check(raw: "the the meeting went well", cleaned: "The meeting went well.").isAccepted)
+}
+
 /// Many removals of protected repeats, each under the share: refused.
 @Test func manySmallRemovalsOfNegationsAreRefused() {
     let raw = "it is not not safe and the bridge is not not open and we can can go"

@@ -163,10 +163,13 @@ public enum FidelityGuard {
                 let span = words[start..<end]
 
                 // A repeat of a negation, a number, a date word or a name is meant ("not not
-                // true", "4 4 1 9"), so it is never removed as a repeat. Only a restart may remove
-                // such a word, below.
+                // true", "4 4 1 9"), so it is never removed as a repeat. Either copy counts: the
+                // first copy of "Bora Bora" may start a sentence, where its capital makes it no
+                // name, and the copy that comes again is one. Only a restart may remove such a
+                // word, below.
                 if length <= limits.maxRepeatWords, following.count == length,
-                    zip(span, following).allSatisfy({ $0.text == $1.text }), !span.contains(where: \.isProtected)
+                    zip(span, following).allSatisfy({ $0.text == $1.text }),
+                    !span.contains(where: \.isProtected), !following.contains(where: \.isProtected)
                 {
                     spans[start].append(Span(length: length, rule: .repeat))
                     continue
