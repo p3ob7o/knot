@@ -31,6 +31,9 @@
             var timeBox: Duration = .seconds(180)
             /// A fault the child injects, for the tests that prove the soak catches it.
             var fault: String?
+            /// Whether every point of `killPoints` must kill at least once, as at the soak tier's size:
+            /// one launch in two then draws among the points that have not killed yet.
+            var everyPointKills = false
 
             /// The configuration as one line, which `parse` reads back: what a replay needs.
             var line: String {
@@ -43,6 +46,7 @@
                     "box=\(timeBox.components.seconds)",
                 ]
                 if let fault { fields.append("fault=\(fault)") }
+                if everyPointKills { fields.append("every=1") }
                 return fields.joined(separator: ";")
             }
 
@@ -72,7 +76,7 @@
                 }
                 return Configuration(
                     seed: seed, captures: captures, killPoints: killPoints, launchBudget: budget,
-                    timeBox: .seconds(box), fault: values["fault"])
+                    timeBox: .seconds(box), fault: values["fault"], everyPointKills: values["every"] == "1")
             }
 
             /// The command that runs this configuration again, whatever test ran it first.
@@ -226,6 +230,7 @@
             var problems: [SoakWitness.Problem] = []
             var next = 0
             var stoppedByTimeBox = false
+            var killedPoints: Set<SoakKillPoint> = []
             let total = configuration.captures
             // A run that makes no progress ends: every launch begins at least one capture
             // unless its kill point comes first, and the next point is drawn again.
@@ -244,7 +249,11 @@
                     break
                 }
                 let number = launches.count + 1
-                let point = configuration.killPoints.randomElement(using: &random)
+                let unkilled = configuration.killPoints.filter { !killedPoints.contains($0) }
+                let pool =
+                    configuration.everyPointKills && number % 2 == 1 && !unkilled.isEmpty
+                    ? unkilled : configuration.killPoints
+                let point = pool.randomElement(using: &random)
                 let passes = point.map { Int.random(in: $0.passes, using: &random) } ?? 0
                 // An `anywhere` kill lands this long after its acknowledgement, so that moments with
                 // no named stop are reached by chance.
@@ -255,6 +264,7 @@
                     number, range: range, point: point, passes: passes, delay: delay, in: folder,
                     previousWasKilled: launches.last?.wasKilled ?? false, witness: &witness)
                 launches.append(launch)
+                if launch.wasKilled, let point { killedPoints.insert(point) }
                 problems += launchProblems
                 if launch.ending == .failed {
                     problems.append(SoakWitness.Problem(code: "child_failed", ids: ["launch=\(number)"]))
@@ -277,6 +287,12 @@
                 if lastProblems.isEmpty, last.ending == .quit {
                     problems += try await witness.check(
                         locations, script: SoakScript(seed: configuration.seed, count: configuration.captures))
+                }
+                // A point that never killed proves nothing: at the soak tier's size each must.
+                if configuration.everyPointKills, !stoppedByTimeBox {
+                    for point in configuration.killPoints where !killedPoints.contains(point) {
+                        problems.append(SoakWitness.Problem(code: "kill_point_never_killed", ids: ["\(point)"]))
+                    }
                 }
             }
             return Verdict(

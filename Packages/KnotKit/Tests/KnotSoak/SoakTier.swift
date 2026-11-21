@@ -21,7 +21,8 @@
         static var ledger: CaptureLedgerSoak.Configuration? {
             if let replay { return CaptureLedgerSoak.Configuration.parse(replay) }
             return CaptureLedgerSoak.Configuration(
-                seed: seed ?? 20_261_121, captures: isSoak ? 500 : 40, killPoints: SoakKillPoint.typedCaptures)
+                seed: seed ?? 20_261_121, captures: isSoak ? 500 : 40, killPoints: SoakKillPoint.typedCaptures,
+                everyPointKills: isSoak)
         }
     }
 
