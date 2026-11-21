@@ -1157,6 +1157,9 @@
                 row.revision = winnerRevision
             case .voice, .ink:
                 let first = SegmentID(id)
+                // A recording recorded as ended before its file, at a newer capture's start,
+                // holds nothing until its file comes: its own end applies as to an open one.
+                let lateRecording = row.kind == .voice && row.outcome == .stored && row.contentHash == nil
                 switch incoming {
                 case .file(let asset, let duration):
                     guard let content = CaptureBody.file(asset, duration: duration).content,
@@ -1189,7 +1192,7 @@
                     }
                 case .discard:
                     switch row.outcome {
-                    case .open, .failed:
+                    case _ where lateRecording, .open, .failed:
                         // A failed one too: a recording read at last that holds no frame.
                         discard(id, touched: &touched, from: &next)
                         receipt.segmentIDs = []
@@ -1200,7 +1203,7 @@
                     }
                 case .failed(let code):
                     switch row.outcome {
-                    case .open:
+                    case _ where lateRecording, .open:
                         next.segments[first]?.endedAt = endingAt ?? now
                         next.segments[first]?.state =
                             row.kind == .voice ? .voice(.failed(.record, code)) : .ink(.failed(code))
