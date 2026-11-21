@@ -1,6 +1,7 @@
 /// One word as the fidelity guard sees it.
 public struct FidelityWord: Sendable, Hashable {
-    /// The word in lower case, without punctuation or apostrophes: "Don't" is "dont".
+    /// The word in lower case, without punctuation: "Don't" is "don't", with a straight
+    /// apostrophe whichever one was written, "-5" keeps its sign and ".5" its point.
     public let text: String
     /// Whether the word is a negation, a number, a name or a date word, which a restart may
     /// remove only when the same word comes again at the same place.
@@ -53,10 +54,14 @@ public enum FidelityWords {
     /// The words of `text`, in order.
     ///
     /// Letters, digits and the symbols `$ £ € ¥ % # @ & + =` make words. An apostrophe inside
-    /// a word is dropped. A full stop, comma or colon between two digits stays, so "9:30" and
-    /// "1,000" are one word each. Every other character separates words, hyphens and dashes
-    /// included. With `listMarkers`, a number followed by "." or ")" at the start of a line is
-    /// a list marker, not a word.
+    /// a word is part of it, written as a straight one, so "we'll" is not "well". A full stop,
+    /// comma or colon between two digits stays, so "9:30" and "1,000" are one word each. A minus
+    /// sign or a full stop straight before a digit, where no word goes on, starts the number,
+    /// so "-5" is not "5" and ".5" is not "5". Every other character separates words, hyphens
+    /// and dashes between letters included.
+    ///
+    /// With `listMarkers`, a number followed by "." or ")" at the start of a line is a list
+    /// marker, not a word.
     ///
     /// A word written with a capital is a name unless it starts the text, a line or a
     /// sentence, or is "I" or one of its contractions.
@@ -72,8 +77,8 @@ public enum FidelityWords {
             func flush() {
                 guard !current.isEmpty else { return }
                 let text = current.lowercased()
-                let capital = current.first.map { $0.isUppercase } ?? false
-                let isName = capital && !startsSentence && !firstPerson.contains(text)
+                let capital = current.first(where: \.isLetter).map { $0.isUppercase } ?? false
+                let isName = capital && !startsSentence && !firstPerson.contains(bare(text))
                 words.append(FidelityWord(text: text, isProtected: isName || isProtectedWord(text)))
                 lastWord = text
                 current = ""
@@ -89,11 +94,18 @@ public enum FidelityWords {
                     }
                     current.append(character)
                 } else if isApostrophe(character), !current.isEmpty, let next, isWordCharacter(next) {
-                    continue
+                    current.append("'")
                 } else if ".,:".contains(character), previous?.isNumber == true, next?.isNumber == true,
                     !current.isEmpty
                 {
                     current.append(character)
+                } else if "-\u{2212}.".contains(character), current.isEmpty, next?.isNumber == true,
+                    previous.map({ !isWordCharacter($0) && !".-\u{2212}".contains($0) }) ?? true
+                {
+                    // A sign or a point that starts a number, where no word goes on.
+                    startsSentence = sentenceStart
+                    sentenceStart = false
+                    current.append(character == "\u{2212}" ? "-" : character)
                 } else {
                     let follows = !current.isEmpty
                     flush()
@@ -108,9 +120,15 @@ public enum FidelityWords {
         return words
     }
 
+    /// The word without its apostrophes, as the closed lists write it: "don't" is "dont".
+    static func bare(_ text: String) -> String {
+        text.contains("'") ? text.replacingOccurrences(of: "'", with: "") : text
+    }
+
     /// True for a negation, a number or a date word. A name is found by its capital instead.
     static func isProtectedWord(_ text: String) -> Bool {
-        negations.contains(text) || numberWords.contains(text) || dateWords.contains(text)
+        let bare = bare(text)
+        return negations.contains(bare) || numberWords.contains(bare) || dateWords.contains(bare)
             || text.contains(where: \.isNumber)
     }
 

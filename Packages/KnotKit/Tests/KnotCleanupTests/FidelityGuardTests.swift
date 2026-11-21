@@ -26,8 +26,12 @@ let guardTable: [GuardExample] = [
     GuardExample(row: "case", raw: "ask dr okafor", cleaned: "Ask Doctor Okafor", verdict: "rejected:changed"),
     // Punctuation, apostrophes and hyphens.
     GuardExample(
-        row: "punctuation", raw: "dont forget forty two chairs for the 3rd",
+        row: "punctuation", raw: "don't forget forty two chairs for the 3rd",
         cleaned: "Don't forget forty-two chairs for the 3rd!", verdict: "accepted"),
+    // An apostrophe belongs to its word, so the model may not add one.
+    GuardExample(
+        row: "punctuation", raw: "well go tomorrow then", cleaned: "We'll go tomorrow then.",
+        verdict: "rejected:changed"),
     GuardExample(
         row: "punctuation", raw: "pay 240 dollars and 50 cents", cleaned: "Pay $240.50.",
         verdict: "rejected:changed"),
@@ -185,10 +189,32 @@ func theGuardDecidesEachExampleOfTheTable(_ example: GuardExample) {
 
 @Test func wordsIgnoreCasePunctuationAndBreaksAndKeepNumbersWhole() {
     let words = FidelityWords.words(
-        in: "Don't — e-mail Dr. O'Neil at 9:30, or 1,000 times!\n\n2) €5", listMarkers: true)
-    #expect(words.map(\.text) == ["dont", "e", "mail", "dr", "oneil", "at", "9:30", "or", "1,000", "times", "€5"])
+        in: "Don\u{2019}t — e-mail Dr. O'Neil at 9:30, or 1,000 times!\n\n2) €5", listMarkers: true)
+    #expect(
+        words.map(\.text) == ["don't", "e", "mail", "dr", "o'neil", "at", "9:30", "or", "1,000", "times", "€5"])
     // "Dr" and "O'Neil" are written with a capital inside a sentence, so they count as names.
     #expect(words.map(\.isProtected) == [true, false, false, true, true, false, true, false, true, false, true])
+}
+
+/// A sign, a decimal point and an apostrophe belong to their word (finding 5).
+@Test(arguments: [
+    ("it will be -5 degrees tonight", "It will be 5 degrees tonight."),
+    ("it will be \u{2212}5 degrees tonight", "It will be 5 degrees tonight."),
+    ("it costs .5 a gram", "It costs 5 a gram."),
+    ("well go tomorrow then", "We'll go tomorrow then."),
+    ("we'll go tomorrow then", "Well, go tomorrow then."),
+    ("its the blue one", "It\u{2019}s the blue one."),
+])
+func aSignAPointAndAnApostropheBelongToTheirWord(_ raw: String, _ cleaned: String) {
+    #expect(!FidelityGuard.check(raw: raw, cleaned: cleaned).isAccepted)
+}
+
+@Test func aSignOrAPointBetweenWordsIsStillPunctuation() {
+    #expect(
+        FidelityWords.words(in: "forty-two, 2-3, 3.5, -5, .5, end. 5").map(\.text)
+            == ["forty", "two", "2", "3", "3.5", "-5", ".5", "end", "5"])
+    #expect(FidelityGuard.check(raw: "it is −5 out", cleaned: "It is -5 out.").isAccepted)
+    #expect(FidelityGuard.check(raw: "don\u{2019}t go", cleaned: "Don't go.").isAccepted)
 }
 
 @Test func aNumberedMarkerIsAMarkerOnlyAtTheStartOfALine() {
