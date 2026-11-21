@@ -144,8 +144,6 @@ import Testing
         case storePath
         /// On the `Inbox/` path: the item's write fails.
         case inboxPath
-        /// Through the capture session, as the surface types.
-        case session
         var testDescription: String { rawValue }
     }
 
@@ -157,29 +155,6 @@ import Testing
         let r = Rig()
         let engine = BoundedEngine(r.engine())
         if diskCase == .inboxPath { await r.notes.failNextCaptureWrites(with: .storeNotOpen) }
-
-        if diskCase == .session {
-            let session = r.session(.app, engine: engine.engine)
-            await session.type("pack")
-            let begun = try await within("the first save") { try await session.flush() }
-            #expect(begun?.durableRevision == 1)
-            await r.notes.failNextCaptureWrites(with: .diskFull)
-            r.layer.failNextWrite(with: .diskFull)
-            await session.type("pack the tent")
-            await expectError(.diskFull) { try await within("the failed save") { try await session.flush() } }
-            // The disk has room again: the next keystroke saves the whole text.
-            await session.type("pack the tent and stove")
-            let saved = try await within("the next save") { try await session.flush() }
-            #expect(saved?.path == .inbox(KnotError.diskFull.code))
-            let ended = try await within("the end") { try await session.end() }
-            #expect(ended?.outcome == .stored)
-            let id = try #require(ended?.captureID)
-            #expect(
-                await eventually("the text to be stored") {
-                    (try? await r.notes.segment(SegmentID(id)))?.segment.text == "pack the tent and stove"
-                })
-            return
-        }
 
         let begun = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "pack"))
         let id = begun.captureID

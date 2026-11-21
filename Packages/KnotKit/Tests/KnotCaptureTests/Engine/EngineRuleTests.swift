@@ -6,9 +6,9 @@ import KnotTestSupport
 import Synchronization
 import Testing
 
-/// The rules of docs/product-spec.md §3 that the engine and its session tracker apply, each on
-/// the fake clock. The rules the store applies, the append window among them, are tested by
-/// WP-02's contract suite and by WP-10; these meet them only through the store's answers.
+/// The rules of docs/product-spec.md §3 that the engine applies, each on the fake clock. The
+/// rules the store applies, the append window among them, are tested by WP-02's contract suite
+/// and by WP-10; these meet them only through the store's answers.
 @Suite struct EngineRuleTests {
     /// Ends a typed capture made at the clock's time, and returns its note.
     private static func capture(_ text: String, on surface: CaptureSurface = .app, in r: Rig) async throws -> NoteID {
@@ -19,26 +19,19 @@ import Testing
 
     // MARK: Rule 13
 
-    /// Rule 13 and §4.1, A17's example. The panel opens at 10:00 and shows the note of the line
-    /// typed at 09:58; it stays empty until 10:07. The capture begins at the first keystroke, so
-    /// the window has run out and it starts a new note; the destination is fixed then. Typed at
-    /// 10:02 instead, it joins the shown note.
-    @Test(arguments: [(2, true), (7, false)])
-    func typedCaptureStartsAtItsFirstKeystroke(minutesAfterOpening: Int, joins: Bool) async throws {
+    /// Rule 13: a typed capture starts at its first keystroke, the begin, and the note it joins
+    /// is decided then. A17's example: the line typed at 09:58, and the first keystroke at 10:02
+    /// joins its note while one at 10:07 starts a new note, whatever happened before the begin.
+    @Test(arguments: [(4, true), (9, false)])
+    func typedCaptureStartsAtItsFirstKeystroke(minutesAfterEarlier: Int, joins: Bool) async throws {
         let r = Rig()
         let earlier = try await Self.capture("dentist at four", in: r)
-        r.clock.advance(by: 120)
-        let session = r.session(.macPanel, engine: r.engine.engine)
-        #expect(await session.destination() == .note(earlier), "The panel shows the note the window would join.")
-        r.clock.advance(by: TimeInterval(minutesAfterOpening * 60))
-        await session.type("bring the forms")
-        let begun = try #require(try await within("the first keystroke") { try await session.flush() })
-        let note = try #require(try await r.note(of: begun.captureID))
-        #expect((note == earlier) == joins)
-        // Fixed at the first keystroke: time passing no longer moves it.
-        r.clock.advance(by: 3_600)
-        #expect(await session.destination() == .note(note))
-        _ = try await within("the end") { try await session.end() }
+        r.clock.advance(by: TimeInterval(minutesAfterEarlier * 60))
+        let begun = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "bring the forms"))
+        let row = try #require(try await r.notes.capture(begun.captureID))
+        #expect(row.startedAt == r.clock.now(), "The capture starts at the begin.")
+        #expect((begun.noteID == earlier) == joins)
+        _ = try await r.engine.end(begun.captureID)
     }
 
     /// Rule 13: holding the Mac hotkey while typing ends the typed capture and starts a
@@ -112,18 +105,14 @@ import Testing
         let r = Rig()
         let earlier = try await Self.capture("first thought", in: r)
         r.clock.advance(by: 30)
-        let session = r.session(.app, engine: r.engine.engine)
-        _ = try await within("new note") { try await session.newNote() }
-        #expect(await session.destination() == .newNote)
-        await session.type("second thought")
-        let second = try #require(try await within("the end") { try await session.end() })
+        let second = try await r.engine.begin(
+            CaptureRequest(kind: .typed, surface: .app, placement: .newNote, text: "second thought"))
+        _ = try await r.engine.end(second.captureID)
         let fresh = try #require(try await r.note(of: second.captureID))
         #expect(fresh != earlier)
         r.clock.advance(by: 30)
-        #expect(await session.intent == .window)
-        #expect(await session.destination() == .note(fresh))
-        await session.type("third thought")
-        let third = try #require(try await within("the end") { try await session.end() })
+        let third = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "third thought"))
+        _ = try await r.engine.end(third.captureID)
         #expect(try await r.note(of: third.captureID) == fresh)
     }
 
@@ -132,14 +121,38 @@ import Testing
         let r = Rig()
         let old = try await Self.capture("garden plan", in: r)
         r.clock.advance(by: 6 * 3_600)
-        let session = r.session(.app, engine: r.engine.engine)
-        await session.open(old)
-        #expect(await session.destination() == .note(old))
-        await session.type("tomatoes by the fence")
-        let ended = try #require(try await within("the end") { try await session.end() })
-        #expect(try await r.note(of: ended.captureID) == old)
-        let row = try #require(try await r.notes.capture(ended.captureID))
-        #expect(row.placement == .named(old))
+        let begun = try await r.engine.begin(
+            CaptureRequest(kind: .typed, surface: .app, placement: .named(old), text: "tomatoes by the fence"))
+        _ = try await r.engine.end(begun.captureID)
+        #expect(try await r.note(of: begun.captureID) == old)
+    }
+
+    // MARK: What the engine passes the store
+
+    /// The placement asked for and the note the surface showed reach the store's record call and
+    /// the `Inbox/` manifest unchanged, for the window, for "New note" and for a named note, so
+    /// that the store path and ingest decide on the same request (docs/architecture.md §5).
+    @Test(arguments: [false, true])
+    func placementAndShownNoteReachTheStoreAndTheManifestUnchanged(inbox: Bool) async throws {
+        let r = Rig(engineIngests: false)
+        let shown = try await Self.capture("shown", in: r)
+        let engine = BoundedEngine(r.engine(ingests: false))
+        for placement in [CapturePlacement.window, .newNote, .named(shown)] {
+            r.clock.advance(by: 10)
+            if inbox { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+            let begun = try await engine.begin(
+                CaptureRequest(kind: .typed, surface: .app, placement: placement, shownNote: shown, text: "x"))
+            if inbox {
+                let manifest = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(begun.captureID)))
+                #expect(manifest.placement == placement)
+                #expect(manifest.shownNoteID == shown)
+            } else {
+                let row = try #require(try await r.notes.capture(begun.captureID))
+                #expect(row.placement == placement)
+                #expect(row.shownNoteID == shown)
+            }
+            _ = try await engine.end(begun.captureID)
+        }
     }
 
     // MARK: Rule 12
@@ -169,66 +182,5 @@ import Testing
         #expect(text.hasPrefix("half a thought"))
         kill.release()
         _ = await SuiteWait.value("the dead launch's update") { await dying.value }
-    }
-}
-
-/// The session's typing: saves at most one save behind the last keystroke, and a flush on end,
-/// background and termination (docs/product-spec.md §4.1).
-@Suite struct CaptureSessionTests {
-    /// Keystrokes made while a save is in flight are folded into the one next save: the text on
-    /// the drive is never more than one save behind, and nothing waits on a timer.
-    @Test func keystrokesDuringASaveFoldIntoTheNext() async throws {
-        let r = Rig()
-        let hooks = JobHooks()
-        let engine = r.engine(notes: HookedStore(store: r.notes, hooks: hooks))
-        let session = r.session(.app, engine: engine.engine)
-        await session.type("w")
-        let begun = try #require(try await within("the first save") { try await session.flush() })
-        let hold = await r.notes.holdNextCaptureWrite()
-        await session.type("wa")
-        await reached(hold)
-        for text in ["wat", "wate", "water", "water the"] { await session.type(text) }
-        hold.release()
-        let saved = try #require(try await within("the flush") { try await session.flush() })
-        #expect(saved.durableRevision == 3, "One save for the keystroke in flight, one for those after it.")
-        let checkpoints = hooks.captureWrites.withLock { $0.filter { $0.hasPrefix("checkpoint") }.count }
-        #expect(checkpoints == 2)
-        #expect(try await r.notes.segment(SegmentID(begun.captureID))?.segment.text == "water the")
-    }
-
-    /// The end flushes first: the last keystroke is in the stored text.
-    @Test func endFlushesTheLastKeystroke() async throws {
-        let r = Rig()
-        let session = r.session(.app, engine: r.engine.engine)
-        for text in ["n", "no", "not", "note"] { await session.type(text) }
-        let ended = try #require(try await within("the end") { try await session.end() })
-        #expect(ended.outcome == .stored)
-        #expect(try await r.notesText() == [["note"]])
-    }
-
-    /// An empty field begins nothing, and text that is only spaces and line breaks ends as
-    /// empty: nothing is left in the stream.
-    @Test func emptyTextLeavesNothing() async throws {
-        let r = Rig()
-        let session = r.session(.app, engine: r.engine.engine)
-        let nothing = try await within("an end with nothing typed") { try await session.end() }
-        #expect(nothing == nil)
-        await session.type(" \n\t")
-        let ended = try #require(try await within("the end") { try await session.end() })
-        #expect(ended.outcome == .discardedEmpty)
-        #expect(try await r.stream().notes.isEmpty)
-    }
-
-    /// When another surface's start ends the session's capture (rule 15), what was saved stays,
-    /// and the next keystroke begins a capture of its own.
-    @Test func captureEndedByAnotherStartKeepsWhatWasSaved() async throws {
-        let r = Rig()
-        let session = r.session(.app, engine: r.engine.engine)
-        await session.type("first")
-        let first = try #require(try await within("the first save") { try await session.flush() })
-        _ = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .intent, text: "other"))
-        await session.type("first, more")
-        await expectError(.illegalTransition) { try await within("the save") { try await session.flush() } }
-        #expect(try await r.notes.segment(SegmentID(first.captureID))?.segment.text == "first")
     }
 }

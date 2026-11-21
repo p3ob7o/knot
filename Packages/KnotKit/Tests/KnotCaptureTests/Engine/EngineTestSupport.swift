@@ -140,14 +140,6 @@ extension Rig {
             ingest: ingests ? ingest : nil, log: KnotLog(.capture, sink: logs), killPoint: killPoint ?? { _, _ in })
     }
 
-    /// A capture session on `surface` over `engine`, with the rig's store and clock.
-    func session(
-        _ surface: CaptureSurface, engine: any CaptureEngine, deadline: StoreDeadline = .patient
-    ) -> CaptureSession {
-        CaptureSession(
-            surface: surface, engine: engine, notes: notes, clock: clock, deviceID: deviceID, deadline: deadline)
-    }
-
     /// The live segments of the stream's notes, note by note, newest note first.
     func notesText() async throws -> [[String]] {
         try await stream().notes.map { $0.liveSegments.map(\.text) }
@@ -157,21 +149,4 @@ extension Rig {
     func note(of capture: CaptureID) async throws -> NoteID? {
         try await notes.segment(SegmentID(capture))?.segment.noteID
     }
-}
-
-/// Runs a session's call within `SuiteWait`'s limit. After it, records that it waited for
-/// `what`, and throws `unexpected`.
-func within<T: Sendable>(
-    _ what: String, sourceLocation: SourceLocation = #_sourceLocation,
-    _ call: @escaping @Sendable () async throws -> T
-) async throws -> T {
-    let answer = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Result<T, any Error> in
-        do {
-            return .success(try await call())
-        } catch {
-            return .failure(error)
-        }
-    }
-    guard let answer else { throw KnotError.unexpected }
-    return try answer.get()
 }
