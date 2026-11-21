@@ -120,7 +120,7 @@ A milestone build is made from `main` in a fresh worktree by the thread of the o
 | Milestone | Owning package | Also needs |
 |---|---|---|
 | M1 | WP-22 PR 1 | WP-05; WP-06 PR 1; WP-06a; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
-| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
+| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-12 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
 | M3 | WP-32 PR 2 | WP-17 PR 2; WP-19 PR 3; SP-2 |
 | M4 | WP-33 PR 2 | WP-16; WP-34 PR 3; SP-3; SP-4; SP-5 |
 | M5 | WP-35 | WP-18; WP-11 PR 4; WP-16; WP-19 PR 4; WP-31 PR 2 |
@@ -132,7 +132,7 @@ If M5 is cut, the second PR of WP-31 loses the Sketch control and M6 needs it. M
 
 - **Identifiers.** Milestone builds use `com.p3ob7o.knot`, with its app group and its iCloud container (D34). They carry a version above 0.2.0, which is the retired app's. Every build that is not a milestone build uses development identifiers: the bundle ID with a `.dev` suffix, its own app group and its own iCloud container. That covers agent builds, PR builds, spikes and tests, and the TestFlight upload of the SP-3 spike app, so nothing before the M1 milestone build touches the retired app or its container. Only a milestone build opens the default store or the real iCloud container.
 - **Levels.** Every milestone build, and every fix built for an earlier milestone, is made at a level from M1 to M7. A feature whose milestone has not passed is switched off in it by a gate: sync and the command line open at M4, and ink at M5. A fix made for M2 during the keep-gate week therefore carries nothing from M3 or M4.
-- **Real notes.** Notes on the owner's iPhone and iPad are disposable until the M2 milestone build, and notes on his Mac until the M4 milestone build, which needs SP-3's answer on where the Mac store lives. After those builds, every change to the schema or to the store's location ships a tested migration. Schema version 1 is the schema of the M2 milestone build. Every change after that build is a numbered migration, whichever package makes it, the second PR of WP-10 included.
+- **Real notes.** Notes on the owner's iPhone and iPad are disposable until the M2 milestone build, and notes on his Mac until the M4 milestone build, which needs SP-3's answer on where the Mac store lives. After those builds, every change to the schema or to the store's location ships a tested migration. Schema version 1 is the schema of the M1 milestone build, the first build installed on the owner's devices: the build after it must open the store that it left there, because on a device a milestone build is installed over the one before, and the app's container, which also holds the retired app's folder, is not cleared between them. Every change after the commit that the M1 build is made from is a numbered migration, whichever package makes it, the second PR of WP-10 included. The owner's notes stay disposable until the builds named above: the migrations are for the build's sake, not yet for theirs.
 - **At each milestone.** The capture ledger soak runs, and `scripts/verify.sh --perf` measures the timed targets (§9). At each milestone tag a seeded synthetic store made by that build is committed. It holds work in flight: an open capture, a queued job and a pending delete. Every later build opens it, migrates it and passes the whole `NoteStore` contract suite on it.
 - **The retired app.** The first milestone build installed on a device replaces the retired app there. Before that install, on every device that had the retired app, the owner clears its Recovery window of drafts, pending captures and outcomes that need review, keeps a copy of the retired app, and quits it. If something was missed, that copy still opens its store, which v1 leaves untouched.
 - **Upgrades.** The upgrade rows name what they install over. At M1 the milestone build, signed for development as `com.p3ob7o.knot`, is installed over the retired app, and the row checks that the retired app's folder is still there. At M7 the TestFlight build is installed over the M6 milestone build, which has the same identifier and development signing. The SP-3 upload under the development identifier proves neither.
@@ -506,7 +506,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
 | G2 | Before WP-40 starts | Read the handoff's gap list | 15 |
 | G4 | M1 | Checklist | 15 |
-| G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 40 |
+| G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 50 |
 | G4 | Seven days after the M2 checklist has passed | The keep-gate sitting (§5) | 30 |
 | G4 | M3 | Checklist | 30 |
 | G4 | M4 | Checklist in three sittings: hotkey, CLI and MCP, two-device sync | 45 |

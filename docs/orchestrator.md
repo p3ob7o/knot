@@ -95,7 +95,7 @@ At each milestone tag, the build of that tag makes a seeded synthetic store, `Kn
 
 Before a milestone install, before Paolo installs anything, read the built Watch app's entitlements and its provisioning profile for the app group, and the same for each app and each extension. A build that says it has a group and finds no container fails with a typed error (docs/architecture.md §7). Neither a simulator nor a locally signed build can show it.
 
-A milestone build is the Release configuration, `-configuration Release` (docs/dev-setup.md). Its build is rehearsed before the milestone's last pull requests are in, with no flag that lets Xcode change the developer account, such as `-allowProvisioningUpdates`, so that what the signing needs from Paolo, the App IDs and profiles of the milestone identifiers among it, is known early.
+A milestone build is made from the commit at which `main` first held everything PLAN.md §5 names for the milestone, the gate passed and the soak ran, with a check of the commit and its tree before the build, and not from a later `main`, which by then holds work for the next milestone. A fix that a sitting asks for is built from that commit and the fix. A milestone build is the Release configuration, `-configuration Release` (docs/dev-setup.md). Its build is rehearsed before the milestone's last pull requests are in, with no flag that lets Xcode change the developer account, such as `-allowProvisioningUpdates`, so that what the signing needs from Paolo, the App IDs and profiles of the milestone identifiers among it, is known early.
 
 ## What needs Paolo
 
