@@ -192,17 +192,20 @@ final class RecordScreenModel {
             announcer.announce(.recordingCouldNotStart)
             return
         }
-        let before = phase
+        let before = (phase: phase, status: status)
         switch phase {
         case .idle:
             phase = .starting
             status = .ready
         case .recording:
+            // The microphone stops at this tap: the word that says Knot is recording goes now,
+            // and the outcome says what became of the recording.
             phase = .stopping
+            status = .ready
         case .starting, .stopping:
             break
         }
-        let moved = phase != before
+        let moved = phase != before.phase
         Task {
             let outcome = await coordinator.press(press)
             await apply(outcome, from: coordinator, before: moved ? before : nil)
@@ -216,10 +219,11 @@ final class RecordScreenModel {
         #endif
     }
 
-    /// Says what came of a press. `before` is the phase the press moved the control from, if it
-    /// moved it.
+    /// Says what came of a press. `before` is the phase and the words the press moved the screen
+    /// from, if it moved them.
     private func apply(
-        _ outcome: WatchCoordinator.PressOutcome, from coordinator: WatchCoordinator, before: KnotUI.RecordingPhase?
+        _ outcome: WatchCoordinator.PressOutcome, from coordinator: WatchCoordinator,
+        before: (phase: KnotUI.RecordingPhase, status: RecordStatus)?
     ) async {
         defer { refreshReport() }
         switch outcome {
@@ -250,9 +254,15 @@ final class RecordScreenModel {
             announcer.announce(.recordingCouldNotStart)
         case .ignored:
             // The recorder was starting or stopping, and the press did nothing. If it moved
-            // the control, the control goes back to what the coordinator is doing now.
+            // the screen, the screen goes back to what the coordinator is doing now: the
+            // recording that goes on gets its control and its words back.
             guard let before else { return }
-            phase = await coordinator.isRecording ? before : .idle
+            if await coordinator.isRecording {
+                phase = before.phase
+                status = before.status
+            } else {
+                phase = .idle
+            }
         }
     }
 
