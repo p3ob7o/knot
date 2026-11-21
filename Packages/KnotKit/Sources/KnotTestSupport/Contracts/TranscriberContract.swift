@@ -5,7 +5,9 @@ import Testing
 /// What a `Transcriber` under test reads.
 public struct TranscriberSubject: Sendable {
     public let transcriber: any Transcriber
-    /// A file with speech, whose pauses are all shorter than `budget`.
+    /// A file with speech. It begins with speech and its pauses are all short, shorter than
+    /// `budget` and too short to be read as silence, so that every run over it starts at a
+    /// phrase and takes one.
     public let speech: URL
     /// A file whose run lasts long enough to be cancelled while it runs.
     public let long: URL

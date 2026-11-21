@@ -44,7 +44,8 @@ func recorderSubject(writeDelay: Duration? = nil) throws -> RecorderSubject {
     let (recorder, layer) = try scriptedRecorder(writeDelay: writeDelay)
     return RecorderSubject(
         recorder: recorder, locations: recorder.locations, exists: { layer.exists($0) },
-        size: { (try? layer.read($0))?.count }, read: { try? layer.read($0) })
+        size: { (try? layer.read($0))?.count }, read: { try? layer.read($0) },
+        setReadable: { layer.setReadable($0, $1) }, remove: { try? layer.remove($0) })
 }
 
 func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
@@ -163,6 +164,48 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         _ = try await recorder.convert(again)
         try await recorder.removeWorkingFile(of: again.captureID)
         #expect(try await recorder.recoverOrphans(currentLaunch: next).isEmpty)
+    }
+
+    /// Finding 3 of the review of pull request 61: an orphan's ending comes from its manifest
+    /// when the manifest can be read, and is `recovered` when it cannot. A stopped recording that
+    /// was never converted, whose manifest cannot be read, came back `stopped`.
+    @Test func anUnreadableManifestGivesTheEndingRecovered() async throws {
+        let (recorder, layer) = try scriptedRecorder()
+        let request = recordingRequest()
+        let session = try await recorder.start(request)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        #expect(stopped.ending == .stopped)
+        let manifest = recorder.locations.recordingManifest(request.captureID)
+        layer.setReadable(manifest, false)
+        let found = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+            $0.captureID == request.captureID
+        }
+        #expect(found != nil, "A manifest that cannot be read hides nothing.")
+        #expect(found?.ending == .recovered, "The ending is recovered when the manifest cannot be read.")
+        #expect(found?.frames == stopped.frames && found?.workingFile == stopped.workingFile, "With its frames.")
+        #expect(layer.exists(manifest), "The manifest is left where it is.")
+        layer.setReadable(manifest, true)
+        let again = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+            $0.captureID == request.captureID
+        }
+        #expect(again?.ending == .stopped, "Once it can be read, the ending is the manifest's again.")
+    }
+
+    /// Finding 4 of the review of pull request 61: a manifest with no working file is a
+    /// recording with no audio. With the working file gone, the scripted recorder returned the
+    /// frames it held in memory and named the missing file.
+    @Test func aManifestWithNoWorkingFileHoldsNoAudio() async throws {
+        let (recorder, layer) = try scriptedRecorder()
+        let orphan: CaptureID = Identifier(uuid: UUID())
+        try recorder.leaveOrphan(orphan, launch: Identifier(uuid: UUID()), frames: 16_000)
+        try layer.remove(recorder.locations.recordingAudio(orphan, format: .caf))
+        let found = try #require(
+            try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+                $0.captureID == orphan
+            }, "The manifest is still an orphan's.")
+        #expect(found.frames == 0, "No frame.")
+        #expect(found.workingFile == nil, "No working file is named that is not on the drive.")
+        #expect(layer.exists(recorder.locations.recordingManifest(orphan)), "The manifest stays.")
     }
 
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {
