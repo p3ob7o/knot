@@ -18,6 +18,8 @@ public final class SearchViewModel {
     private let environment: AppEnvironment
     private let context: UIContext
     private var running: Task<Void, Never>?
+    /// Every search started and not yet finished, the dropped ones included.
+    private var started: [Task<Void, Never>] = []
 
     public init(environment: AppEnvironment, context: UIContext, limit: Int = 200) {
         self.environment = environment
@@ -25,16 +27,22 @@ public final class SearchViewModel {
         self.limit = max(1, limit)
     }
 
-    /// The search text changed. The search for the previous text, if it still runs, is dropped.
+    /// The search text changed. The search for the previous text, if it still runs, is dropped:
+    /// its results never replace those of a newer text.
     public func setQuery(_ text: String) {
         query = text
         running?.cancel()
-        running = Task { [weak self] in await self?.search(text) }
+        let search = Task<Void, Never> { [weak self] in await self?.search(text) }
+        running = search
+        started.append(search)
     }
 
-    /// Waits for the search of the current text.
+    /// Waits for every search started so far, the dropped ones included.
     public func settle() async {
-        await running?.value
+        while let next = started.first {
+            await next.value
+            started.removeAll { $0 == next }
+        }
     }
 
     public func clear() {

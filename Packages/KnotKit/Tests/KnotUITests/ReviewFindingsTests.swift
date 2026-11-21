@@ -237,6 +237,85 @@ import Testing
         #expect(model.problem == nil)
         #expect(try await rig.environment.notes.capture(capture)?.outcome == .stored)
     }
+
+    /// Finding 6. Search filters the stream as the person types: the results of an older text
+    /// that arrive late never replace those of the newer one.
+    @Test func aLateSearchForAnOlderTextDoesNotReplaceTheNewerResults() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        try await rig.type("the roof leaks")
+        try await rig.type("buy stamps", placement: .newNote)
+        let gate = GatedTranscriber()
+        var environment = rig.environment
+        environment.transcriber = gate
+        let search = SearchViewModel(environment: environment, context: rig.context)
+
+        // The search for "roof" is held after the store answered it.
+        search.setQuery("roof")
+        #expect(await eventually("the first search to be held") { gate.isHolding })
+        search.setQuery("stamps")
+        #expect(await eventually("the newer search to finish") { search.results?.map(\.title) == ["buy stamps"] })
+
+        // The held search finishes last, with its older results.
+        gate.release()
+        await search.settle()
+        #expect(gate.released)
+        #expect(search.results?.map(\.title) == ["buy stamps"])
+    }
+}
+
+/// A transcriber whose first readiness call waits until released, to hold a search after the
+/// store answered it. Later calls answer at once.
+final class GatedTranscriber: Transcriber {
+    private struct State {
+        var calls = 0
+        var waiter: CheckedContinuation<Void, Never>?
+        var released = false
+    }
+
+    private let state = Mutex(State())
+
+    var isHolding: Bool { state.withLock { $0.waiter != nil } }
+    var released: Bool { state.withLock { $0.released } }
+
+    func release() {
+        let waiter = state.withLock { state in
+            state.released = true
+            defer { state.waiter = nil }
+            return state.waiter
+        }
+        waiter?.resume()
+    }
+
+    func readiness() async -> TranscriberReadiness {
+        let first = state.withLock { state in
+            state.calls += 1
+            return state.calls == 1 && !state.released
+        }
+        if first {
+            await withCheckedContinuation { continuation in
+                let resumeNow = state.withLock { state in
+                    if state.released { return true }
+                    state.waiter = continuation
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+        }
+        return .ready
+    }
+
+    var locale: Locale { Locale(identifier: "en_US") }
+
+    func install(progress: @escaping @Sendable (Double) -> Void) async throws(KnotError) {}
+
+    func transcribe(file: URL, from offset: Duration, budget: Duration?) async throws(KnotError) -> TranscriptionRun {
+        throw KnotError.portUnavailable
+    }
+
+    func live(_ chunks: AsyncStream<AudioChunk>) -> AsyncStream<LiveTranscriptEvent> {
+        AsyncStream { $0.finish() }
+    }
 }
 
 /// The real engine, whose text saves and ends can be made to fail.
