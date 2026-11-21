@@ -299,3 +299,15 @@ import Testing
         #expect((summary["meaningCritical"] as? [String: Any])?["reachedTheNote"] as? Int == 1)
     }
 #endif
+
+#if os(macOS)
+    // MARK: - The re-check's N3 and N4
+
+    /// N4: c16's reading refuses a comma after "sure", which turns the doubt into a decision.
+    @Test func c16sReadingRefusesACommaAfterSure() {
+        let c16 = ["I'm not{_} sure{_} we should cancel the booking."]
+        #expect(CleanupReadings.matches("I'm not sure we should cancel the booking.", readings: c16))
+        #expect(!CleanupReadings.matches("I'm not sure, we should cancel the booking.", readings: c16))
+        #expect(!CleanupReadings.matches("I'm not sure. We should cancel the booking.", readings: c16))
+    }
+#endif

@@ -229,7 +229,7 @@
       "raw": "I'm not sure we should cancel the booking",
       "reference": "I'm not sure we should cancel the booking.",
       "keep": ["not sure we should cancel"],
-      "readings": ["I'm not{_} sure we should cancel the booking."],
+      "readings": ["I'm not{_} sure{_} we should cancel the booking."],
       "remove": [],
       "mustNotMatch": ["\\bnot\\s*[.,;:!?]+\\s*sure"],
       "wrong": [
