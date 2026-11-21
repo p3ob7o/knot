@@ -167,9 +167,27 @@ public struct ModelCleaner: Cleaner {
     /// A title for the note the run's text starts, or `nil` when the model gives none that
     /// passes the check. Only a cancellation is thrown: any other failure drops the title.
     public func proposeTitle(for run: CleanupRun) async throws(KnotError) -> String? {
-        guard !run.pieces.isEmpty || run.decline == nil else { return nil }
+        try await titleProposal(for: run).title
+    }
+
+    /// What became of the title request: the title kept, or the answer's reason to be dropped,
+    /// or neither when no answer came. `knot-eval` counts the reasons.
+    public struct TitleProposal: Sendable, Hashable {
+        public var title: String?
+        public var dropped: CleanupTitle.Drop?
+
+        public init(title: String?, dropped: CleanupTitle.Drop?) {
+            self.title = title
+            self.dropped = dropped
+        }
+    }
+
+    /// The title request and what the check made of its answer. Only a cancellation is thrown.
+    public func titleProposal(for run: CleanupRun) async throws(KnotError) -> TitleProposal {
+        let none = TitleProposal(title: nil, dropped: nil)
+        guard !run.pieces.isEmpty || run.decline == nil else { return none }
         let text = run.finalText
-        guard !FidelityWords.words(in: text).isEmpty else { return nil }
+        guard !FidelityWords.words(in: text).isEmpty else { return none }
         guard !Task.isCancelled else { throw KnotError.cancelled }
         do throws(CleanupModelFailure) {
             let instructions = CleanupInstructions.title
@@ -179,15 +197,18 @@ public struct ModelCleaner: Cleaner {
             let first = try await CleanupChunker.pieces(of: text, maxTokens: budget) {
                 (text: String) async throws(CleanupModelFailure) -> Int in try await model.tokenCount(of: text)
             }.first
-            guard let first else { return nil }
+            guard let first else { return none }
             let answer = try await model.respond(
                 to: Self.prompt(first.text, tag: "note"), instructions: instructions,
                 maximumResponseTokens: Self.titleTokens)
-            return CleanupTitle.checked(Self.untagged(answer, tag: "note"), note: text, raw: run.raw)
+            switch CleanupTitle.check(Self.untagged(answer, tag: "note"), note: text, raw: run.raw) {
+            case .success(let title): return TitleProposal(title: title, dropped: nil)
+            case .failure(let error): return TitleProposal(title: nil, dropped: error.drop)
+            }
         } catch .cancelled {
             throw KnotError.cancelled
         } catch {
-            return nil
+            return none
         }
     }
 
@@ -307,22 +328,60 @@ public struct CleanupRun: Sendable, Hashable {
 }
 
 /// The check on a proposed title, which ends in KnotCore's `TitleRule.fits`, the one check
-/// that the store runs too (docs/architecture.md §9).
+/// that the store runs too (docs/architecture.md §9), and adds two of KnotCleanup's own.
 public enum CleanupTitle {
+    /// Why a proposed title was dropped.
+    public enum Drop: String, Sendable, Hashable {
+        /// Not one line of plain text of at most 60 characters made only of the note's words,
+        /// as the segment shows them and as they were said (`TitleRule.fits`), or markup.
+        case doesNotFit = "does_not_fit"
+        /// Filler sounds alone, such as "Um", which name nothing.
+        case fillerSounds = "filler_sounds"
+        /// Every word of the title stands in one sentence of the note, and that sentence holds a
+        /// negation the title leaves out: "I'm not sure we should cancel the booking." named
+        /// "cancel the booking".
+        case negationLeftOut = "negation_left_out"
+    }
+
     /// `answer` trimmed of space, quotation marks and a final full stop, or `nil` when it is
-    /// not one line of plain text of at most 60 characters made only of words of the note,
-    /// both as the segment shows it and as it was said.
+    /// dropped.
     public static func checked(_ answer: String, note: String, raw: String) -> String? {
+        try? check(answer, note: note, raw: raw).get()
+    }
+
+    /// `answer` trimmed, or why it is dropped.
+    public static func check(_ answer: String, note: String, raw: String) -> Result<String, DropError> {
         let title = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”'‘’."))
             .trimmingCharacters(in: .whitespaces)
         // Plain text: no Markdown or markup that a model may add.
-        guard !title.contains(where: { "*#_`[]<>|~".contains($0) }) else { return nil }
-        guard TitleRule.fits(title, noteTexts: [note]), TitleRule.fits(title, noteTexts: [raw]) else { return nil }
-        // A title of filler sounds alone, such as "Um", names nothing.
-        guard FidelityWords.words(in: title).contains(where: { !FidelityWords.fillers.contains($0.text) }) else {
-            return nil
+        guard !title.contains(where: { "*#_`[]<>|~".contains($0) }),
+            TitleRule.fits(title, noteTexts: [note]), TitleRule.fits(title, noteTexts: [raw])
+        else { return .failure(DropError(drop: .doesNotFit)) }
+        let titleWords = FidelityWords.words(in: title)
+        guard titleWords.contains(where: { !FidelityWords.fillers.contains($0.text) }) else {
+            return .failure(DropError(drop: .fillerSounds))
         }
-        return title
+        let wanted = Set(titleWords.map(\.text))
+        // The note's sentences as the segment shows them. A note shown raw, with no punctuation,
+        // is one sentence, so a negation anywhere in it counts.
+        for sentence in CleanupChunker.sentences(of: note) {
+            let words = FidelityWords.words(in: String(sentence))
+            guard wanted.isSubset(of: Set(words.map(\.text))) else { continue }
+            let negations = words.filter { FidelityWords.negations.contains(FidelityWords.bare($0.text)) }
+            if negations.contains(where: { !wanted.contains($0.text) }) {
+                return .failure(DropError(drop: .negationLeftOut))
+            }
+        }
+        return .success(title)
+    }
+
+    /// A dropped title, as an error so that `check` returns a `Result`.
+    public struct DropError: Error, Sendable, Hashable {
+        public let drop: Drop
+
+        public init(drop: Drop) {
+            self.drop = drop
+        }
     }
 }

@@ -246,6 +246,51 @@ func thrown(_ call: () async throws -> CleanupResult) async -> KnotError? {
         #expect(result.outcome == .cleaned(body: plainClean))
     }
 
+    /// Finding 2: a title that leaves out the negation of the sentence it comes from is dropped.
+    @Test(arguments: [
+        (
+            "i'm not sure we should cancel the booking", "I'm not sure we should cancel the booking.",
+            "cancel the booking"
+        ),
+        (
+            "remind me to not reply to the email from the bank until I've called them",
+            "Remind me to not reply to the email from the bank until I've called them.", "reply to the email"
+        ),
+        ("we can't come on friday", "We can't come on Friday.", "come on Friday"),
+    ])
+    func aTitleThatLeavesOutTheSentencesNegationIsDropped(_ raw: String, _ clean: String, _ title: String)
+        async throws
+    {
+        let model = scripted(clean)
+        model.scriptTitles(.success(title))
+        let cleaner = ModelCleaner(model: model)
+        let run = try await cleaner.run(raw, stopAtRejection: true)
+        #expect(run.finalText == clean)
+        let proposal = try await cleaner.titleProposal(for: run)
+        #expect(proposal.title == nil && proposal.dropped == .negationLeftOut)
+    }
+
+    @Test func aTitleThatKeepsTheNegationOrComesFromAnotherSentenceStays() {
+        let note = "I'm not sure we should cancel the booking. The plumber is coming at nine."
+        #expect(CleanupTitle.checked("Not sure we should cancel", note: note, raw: note) == "Not sure we should cancel")
+        #expect(CleanupTitle.checked("Plumber coming at nine", note: note, raw: note) == "Plumber coming at nine")
+        #expect(CleanupTitle.checked("cancel the booking", note: note, raw: note) == nil)
+    }
+
+    /// A title is checked against the raw transcript too: a word that only the cleaned text
+    /// has, here an apostrophe the guard let through as it stood, is no word of the note.
+    @Test func aTitleIsCheckedAgainstTheRawTranscriptToo() {
+        #expect(
+            CleanupTitle.check("Dont forget the milk", note: "Don't forget the milk.", raw: "don't forget the milk")
+                == .failure(.init(drop: .doesNotFit)))
+        #expect(
+            CleanupTitle.check("Don't forget the milk", note: "Don't forget the milk.", raw: "dont forget the milk")
+                == .failure(.init(drop: .doesNotFit)))
+        #expect(
+            CleanupTitle.checked("Don't forget the milk", note: "Don't forget the milk.", raw: "don't forget the milk")
+                == "Don't forget the milk")
+    }
+
     @Test func aTitleOfFillerSoundsAloneIsDropped() async throws {
         let model = ScriptedCleanupModel()
         model.scriptTitles(.success("Um"))
