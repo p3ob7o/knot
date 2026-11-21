@@ -650,6 +650,23 @@ knot_scrub_logs() {
     done
 }
 
+# Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error
+# lines, "<file>:<line>: error: …", by file and line with the folder taken off, each once and
+# at most twenty, and then the longer log they come from, by its path in the tree.
+#   knot_xctest_failures <log>
+knot_xctest_failures() {
+    local log=$1 errors
+    errors="$(grep -a -E '^.+:[0-9]+: error: ' "$log" | sed -E 's|^.*/([^/]+:[0-9]+: error: )|\1|' |
+        awk '!seen[$0]++' | head -n 20 | cut -c1-400 || true)"
+    if [[ -n $errors ]]; then
+        echo "The failed cases' errors:"
+        printf '%s\n' "$errors" | sed 's/^/    /'
+    else
+        echo "The run wrote no error line for its failed cases."
+    fi
+    echo "The whole run is in ${log#"$KNOT_ROOT"/}."
+}
+
 # Judges the log of an xcodebuild test run of XCTest cases, such as UI tests. Prints one line,
 # "xctest: N passed, M failed", and returns 1 when no case passed, when a case failed, or
 # when a destination named after the log has no passed case: a run that executed 0 tests is

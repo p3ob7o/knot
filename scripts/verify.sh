@@ -161,8 +161,9 @@ KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-a
 # limits are on, so a case that hangs fails after its allowance, and an outer limit round the
 # whole call (KNOT_UI_TEST_LIMIT, 20 minutes) ends a run that a system dialog holds. The
 # results are read first: a run that executed no test, a failed case, or a destination with
-# no pass fails (knot_xctest_result). Then xcodebuild's own status: a run whose cases passed
-# and that still exited with an error fails too.
+# no pass fails (knot_xctest_result), and the step's log then gives the failed cases' error
+# lines and names the long log (knot_xctest_failures). Then xcodebuild's own status: a run
+# whose cases passed and that still exited with an error fails too.
 ui_tests() {
     local what=$1 log=$2 limit=${KNOT_UI_TEST_LIMIT:-1200} status=0
     local destinations=()
@@ -174,7 +175,11 @@ ui_tests() {
     shift
     knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
-    knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"} || return 1
+    if ! knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"}; then
+        # The reason is in the long log; the step's own log, which a failure shows, gives it.
+        knot_xctest_failures "$log"
+        return 1
+    fi
     if ((status != 0)); then
         echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
         return 1

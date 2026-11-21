@@ -1090,6 +1090,48 @@ else
     fail "the UI test judge was right on $cases of 5 logs"
 fi
 
+# When a UI test fails, the step's own log gives the failing case's error lines, by file and
+# line with no folder, and names the longer log, so the gate's failure shows the reason.
+# Through verify.sh's loop: a copy of scripts/ in which the doctor is a stand-in, the project
+# is not generated, xcb prints a made-up failing run into the test log, and a stub ioreg says
+# the screen is unlocked; the Mac UI step runs on a scratch tree with scratch slots.
+ul="$scratch/ui-loop"
+mkdir -p "$ul/tree" "$ul/slots" "$ul/stub"
+cp -R "$KNOT_SCRIPTS" "$ul/scripts"
+cp "$KNOT_ROOT/.xcode-version" "$ul/tree/"
+python3 -I - "$ul/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("xcb", 'cat "$KNOT_UI_RUN" >>"$1"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+old = '    knot_generate_project\n    ui_tests "The Mac UI tests"'
+assert old in text, old
+text = text.replace(old, '    ui_tests "The Mac UI tests"')
+open(path, "w").write(text)
+PY
+printf '#!/bin/sh\nprintf "<plist version=\\"1.0\\"><dict><key>IOConsoleLocked</key><false/></dict></plist>\\n"\n' >"$ul/stub/ioreg"
+chmod +x "$ul/stub/ioreg"
+cat >"$ul/run.log" <<'LOG'
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' started.
+/tmp/self-test-tree/Apps/UITestSupport/AccessibilityAudit.swift:53: error: -[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark] : Element has no description: a made-up button
+Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' failed (3.204 seconds).
+** TEST FAILED **
+LOG
+ui_status=0
+env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/run.log" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$ul/slots" \
+    "$ul/scripts/verify.sh" --only mac-ui >"$ul/out" 2>&1 || ui_status=$?
+ui_step_log="$(cat "$ul/tree/.build/logs/verify-mac-ui.log" 2>/dev/null || true)"
+if [[ $ui_status != 0 && $ui_step_log == *"AccessibilityAudit.swift:53: error: "*"Element has no description"* &&
+    $ui_step_log == *".build/logs/verify-mac-ui-tests.log"* && $ui_step_log != *"/tmp/self-test-tree/"* &&
+    "$(cat "$ul/out")" == *"AccessibilityAudit.swift:53: error: "* ]]; then
+    pass "a failed UI test's error lines are in the step's log and the run's failure, and the longer log is named"
+else
+    fail "a failed UI test through verify's loop, status $ui_status: the step's log: $ui_step_log"
+fi
+
 # XcodeGen is chosen by the scripts, not by PATH (docs/dev-setup.md): KNOT_XCODEGEN, else the
 # pinned release under the build folder's tools/, else xcodegen on PATH, and its version is
 # checked again just before it generates. The stubs answer --version from a file beside them
