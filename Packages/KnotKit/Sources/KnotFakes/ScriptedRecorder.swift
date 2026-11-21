@@ -121,6 +121,8 @@
                     try? files.place(audio ?? Self.synthetic(frames: frames), at: self.workingURL(request.captureID))
                 },
                 remove: { [files] in
+                    // The peaks first, as the port says: a peaks file never outlives its recording.
+                    try? files.remove(self.locations.recordingPeaks(request.captureID))
                     try? files.remove(self.workingURL(request.captureID))
                     try? files.remove(self.manifestURL(request.captureID))
                     self.state.withLock { _ = $0.workingFiles.removeValue(forKey: request.captureID) }
@@ -204,7 +206,8 @@
         }
 
         public func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
-            for url in [workingURL(capture), manifestURL(capture)] where layer.entryKind(url) != nil {
+            let peaks = locations.recordingPeaks(capture)
+            for url in [peaks, workingURL(capture), manifestURL(capture)] where layer.entryKind(url) != nil {
                 try files.remove(url)
             }
             state.withLock { _ = $0.workingFiles.removeValue(forKey: capture) }
