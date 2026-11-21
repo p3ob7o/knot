@@ -8,7 +8,7 @@
     "osBuild": "26C5047e",
     "sampling": "greedy"
   },
-  "instructionsSha256": "4087e48caaaaba3077be5807538c47216468aabadaabe1856b4e01fd985a49d1",
+  "instructionsSha256": "fa14cbd31469af6961a93037522b4ee838f5813cb991a51db5ba0fd2ef4d814b",
   "guardSha256": "082796503319bee246abc08eb10950f2e61bbdad9d84cc0b4f756064aa4d3107",
   "date": "2026-11-21",
   "results": [
@@ -171,9 +171,9 @@
         "date"
       ],
       "outcome": "cleaned",
-      "modelOutput": "The dentist moved my appointment to the 14th of March, at 9:30.",
+      "modelOutput": "The dentist moved my appointment to the 14th of March at 9:30.",
       "guard": "accepted",
-      "finalText": "The dentist moved my appointment to the 14th of March, at 9:30.",
+      "finalText": "The dentist moved my appointment to the 14th of March at 9:30.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
@@ -200,17 +200,17 @@
         "negation"
       ],
       "outcome": "cleaned",
-      "modelOutput": "The flight is next Friday, the 3rd. Not Thursday.",
+      "modelOutput": "The flight is next Friday, the 3rd, not Thursday.",
       "guard": "accepted",
-      "finalText": "The flight is next Friday, the 3rd. Not Thursday.",
+      "finalText": "The flight is next Friday, the 3rd, not Thursday.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
       "readingsHeld": true,
       "meaningChanged": false,
       "pass": true,
-      "title": "Flight next Friday",
-      "titleDropped": null,
+      "title": null,
+      "titleDropped": "negation_left_out",
       "punctuationOnly": {
         "outcome": "cleaned",
         "modelOutput": "The flight is next Friday, the 3rd, not Thursday.",
@@ -318,17 +318,17 @@
         "amount"
       ],
       "outcome": "cleaned",
-      "modelOutput": "Buy 2 no 3 bags of rice.",
+      "modelOutput": "Buy 2, no 3 bags of rice.",
       "guard": "accepted",
-      "finalText": "Buy 2 no 3 bags of rice.",
+      "finalText": "Buy 2, no 3 bags of rice.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
-      "readingsHeld": false,
-      "meaningChanged": true,
-      "pass": false,
-      "title": "Buy 2 no 3 bags rice",
-      "titleDropped": null,
+      "readingsHeld": true,
+      "meaningChanged": false,
+      "pass": true,
+      "title": null,
+      "titleDropped": "negation_left_out",
       "punctuationOnly": {
         "outcome": "cleaned",
         "modelOutput": "Buy 2, no 3 bags of rice.",
@@ -492,12 +492,13 @@
         "filler"
       ],
       "outcome": "cleaned",
-      "modelOutput": "Um so I want to like try the new running route tomorrow morning, you know the one by the river.",
+      "modelOutput": "So I want to like try the new running route tomorrow morning, you know the one by the river",
       "guard": "accepted",
-      "finalText": "Um so I want to like try the new running route tomorrow morning, you know the one by the river.",
+      "finalText": "So I want to like try the new running route tomorrow morning, you know the one by the river",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [
+        "um",
         "uh",
         "uh"
       ],
@@ -553,17 +554,20 @@
       "categories": [
         "restart"
       ],
-      "outcome": "rejected",
-      "modelOutput": "We should book the hotel this week. We should.",
-      "guard": "rejected:reordered",
-      "finalText": "we should we should book the hotel this week",
+      "outcome": "cleaned",
+      "modelOutput": "We should book the hotel this week.",
+      "guard": "accepted",
+      "finalText": "We should book the hotel this week.",
       "keptAll": true,
       "matchedForbidden": [],
-      "removed": [],
+      "removed": [
+        "we",
+        "should"
+      ],
       "readingsHeld": null,
       "meaningChanged": false,
       "pass": true,
-      "title": "book the hotel this week",
+      "title": "book hotel this week",
       "titleDropped": null,
       "punctuationOnly": {
         "outcome": "cleaned",
@@ -610,9 +614,9 @@
         "list"
       ],
       "outcome": "cleaned",
-      "modelOutput": "Three things for the trip. First, the passport. Second, the charger. Third, the blue jacket.",
+      "modelOutput": "Three things for the trip:  \nFirst, the passport.  \nSecond, the charger.  \nThird, the blue jacket.",
       "guard": "accepted",
-      "finalText": "Three things for the trip. First, the passport. Second, the charger. Third, the blue jacket.",
+      "finalText": "Three things for the trip:  \nFirst, the passport.  \nSecond, the charger.  \nThird, the blue jacket.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
@@ -639,9 +643,9 @@
         "filler"
       ],
       "outcome": "cleaned",
-      "modelOutput": "Okay, two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
+      "modelOutput": "Okay two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
       "guard": "accepted",
-      "finalText": "Okay, two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
+      "finalText": "Okay two things about the garden: the tomato plants need staking before the weekend, and the hose by the shed is leaking. separate thing: the neighbours asked if they can borrow the ladder on Sunday.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [
@@ -870,16 +874,16 @@
         "filler-lookalike"
       ],
       "outcome": "cleaned",
-      "modelOutput": "You know the answer better than I do, so just decide.",
+      "modelOutput": "You know the answer better than I do, so just decide?",
       "guard": "accepted",
-      "finalText": "You know the answer better than I do, so just decide.",
+      "finalText": "You know the answer better than I do, so just decide?",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
-      "readingsHeld": true,
-      "meaningChanged": false,
-      "pass": true,
-      "title": "decide",
+      "readingsHeld": false,
+      "meaningChanged": true,
+      "pass": false,
+      "title": "You know the answer",
       "titleDropped": null,
       "punctuationOnly": {
         "outcome": "cleaned",
@@ -899,9 +903,9 @@
         "name"
       ],
       "outcome": "cleaned",
-      "modelOutput": "We call her Anna, we call her Joe at home.",
+      "modelOutput": "We call her Anna. We call her Joe at home.",
       "guard": "accepted",
-      "finalText": "We call her Anna, we call her Joe at home.",
+      "finalText": "We call her Anna. We call her Joe at home.",
       "keptAll": true,
       "matchedForbidden": [],
       "removed": [],
@@ -1249,7 +1253,7 @@
       "meaningChanged": 0,
       "reachedTheNote": 0
     },
-    "guardRejected": 3,
+    "guardRejected": 2,
     "declined": 0,
     "punctuationOnlyMode": {
       "cleaned": 35,
@@ -1260,8 +1264,8 @@
       "meaningCriticalPass": 24
     },
     "titles": {
-      "kept": 32,
-      "droppedForNegationLeftOut": 2
+      "kept": 30,
+      "droppedForNegationLeftOut": 4
     }
   }
 }
