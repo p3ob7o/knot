@@ -395,4 +395,45 @@ import Testing
         #expect(left == ["new words"], "Only the text replaced within 30 days is kept.")
         expectConsistent(database)
     }
+
+    /// A purge batch counts a segment's history toward its limit: a segment with more history
+    /// than a batch holds spreads over as many batches as it needs, and the segment goes after.
+    @Test func aSegmentsHistoryCountsTowardTheBatch() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let made = try await CopiesTests.make(in: folders.make(), seed: 125)
+        let limit = NoteRepository.purgeBatch
+        for index in 0..<(limit + 5) {
+            _ = try await made.notes.replaceText(
+                TextReplacement(
+                    segment: made.typed.segmentIDs[0], text: "Synthetic \(index)", origin: .edited,
+                    writer: .commandLine))
+        }
+        _ = try await made.notes.delete(.note(made.typed.noteID))
+        let database = made.database
+        try await database.pool.write { db in
+            try db.execute(sql: "CREATE TEMP TABLE counted (kind TEXT)")
+            for table in ["note", "segment", "segment_history", "job", "asset"] {
+                try db.execute(
+                    sql:
+                        "CREATE TEMP TRIGGER count_\(table) AFTER DELETE ON \(table) BEGIN INSERT INTO counted VALUES ('\(table)'); END"
+                )
+            }
+        }
+        var batches = 0
+        var more = true
+        while more && batches < 10 {
+            let (batch, removed) = try await database.pool.write { db in
+                try db.execute(sql: "DELETE FROM counted")
+                let batch = try StoreTransaction(db, store: database).purgeBatch(before: .distantFuture, limit: limit)
+                return (batch, try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM counted") ?? -1)
+            }
+            #expect(removed <= limit, "Batch \(batches) removed \(removed) rows.")
+            more = batch.more
+            batches += 1
+        }
+        #expect(batches >= 2)
+        #expect(try await made.notes.note(made.typed.noteID) == nil)
+        expectConsistent(database)
+    }
 }

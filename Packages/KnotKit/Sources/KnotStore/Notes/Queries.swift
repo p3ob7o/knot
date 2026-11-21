@@ -221,9 +221,11 @@ extension StoreTransaction {
                 db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE note_id = ? LIMIT ?",
                 arguments: [id.description, budget])
             for segment in segments {
-                assets += try drop(try SegmentRows.decode(segment), at: purgedAt)
+                guard let dropped = try drop(try SegmentRows.decode(segment), at: purgedAt, budget: &budget) else {
+                    return PurgeBatch(removed: removed, assets: assets, more: true)
+                }
+                assets += dropped
                 removed += 1
-                budget -= 1
             }
             // The note goes once its last segment has, in this batch or the next.
             guard budget > 0, try !hasSegment(id) else {
@@ -245,9 +247,11 @@ extension StoreTransaction {
             db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE deleted_at < ? LIMIT ?",
             arguments: [cutoff, budget])
         for row in segments {
-            assets += try drop(try SegmentRows.decode(row), at: purgedAt)
+            guard let dropped = try drop(try SegmentRows.decode(row), at: purgedAt, budget: &budget) else {
+                return PurgeBatch(removed: removed, assets: assets, more: true)
+            }
+            assets += dropped
             removed += 1
-            budget -= 1
         }
         guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
         try db.execute(
@@ -262,19 +266,33 @@ extension StoreTransaction {
             db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE note_id = ?)", arguments: [note.description]) ?? false
     }
 
-    /// Removes a segment with its jobs, its history and its asset row, leaving a tombstone. A
-    /// file that another segment still names, or whose row another segment holds, is not
-    /// returned for removal: its row stays with, or passes to, that segment.
-    private func drop(_ segment: Segment, at purgedAt: Date) throws -> [Asset] {
+    /// Removes a segment with its history, its jobs and its asset row, leaving a tombstone, within
+    /// `budget` rows, which it spends: every row it deletes counts. When the segment's history
+    /// needs more than the budget holds, as much of it as fits goes and the segment waits for the
+    /// next batch, and so does a segment whose jobs and files do not fit: `nil`. A file that
+    /// another segment still names, or whose row another segment holds, is not returned for
+    /// removal: its row stays with, or passes to, that segment.
+    private func drop(_ segment: Segment, at purgedAt: Date, budget: inout Int) throws -> [Asset]? {
         var assets: [Asset] = []
         let id = segment.id.description
-        try db.execute(sql: "DELETE FROM job WHERE segment_id = ?", arguments: [id])
-        try db.execute(sql: "DELETE FROM segment_history WHERE segment_id = ?", arguments: [id])
+        try db.execute(
+            sql:
+                "DELETE FROM segment_history WHERE seq IN (SELECT seq FROM segment_history WHERE segment_id = ? LIMIT ?)",
+            arguments: [id, max(budget, 0)])
+        budget -= db.changesCount
+        let historyLeft =
+            try Bool.fetchOne(
+                db, sql: "SELECT EXISTS (SELECT 1 FROM segment_history WHERE segment_id = ?)", arguments: [id]) ?? false
         var named = try Row.fetchAll(db, sql: "SELECT * FROM asset WHERE segment_id = ?", arguments: [id])
             .map(AssetRows.decode)
         if let assetID = segment.assetID, !named.contains(where: { $0.id == assetID }), let asset = try asset(assetID) {
             named.append(asset)
         }
+        let jobs = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM job WHERE segment_id = ?", arguments: [id]) ?? 0
+        // What is left of the segment, its jobs, its files' rows and itself, goes in one batch.
+        guard !historyLeft, budget >= jobs + named.count + 1 else { return nil }
+        try db.execute(sql: "DELETE FROM job WHERE segment_id = ?", arguments: [id])
+        budget -= db.changesCount
         for var asset in named {
             // A row another segment holds is that segment's.
             if asset.segmentID != segment.id, try self.segment(asset.segmentID) != nil { continue }
@@ -287,6 +305,7 @@ extension StoreTransaction {
             } else {
                 assets.append(asset)
                 try removeAsset(asset.id)
+                budget -= 1
             }
         }
         try db.execute(
@@ -296,6 +315,7 @@ extension StoreTransaction {
                     purged_at = excluded.purged_at
                 """, arguments: [id, segment.revision, segment.deletedAt?.stored, purgedAt.stored])
         try removeSegment(segment.id)
+        budget -= 1
         return assets
     }
 }
