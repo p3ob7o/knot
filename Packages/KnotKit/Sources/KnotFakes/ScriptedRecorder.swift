@@ -137,7 +137,8 @@
         /// Every working file of an earlier launch that `removeWorkingFile` has not removed: a
         /// recording that died while it ran, finished as recovered, and one that stopped and was
         /// never converted, or whose conversion failed, as it ended (finding 23). One whose
-        /// working file cannot be read through the layer is left out until it can.
+        /// working file cannot be read through the layer is left out until it can. One whose
+        /// manifest cannot be read ends `recovered`.
         public func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
             // A session of an earlier launch that never ended is finished as recovered, which
             // keeps its working file among the others. It is finished outside the lock, because
@@ -154,8 +155,13 @@
             }
             // A working file that is there and cannot be read is left where it is, and returned
             // once it can be read: never as one with no audio. A manifest that cannot be read
-            // hides nothing.
-            return orphans.filter { canRead($0) }
+            // hides nothing, and it is left where it is.
+            return orphans.filter { canRead($0) }.map { orphan in
+                var found = orphan
+                // The ending is the manifest's when the manifest can be read, else `recovered`.
+                if (try? layer.read(manifestURL(orphan.captureID))) == nil { found.ending = .recovered }
+                return found
+            }
         }
 
         /// Whether the recording's working file, if it is on the drive, can be read now.

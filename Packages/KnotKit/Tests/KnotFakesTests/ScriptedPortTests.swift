@@ -166,6 +166,31 @@ func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> Recordin
         #expect(try await recorder.recoverOrphans(currentLaunch: next).isEmpty)
     }
 
+    /// Finding 3 of the review of pull request 61: an orphan's ending comes from its manifest
+    /// when the manifest can be read, and is `recovered` when it cannot. A stopped recording that
+    /// was never converted, whose manifest cannot be read, came back `stopped`.
+    @Test func anUnreadableManifestGivesTheEndingRecovered() async throws {
+        let (recorder, layer) = try scriptedRecorder()
+        let request = recordingRequest()
+        let session = try await recorder.start(request)
+        let stopped = try #require(await SuiteWait.value("the stop") { await session.stop() })
+        #expect(stopped.ending == .stopped)
+        let manifest = recorder.locations.recordingManifest(request.captureID)
+        layer.setReadable(manifest, false)
+        let found = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+            $0.captureID == request.captureID
+        }
+        #expect(found != nil, "A manifest that cannot be read hides nothing.")
+        #expect(found?.ending == .recovered, "The ending is recovered when the manifest cannot be read.")
+        #expect(found?.frames == stopped.frames && found?.workingFile == stopped.workingFile, "With its frames.")
+        #expect(layer.exists(manifest), "The manifest is left where it is.")
+        layer.setReadable(manifest, true)
+        let again = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID())).first {
+            $0.captureID == request.captureID
+        }
+        #expect(again?.ending == .stopped, "Once it can be read, the ending is the manifest's again.")
+    }
+
     @Test func aSlowConsumerOfLiveAudioNeverHoldsTheRecordingBack() async throws {
         let (recorder, _) = try scriptedRecorder(script: .init(buffers: 40, interval: .zero))
         let session = try await recorder.start(recordingRequest())
