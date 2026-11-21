@@ -86,14 +86,17 @@ public enum StoreCopies {
         return counts
     }
 
-    /// Writes a checked copy of the database to `destination`, replacing one there.
+    /// Writes a checked copy of the database to `destination`. With `publishing`, a copy that
+    /// another writer published there first is kept and this one dropped; without it, a copy
+    /// there is replaced, as a migration's retry replaces the copy its killed attempt made. The
+    /// partial file of a copy is never another copy's to remove: the app removes what a crash
+    /// left when it opens the store.
     static func makeCopy(
-        of reader: any DatabaseReader, to destination: URL, files: StoreFiles, hooks: StoreHooks,
-        killPoint: StoreKillPoint? = nil
+        of reader: any DatabaseReader, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         let folder = destination.deletingLastPathComponent()
         try files.makeFolder(folder)
-        removePartials(in: folder)
         let partial = folder.appending(
             path: ".\(destination.lastPathComponent).\(UUID().uuidString.lowercased())\(DurableFile.partialSuffix)",
             directoryHint: .notDirectory)
@@ -123,7 +126,16 @@ public enum StoreCopies {
             try plain.close()
             try check(partial, against: counts)
             removeJournals(of: partial)
-            try files.move(partial, to: destination)
+            if let publishing {
+                do {
+                    try publishing.move(partial, to: destination)
+                } catch  where ExclusiveRenameLayer.isTaken(error) {
+                    // Another copy of the same day was published first: it is the copy.
+                    try? FileManager.default.removeItem(at: partial)
+                }
+            } else {
+                try files.move(partial, to: destination)
+            }
         } catch {
             try? FileManager.default.removeItem(at: partial)
             removeJournals(of: partial)
@@ -408,7 +420,7 @@ extension StoreDatabase {
         let copy = StoreCopies.dailyCopy(locations, day: day)
         do {
             if !FileManager.default.fileExists(atPath: copy.path) {
-                try StoreCopies.makeCopy(of: pool, to: copy, files: files, hooks: hooks)
+                try StoreCopies.makeCopy(of: pool, to: copy, files: files, publishing: publishing, hooks: hooks)
             }
             let daily = StoreCopies.copies(locations, prefix: "daily-")
             for old in daily.dropLast(StoreCopies.dailyCopiesKept) { try files.remove(old) }

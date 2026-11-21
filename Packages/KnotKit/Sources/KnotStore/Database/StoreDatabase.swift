@@ -81,13 +81,15 @@ public final class StoreDatabase: Sendable {
     let secret: StoreSecret
     let pool: DatabasePool
     let files: StoreFiles
+    /// The same placing, with a rename that never replaces what another writer published.
+    let publishing: StoreFiles
     let hooks: StoreHooks
     let clock: any WallClock
     let ids: any IDGenerator
 
     private init(
-        locations: StoreLocations, meta: StoreMeta, pool: DatabasePool, files: StoreFiles, hooks: StoreHooks,
-        clock: any WallClock, ids: any IDGenerator
+        locations: StoreLocations, meta: StoreMeta, pool: DatabasePool, files: StoreFiles, layer: any FileLayer,
+        hooks: StoreHooks, clock: any WallClock, ids: any IDGenerator
     ) {
         self.locations = locations
         self.storeID = meta.storeID
@@ -96,6 +98,7 @@ public final class StoreDatabase: Sendable {
         self.secret = meta.secret
         self.pool = pool
         self.files = files
+        self.publishing = locations.durableFiles(layer: ExclusiveRenameLayer(base: layer))
         self.hooks = hooks
         self.clock = clock
         self.ids = ids
@@ -152,12 +155,18 @@ public final class StoreDatabase: Sendable {
                     clock: clock, hooks: hooks)
             }
             try protectFiles(at: locations)
-            if role == .app { removeCreationLeftovers(in: locations) }
+            if role == .app {
+                // What a crash left of a creation or a copy. Only the app makes either, and it
+                // opens its store before making any.
+                removeCreationLeftovers(in: locations)
+                StoreCopies.removePartials(in: StoreCopies.folder(locations))
+            }
             // The store's folder records its generation, which a restore over a damaged
             // database must pass. Only the app writes in the store's folder.
             if role == .app { try recordGeneration(meta.generation, in: locations, files: files) }
             return StoreDatabase(
-                locations: locations, meta: meta, pool: pool, files: files, hooks: hooks, clock: clock, ids: ids)
+                locations: locations, meta: meta, pool: pool, files: files, layer: fileLayer, hooks: hooks,
+                clock: clock, ids: ids)
         } catch {
             try? pool.close()
             throw StoreErrors.knotError(error)

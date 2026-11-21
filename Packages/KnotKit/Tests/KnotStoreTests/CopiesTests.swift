@@ -318,6 +318,36 @@ import Testing
         #expect(try await NoteRepository(database: opened).asset(made.audio)?.availability == .remote)
         expectConsistent(opened)
     }
+
+    /// Two daily copies at once: neither removes the file the other is writing, and both answer
+    /// with the one copy of the day.
+    @Test func twoDailyCopiesAtOnceKeepOneWholeCopy() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let root = folders.make()
+        let made = try await CopiesTests.make(in: root, seed: 94)
+        try made.database.close()
+        let gate = Gate()
+        // The first copy stops with its file written and checked, before it is moved in.
+        let layer = HookedFileLayer(beforeSyncFile: { url in
+            let name = url.lastPathComponent
+            if name.hasPrefix(".daily-"), name.hasSuffix(DurableFile.partialSuffix) { gate.stop() }
+        })
+        let database = try StoreDatabase.open(
+            locations: made.database.locations, role: .app, clock: made.clock, fileLayer: layer)
+        let first = Task.detached { try database.makeDailyCopy() }
+        defer { gate.release() }
+        #expect(await gate.untilReached())
+        let other = try database.makeDailyCopy()
+        gate.release()
+        let earlier = try await first.value
+        #expect(earlier == other)
+        #expect(StoreCopies.copies(database.locations, prefix: "daily-") == [other])
+        let partials = try FileManager.default.contentsOfDirectory(atPath: StoreCopies.folder(database.locations).path)
+            .filter { $0.hasSuffix(DurableFile.partialSuffix) }
+        #expect(partials.isEmpty, "\(partials)")
+        #expect(try StoreCopies.tableCounts(in: other)["note"] == (try await noteCount(database)))
+    }
 }
 
 extension StoreCopies {
