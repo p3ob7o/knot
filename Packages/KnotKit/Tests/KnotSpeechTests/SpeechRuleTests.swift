@@ -287,4 +287,20 @@ private func word(_ text: String, _ from: Double, _ to: Double) -> SpeechWord {
         return
     }
     #expect(pieces.allSatisfy { $0.range.upperBound <= resume })
+
+    // A pause that begins before the last word's middle, 12.65 s, so the word keeps its end,
+    // 13.3 s, while the join is anchored in the pause's middle, 13.1 s: only the clamp ends the
+    // piece at the join.
+    let early: Range<Duration> = .seconds(12.5) ..< .seconds(13.7)
+    #expect(SpeechRunCut.trim(phrases, at: [early]) == phrases, "The pause does not end the word.")
+    guard
+        case .run(let clamped, let join?) =
+            SpeechRunCut.decide(phrases, floor: .seconds(10), cut: .seconds(15), reachedEnd: false, pauses: [early])
+    else {
+        Issue.record("The run must end before the open phrase.")
+        return
+    }
+    #expect(join == early.lowerBound + (early.upperBound - early.lowerBound) / 2)
+    #expect(clamped.map(\.text) == ["one two."])
+    #expect(clamped.first?.range.upperBound == join, "The piece ends at the join, not at its word's end.")
 }
