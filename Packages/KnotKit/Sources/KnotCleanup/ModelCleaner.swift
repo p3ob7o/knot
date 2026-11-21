@@ -337,9 +337,11 @@ public enum CleanupTitle {
         case doesNotFit = "does_not_fit"
         /// Filler sounds alone, such as "Um", which name nothing.
         case fillerSounds = "filler_sounds"
-        /// Every word of the title stands in one sentence of the note, and that sentence holds a
-        /// negation the title leaves out: "I'm not sure we should cancel the booking." named
-        /// "cancel the booking".
+        /// The title leaves out a negation that bears on its words: "I'm not sure we should
+        /// cancel the booking." named "cancel the booking". When one sentence holds every word of
+        /// the title, that sentence and the one after it count, since a take-back comes after
+        /// ("Cancel the booking. Actually, no, don't."). When none does, the title is drawn
+        /// from several, and every negation of the note counts.
         case negationLeftOut = "negation_left_out"
     }
 
@@ -365,11 +367,18 @@ public enum CleanupTitle {
         let wanted = Set(titleWords.map(\.text))
         // The note's sentences as the segment shows them. A note shown raw, with no punctuation,
         // is one sentence, so a negation anywhere in it counts.
-        for sentence in CleanupChunker.sentences(of: note) {
-            let words = FidelityWords.words(in: String(sentence))
-            guard wanted.isSubset(of: Set(words.map(\.text))) else { continue }
-            let negations = words.filter { FidelityWords.negations.contains(FidelityWords.bare($0.text)) }
-            if negations.contains(where: { !wanted.contains($0.text) }) {
+        let sentences = CleanupChunker.sentences(of: note).map { FidelityWords.words(in: String($0)) }
+        func leavesOutANegation(_ words: some Sequence<FidelityWord>) -> Bool {
+            words.contains {
+                FidelityWords.negations.contains(FidelityWords.bare($0.text)) && !wanted.contains($0.text)
+            }
+        }
+        let holding = sentences.indices.filter { wanted.isSubset(of: Set(sentences[$0].map(\.text))) }
+        if holding.isEmpty {
+            // Drawn from several sentences: every negation of the note bears on it.
+            if leavesOutANegation(sentences.joined()) { return .failure(DropError(drop: .negationLeftOut)) }
+        } else {
+            for index in holding where leavesOutANegation(sentences[index...].prefix(2).joined()) {
                 return .failure(DropError(drop: .negationLeftOut))
             }
         }

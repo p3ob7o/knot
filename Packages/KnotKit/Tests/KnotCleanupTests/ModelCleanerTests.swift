@@ -270,6 +270,27 @@ func thrown(_ call: () async throws -> CleanupResult) async -> KnotError? {
         #expect(proposal.title == nil && proposal.dropped == .negationLeftOut)
     }
 
+    /// N1 of the re-check: the sentence after the title's own counts with it, and a title drawn
+    /// from several sentences answers to every negation of the note.
+    @Test func aTitleWhoseNegationIsInTheNextSentenceIsDropped() {
+        let result = CleanupTitle.check(
+            "Cancel the booking", note: "Cancel the booking. Actually, no, don't.",
+            raw: "cancel the booking actually no don't")
+        #expect(result == .failure(.init(drop: .negationLeftOut)))
+    }
+
+    @Test func aTitleFromTwoSentencesAnswersToEveryNegation() {
+        let result = CleanupTitle.check(
+            "Cancel the booking", note: "We should not cancel. The booking stays.",
+            raw: "we should not cancel the booking stays")
+        #expect(result == .failure(.init(drop: .negationLeftOut)))
+    }
+
+    @Test func aTitleIsKeptWhenTheNegationIsTwoSentencesOn() {
+        let note = "Cancel the booking. Then call the bank. We can't come on Friday."
+        #expect(CleanupTitle.checked("Cancel the booking", note: note, raw: note) == "Cancel the booking")
+    }
+
     @Test func aTitleThatKeepsTheNegationOrComesFromAnotherSentenceStays() {
         let note = "I'm not sure we should cancel the booking. The plumber is coming at nine."
         #expect(CleanupTitle.checked("Not sure we should cancel", note: note, raw: note) == "Not sure we should cancel")
