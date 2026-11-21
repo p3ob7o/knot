@@ -158,6 +158,18 @@ extension CGRect {
 }
 
 extension XCUIApplication {
+    /// Launches the app for a smoke test. On the Mac it ignores the window state that AppKit
+    /// saved at an earlier quit: every development build has the same bundle ID and so shares it,
+    /// and a window that one launch left closed would stay closed at the next. The launch
+    /// argument sets the user default `ApplePersistenceIgnoreState`, which AppKit reads at launch.
+    @MainActor
+    func launchForSmokeTest() {
+        #if os(macOS)
+            launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        launch()
+    }
+
     /// Runs every audit type on the current screen. Each issue fails the test, unless the lists
     /// above exclude it, and the failure names the element: its kind, its identifier, its label
     /// and its frame. Every UI smoke test calls it after its launch: the named test
