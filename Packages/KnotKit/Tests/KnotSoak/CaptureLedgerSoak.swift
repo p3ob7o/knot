@@ -342,7 +342,8 @@
                 default: .failed
                 }
             let problems = witness.absorb(
-                child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled)
+                child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled,
+                capturesDuringRecovery: SoakLaunch.recoversWhileCapturing(seed: configuration.seed, launch: number))
             return (
                 Launch(number: number, range: range, killPoint: point, passes: passes, delay: delay, ending: ending),
                 problems

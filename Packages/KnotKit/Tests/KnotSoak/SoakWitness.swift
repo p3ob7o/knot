@@ -51,6 +51,9 @@ struct SoakWitness {
     /// (`InboxEntries`, `SoakRules.inboxPartialsAreRed`).
     private(set) var partials: Set<String> = []
     var partialsLeft: Int { partials.count }
+    /// The kills since the last launch whose report counted all of `Inbox/`: as many temporaries
+    /// of cut writes may be new at the next such count.
+    private(set) var killsSinceFullCount = 0
     /// The captures the script discarded, or was about to: one may end empty, whatever it was
     /// acknowledged with before.
     private(set) var discarding: Set<CaptureID> = []
@@ -72,7 +75,8 @@ struct SoakWitness {
     /// its range with no gap; a launch that quit says `done` after an intent for every index of
     /// its range; and a launch killed at its point said it stopped at that point and no other.
     mutating func absorb(
-        _ lines: [String], launch: Int, range: Range<Int>, end: LaunchEnd, afterKill: Bool
+        _ lines: [String], launch: Int, range: Range<Int>, end: LaunchEnd, afterKill: Bool,
+        capturesDuringRecovery: Bool = false
     ) -> [Problem] {
         var problems: [Problem] = []
         func problem(_ code: String, _ ids: String...) {
@@ -96,7 +100,9 @@ struct SoakWitness {
         for line in parsed {
             switch line {
             case .intent(let index):
-                if !recoveryReported { problem("capture_before_recovery_report", "index=\(index)") }
+                if !recoveryReported, !capturesDuringRecovery {
+                    problem("capture_before_recovery_report", "index=\(index)")
+                }
                 intents.append(index)
                 highestIntent = max(highestIntent, index)
             case .discarding(_, let capture):
@@ -125,10 +131,20 @@ struct SoakWitness {
             }
         }
         if reportedPartials.count != partialCount { problem("inbox_partials_miscounted") }
-        // A kill cuts at most one write into `Inbox/`: the child's saves run one at a time.
-        problems += Self.partialProblems(
-            reportedPartials, known: partials, allowance: afterKill ? 1 : 0, red: SoakRules.inboxPartialsAreRed
-        ).map { Problem(code: $0.code, ids: ["launch=\(launch)"] + $0.ids) }
+        // A kill cuts at most one write into `Inbox/`: the child's saves run one at a time. A
+        // launch that captures while it recovers counts only what is provably an earlier
+        // launch's, so the kills before it are left to the next launch that counts everything.
+        if afterKill { killsSinceFullCount += 1 }
+        if capturesDuringRecovery {
+            if SoakRules.inboxPartialsAreRed, !reportedPartials.isEmpty {
+                problem("inbox_partials_left", "count=\(reportedPartials.count)")
+            }
+        } else if recoveryReported {
+            problems += Self.partialProblems(
+                reportedPartials, known: partials, allowance: killsSinceFullCount, red: SoakRules.inboxPartialsAreRed
+            ).map { Problem(code: $0.code, ids: ["launch=\(launch)"] + $0.ids) }
+            killsSinceFullCount = 0
+        }
         partials.formUnion(reportedPartials)
         if intents != Array(range.lowerBound..<(range.lowerBound + intents.count)) || intents.count > range.count {
             problem("intents_out_of_order", "from=\(range.lowerBound)", "count=\(intents.count)")
@@ -254,7 +270,8 @@ struct SoakWitness {
         // Nothing waits in `Inbox/` once the last launch has recovered: every entry counts,
         // whatever its name, and a folder that cannot be listed is red too.
         problems += Self.inboxProblems(
-            InboxEntries.list(locations), known: partials, red: SoakRules.inboxPartialsAreRed)
+            InboxEntries.list(locations), known: partials, allowance: killsSinceFullCount,
+            red: SoakRules.inboxPartialsAreRed)
         return problems
     }
 
@@ -356,9 +373,11 @@ struct SoakWitness {
 
     /// What `Inbox/` holds once the last launch has recovered: every entry counts, dot-named or
     /// not; only the temporaries of cut writes already seen after a kill are set apart.
-    static func inboxProblems(_ entries: InboxEntries?, known: Set<String>, red: Bool) -> [Problem] {
+    static func inboxProblems(_ entries: InboxEntries?, known: Set<String>, allowance: Int = 0, red: Bool)
+        -> [Problem]
+    {
         guard let entries else { return [Problem(code: "inbox_not_listed", ids: [])] }
-        var problems = partialProblems(entries.partials, known: known, allowance: 0, red: red)
+        var problems = partialProblems(entries.partials, known: known, allowance: allowance, red: red)
         if entries.others > 0 { problems.append(Problem(code: "inbox_items_left", ids: ["count=\(entries.others)"])) }
         return problems
     }

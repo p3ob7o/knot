@@ -44,6 +44,54 @@
         }
     }
 
+    /// A launch's recovery and its report of what recovery left, apart from the launch so that
+    /// it can run beside the launch's captures.
+    struct RecoveryRun: Sendable {
+        let recovery: LaunchRecovery
+        let ingest: InboxIngest
+        let notes: NoteRepository
+        let locations: StoreLocations
+        let launchID: LaunchID
+        /// The injected fault `skippedRecovery`.
+        let skipped: Bool
+        /// Whether the launch's captures run beside it, so that `Inbox/` may hold their items.
+        let capturing: Bool
+
+        func run() async {
+            if skipped {
+                Say.line(SoakLine.recovered(0).rendered)
+            } else {
+                do {
+                    let outcomes = try await recovery.run(ingest: ingest)
+                    Say.line(SoakLine.recovered(outcomes.count).rendered)
+                } catch {
+                    Say.fail("recovery failed: \(error.code)")
+                }
+            }
+            await reportWhatRecoveryLeft()
+        }
+
+        /// Says what recovery left of earlier launches: their rows still open, and every entry in
+        /// `Inbox/`, whatever its name. A launch that captures meanwhile counts only what is provably
+        /// an earlier launch's (`InboxEntries.list(_:besides:)`); another has written nothing there
+        /// yet, so everything in it is an earlier launch's.
+        private func reportWhatRecoveryLeft() async {
+            let open: [Capture]
+            do {
+                open = try await notes.openCaptures().filter { $0.launchID != launchID }
+            } catch {
+                Say.fail("the open captures could not be read: \(error.code)")
+            }
+            guard let inbox = InboxEntries.list(locations, besides: capturing ? launchID : nil) else {
+                Say.fail("Inbox/ could not be listed")
+            }
+            Say.line(
+                SoakLine.recoveryLeft(open: open.count, inbox: inbox.others, partials: inbox.partials.count).rendered)
+            for name in inbox.partials.sorted() { Say.line(SoakLine.inboxPartial(name).rendered) }
+            for row in open { Say.line(SoakLine.leftOpen(row.id).rendered) }
+        }
+    }
+
     final class SoakLaunch {
         struct Options {
             var root: URL
@@ -77,6 +125,8 @@
         private var durable: [CaptureID: Int64] = [:]
         /// The captures that `vanishedCapture` answered and never wrote.
         private var vanished: Set<CaptureID> = []
+        /// Whether this launch's captures run beside its recovery: the script then disturbs no write.
+        private var capturesDuringRecovery = false
         /// The capture the script left open, which the next one's start ends (rule 15).
         private var leftOpen: (index: Int, id: CaptureID, text: String)?
 
@@ -122,19 +172,26 @@
             // The clock starts where this launch's part of the script starts, just before it.
             let first = script.captures.indices.contains(options.range.lowerBound) ? options.range.lowerBound : nil
             clock.set(SoakScript.base.addingTimeInterval((first.map { script.captures[$0].startsAt } ?? 0) - 1))
-            if options.fault == .skippedRecovery {
-                Say.line(SoakLine.recovered(0).rendered)
-            } else {
-                do {
-                    let outcomes = try await recovery.run(ingest: ingest)
-                    Say.line(SoakLine.recovered(outcomes.count).rendered)
-                } catch {
-                    Say.fail("recovery failed: \(error.code)")
+            let concurrent = Self.recoversWhileCapturing(seed: options.seed, launch: options.launch)
+            let recovering = RecoveryRun(
+                recovery: recovery, ingest: ingest, notes: notes, locations: locations, launchID: launchID,
+                skipped: options.fault == .skippedRecovery, capturing: concurrent)
+            if concurrent {
+                // The app does not wait for recovery: typing starts at once. This launch's captures
+                // begin while recovery runs. The script disturbs none of their writes, though the
+                // store may still refuse one, as when it meets a row of a dead launch still open on
+                // the device, and the item that capture takes in `Inbox/` is this launch's.
+                capturesDuringRecovery = true
+                async let recovered: Void = recovering.run()
+                for index in options.range {
+                    await runCapture(script.captures[index])
                 }
-            }
-            await reportWhatRecoveryLeft()
-            for index in options.range {
-                await runCapture(script.captures[index])
+                await recovered
+            } else {
+                await recovering.run()
+                for index in options.range {
+                    await runCapture(script.captures[index])
+                }
             }
             // The launch ends as the app quits: the capture left open ends, and what the engine
             // left in `Inbox/` is ingested.
@@ -150,21 +207,11 @@
             exit(0)
         }
 
-        /// Says what recovery left of earlier launches: their rows still open, and every entry in
-        /// `Inbox/`, whatever its name. This launch has written nothing there yet, so everything
-        /// in it is an earlier launch's.
-        private func reportWhatRecoveryLeft() async {
-            let open: [Capture]
-            do {
-                open = try await notes.openCaptures().filter { $0.launchID != launchID }
-            } catch {
-                Say.fail("the open captures could not be read: \(error.code)")
-            }
-            guard let inbox = InboxEntries.list(locations) else { Say.fail("Inbox/ could not be listed") }
-            Say.line(
-                SoakLine.recoveryLeft(open: open.count, inbox: inbox.others, partials: inbox.partials.count).rendered)
-            for name in inbox.partials.sorted() { Say.line(SoakLine.inboxPartial(name).rendered) }
-            for row in open { Say.line(SoakLine.leftOpen(row.id).rendered) }
+        /// Whether a launch begins its captures while its recovery runs: one in three, by the seed.
+        /// The parent makes the same choice.
+        static func recoversWhileCapturing(seed: UInt64, launch: Int) -> Bool {
+            var random = SeededRandom(seed: seed ^ (UInt64(launch) &* 0xA24B_AED4_963E_E407))
+            return random.next() % 3 == 0
         }
 
         // MARK: One capture
@@ -303,7 +350,9 @@
         private func disturbed(
             _ capture: SoakScript.Capture, save: Int, _ body: () async throws(KnotError) -> CaptureState
         ) async throws(KnotError) -> CaptureState {
-            guard let disturbance = capture.disturbance, disturbance.save == save else { return try await body() }
+            guard !capturesDuringRecovery, let disturbance = capture.disturbance, disturbance.save == save else {
+                return try await body()
+            }
             switch disturbance.kind {
             case .refused:
                 await notes.failNextCaptureWrites(with: .storeBusy)

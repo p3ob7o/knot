@@ -18,11 +18,38 @@
 
         /// Lists `Inbox/`. A folder that is not there holds nothing; one that cannot be listed
         /// answers `nil`.
-        static func list(_ locations: StoreLocations) -> InboxEntries? {
+        ///
+        /// With `besides`, the launch that is capturing while it looks, only what an earlier launch
+        /// provably left counts: an item whose manifest names another launch, its payload and the
+        /// temporaries of its files. A file with no such manifest may be one this launch is
+        /// writing now, and is left to the next launch's look and to the last one, which count
+        /// everything.
+        static func list(_ locations: StoreLocations, besides current: LaunchID? = nil) -> InboxEntries? {
             let path = locations.inbox.path
             guard FileManager.default.fileExists(atPath: path) else { return InboxEntries(partials: [], others: 0) }
-            guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+            guard var names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+            if let current {
+                var earlier: Set<CaptureID> = []
+                for name in names where name.hasSuffix(".json") && !name.hasPrefix(".") {
+                    let url = locations.inbox.appending(path: name, directoryHint: .notDirectory)
+                    guard let data = try? Data(contentsOf: url) else { continue }
+                    if let manifest = try? CaptureManifest.decode(data), manifest.launchID != current {
+                        earlier.insert(manifest.captureID)
+                    } else if (try? CaptureManifest.decode(data)) == nil, let id = capture(ofFile: name) {
+                        earlier.insert(id)  // a manifest that does not read is no one's in flight
+                    }
+                }
+                names = names.filter { name in
+                    let id = name.hasPrefix(".") ? capture(ofPartial: name) : capture(ofFile: name)
+                    return id.map(earlier.contains) ?? true
+                }
+            }
             return sort(names, locations)
+        }
+
+        /// The capture an item's file names: `<capture>.<extension>`.
+        static func capture(ofFile name: String) -> CaptureID? {
+            name.split(separator: ".", maxSplits: 1).first.flatMap { CaptureID(String($0)) }
         }
 
         static func sort(_ names: [String], _ locations: StoreLocations) -> InboxEntries {
