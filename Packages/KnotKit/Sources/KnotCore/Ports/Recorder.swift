@@ -7,6 +7,30 @@ import Foundation
 /// injected audio under test, where the hardware input is refused. That source is not part of
 /// the port. A recording is not tied to the task that awaits it: a start runs to live or to a
 /// typed error, and a stop always finishes.
+///
+/// **Peaks.** A recorder may leave a recording's level peaks at `StoreLocations.recordingPeaks(_:)`,
+/// in the format of `RecordingPeaks`, appended while it records. A recording never fails, ends
+/// or waits because its peaks could not be written. The peaks may run a sync ahead of the audio
+/// or behind it, and a reader holds them to the audio's length. `discard()` removes them, and
+/// `removeWorkingFile(of:)` removes them before the working file and the manifest, so that a
+/// peaks file never outlives its recording. Recovery leaves them where they are and judges no
+/// recording by them.
+///
+/// **Cues** (docs/product-spec.md §4.5). Exactly one cue starts a recording and exactly one ends
+/// it. The recorder gives the cues that only it can time:
+///
+/// - `recordingLive`, once, at the moment the recording is live, as `start` returns;
+/// - `couldNotStart`, once, for every `start` that throws;
+/// - `stoppedEarly`, once, for every recording whose ending is neither `stopped` nor `discarded`
+///   nor `recovered`: the limit, an interruption, a lost input, a failed write and a full disk,
+///   and a failure in the last write of a `stop()` too. It plays after the last sync, whether or
+///   not anyone reads `events`.
+///
+/// The caller gives `saved`, after a `stop()` that returned the ending `stopped` and whose
+/// recording it keeps, and `discarded`, after `discard()` or when it keeps nothing of a stopped
+/// recording, such as one with no frames. For any other ending the recorder has given the cue,
+/// and the caller gives none: it reads `ending`. A caller that fails before it can call `start`
+/// gives `couldNotStart` itself. A recovered recording has no cue: nobody is pressing.
 public protocol Recorder: Sendable {
     /// Gets ready without opening the microphone, so that a start soon after is fast, as on
     /// the Mac's key-down. Calling it often is harmless.
@@ -47,7 +71,7 @@ public protocol Recorder: Sendable {
     /// An orphan is returned as holding no audio, with no frame or no working file, only in
     /// three cases: its working file is missing; the file is shorter than its header; the file
     /// was read and holds no frame. A working file that is there and cannot be read is never
-    /// one of them.
+    /// one of them. A peaks file is left where it is, and no recording is judged by it.
     func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio]
 
     /// Converts a stopped recording's working file to the stored format, AAC mono in `.m4a`,
@@ -58,8 +82,9 @@ public protocol Recorder: Sendable {
     /// the conversion is tried again.
     func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording
 
-    /// Removes a recording's working file and its manifest, once the capture's row points to
-    /// the stored asset (§6, rule 7). Removing what is not there is not an error.
+    /// Removes a recording's peaks, its working file and its manifest, the peaks first, once the
+    /// capture's row points to the stored asset (§6, rule 7). Removing what is not there is not
+    /// an error.
     func removeWorkingFile(of capture: CaptureID) async throws(KnotError)
 }
 
@@ -149,8 +174,8 @@ public protocol RecordingSession: AnyObject, Sendable {
     /// recording on the drive is never answered as one with no audio.
     func stop() async -> RecordedAudio
 
-    /// Ends the recording and removes its file and manifest: the accidental press of
-    /// docs/product-spec.md §4.2. After a discard, `stop` returns an empty result.
+    /// Ends the recording and removes its peaks, its file and its manifest: the accidental press
+    /// of docs/product-spec.md §4.2. After a discard, `stop` returns an empty result.
     func discard() async
 }
 
