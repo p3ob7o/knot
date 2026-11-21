@@ -54,11 +54,17 @@ step "$(knot_xcode_label)"
 knot_check_xcodegen ||
     knot_fail "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
 step "XcodeGen $KNOT_XCODEGEN_VERSION, from $KNOT_XCODEGEN_FROM, at $KNOT_XCODEGEN_PATH"
+# The runtimes are read once, with a limit: CoreSimulator that does not answer says so.
+runtimes_status=0
+runtimes="$(knot_limit "${KNOT_SIMCTL_LIMIT:-120}" xcrun simctl list runtimes)" || runtimes_status=$?
+((runtimes_status != 124)) ||
+    knot_fail "infra-simulators-silent" "xcrun simctl list runtimes did not answer within ${KNOT_SIMCTL_LIMIT:-120}s." \
+        "Quit Simulator.app and rerun scripts/bootstrap.sh; if it stays silent, ask the owner to restart the Mac." "safe" "nothing"
 for platform in iOS:iphonesimulator watchOS:watchsimulator; do
     name=${platform%%:*}
     sdk=${platform#*:}
     major="$(xcrun --sdk "$sdk" --show-sdk-version | cut -d. -f1)"
-    xcrun simctl list runtimes | grep -e "^$name $major\." >/dev/null ||
+    grep -e "^$name $major\." <<<"$runtimes" >/dev/null ||
         knot_fail "infra-runtime-$name" "No $name $major simulator runtime for $(knot_xcode_label)." \
             "DEVELOPER_DIR=$DEVELOPER_DIR xcodebuild -downloadPlatform $name" "safe" "nothing"
 done
@@ -78,7 +84,14 @@ step "generated Knot.xcodeproj"
 knot_swiftpm_flags
 swift package "${KNOT_SWIFTPM_FLAGS[@]}" resolve >/dev/null
 knot_xcodebuild_settings
-xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" -scheme Knot-iOS -resolvePackageDependencies >/dev/null
+resolve_status=0
+knot_limit "$KNOT_BUILD_LIMIT" \
+    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" -scheme Knot-iOS -resolvePackageDependencies >/dev/null ||
+    resolve_status=$?
+((resolve_status != 124)) ||
+    knot_fail "bootstrap-xcode-silent" "$(knot_dialog_message "Resolving the packages for Xcode" "$KNOT_BUILD_LIMIT")" \
+        "Ask the owner to look at the screen, then rerun scripts/bootstrap.sh." "safe" "nothing"
+((resolve_status == 0)) || exit "$resolve_status"
 step "resolved GRDB for SwiftPM and for Xcode"
 
 "$KNOT_SCRIPTS/sim.sh" ensure | sed 's/^/bootstrap: simulator /'
@@ -100,7 +113,8 @@ step "done in $(knot_duration $(($(knot_now) - START)))"
 
 if ((FIRST_TEST)); then
     mkdir -p "$KNOT_LOGS"
-    swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter '^KnotCoreTests\.' >"$KNOT_LOGS/bootstrap-first-test.log" 2>&1 ||
+    knot_swift_test_limited bootstrap-first-test \
+        swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter '^KnotCoreTests\.' >"$KNOT_LOGS/bootstrap-first-test.log" 2>&1 ||
         knot_fail "bootstrap-first-test" "The first module test failed. Its log is $KNOT_LOGS/bootstrap-first-test.log." \
             "Read the log." "safe" "build products in .build/ only"
     step "a fresh worktree reached its first green module test in $(knot_duration $(($(knot_now) - START))) (target 5m)"

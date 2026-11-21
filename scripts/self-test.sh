@@ -668,7 +668,7 @@ fi
 
 # Every start in the scripts is wired through a limit (knot_tool.py unbounded-calls): no call
 # of swift test, xcrun simctl, xcodebuild or xcb in verify.sh, sim.sh, nightly.sh, doctor.sh,
-# which starts every run, or lib/common.sh is
+# which starts every run, lib/common.sh or bootstrap.sh is
 # made without a limit helper. A copy of verify.sh with the hosted run's limit taken off,
 # and one with a wrapper called bare, fail.
 wiring="$scratch/wiring"
@@ -676,7 +676,7 @@ mkdir -p "$wiring"
 wiring_check() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" unbounded-calls "$@" >"$wiring/out" 2>&1; }
 real=0
 wiring_check "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/sim.sh" "$KNOT_SCRIPTS/nightly.sh" "$KNOT_SCRIPTS/doctor.sh" \
-    "$KNOT_SCRIPTS/lib/common.sh" || real=$?
+    "$KNOT_SCRIPTS/lib/common.sh" "$KNOT_SCRIPTS/bootstrap.sh" || real=$?
 real_out="$(cat "$wiring/out")"
 sed 's/knot_run_limited "The hosted iOS tests" "\$limit" xcb/xcb/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/hosted.sh"
 sed 's/knot_swift_test_limited package-test package_tests/package_tests/' "$KNOT_SCRIPTS/verify.sh" >"$wiring/wrapper.sh"
