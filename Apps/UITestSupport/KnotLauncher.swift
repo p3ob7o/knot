@@ -35,6 +35,11 @@ enum KnotLauncher {
     /// AppKit reads from the argument domain; the SDK declares no symbol for it
     /// (`NSWindowRestoration.h` describes the restoration it turns off). Only the window state is
     /// ignored: a relaunch on the same temporary store still reads the store.
+    ///
+    /// The pair comes first, before every flag that takes no value, such as `-KnotPreview`. Known
+    /// by trial on the build Mac (the orchestrator's, 2026-11-21): after such a flag AppKit does
+    /// not see the pair, and the app opens no window, though Foundation's argument domain reads
+    /// the pair in either order.
     static var everyLaunch: [String] {
         #if os(macOS)
             ["-ApplePersistenceIgnoreState", "YES"]
@@ -55,7 +60,7 @@ enum KnotLauncher {
     @MainActor
     static func application(_ environment: Environment = .preview) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = arguments(for: environment) + everyLaunch
+        app.launchArguments = everyLaunch + arguments(for: environment)
         for (name, value) in agentMark { app.launchEnvironment[name] = value }
         return app
     }
@@ -90,12 +95,17 @@ final class KnotLauncherTests: XCTestCase {
 
     @MainActor
     func testTheEnvironmentsSelectTheirArguments() {
-        XCTAssertEqual(KnotLauncher.application(.preview).launchArguments, ["-KnotPreview"] + KnotLauncher.everyLaunch)
+        // The arguments of every launch come first: AppKit misses the window-state pair after a
+        // flag that takes no value.
+        XCTAssertEqual(KnotLauncher.application(.preview).launchArguments, KnotLauncher.everyLaunch + ["-KnotPreview"])
         XCTAssertEqual(
             KnotLauncher.application(.live(temporaryStore: "smoke-1")).launchArguments,
-            ["-KnotTemporaryStore", "smoke-1"] + KnotLauncher.everyLaunch)
+            KnotLauncher.everyLaunch + ["-KnotTemporaryStore", "smoke-1"])
         #if os(macOS)
             XCTAssertEqual(KnotLauncher.everyLaunch, ["-ApplePersistenceIgnoreState", "YES"])
+            XCTAssertEqual(
+                KnotLauncher.application(.preview).launchArguments,
+                ["-ApplePersistenceIgnoreState", "YES", "-KnotPreview"])
         #endif
         XCTAssertNotEqual(KnotLauncher.newTemporaryStore(), KnotLauncher.newTemporaryStore())
     }
