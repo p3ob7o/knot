@@ -1211,6 +1211,20 @@ if [[ $ui_status != 0 && $ui_step_log == *"AccessibilityAudit.swift:53: error: "
 else
     fail "a failed UI test through verify's loop, status $ui_status: the step's log: $ui_step_log"
 fi
+# A run with twenty-five error lines gives twenty, and says that five more are in the long log.
+for n in $(seq 1 25); do
+    echo "/tmp/self-test-tree/Apps/UITestSupport/AccessibilityAudit.swift:$n: error: -[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark] : made-up error $n"
+done >"$ul/many.log"
+echo "Test Case '-[Knot_macOS_UITests.KnotMacLaunchTests testLaunchShowsTheMark]' failed (3.204 seconds)." >>"$ul/many.log"
+mkdir -p "$ul/many-slots"
+env PATH="$ul/stub:$PATH" KNOT_UI_RUN="$ul/many.log" KNOT_TREE="$ul/tree" KNOT_SLOT_DIR="$ul/many-slots" \
+    "$ul/scripts/verify.sh" --only mac-ui >"$ul/many.out" 2>&1 || true
+ui_many_log="$(cat "$ul/tree/.build/logs/verify-mac-ui.log" 2>/dev/null || true)"
+if [[ "$(grep -c -e 'made-up error' <<<"$ui_many_log")" == 20 && $ui_many_log == *"5 more error lines are in"* ]]; then
+    pass "a failed UI run's error lines are cut at twenty, and the step says how many more the long log holds"
+else
+    fail "a failed UI run with 25 error lines: the step's log: $ui_many_log"
+fi
 
 # A skipped XCTest case, or a skipped test in the hosted run, is counted as skipped, and at
 # the gate it fails the step, as the package's tests do: in the Mac UI step one case passed

@@ -672,12 +672,14 @@ knot_scrub_logs() {
 # at most twenty, and then the longer log they come from, by its path in the tree.
 #   knot_xctest_failures <log>
 knot_xctest_failures() {
-    local log=$1 errors
+    local log=$1 errors total
     errors="$(grep -a -E '^.+:[0-9]+: error: ' "$log" | sed -E 's|^.*/([^/]+:[0-9]+: error: )|\1|' |
-        awk '!seen[$0]++' | head -n 20 | cut -c1-400 || true)"
+        awk '!seen[$0]++' || true)"
+    total=$(grep -c . <<<"$errors" || true)
     if [[ -n $errors ]]; then
         echo "The failed cases' errors:"
-        printf '%s\n' "$errors" | sed 's/^/    /'
+        printf '%s\n' "$errors" | head -n 20 | cut -c1-400 | sed 's/^/    /'
+        ((total <= 20)) || echo "    … $((total - 20)) more error lines are in the long log."
     else
         echo "The run wrote no error line for its failed cases."
     fi
