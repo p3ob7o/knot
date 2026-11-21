@@ -143,6 +143,9 @@ public final class NoteViewModel {
     private var endsAsked = 0
     /// The revision of each segment when the person began editing it, which the edit carries.
     private var editBases: [SegmentID: StampedRevision] = [:]
+    /// The revision of what each conflict showed as arrived. Committing again carries it, so a
+    /// change that arrives after the conflict was shown is never replaced unseen.
+    private var conflictBases: [EditConflict.Target: StampedRevision] = [:]
     /// The note's revision when the person began editing its title.
     private var titleBase: StampedRevision?
     /// Follows the running recording's capture, which can end by itself.
@@ -517,13 +520,17 @@ public final class NoteViewModel {
     public func keepMyEdit(_ target: EditConflict.Target) {
         guard let conflict = editConflicts[target] else { return }
         enqueue { model in
-            guard model.editConflicts[target] == conflict, let record = model.record else { return }
+            guard model.editConflicts[target] == conflict else { return }
+            // The revision of what the conflict showed. If it is stale by now, nothing is written
+            // and the conflict shows the newer arrival.
+            let shown = model.conflictBases[target]
             model.editConflicts[target] = nil
+            model.conflictBases[target] = nil
             switch conflict.target {
             case .segment(let segment):
-                await model.replace(segment, with: conflict.draft ?? "", ifRevision: record.revision(of: segment))
+                await model.replace(segment, with: conflict.draft ?? "", ifRevision: shown)
             case .title:
-                await model.retitle(conflict.draft, ifRevision: record.revision)
+                await model.retitle(conflict.draft, ifRevision: shown)
             }
         }
     }
@@ -531,6 +538,7 @@ public final class NoteViewModel {
     /// Drops the draft of `target`: the text that arrived stays.
     public func dropMyEdit(_ target: EditConflict.Target) {
         editConflicts[target] = nil
+        conflictBases[target] = nil
     }
 
     private func replace(_ segment: SegmentID, with text: String, ifRevision: StampedRevision?) async {
@@ -540,8 +548,10 @@ public final class NoteViewModel {
             _ = try await environment.notes.replaceText(replacement)
             // A write that succeeds ends the segment's conflict: the person decided by writing.
             editConflicts[.segment(segment)] = nil
+            conflictBases[.segment(segment)] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
+            conflictBases[.segment(segment)] = record?.revision(of: segment)
             editConflicts[.segment(segment)] = EditConflict(
                 target: .segment(segment), draft: text,
                 arrived: record?.segments.first { $0.id == segment }?.text)
@@ -558,8 +568,10 @@ public final class NoteViewModel {
         do {
             _ = try await environment.notes.setTitle(value, of: id, ifRevision: ifRevision)
             editConflicts[.title] = nil
+            conflictBases[.title] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
+            conflictBases[.title] = record?.revision
             editConflicts[.title] = EditConflict(target: .title, draft: value, arrived: record?.note.title)
             return
         } catch {

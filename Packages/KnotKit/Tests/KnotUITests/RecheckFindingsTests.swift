@@ -158,6 +158,61 @@ import Testing
         #expect(try await rig.environment.notes.note(note)?.note.title == "Shopping on Saturday")
     }
 
+    /// Finding 10. "Keep mine" was decided over what the conflict showed: a change that arrived
+    /// after it is not replaced unseen. Nothing is written, and the conflict shows the newer one.
+    @Test func keepMineDoesNotReplaceALaterArrivalUnseen() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("v1"))
+        let model = rig.open(note)
+        await model.refresh()
+        let segment = try #require(model.items.first?.id)
+        let notes = rig.environment.notes
+
+        model.beginEditing(segment)
+        _ = try await notes.replaceText(TextReplacement(segment: segment, text: "v2", origin: .edited, writer: .mcp))
+        await model.refresh()
+        model.editText(of: segment, to: "mine")
+        await settled(model)
+        #expect(model.editConflict(for: .segment(segment))?.arrived == "v2")
+
+        _ = try await notes.replaceText(TextReplacement(segment: segment, text: "v3", origin: .edited, writer: .mcp))
+        await model.refresh()
+        model.keepMyEdit(.segment(segment))
+        await settled(model)
+        #expect(try await notes.segment(segment)?.text == "v3")
+        #expect(
+            model.editConflict(for: .segment(segment))
+                == EditConflict(target: .segment(segment), draft: "mine", arrived: "v3"))
+
+        // Kept over what it now shows, the draft is written.
+        model.keepMyEdit(.segment(segment))
+        await settled(model)
+        #expect(try await notes.segment(segment)?.text == "mine")
+        #expect(model.editConflicts.isEmpty)
+    }
+
+    @Test func keepMineOnATitleDoesNotReplaceALaterArrivalUnseen() async throws {
+        let rig = PreviewRig()
+        defer { rig.remove() }
+        let note = try #require(try await rig.type("errands"))
+        let model = rig.open(note)
+        await model.refresh()
+        let notes = rig.environment.notes
+        model.beginEditingTitle()
+        _ = try await notes.setTitle("Saturday", of: note, ifRevision: nil)
+        await model.refresh()
+        model.setTitle("Shopping")
+        await settled(model)
+        #expect(model.editConflict(for: .title)?.arrived == "Saturday")
+        _ = try await notes.setTitle("Sunday", of: note, ifRevision: nil)
+        await model.refresh()
+        model.keepMyEdit(.title)
+        await settled(model)
+        #expect(try await notes.note(note)?.note.title == "Sunday")
+        #expect(model.editConflict(for: .title)?.arrived == "Sunday")
+    }
+
     /// The re-check found this right: two changes that arrive before the commit leave the
     /// conflict holding the latest.
     @Test func twoChangesBeforeTheCommitHoldTheLatest() async throws {
