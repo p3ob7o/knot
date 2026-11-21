@@ -991,6 +991,38 @@ else
     fail "the gate's check of skipped tests through verify's loop: cancelled at the gate '$gate_cancelled', skipped at the gate '$gate_skipped', cancelled at the quick tier '$quick_cancelled', lookalike lines at the gate '$gate_lookalike'"
 fi
 
+# worktree-remove.sh prints no path with the home folder in it, since its lines end in the
+# journal: a path under the home folder shows as "the home folder's …". It runs on a scratch
+# repository whose worktree sits in a scratch home folder, with a store of the worktree in the
+# development app's container there, and a stub xcrun that lists one simulator of it.
+wr="$scratch/worktree-remove"
+mkdir -p "$wr/home" "$wr/stub" "$wr/repo"
+git -C "$wr/repo" init -q -b main
+cp -R "$KNOT_SCRIPTS" "$wr/repo/scripts"
+cp "$KNOT_ROOT/.xcode-version" "$wr/repo/"
+git -C "$wr/repo" add scripts .xcode-version
+git -C "$wr/repo" -c user.name=self-test -c user.email=self-test@example.invalid commit -q -m scratch
+git -C "$wr/repo" worktree add -q "$wr/home/wt" -b self-test-wt
+wr_tree="$(cd "$wr/home/wt" && pwd -P)"
+wr_id="wt-$(printf '%s' "$wr_tree" | shasum -a 256 | cut -c1-6)"
+mkdir -p "$wr/home/Library/Containers/com.p3ob7o.knot.dev/Data/Library/Application Support/Knot/$wr_id"
+printf '#!/bin/sh\necho "$*" >>"%s/calls"\n[ "$*" = "simctl list devices -j" ] && printf %s\nexit 0\n' "$wr" \
+    "'{\"devices\":{\"r\":[{\"name\":\"$wr_id-iphone\",\"udid\":\"U1\",\"state\":\"Shutdown\"}]}}\\n'" >"$wr/stub/xcrun"
+chmod +x "$wr/stub/xcrun"
+wr_status=0
+(cd "$wr/repo" && env -u KNOT_TREE HOME="$wr/home" PATH="$wr/stub:$PATH" KNOT_SIMCTL_LIMIT=10 \
+    scripts/worktree-remove.sh "$wr_tree" >"$wr/out" 2>&1) || wr_status=$?
+wr_home="$(cd "$wr/home" && pwd -P)"
+if [[ $wr_status == 0 && "$(cat "$wr/out")" != *"$wr_home"* && "$(cat "$wr/out")" != *"$wr/home"* &&
+    "$(cat "$wr/out")" != *"~/"* &&
+    "$(cat "$wr/out")" == *"the home folder's Library/Group Containers/"* &&
+    "$(cat "$wr/out")" == *"removed the development store the home folder's Library/Containers/"* &&
+    "$(cat "$wr/out")" == *"deleted the simulator $wr_id-iphone"* && ! -d $wr_tree ]]; then
+    pass "worktree-remove.sh removes the worktree, its simulator and its store, and prints no path with the home folder in it"
+else
+    fail "worktree-remove.sh, status $wr_status: $(sed -e "s|$wr_home|<home>|g" -e "s|$wr/home|<home>|g" "$wr/out")"
+fi
+
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
 # scrub rewrites a kept log in place.

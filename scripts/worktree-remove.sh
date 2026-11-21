@@ -23,8 +23,10 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n $TARGET ]] || knot_fail "worktree-remove-usage" "Name the worktree folder to remove." \
     "Run scripts/worktree-remove.sh <folder>." "safe" "nothing"
-[[ -d $TARGET ]] || knot_fail "worktree-remove-missing" "$TARGET is not a folder." "Name a worktree from git worktree list." "safe" "nothing"
+[[ -d $TARGET ]] || knot_fail "worktree-remove-missing" "$(knot_home_path "$TARGET") is not a folder." "Name a worktree from git worktree list." "safe" "nothing"
 TARGET="$(cd "$TARGET" && pwd -P)"
+# The lines it prints end in the journal, so each path in them is shown with no home folder.
+SHOWN="$(knot_home_path "$TARGET")"
 
 # It must be a worktree of this repository, and not the main checkout.
 main="$(git -C "$KNOT_ROOT" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
@@ -34,20 +36,20 @@ while IFS= read -r tree; do
     if [[ "$(cd "$tree" 2>/dev/null && pwd -P)" == "$TARGET" ]]; then found=1; fi
 done < <(git -C "$KNOT_ROOT" worktree list --porcelain | awk '/^worktree / { print substr($0, 10) }')
 ((found)) ||
-    knot_fail "worktree-remove-not-worktree" "$TARGET is not a worktree of this repository." \
+    knot_fail "worktree-remove-not-worktree" "$SHOWN is not a worktree of this repository." \
         "Name a folder from git worktree list." "safe" "nothing"
 [[ $TARGET != "$main" ]] ||
-    knot_fail "worktree-remove-main" "$TARGET is the main checkout, which is never removed." \
+    knot_fail "worktree-remove-main" "$SHOWN is the main checkout, which is never removed." \
         "Name another worktree." "safe" "nothing"
 if ((!FORCE)) && [[ -n "$(git -C "$TARGET" status --porcelain)" ]]; then
-    knot_fail "worktree-remove-dirty" "$TARGET has changes that are not committed." \
+    knot_fail "worktree-remove-dirty" "$SHOWN has changes that are not committed." \
         "Commit or move them, or pass --force to remove them with the worktree." "safe" "nothing"
 fi
 
 # The worktree's ID, as scripts/lib/common.sh computes it there.
 name="$(basename "$TARGET")"
 id="$name-$(printf '%s' "$TARGET" | shasum -a 256 | cut -c1-6)"
-echo "worktree-remove: $TARGET, ID $id"
+echo "worktree-remove: $SHOWN, ID $id"
 
 # 1. Its simulators: every set named by its ID. A booted one is shut down first, because
 #    simctl cannot delete it. Simulators named the old way, by the folder's name alone,
@@ -74,7 +76,7 @@ while IFS=$'\t' read -r what udid simulator state; do
     [[ $state == Shutdown ]] || knot_sim_call "$simctl_limit" shutdown "$simulator" xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
     why="$(knot_sim_call "$simctl_limit" delete "$simulator" xcrun simctl delete "$udid" 2>&1 >/dev/null)" ||
         knot_fail "infra-simulator-delete" "simctl could not delete $simulator ($udid). $why" \
-            "Quit Simulator.app, then rerun scripts/worktree-remove.sh $TARGET." "safe" "the simulators listed before it"
+            "Quit Simulator.app, then rerun scripts/worktree-remove.sh on $SHOWN." "safe" "the simulators listed before it"
     echo "worktree-remove: deleted the simulator $simulator"
 done < <(printf '%s\n' "$devices" | python3 -I -c '
 import json, sys
@@ -98,12 +100,12 @@ if [[ -d $container ]]; then
     while IFS= read -r -d '' store; do
         [[ $store == "$container"/*/"$id" ]] || continue
         rm -rf "$store"
-        echo "worktree-remove: removed the development store $store"
+        echo "worktree-remove: removed the development store $(knot_home_path "$store")"
     done < <(find "$container" -maxdepth 7 -type d -name "$id" -print0 2>/dev/null || true)
 fi
 echo "worktree-remove: app group containers were not looked at, since reading one can raise a consent dialog."
 echo "worktree-remove: a store of this worktree in the development app group, if a build put one there,"
-echo "worktree-remove: is ~/Library/Group Containers/group.com.p3ob7o.knot.dev/…/$id; remove it by hand."
+echo "worktree-remove: is $(knot_home_path "$HOME/Library/Group Containers/group.com.p3ob7o.knot.dev")/…/$id; remove it by hand."
 
 # 3. The worktree, with its .build/ and DerivedData inside it.
 if ((FORCE)); then
@@ -112,4 +114,4 @@ else
     git -C "$KNOT_ROOT" worktree remove "$TARGET"
 fi
 git -C "$KNOT_ROOT" worktree prune
-echo "worktree-remove: removed the worktree $TARGET"
+echo "worktree-remove: removed the worktree $SHOWN"

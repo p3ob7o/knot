@@ -477,6 +477,25 @@ knot_skipped_tests() {
         -e "^Test Case '[^']+' skipped" "$1" || true
 }
 
+# Prints a path for a line that may end in the journal, with no home folder in it: a path
+# under the home folder, as given or resolved, as "the home folder's <the rest>", and any
+# other path as it is.
+#   knot_home_path <path>
+knot_home_path() {
+    local path=$1 home
+    for home in "$HOME" "$(cd "$HOME" 2>/dev/null && pwd -P)"; do
+        [[ -n $home ]] || continue
+        if [[ $path == "$home" ]]; then
+            printf 'the home folder\n'
+            return
+        elif [[ $path == "$home"/* ]]; then
+            printf "the home folder's %s\n" "${path#"$home"/}"
+            return
+        fi
+    done
+    printf '%s\n' "$path"
+}
+
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
 # when it does not end in time or ends with a status other than zero. The failure goes to
 # standard error, which a step sends to its log, so a caller may drop the call's output.
