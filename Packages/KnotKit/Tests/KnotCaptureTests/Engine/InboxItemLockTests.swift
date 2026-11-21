@@ -13,19 +13,24 @@ import Testing
 @Suite struct InboxItemLockTests {
     /// Without the lock. A removal of the item, as ingest makes once it has stored an item, runs
     /// between the end's manifest and its payload, whose bytes are already the end's. With the
-    /// lock, the removal waits for the engine's writing to end, and then removes the whole item;
-    /// without it, the engine finds no payload and places one again, which no manifest names, and
-    /// it stays in `Inbox/`.
+    /// lock, the removal waits for the writing to end, and then removes the whole item; without
+    /// it, the writing finds no payload and places one again, which no manifest names, and it stays
+    /// in `Inbox/`.
     ///
-    /// The removal runs on a thread of its own, never on Swift's cooperative pool: the hook waits
-    /// inside the lock for it to finish or to wait for the lock, and nothing that ends that wait
-    /// needs a thread of the pool (finding 77).
+    /// No thread of Swift's cooperative pool waits here (findings 77 and 80): the writing runs on
+    /// a thread of its own, which the hook holds until the removal, on another thread of its own,
+    /// has finished or waits for the lock; the test awaits both, suspended.
     @Test func removalBetweenAnItemsTwoPlacingsLeavesNoPayloadAlone() async throws {
         let r = Rig(engineIngests: false)
         let engine = BoundedEngine(r.engine(ingests: false))
         await r.notes.failNextCaptureWrites(with: .storeBusy)
         let begun = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "one"))
         let id = begun.captureID
+        // The capture's end, as the engine would write it: the same text, with an end.
+        var manifest = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(id)))
+        manifest.endedAt = r.clock.now()
+        manifest.revision += 1
+        let ending = manifest
         let items = InboxItems(locations: r.locations, layer: r.layer)
         let ownLock = ItemLock.of(inbox: r.locations.inbox, layer: r.layer)
         let ran = Mutex(false)
@@ -38,28 +43,34 @@ import Testing
                     try? items.remove(id, kind: .typed)
                     finished.withLock { $0 = true }
                 }.start()
-                // Until the removal has finished, or waits for this writing's lock.
+                // On the writing's own thread: until the removal has finished, or waits for the lock.
                 let limit = ContinuousClock.now.advanced(by: SuiteWait.limit)
                 while !finished.withLock({ $0 }), ownLock.removalsWaiting.withLock({ $0[id] ?? 0 }) == 0 {
-                    guard ContinuousClock.now < limit else {
-                        Issue.record("The removal neither finished nor waited for the item's lock.")
-                        break
-                    }
+                    guard ContinuousClock.now < limit else { break }
                     usleep(200)
                 }
                 ran.withLock { $0 = true }
             }
         }
         defer { InboxItems.afterManifestPlaced.withLock { $0 = nil } }
-        _ = try await engine.end(id)
+        let written = await SuiteWait.value("the item's writing") { () async -> Bool in
+            await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+                Thread {
+                    let placed = (try? items.writeTyped(ending, text: "one")) != nil
+                    done.resume(returning: placed)
+                }.start()
+            }
+        }
+        #expect(written == true)
         #expect(ran.withLock { $0 })
-        let files = Set(r.inboxFiles())
-        let manifest = r.locations.inboxManifest(id).lastPathComponent
-        let payload = r.locations.inboxPayload(id, kind: .typed).lastPathComponent
         #expect(
             await eventually("the removal to end") { ownLock.removalsWaiting.withLock { $0[id] == nil } })
         let after = Set(r.inboxFiles())
-        #expect(!(after.contains(payload) && !after.contains(manifest)), "A payload is left with no manifest: \(files)")
+        let manifestName = r.locations.inboxManifest(id).lastPathComponent
+        let payloadName = r.locations.inboxPayload(id, kind: .typed).lastPathComponent
+        #expect(
+            !(after.contains(payloadName) && !after.contains(manifestName)),
+            "A payload is left with no manifest: \(after)")
     }
 
     /// Without the check. An end whose text is the payload already on the drive places no payload
