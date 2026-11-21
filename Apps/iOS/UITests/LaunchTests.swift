@@ -7,5 +7,6 @@ final class KnotIOSLaunchTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         XCTAssertTrue(app.images["knot.mark"].waitForExistence(timeout: 30))
+        try app.auditAccessibility()
     }
 }

@@ -127,6 +127,7 @@ public enum NoteStoreContract {
         Check(name: "short-tail", run: aShortCheckpointDropsTheOldTail),
         Check(name: "three-moves", run: threeMovesAndThreeReturns),
         Check(name: "run-past-resume", run: aRunThatStartsPastTheResumePointIsNotApplied),
+        Check(name: "run-over-silence", run: aRunOverSilenceMovesTheResumePointAndNotTheText),
     ]
 
     // MARK: Idempotence
@@ -1778,6 +1779,30 @@ public enum NoteStoreContract {
         #expect(stored.resumeAt == nil && stored.state == .queued, "The resume point and the state stay.")
         _ = try await h.store.appendTranscript(h.run("real", from: .zero, resumeAt: nil), to: segment, job: job)
         #expect(try await h.text(segment) == "real")
+    }
+
+    /// A run over silence has no pieces and moves on (the `Transcriber` port): applied at the
+    /// stored resume point, it moves the resume point and leaves the text as it was, and the
+    /// run after it is applied where it starts.
+    public static func aRunOverSilenceMovesTheResumePointAndNotTheText(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let recording = try await h.store.record(h.watchRecording(from: 0, to: 1, arrival: .live))
+        let segment = recording.segmentIDs[0]
+        let job = JobID.transcribe(of: segment)
+        _ = try await h.store.appendTranscript(
+            h.run("before the pause", from: .zero, resumeAt: .seconds(5)), to: segment, job: job)
+        for (start, resume) in [(Duration.seconds(5), Duration.seconds(65)), (.seconds(65), .seconds(125))] {
+            let silent = h.run("", from: start, resumeAt: resume)
+            _ = try await h.store.appendTranscript(silent, to: segment, job: job)
+            let stored = try #require(try await h.store.jobs(for: segment).first)
+            #expect(stored.resumeAt == resume, "A run with no pieces moves the resume point to \(resume).")
+            #expect(stored.state != .done, "A run over silence that is not the last leaves the job going.")
+            #expect(try await h.text(segment) == "before the pause", "A run with no pieces leaves the text.")
+        }
+        _ = try await h.store.appendTranscript(
+            h.run("after the pause", from: .seconds(125), resumeAt: nil), to: segment, job: job)
+        #expect(try await h.text(segment) == "before the pause after the pause", "The run after it is applied.")
+        #expect(try await h.store.jobs(for: segment).first?.state == .done)
     }
 
     /// Witness 48: three moves, each leaving a live sibling behind, and three returns.
