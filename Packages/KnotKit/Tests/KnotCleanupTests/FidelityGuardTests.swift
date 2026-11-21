@@ -189,11 +189,13 @@ func theGuardDecidesEachExampleOfTheTable(_ example: GuardExample) {
 
 @Test func wordsIgnoreCasePunctuationAndBreaksAndKeepNumbersWhole() {
     let words = FidelityWords.words(
-        in: "Don\u{2019}t — e-mail Dr. O'Neil at 9:30, or 1,000 times!\n\n2) €5", listMarkers: true)
+        in: "Don\u{2019}t — e-mail Dr. O'Neil at 9:30, or 1,000 times!\n\n1) €5", listMarkers: true)
     #expect(
-        words.map(\.text) == ["don't", "e", "mail", "dr", "o'neil", "at", "9:30", "or", "1,000", "times", "€5"])
+        words.map(\.text) == ["don't", "e", "mail", "dr", "o'neil", "at", "9:30", "or", "1,000", "times", "1", "€5"])
     // "Dr" and "O'Neil" are written with a capital inside a sentence, so they count as names.
-    #expect(words.map(\.isProtected) == [true, false, false, true, true, false, true, false, true, false, true])
+    #expect(
+        words.map(\.isProtected) == [true, false, false, true, true, false, true, false, true, false, true, true])
+    #expect(words.map(\.isMarker) == Array(repeating: false, count: 10) + [true, false])
 }
 
 /// A sign, a decimal point and an apostrophe belong to their word (finding 5).
@@ -217,12 +219,41 @@ func aSignAPointAndAnApostropheBelongToTheirWord(_ raw: String, _ cleaned: Strin
     #expect(FidelityGuard.check(raw: "don\u{2019}t go", cleaned: "Don't go.").isAccepted)
 }
 
-@Test func aNumberedMarkerIsAMarkerOnlyAtTheStartOfALine() {
-    #expect(FidelityWords.words(in: "1. eggs\n 12) milk", listMarkers: true).map(\.text) == ["eggs", "milk"])
-    #expect(FidelityWords.words(in: "1. eggs", listMarkers: false).map(\.text) == ["1", "eggs"])
-    #expect(FidelityWords.words(in: "buy 2. eggs", listMarkers: true).map(\.text) == ["buy", "2", "eggs"])
-    // A number the model turns into a list marker is a number removed.
-    #expect(FidelityGuard.check(raw: "buy 2 eggs", cleaned: "Buy\n2. eggs") == .rejected(.protectedWordRemoved))
+@Test func aNumberedMarkerIsAMarkerOnlyAtTheStartOfALineCountingFromOne() {
+    let words = FidelityWords.words(in: "1. eggs\n 2) milk\n12. tea\n1. bread\nbuy 2. jam", listMarkers: true)
+    #expect(words.map(\.text) == ["1", "eggs", "2", "milk", "12", "tea", "1", "bread", "buy", "2", "jam"])
+    #expect(words.map(\.isMarker) == [true, false, true, false, false, false, true, false, false, false, false])
+    #expect(FidelityWords.words(in: "1. eggs", listMarkers: false).map(\.isMarker) == [false, false])
+}
+
+/// A marker the model adds counts from 1, by one, at the start of a line, with a space after
+/// it; a number the speaker said that becomes a marker is the speaker's number kept (finding 7).
+@Test(arguments: [
+    ("buy eggs bread", "Buy:\n12. eggs\n2. bread", false),
+    ("buy eggs", "Buy:\n100. eggs", false),
+    ("buy eggs", "Buy:\n1.eggs", false),
+    ("buy eggs bread", "Buy:\n1. eggs\n3. bread", false),
+    ("buy eggs bread", "Buy: 1. eggs 2. bread", false),
+    ("buy eggs bread", "Buy:\n1. eggs\n2. bread", true),
+    ("buy eggs bread", "Buy:\n1) eggs\n2) bread", true),
+    ("packing 1 the passport 2 the charger", "Packing:\n1. the passport\n2. the charger", true),
+    ("we need chairs. 10. no 12.", "We need chairs.\n\n10. No, 12.", true),
+    ("buy 2 eggs", "Buy\n2. eggs", true),
+    ("two lists eggs milk then tea jam", "Two lists:\n1. eggs\n2. milk\nThen:\n1. tea\n2. jam", true),
+])
+func aMarkerTheModelAddsCountsFromOne(_ raw: String, _ cleaned: String, _ accepted: Bool) {
+    #expect(FidelityGuard.check(raw: raw, cleaned: cleaned).isAccepted == accepted)
+}
+
+/// A list may run past nine but not past 99: a marker has two digits at most.
+@Test func aMarkerHasTwoDigitsAtMost() {
+    let items = (1...100).map { "item\($0)" }
+    let raw = items.joined(separator: " ")
+    let list = { (count: Int) in items.prefix(count).enumerated().map { "\($0.offset + 1). \($0.element)" } }
+    #expect(
+        FidelityGuard.check(raw: items.prefix(99).joined(separator: " "), cleaned: list(99).joined(separator: "\n"))
+            .isAccepted)
+    #expect(!FidelityGuard.check(raw: raw, cleaned: list(100).joined(separator: "\n")).isAccepted)
 }
 
 @Test func aLongTranscriptIsCheckedQuickly() {

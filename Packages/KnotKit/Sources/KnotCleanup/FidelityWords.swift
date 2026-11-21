@@ -3,13 +3,18 @@ public struct FidelityWord: Sendable, Hashable {
     /// The word in lower case, without punctuation: "Don't" is "don't", with a straight
     /// apostrophe whichever one was written, "-5" keeps its sign and ".5" its point.
     public let text: String
-    /// Whether the word is a negation, a number, a name or a date word, which a restart may
-    /// remove only when the same word comes again at the same place.
+    /// Whether the word is a negation, a number, a name or a date word, which only a restart
+    /// may remove, and only when the same word comes again at the same place.
     public let isProtected: Bool
+    /// True for a list marker the cleaned text added: a number at the start of a line,
+    /// followed by "." or ")" and a space, that counts on from the last marker. The guard may
+    /// read it as the speaker's own number kept, or as a marker that holds no word.
+    public let isMarker: Bool
 
-    public init(text: String, isProtected: Bool) {
+    public init(text: String, isProtected: Bool, isMarker: Bool = false) {
         self.text = text
         self.isProtected = isProtected
+        self.isMarker = isMarker
     }
 }
 
@@ -60,15 +65,25 @@ public enum FidelityWords {
     /// so "-5" is not "5" and ".5" is not "5". Every other character separates words, hyphens
     /// and dashes between letters included.
     ///
-    /// With `listMarkers`, a number followed by "." or ")" at the start of a line is a list
-    /// marker, not a word.
+    /// With `listMarkers`, a number of one or two digits at the start of a line, followed by
+    /// "." or ")" and a space, is a list marker when it counts from 1, by one: "1.", then "2.",
+    /// and a new list from "1." again. It is a word with `isMarker`, which the guard may match
+    /// with the speaker's own number or skip. Any other number there, such as "12." or "10."
+    /// first, is an ordinary word.
     ///
     /// A word written with a capital is a name unless it starts the text, a line or a
     /// sentence, or is "I" or one of its contractions.
     public static func words(in text: String, listMarkers: Bool = false) -> [FidelityWord] {
         var words: [FidelityWord] = []
+        var lastMarker = 0
         for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
-            let characters = Array(listMarkers ? dropListMarker(line) : line)
+            var body = line
+            if listMarkers, let (number, rest) = listMarker(line), number == 1 || number == lastMarker + 1 {
+                lastMarker = number
+                words.append(FidelityWord(text: String(number), isProtected: true, isMarker: true))
+                body = rest
+            }
+            let characters = Array(body)
             var sentenceStart = true
             var current = ""
             var startsSentence = true
@@ -140,16 +155,17 @@ public enum FidelityWords {
         character == "'" || character == "\u{2019}" || character == "\u{02BC}"
     }
 
-    /// The line without a numbered list marker at its start: one or two digits, then "." or
-    /// ")", then a space. Bullets need no rule, because they are not word characters.
-    static func dropListMarker(_ line: Substring) -> Substring {
+    /// The number of a list marker at the start of `line`, and the line after it: one or two
+    /// digits, then "." or ")", then a space or a tab. Bullets need no rule, because they are
+    /// not word characters.
+    static func listMarker(_ line: Substring) -> (number: Int, rest: Substring)? {
         let trimmed = line.drop { $0 == " " || $0 == "\t" }
         let digits = trimmed.prefix { $0.isASCII && $0.isNumber }
-        guard (1...2).contains(digits.count) else { return line }
+        guard (1...2).contains(digits.count), let number = Int(digits) else { return nil }
         let rest = trimmed.dropFirst(digits.count)
         guard let marker = rest.first, marker == "." || marker == ")",
             let space = rest.dropFirst().first, space == " " || space == "\t"
-        else { return line }
-        return rest.dropFirst(2)
+        else { return nil }
+        return (number, rest.dropFirst(2))
     }
 }

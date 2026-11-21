@@ -5,9 +5,10 @@
 ///
 /// Allowed, and invisible to the guard because it compares words:
 /// - letter case;
-/// - punctuation, apostrophes and hyphens, so "dont" and "don't" are the same word and
-///   "forty-two" is the two words "forty two";
-/// - paragraph and line breaks, and list markers at the start of a line ("-", "•", "1.", "2)").
+/// - punctuation, and hyphens between letters, so "forty-two" is the two words "forty two". An
+///   apostrophe, a minus sign and a point before a digit belong to their word (`FidelityWords`);
+/// - paragraph and line breaks, and list markers at the start of a line: "-" and "•", and
+///   "1." or "1)" counting from 1 by one, which may also be the speaker's own number kept.
 ///
 /// Removals, allowed only under `Policy.full`. A raw word may be left out only when
 /// - it is a filler sound from the closed list (`FidelityWords.fillers`);
@@ -191,6 +192,7 @@ public enum FidelityGuard {
     /// bits and the length of a removed span above them. Zero is a state not reached.
     private enum Step {
         static let match: UInt16 = 1
+        static let skipMarker: UInt16 = 5
         static func removal(_ rule: FidelityRemoval.Rule, length: Int) -> UInt16 {
             let kind: UInt16 =
                 switch rule {
@@ -210,42 +212,59 @@ public enum FidelityGuard {
         }
     }
 
-    /// Finds a way to read `clean` as `raw` with only allowed spans removed. Returns the
-    /// removed words, or nil when there is none.
+    /// Finds a way to read `clean` as `raw` with only allowed spans removed, and each added
+    /// list marker either matched with the speaker's own number or skipped. Returns the removed
+    /// words, or nil when there is none.
     static func align(_ raw: [FidelityWord], _ clean: [FidelityWord], spans: [[Span]]) -> [FidelityRemoval]? {
-        let removedTotal = raw.count - clean.count
-        guard removedTotal >= 0 else { return nil }
-        let width = removedTotal + 1
-        // State (i, d): the first i raw words are read, d of them removed, so i - d clean words
-        // are matched. Each state keeps how it was first reached.
+        let markers = clean.filter(\.isMarker).count
+        // State (i, j): the first i raw words and the first j clean words are read. Its offset
+        // t = i - j is the raw words removed less the markers skipped, between -markers and the
+        // most that can be removed.
+        let lowest = -markers
+        let highest = raw.count - clean.count + markers
+        guard highest >= 0, raw.count - clean.count >= lowest else { return nil }
+        let width = highest - lowest + 1
+        func index(_ i: Int, _ t: Int) -> Int { i * width + (t - lowest) }
         var steps = [UInt16](repeating: 0, count: (raw.count + 1) * width)
-        steps[0] = Step.match
-        for i in 0..<raw.count {
-            for d in 0...min(i, removedTotal) where steps[i * width + d] != 0 {
-                let j = i - d
-                if j < clean.count, raw[i].text == clean[j].text, steps[(i + 1) * width + d] == 0 {
-                    steps[(i + 1) * width + d] = Step.match
+        steps[index(0, 0)] = Step.match
+        for i in 0...raw.count {
+            // From the highest offset down, so a skipped marker, which lowers the offset at the
+            // same i, is reached before it is read.
+            for t in stride(from: min(highest, i), through: lowest, by: -1) where steps[index(i, t)] != 0 {
+                let j = i - t
+                guard j >= 0, j <= clean.count else { continue }
+                if i < raw.count, j < clean.count, raw[i].text == clean[j].text,
+                    steps[index(i + 1, t)] == 0
+                {
+                    steps[index(i + 1, t)] = Step.match
                 }
-                for span in spans[i] where d + span.length <= removedTotal {
-                    let next = (i + span.length) * width + d + span.length
+                if j < clean.count, clean[j].isMarker, t - 1 >= lowest, steps[index(i, t - 1)] == 0 {
+                    steps[index(i, t - 1)] = Step.skipMarker
+                }
+                guard i < raw.count else { continue }
+                for span in spans[i] where t + span.length <= highest {
+                    let next = index(i + span.length, t + span.length)
                     if steps[next] == 0 {
                         steps[next] = Step.removal(span.rule, length: span.length)
                     }
                 }
             }
         }
-        guard steps[raw.count * width + removedTotal] != 0 else { return nil }
+        let end = raw.count - clean.count
+        guard steps[index(raw.count, end)] != 0 else { return nil }
 
         var removals: [FidelityRemoval] = []
         var i = raw.count
-        var d = removedTotal
-        while i > 0 {
-            let step = steps[i * width + d]
+        var t = end
+        while i > 0 || t != 0 {
+            let step = steps[index(i, t)]
             if let rule = Step.rule(step) {
                 let length = Int(step >> 3)
                 removals += (i - length..<i).map { FidelityRemoval(rawIndex: $0, rule: rule) }
                 i -= length
-                d -= length
+                t -= length
+            } else if step == Step.skipMarker {
+                t += 1
             } else {
                 i -= 1
             }
@@ -254,7 +273,10 @@ public enum FidelityGuard {
     }
 
     /// Why no allowed reading exists.
-    static func diagnose(_ raw: [FidelityWord], _ clean: [FidelityWord]) -> FidelityRejection {
+    static func diagnose(_ raw: [FidelityWord], _ cleanAndMarkers: [FidelityWord]) -> FidelityRejection {
+        // A marker the guard could have skipped is no word of the speaker's.
+        let rawTexts = Set(raw.map(\.text))
+        let clean = cleanAndMarkers.filter { !$0.isMarker || rawTexts.contains($0.text) }
         var balance: [String: Int] = [:]
         for word in raw { balance[word.text, default: 0] += 1 }
         for word in clean { balance[word.text, default: 0] -= 1 }
