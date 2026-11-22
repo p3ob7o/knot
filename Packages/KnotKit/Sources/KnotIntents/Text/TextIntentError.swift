@@ -6,8 +6,9 @@ public enum TextIntentError: Error, Hashable, Sendable {
     case knot(KnotError)
     /// The intent was given no text, or only spaces and line breaks, and wrote nothing.
     ///
-    /// No entry of the catalog means it, so it carries no code yet: the code to add is
-    /// `text_missing`, in a contract pull request (the orchestrator's ruling of 2026-11-22).
+    /// The refusal is of the call's form, made before anything reaches a port, as the command
+    /// line refuses a command given no text (docs/product-spec.md §10). It is never a capture's
+    /// failure, is never logged as one, and carries no catalog code.
     case noText
 
     /// The refusal of attachments, which Knot does not take: a file is content, and Knot does
@@ -15,7 +16,7 @@ public enum TextIntentError: Error, Hashable, Sendable {
     /// another kind" for a capture.
     public static let attachmentsRefused = TextIntentError.knot(KnotError.captureInvalid)
 
-    /// The catalog's code, or `nil` for a refusal that has none yet.
+    /// The catalog's code, or `nil` for the refusal of the call's form, which has none.
     public var code: ErrorCode? {
         switch self {
         case .knot(let error): error.code
