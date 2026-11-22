@@ -1425,7 +1425,9 @@ fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
-# scrub rewrites a kept log in place.
+# scrub rewrites a kept log in place, keeping its time (item 115): the log of a step that an
+# earlier run started, dated 2020 here, keeps that date, so that a reader of this run's logs
+# does not take it for this run's.
 fake_team="ZZ9QX42K7T"
 team_log="$scratch/verify-apps.log"
 {
@@ -1435,13 +1437,15 @@ team_log="$scratch/verify-apps.log"
     echo 'DEVELOPMENT_TEAM = '"$fake_team"
     echo 'keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52 KNOT_WORKTREE'
 } >"$team_log"
+touch -t 202001020304.05 "$team_log"
 filtered="$(knot_filter_team <"$team_log")"
 knot_scrub_logs "$scratch"
+scrubbed_time="$(date -r "$(stat -f %m "$team_log")" +%Y%m%d%H%M.%S)"
 if [[ $filtered != *"$fake_team"* && $filtered == *"keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52"* &&
-    $(grep -c -e '<TEAM>' "$team_log") == 4 ]] && ! grep -e "$fake_team" "$team_log" >/dev/null; then
-    pass "the team's ID leaves a build log, by pattern, and the rest stays"
+    $(grep -c -e '<TEAM>' "$team_log") == 4 && $scrubbed_time == 202001020304.05 ]] && ! grep -e "$fake_team" "$team_log" >/dev/null; then
+    pass "the team's ID leaves a build log, by pattern, and the rest stays, and the scrubbed log keeps its time"
 else
-    fail "the team filter left an ID or took too much: $filtered"
+    fail "the team filter left an ID or took too much, or the scrub changed the log's time to $scrubbed_time: $filtered"
 fi
 
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands

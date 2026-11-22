@@ -111,7 +111,7 @@ One run takes one tier. Each run starts with `scripts/doctor.sh`, and ends with 
 | `scripts/verify.sh --only <step>` | Doctor, then one step. `scripts/verify.sh --help` lists the steps. |
 | `scripts/verify.sh --module <name>` | Doctor, then the package build and the tests of one module, such as `KnotStore`, or of one test target, such as `KnotSoak`. It fails when no test ran. |
 
-A failed step names its log in `.build/logs/` and the command that reruns only that step.
+A failed step names its log in `.build/logs/` and the command that reruns only that step. A run rewrites only the logs of the steps it starts; the others stay from earlier runs and keep their own times, which the start of a run, removing the team's ID from every kept log, leaves as they were. So a step log older than the run is an earlier run's.
 
 **Which scripts drive the gate.** The scripts that drive the gate come from `main`, not from the candidate (`docs/architecture.md` §18). Every script reads the code, the plan, the fixtures and the pinned Xcode from the tree that `KNOT_TREE` or `--tree` names, and its own helpers and the orchestrator's lists from the checkout it runs from. So the orchestrator, with the candidate checked out in its gate worktree, runs main's scripts on it:
 

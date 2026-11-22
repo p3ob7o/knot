@@ -685,13 +685,18 @@ knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
 # the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
 # of a command still writing to it, and a rewrite would give the file a new inode under the
-# writer, whose lines would then be lost.
+# writer, whose lines would then be lost. Each log keeps its time: the log of a step that an
+# earlier run started, and this one does not, keeps the earlier run's, so that it is not taken
+# for this run's (item 115). The logs are kept, since a thread that reruns one step still
+# reads the others.
 knot_scrub_logs() {
-    local folder=$1 log
+    local folder=$1 log stamp
     [[ -d $folder ]] || return 0
     for log in "$folder"/verify-* "$folder"/bootstrap-*; do
         [[ -f $log ]] || continue
+        stamp="$(date -r "$(stat -f %m "$log")" +%Y%m%d%H%M.%S)"
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
+        touch -t "$stamp" "$log" 2>/dev/null || true
     done
 }
 
