@@ -17,11 +17,18 @@ public struct RecorderSubject: Sendable {
     public let setReadable: @Sendable (URL, Bool) -> Void
     /// Removes a file without the recorder, as a death between two writes leaves a recording.
     public let remove: @Sendable (URL) -> Void
+    /// The cues the recorder has given, in order: the factory hands the recorder an emitter
+    /// that records them.
+    public let cues: @Sendable () -> [Cue]
+    /// Makes the recorder's next start throw `error`, as a refused microphone does: for the real
+    /// recorder, its input's open.
+    public let failNextStart: @Sendable (KnotError) -> Void
 
     public init(
         recorder: any Recorder, locations: StoreLocations, exists: @escaping @Sendable (URL) -> Bool,
         size: @escaping @Sendable (URL) -> Int?, read: @escaping @Sendable (URL) -> Data?,
-        setReadable: @escaping @Sendable (URL, Bool) -> Void, remove: @escaping @Sendable (URL) -> Void
+        setReadable: @escaping @Sendable (URL, Bool) -> Void, remove: @escaping @Sendable (URL) -> Void,
+        cues: @escaping @Sendable () -> [Cue], failNextStart: @escaping @Sendable (KnotError) -> Void
     ) {
         self.recorder = recorder
         self.locations = locations
@@ -30,6 +37,8 @@ public struct RecorderSubject: Sendable {
         self.read = read
         self.setReadable = setReadable
         self.remove = remove
+        self.cues = cues
+        self.failNextStart = failNextStart
     }
 }
 
@@ -50,13 +59,16 @@ public enum RecorderContract {
         try await aManifestWithNoWorkingFileHoldsNoAudio(make)
         try await aStopThatCannotReadTheFileBackIsAWriteFailure(make)
         try await aRecordingsPeaksGoWithIt(make)
+        try await theRecorderGivesItsThreeCues(make)
     }
 
-    static func request(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {
+    static func request(
+        _ launch: LaunchID = Identifier(uuid: UUID()), limit: Duration = .seconds(Limits.longestRecording)
+    ) -> RecordingRequest {
         RecordingRequest(
             captureID: Identifier(uuid: UUID()), launchID: launch,
             origin: CaptureOrigin(source: .device(Identifier(uuid: UUID())), surface: .control), placement: .window,
-            shownNote: Identifier(uuid: UUID()))
+            shownNote: Identifier(uuid: UUID()), limit: limit)
     }
 
     /// A start writes the manifest and the working file and returns a live session; levels,
@@ -257,6 +269,59 @@ public enum RecorderContract {
         }
         _ = await SuiteWait.value("the discard") { await discarded.discard() }
         #expect(!subject.exists(subject.locations.recordingPeaks(dropped.captureID)), "A discard takes the peaks.")
+    }
+
+    /// The recorder gives the three cues that only it can time, each once, as the port says:
+    /// `recordingLive` as a start returns live, `couldNotStart` for a start that throws, and
+    /// `stoppedEarly` for a recording that ended by itself, here at its limit, with nobody
+    /// reading its events. A stop, a discard and recovery give none: the caller gives `saved`
+    /// or `discarded`, and a recovered recording has no cue. A start that throws follows each
+    /// step, so that a cue given late would show before its `couldNotStart`.
+    public static func theRecorderGivesItsThreeCues(_ make: @Sendable () async throws -> RecorderSubject)
+        async throws
+    {
+        let subject = try await make()
+        let recorder = subject.recorder
+        var expected: [Cue] = []
+        /// A start that throws, and every cue so far, in order, then that start's.
+        func refusedStart(after step: String) async {
+            subject.failNextStart(.noInputDevice)
+            await #expect(throws: KnotError.self, "The start after \(step) throws.") {
+                _ = try await recorder.start(request())
+            }
+            expected.append(.couldNotStart)
+            let count = expected.count
+            #expect(
+                await SuiteWait.until("the cue after \(step)", limit: .seconds(10)) { subject.cues().count >= count })
+            #expect(subject.cues() == expected, "The cues after \(step).")
+        }
+
+        let stopped = try await recorder.start(request())
+        expected.append(.recordingLive)
+        _ = try #require(await SuiteWait.value("the stop") { await stopped.stop() })
+        await refusedStart(after: "a stop")
+
+        // At its limit, with nobody reading its events: the recording ends by itself.
+        let limited = try await recorder.start(request(limit: .milliseconds(250)))
+        expected += [.recordingLive, .stoppedEarly]
+        let count = expected.count
+        #expect(await SuiteWait.until("the stopped-early cue", limit: .seconds(10)) { subject.cues().count >= count })
+        #expect(subject.cues() == expected, "A recording that ended at its limit stopped early.")
+        let ended = try #require(await SuiteWait.value("the stop after the ending") { await limited.stop() })
+        #expect(ended.ending == .limitReached)
+        await refusedStart(after: "a recording that ended by itself")
+
+        let discarded = try await recorder.start(request())
+        expected.append(.recordingLive)
+        _ = await SuiteWait.value("the discard") { await discarded.discard() }
+        await refusedStart(after: "a discard")
+
+        let launch: LaunchID = Identifier(uuid: UUID())
+        _ = try await recorder.start(request(launch))
+        expected.append(.recordingLive)
+        let orphans = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID()))
+        #expect(orphans.contains { $0.ending == .recovered }, "\(orphans.map(\.ending))")
+        await refusedStart(after: "a recovery")
     }
 
     /// Recovery finishes recordings of earlier launches and never one of the current launch.

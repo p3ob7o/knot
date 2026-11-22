@@ -10,8 +10,11 @@ import KnotCore
 //   record          records injected audio with the live recorder until done or killed
 //   recover         runs recovery from a launch of its own and checks what it finds
 //   measure-start   times the live recorder's start
+//   measure-costs   times the sync every second and the heartbeat's writes
+//   state           reads, writes or clears the recording state in a test's defaults suite
 //   policy          prints whether this process may open a hardware input, and opens nothing
 //   kill-test       (Mac only) the parent of the kill test: starts, kills and recovers children
+//   state-check     (Mac only) the recording state shared by two children, through a runner
 //
 // With no command it reports that it is ready, which WP-01's test of the crash host checks.
 
@@ -29,9 +32,12 @@ do {
     case "record": try await record(arguments)
     case "recover": try await recover(arguments)
     case "measure-start": try await measureStart(arguments)
+    case "measure-costs": try await measureCosts(arguments)
+    case "state": try state(arguments)
     case "policy": policy()
     #if os(macOS)
         case "kill-test": exit(try await killTest(arguments) ? 0 : 1)
+        case "state-check": exit(try stateCheck(arguments) ? 0 : 1)
     #endif
     default: throw HostError.usage("unknown command \(arguments.command)")
     }

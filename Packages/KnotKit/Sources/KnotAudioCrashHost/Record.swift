@@ -32,6 +32,11 @@ let endedEarlyStatus: Int32 = 3
 ///
 ///     record --dir <folder> --witness <file> [--rate 16000] [--seconds 60] [--sync-ms 1000]
 ///            [--ends-after <frames>] [--stage start|early|ending|conversion] [--capture <id>]
+///            [--state-suite <defaults suite>]
+///
+/// `--state-suite` names a test's own defaults suite, where the recorder publishes its recording
+/// state with a heartbeat every second, as the app's does in the group's; without it the state
+/// goes nowhere.
 ///
 /// `--capture` names the recording's capture, which the kill test chooses, so that its lines
 /// name the capture before the child has printed one; without it, the capture is new.
@@ -71,9 +76,14 @@ func record(_ arguments: Arguments) async throws(HostError) {
         return stage
     }
     let stalling = stage.map { StallingLayer(stage: $0, capture: capture, locations: store) }
+    let state: any RecordingStateStore =
+        try arguments.string("state-suite").map { name throws(HostError) in
+            guard let defaults = UserDefaults(suiteName: name) else { throw .usage("--state-suite cannot be used") }
+            return DefaultsRecordingStateStore(defaults: defaults)
+        } ?? UnavailableRecordingStateStore()
     let recorder = LiveRecorder(
         locations: store, layer: stalling ?? PosixFileLayer(), input: input,
-        settings: LiveRecorder.Settings(syncInterval: interval))
+        settings: LiveRecorder.Settings(syncInterval: interval), state: state)
     // The pid first, so that an early kill lands while the manifest and the file are made.
     print("pid \(getpid())")
     print("capture \(capture)")

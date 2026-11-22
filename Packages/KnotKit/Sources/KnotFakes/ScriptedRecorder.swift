@@ -12,6 +12,11 @@
     /// It writes real files through a `FileLayer`, where `StoreLocations` puts them: the
     /// manifest before the first sample, the working file with the injected audio's bytes, and
     /// the converted file, so that what the engine moves into the `AssetStore` is real.
+    ///
+    /// It gives the recorder's three cues through the emitter it is given, as the port says:
+    /// `recordingLive` as a start returns, `couldNotStart` for a start that throws, and
+    /// `stoppedEarly` once a recording that ended by itself, or whose last write failed, is on
+    /// the drive. A recording ends at its request's limit, as `limitReached`.
     public final class ScriptedRecorder: Recorder {
         /// What one recording does.
         public struct Script: Sendable {
@@ -54,19 +59,22 @@
         private let clock: any WallClock
         /// The injected audio: the bytes a working file holds, such as a fixture's.
         private let audio: Data?
+        private let cues: any CueEmitter
         private let state: Mutex<State>
 
         /// - Parameter audio: the bytes of the injected audio, which the working file holds. Left
         ///   out, the recorder writes synthetic 16-bit samples, two bytes a frame.
+        /// - Parameter cues: plays the cues the recorder gives; left out, none plays.
         public init(
             locations: StoreLocations, layer: any FileLayer, clock: any WallClock, audio: Data? = nil,
-            script: Script = Script()
+            script: Script = Script(), cues: any CueEmitter = UnavailableCueEmitter()
         ) {
             self.locations = locations
             self.layer = layer
             self.files = locations.durableFiles(layer: layer)
             self.clock = clock
             self.audio = audio
+            self.cues = cues
             self.state = Mutex(State(script: script))
         }
 
@@ -108,6 +116,17 @@
         public func prepare() async { state.withLock { $0.prepared += 1 } }
 
         public func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
+            do {
+                let session = try begin(request)
+                cues.emit(.recordingLive)
+                return session
+            } catch {
+                cues.emit(.couldNotStart)
+                throw error
+            }
+        }
+
+        private func begin(_ request: RecordingRequest) throws(KnotError) -> any RecordingSession {
             let (failure, script) = state.withLock { state in
                 (state.startFailures.isEmpty ? nil : state.startFailures.removeFirst(), state.script)
             }
@@ -115,8 +134,10 @@
             // The manifest first, then the working file, before the first sample.
             try files.place(try request.manifest(startedAt: clock.now()).encoded(), at: manifestURL(request.captureID))
             try files.place(Data(), at: workingURL(request.captureID))
+            let seconds = Double(request.limit.components.seconds) + Double(request.limit.components.attoseconds) / 1e18
             let session = ScriptedSession(
                 captureID: request.captureID, script: script, workingFile: workingURL(request.captureID),
+                limit: Int64((seconds * script.sampleRate).rounded(.down)),
                 write: { [files, audio] frames in
                     try? files.place(audio ?? Self.synthetic(frames: frames), at: self.workingURL(request.captureID))
                 },
@@ -128,9 +149,14 @@
                     self.state.withLock { _ = $0.workingFiles.removeValue(forKey: request.captureID) }
                 },
                 readBack: { [layer] in (try? layer.read(self.workingURL(request.captureID))) != nil },
-                ended: { audio in
+                ended: { [cues] audio in
                     // A recording that ended leaves its working file until it is removed.
                     self.state.withLock { $0.workingFiles[request.captureID] = (request.launchID, audio) }
+                    // On the drive: a recording that ended neither stopped nor recovered stopped early.
+                    switch audio.ending {
+                    case .stopped, .discarded, .recovered: break
+                    case .limitReached, .interrupted, .inputLost, .diskFull, .writeFailed: cues.emit(.stoppedEarly)
+                    }
                 })
             state.withLock { $0.sessions[request.captureID] = (request.launchID, session) }
             session.begin()
@@ -246,6 +272,8 @@
         private let audioSink: AsyncStream<AudioChunk>.Continuation
         private let script: ScriptedRecorder.Script
         private let workingFile: URL
+        /// The most frames the recording may hold: its request's limit.
+        private let limit: Int64
         private let write: @Sendable (Int64) -> Void
         private let remove: @Sendable () -> Void
         /// Whether the working file's length can be read back, once it is written.
@@ -255,13 +283,14 @@
         private let feeder = Mutex<Task<Void, Never>?>(nil)
 
         init(
-            captureID: CaptureID, script: ScriptedRecorder.Script, workingFile: URL,
+            captureID: CaptureID, script: ScriptedRecorder.Script, workingFile: URL, limit: Int64,
             write: @escaping @Sendable (Int64) -> Void, remove: @escaping @Sendable () -> Void,
             readBack: @escaping @Sendable () -> Bool, ended: @escaping @Sendable (RecordedAudio) -> Void
         ) {
             self.captureID = captureID
             self.script = script
             self.workingFile = workingFile
+            self.limit = limit
             self.write = write
             self.remove = remove
             self.readBack = readBack
@@ -276,6 +305,10 @@
                 for index in 0..<script.buffers {
                     if index > 0 { try? await Task.sleep(for: script.interval) }
                     guard append() else { return }
+                    if state.withLock({ $0.appended >= limit }) {
+                        _ = finish(.limitReached, discarding: false)
+                        return
+                    }
                 }
                 if let ending = script.endsBySelf { _ = finish(ending, discarding: false) }
             }
@@ -285,10 +318,11 @@
         /// Appends one buffer, as the tap does, and syncs it: the working file holds every frame
         /// that `.durable` reports (finding 72). False once the recording ended.
         private func append() -> Bool {
-            let frames = Int64(script.framesPerBuffer)
             let samples = (0..<script.framesPerBuffer).map { Float(sin(Double($0) / 8)) * 0.25 }
             return state.withLock { state in
-                guard state.result == nil else { return false }
+                // Up to the limit, never past it.
+                let frames = min(Int64(script.framesPerBuffer), limit - state.appended)
+                guard state.result == nil, frames > 0 else { return false }
                 state.appended += frames
                 eventSink.yield(.level(peak: 0.25, average: 0.16))
                 audioSink.yield(AudioChunk(samples: samples, sampleRate: script.sampleRate))
