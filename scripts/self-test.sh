@@ -1382,8 +1382,74 @@ else
     fail "package-test-strict's skips and failures: a skip on the console alone at the gate: ${strict_skip_console%%$'\n'*}; a cancelled case in the stream alone at the gate: $strict_cancel_stream; a failure: $strict_fail"
 fi
 
+# The live smoke step (item 80): after launch and mac-ui it reads their results, and fails
+# unless each platform's smoke test, found by its named comment in the sources, ran and
+# passed in this run, and was not skipped. On a fixture tree of its own, so that it pins none
+# of the real sources: three smoke tests named in its named-tests.txt, two in launch's logs
+# and the Mac's in mac-ui's, and a fourth whose pull request has not merged, which is not
+# asked for. The results are logs written for each run, in both of XCTest's forms.
+st="$scratch/live-smoke"
+mkdir -p "$st/tree/docs/plan" "$st/tree/Apps/iOS/UITests" "$st/tree/Apps/watchOS/UITests" "$st/tree/Apps/macOS/UITests"
+git -C "$st/tree" init -q -b main
+printf 'WP-30 PR 1\tlive-smoke-a-iphone\tThe iPhone.\nWP-32 PR 1\tlive-smoke-a-watch\tThe Watch.\nWP-33 PR 1\tlive-smoke-a-mac\tThe Mac.\nWP-22 PR 2\tlive-smoke-a-composition\tNot merged.\n' \
+    >"$st/tree/docs/plan/named-tests.txt"
+printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: type, kill, relaunch, read.\n    @MainActor\n    func testPhoneSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/iOS/UITests/PhoneTests.swift"
+printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class WatchSmokeTests: XCTestCase {\n    func testWatchSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
+printf 'final class MacSmokeTests: XCTestCase {\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
+smoke_logs() { # smoke_logs <folder> <iPhone line> <Watch line> <Mac line>: fresh logs of a run
+    mkdir -p "$1"
+    printf '%s\n' "$2" >"$1/verify-launch-tests.log"
+    printf '%s\n' "$3" >"$1/verify-launch-watch-tests.log"
+    printf '%s\n' "$4" >"$1/verify-mac-ui-tests.log"
+}
+phone_ok="Test case 'PhoneTests.testPhoneSmoke()' passed on 'set-iphone - Runner (1)' (7.4 seconds)"
+watch_ok="Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' passed (13.8 seconds)."
+mac_ok="Test Case '-[Knot_macOS_UITests.MacSmokeTests testMacSmoke]' passed (133.4 seconds)."
+smoke_start=$(($(date +%s) - 1))
+smoke_logs "$st/all" "$phone_ok" "$watch_ok" "$mac_ok"
+smoke_logs "$st/phone-missing" "Test case 'PhoneTests.testOther()' passed on 'set-iphone - Runner (1)' (1.0 seconds)" "$watch_ok" "$mac_ok"
+smoke_logs "$st/watch-skipped" "$phone_ok" "Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' skipped (0.001 seconds)." "$mac_ok"
+smoke_logs "$st/mac-old" "$phone_ok" "$watch_ok" "$mac_ok"
+touch -t 202001020304.05 "$st/mac-old/verify-mac-ui-tests.log"
+smoke() { # smoke <logs> <mac-ui 0|1>: status and the check's lines
+    python3 -I -B - "$KNOT_SCRIPTS/lib" "$st/tree" "$1" "$smoke_start" "$2" <<'PY' 2>&1 || true
+import contextlib, io, os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+os.chdir(sys.argv[2])
+k.merged_prs = lambda source: [("WP-30", False), ("WP-32", False), ("WP-33", False)]
+# The fixture's packages plan two pull requests each, of which the first has merged.
+k.plan_rows = lambda package: ["1", "2"]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    status = k.cmd_live_smoke(sys.argv[3], int(sys.argv[4]), sys.argv[5] == "1")
+print(status)
+print(out.getvalue())
+PY
+}
+smoke_all="$(smoke "$st/all" 1)"
+smoke_no_mac="$(smoke "$st/all" 0)"
+smoke_phone="$(smoke "$st/phone-missing" 1)"
+smoke_watch="$(smoke "$st/watch-skipped" 1)"
+smoke_old="$(smoke "$st/mac-old" 1)"
+if [[ ${smoke_all%%$'\n'*} == 0 && $smoke_all == *"live-smoke-a-composition"*"not asked for"* &&
+    ${smoke_no_mac%%$'\n'*} == 0 && $smoke_no_mac == *"live-smoke-a-mac"*"not asked for"*"mac-ui"* &&
+    ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
+    ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
+    ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* ]]; then
+    pass "the live smoke step asks each platform's smoke test, found by its named comment, to have passed in this run, and no other"
+else
+    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'"
+fi
+
 # The step's place in each tier: after package-test in --full and in the gate's leaf and
-# everything depths, and in neither --quick nor the gate of documents alone. A copy of
+# everything depths, and in neither --quick nor the gate of documents alone. And the live
+# smoke step's: last in --full and the everything depth, after launch and mac-ui, whose
+# results it reads (item 80); mac-ui is left out here, as --skip mac-ui and a diff that does
+# not reach the Mac app leave it. A copy of
 # scripts/ whose runner records each step's name and runs nothing, and whose gate takes its
 # depth from KNOT_SELF_TEST_DEPTH, runs each tier on a scratch tree.
 pl="$scratch/step-lists"
@@ -1421,8 +1487,10 @@ list_everything="$(step_list everything everything --gate --branch wp/01-self-te
 list_documents="$(step_list documents documents --gate --branch wp/01-self-test --package WP-01)"
 if [[ $list_quick == *"package-test "* && $list_quick != *"package-test-strict"* &&
     $list_full == *"package-test package-test-strict "* && $list_leaf == *"package-test package-test-strict "* &&
-    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* ]]; then
-    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents"
+    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* &&
+    $list_full == *" launch live-smoke " && $list_everything == *" launch live-smoke " &&
+    $list_quick != *"live-smoke"* && $list_leaf != *"live-smoke"* && $list_documents != *"live-smoke"* ]]; then
+    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents; live-smoke comes last in --full and the everything depth, after launch and mac-ui"
 else
     fail "the steps of each tier: quick '$list_quick'; full '$list_full'; gate leaf '$list_leaf'; everything '$list_everything'; documents '$list_documents'"
 fi

@@ -951,6 +951,92 @@ def cmd_test_events(path, gate=False):
     return 0
 
 
+# ---------------------------------------------------------------- the live smoke tests
+
+
+# Where each platform's UI tests run, by the folder of the test's source, and the log of that
+# step that holds XCTest's results.
+SMOKE_STEPS = (
+    ("Apps/iOS/", "launch", "verify-launch-tests.log"),
+    ("Apps/watchOS/", "launch", "verify-launch-watch-tests.log"),
+    ("Apps/macOS/", "mac-ui", "verify-mac-ui-tests.log"),
+)
+
+
+def smoke_test_of(slug):
+    """The source, class and test method that a smoke test's named comment marks: the first
+    test method after the comment, in the class that holds it. None when no source names it."""
+    for path in swift_files(SWIFT_SOURCES + SWIFT_TESTS):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            source = f.read().splitlines()
+        marks = [n for n, line in enumerate(source) if slug in line and "//" in line]
+        if not marks:
+            continue
+        for n in range(marks[0], len(source)):
+            method = re.search(r"\bfunc\s+(test\w*)\s*\(", source[n])
+            if method:
+                owner = next((m.group(1) for line in reversed(source[:n])
+                              if (m := re.search(r"\bclass\s+(\w+)", line))), None)
+                return path, owner, method.group(1)
+    return None
+
+
+def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
+    """The live smoke tests of docs/plan/named-tests.txt, the slugs that begin live-smoke-,
+    each asked for once its pull request has merged, or is the one under test, as the named
+    tests are. Each is found by its named comment in the sources, and must have passed in the
+    log of the step that runs it, launch or mac-ui, written in this run (since <since>), with
+    no failure and no skip. The Mac's is not asked for in a run that does not start mac-ui."""
+    merged = merged_prs("git")
+    if package and package != "contract":
+        merged.append((package, is_note_branch(branch)))
+    problems, asked = 0, 0
+    with open(NAMED_TESTS) as f:
+        rows = [line.rstrip("\n").split("\t", 2) for line in f if not line.startswith("#") and line.strip()]
+    for owner, slug, description in rows:
+        if not slug.startswith("live-smoke-"):
+            continue
+        if not named_test_required(owner, named_test_pr(owner, description), merged):
+            print(f"live-smoke: {slug}: not asked for: its pull request, {owner}, has not merged")
+            continue
+        found = smoke_test_of(slug)
+        if not found:
+            print(f"live-smoke: FAIL {slug}: no test in the sources carries its named comment")
+            problems += 1
+            continue
+        path, owner_class, method = found
+        place = next(((step, log) for prefix, step, log in SMOKE_STEPS if path.startswith(prefix)), None)
+        if place is None:
+            print(f"live-smoke: FAIL {slug}: {path} is in no step that runs the UI tests")
+            problems += 1
+            continue
+        step, log = place
+        if step == "mac-ui" and not mac_ui:
+            print(f"live-smoke: {slug}: not asked for: this run does not start mac-ui")
+            continue
+        asked += 1
+        log_path = os.path.join(logs, log)
+        if not os.path.exists(log_path) or os.path.getmtime(log_path) < since:
+            print(f"live-smoke: FAIL {slug}: {log} is missing or from an earlier run, so {step} did not run it in this run")
+            problems += 1
+            continue
+        name = re.escape(owner_class or "") + r"[ .]" + re.escape(method)
+        result = re.compile(r"^Test [Cc]ase '(?:-\[[\w.]*?\.)?" + name + r"(?:\(\))?\]?' (passed|failed|skipped)")
+        with open(log_path, errors="replace") as f:
+            outcomes = [m.group(1) for line in f if (m := result.match(line))]
+        test = f"{owner_class}.{method}"
+        if "skipped" in outcomes:
+            print(f"live-smoke: FAIL {slug}: {test} was skipped in {step}")
+            problems += 1
+        elif "failed" in outcomes or "passed" not in outcomes:
+            print(f"live-smoke: FAIL {slug}: {test} did not pass in {step}: {', '.join(outcomes) or 'no result'}")
+            problems += 1
+        else:
+            print(f"live-smoke: ok   {slug}: {test} passed in {step}, {outcomes.count('passed')} time(s)")
+    print(f"live-smoke: {asked} smoke tests asked for, {problems} failing")
+    return 1 if problems else 0
+
+
 # ---------------------------------------------------------------- workflows
 
 
@@ -1754,6 +1840,9 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "live-smoke":
+        return cmd_live_smoke(option(args, "--logs"), int(option(args, "--since", "0")), option(args, "--mac-ui") == "1",
+                              option(args, "--package"), option(args, "--branch"))
     if command == "test-events":
         return cmd_test_events(args[0], "--gate" in args[1:])
     if command == "unended-tests":

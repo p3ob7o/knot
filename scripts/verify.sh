@@ -49,7 +49,7 @@ package-test-strict contract-two-targets self-test apps packaging ios-hosted lau
 model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
@@ -820,9 +820,16 @@ end_mac_test_hosts() {
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
 # scripts/gate-steps.txt until their packages build them. Should a line turn to required
 # before the step is filled in, the gate fails here rather than pass a check it did not run.
+# The live smoke tests (docs/architecture.md §17), item 80 of the orchestrator's list. They
+# run inside launch and mac-ui; this step, after both, reads their results and fails unless
+# each platform's smoke test, found by its named comment in the sources, ran and passed in
+# this run and was not skipped (knot_tool.py live-smoke). The Mac's is not asked for in a run
+# that does not start mac-ui, and a test whose pull request has not merged is not asked for.
 step_live_smoke() {
-    echo "live-smoke: not built yet. WP-22 builds the .live smoke tests (docs/architecture.md §17)."
-    return 1
+    local mac_ui=0
+    [[ " $STEPS " == *" mac-ui "* ]] && mac_ui=1
+    (cd "$KNOT_ROOT" && tool live-smoke --logs "$KNOT_LOGS" --since "$START" --mac-ui "$mac_ui" \
+        ${PACKAGE:+--package "$PACKAGE"} ${BRANCH:+--branch "$BRANCH"})
 }
 step_two_process() {
     echo "two-process: not built yet. WP-34 builds it after G1 and SP-3 (docs/architecture.md §18)."
@@ -1020,10 +1027,12 @@ else
                     # docs/architecture.md §18: everything adds the two-process test and the
                     # .live smoke tests. They are pending until their packages build them.
                     STEPS="$common package-test package-test-strict contract-two-targets self-test apps packaging ios-hosted launch"
-                    STEPS="$STEPS live-smoke two-process" ;;
+                    STEPS="$STEPS two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
+            # The live smoke step reads the results of launch and mac-ui, so it comes after both.
+            [[ $DEPTH == everything ]] && STEPS="$STEPS live-smoke"
             # A step that scripts/gate-steps.txt lists as pending does not run yet.
             kept=""
             for step in $STEPS; do

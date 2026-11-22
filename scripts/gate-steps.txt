@@ -36,5 +36,5 @@ ios-hosted	required	WP-01	The tests hosted in the iOS app in the iPhone simulato
 launch	required	WP-01	The UI tests on the iPhone, iPad and Watch simulators, and the Mac app's window.
 mac-ui	required	WP-01 PR 3	Mac UI tests, on the exclusive slot, where the diff reaches the Mac app, KnotUI, scripts/ or .xcode-version.
 soak	required	WP-06 PR 1 and WP-06a	The capture ledger soak, where docs/architecture.md §17 asks for it.
-live-smoke	pending	WP-22	One UI smoke test on each platform on .live with a temporary store.
+live-smoke	required	WP-01, from the tests of WP-30, WP-32 and WP-33	One UI smoke test on each platform on .live with a temporary store: each, found by its named comment, ran and passed in launch or mac-ui in this run, and was not skipped; the Mac's only where the run starts mac-ui.
 two-process	pending	WP-34	After G1 and SP-3: the sandboxed app and knot-dev share a store, the tool writes and the app shows it.
