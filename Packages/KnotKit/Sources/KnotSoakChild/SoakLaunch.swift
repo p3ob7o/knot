@@ -9,9 +9,10 @@
 
     /// One launch of the soak's child over the real store (docs/architecture.md §17): it
     /// composes the store, the capture engine, ingest and recovery as the app does, over the
-    /// scripted recorder, transcriber and cleaner and an injected clock; it recovers what the
-    /// launches before it left; then it runs its part of the script, and tells its parent each
-    /// save the engine acknowledged.
+    /// live recorder on injected audio, the scripted transcriber and cleaner and an injected
+    /// clock; it recovers what the launches before it left; then it runs its part of the script,
+    /// and tells its parent each save the engine acknowledged, and each recording's durable
+    /// frames.
     ///
     /// Its lines:
     ///
@@ -96,6 +97,72 @@
                 SoakLine.recoveryLeft(open: open.count, inbox: inbox.others, partials: inbox.partials.count).rendered)
             for name in inbox.partials.sorted() { Say.line(SoakLine.inboxPartial(name).rendered) }
             for row in open { Say.line(SoakLine.leftOpen(row.id).rendered) }
+            // `Recording/` too: a recording recovery finished leaves none of its files there.
+            guard let recording = RecordingEntries.list(locations, besides: capturing ? launchID : nil) else {
+                Say.fail("Recording/ could not be listed")
+            }
+            Say.line(
+                SoakLine.recordingLeft(others: recording.others, peaksTemporaries: recording.peaksTemporaries.count)
+                    .rendered)
+            for name in recording.peaksTemporaries.sorted() { Say.line(SoakLine.peaksTemporary(name).rendered) }
+        }
+    }
+
+    /// What the engine says of the frames of each recording of the launch, as its states come:
+    /// each time more are durable, the parent is told.
+    final class AudioWitness: Sendable {
+        private struct Recording {
+            let index: Int
+            var frames: Int64
+        }
+
+        private let recordings = Mutex<[CaptureID: Recording]>([:])
+        /// The fault `audioAcknowledgedAhead`: the parent is told of a second more audio than the
+        /// engine said is durable.
+        private let ahead: Bool
+
+        init(ahead: Bool = false) { self.ahead = ahead }
+
+        /// A recording that began, with the frames its start answered as durable.
+        func begin(_ capture: CaptureID, index: Int, frames: Int64) {
+            let first = recordings.withLock { recordings in
+                let known = recordings[capture]?.frames ?? 0
+                recordings[capture] = Recording(index: index, frames: max(known, frames))
+                return max(known, frames)
+            }
+            say(index, capture, first, .open)
+        }
+
+        /// A state the engine published. Frames that come before the start answered wait for it.
+        func observe(_ state: CaptureState) {
+            guard state.outcome == .open else { return }
+            let told: (Int, Int64)? = recordings.withLock { recordings in
+                guard var recording = recordings[state.captureID], state.durableRevision > recording.frames else {
+                    return nil
+                }
+                recording.frames = state.durableRevision
+                recordings[state.captureID] = recording
+                return (recording.index, recording.frames)
+            }
+            if let (index, frames) = told { say(index, state.captureID, frames, .open) }
+        }
+
+        /// How many frames are durable, as the engine said.
+        func durable(_ capture: CaptureID) -> Int64 { recordings.withLock { $0[capture]?.frames ?? 0 } }
+
+        /// The recording's end, as `end` or `discard` answered it.
+        func end(_ capture: CaptureID, _ state: CaptureState) {
+            guard let index = recordings.withLock({ $0[capture]?.index }) else { return }
+            let discarded = state.outcome == .discardedEmpty
+            say(index, capture, discarded ? 0 : state.durableRevision, discarded ? .discarded : .ended)
+        }
+
+        private func say(_ index: Int, _ capture: CaptureID, _ frames: Int64, _ state: SoakLine.Acknowledgement.State) {
+            let frames = ahead && frames > 0 ? frames + Int64(SoakScript.sampleRate) : frames
+            Say.line(
+                SoakLine.ackAudio(
+                    SoakLine.AudioAcknowledgement(index: index, capture: capture, frames: frames, state: state)
+                ).rendered)
         }
     }
 
@@ -134,6 +201,8 @@
         private var vanished: Set<CaptureID> = []
         /// Whether this launch's captures run beside its recovery: the script then disturbs no write.
         private var capturesDuringRecovery = false
+        /// What the engine says of each recording's durable frames.
+        private lazy var audio = AudioWitness(ahead: options.fault == .audioAcknowledgedAhead)
         /// The capture the script left open, which the next one's start ends (rule 15).
         private var leftOpen: (index: Int, id: CaptureID, text: String)?
 
@@ -155,7 +224,9 @@
             notes = NoteRepository(database: database)
             let layer = PosixFileLayer()
             let assets = AssetRepository(locations: locations, layer: layer, database: database)
-            let recorder = ScriptedRecorder(locations: locations, layer: layer, clock: clock)
+            let recorder = SoakRecorder(
+                locations: locations, clock: clock, log: KnotLog(.audio, sink: SoakLogSink(arming: arming)),
+                fault: options.fault)
             let queue = StandardProcessingQueue(
                 notes: notes, assets: assets, transcriber: ScriptedTranscriber(), cleaner: ScriptedCleaner(),
                 clock: clock, ids: ids, log: log)
@@ -176,6 +247,12 @@
 
         func run() async {
             Say.line(SoakLine.launch(options.launch).rendered)
+            // Every state the engine publishes: a recording's durable frames come only so.
+            let states = engine.states()
+            let audio = audio
+            Task.detached {
+                for await state in states where state.kind == .voice { audio.observe(state) }
+            }
             // The clock starts where this launch's part of the script starts, just before it.
             let first = script.captures.indices.contains(options.range.lowerBound) ? options.range.lowerBound : nil
             clock.set(SoakScript.base.addingTimeInterval((first.map { script.captures[$0].startsAt } ?? 0) - 1))
@@ -224,6 +301,10 @@
         // MARK: One capture
 
         private func runCapture(_ capture: SoakScript.Capture) async {
+            if capture.kind == .voice {
+                await runRecording(capture)
+                return
+            }
             let index = capture.index
             clock.set(SoakScript.base.addingTimeInterval(capture.startsAt))
             Say.line(SoakLine.intent(index).rendered)
@@ -275,6 +356,68 @@
                 leftOpen = (index, id, capture.texts.last ?? "")
             case .end, .discard:
                 await end(index, id, text: capture.texts.last ?? "", discard: capture.ending == .discard)
+            }
+        }
+
+        /// A recording on the live recorder, through the engine as the app records: it begins,
+        /// records until the script's frames are durable, as the engine says, and ends, or is
+        /// discarded as an accidental press.
+        private func runRecording(_ capture: SoakScript.Capture) async {
+            let index = capture.index
+            clock.set(SoakScript.base.addingTimeInterval(capture.startsAt))
+            Say.line(SoakLine.intent(index).rendered)
+            let begun: CaptureState
+            do throws(KnotError) {
+                begun = try await disturbed(capture, save: 0) { () async throws(KnotError) -> CaptureState in
+                    try await self.engine.begin(
+                        CaptureRequest(kind: .voice, surface: capture.surface, placement: capture.placement))
+                }
+            } catch {
+                Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
+                if let open = leftOpen {
+                    leftOpen = nil
+                    await end(open.index, open.id, text: open.text, discard: false)
+                }
+                return
+            }
+            // Rule 15 ended the typed capture left open: a recording is of another kind.
+            leftOpen = nil
+            let id = begun.captureID
+            audio.begin(id, index: index, frames: begun.durableRevision)
+            await arming.step("after_begin")
+            // It records until the script's frames are durable, each new durable stretch a pass of
+            // the step `during_recording`, or for at most half a minute.
+            var seen: Int64 = 0
+            let until = ContinuousClock.now + .seconds(30)
+            while audio.durable(id) < capture.frames, ContinuousClock.now < until {
+                let now = audio.durable(id)
+                if now > seen {
+                    seen = now
+                    await arming.step("during_recording")
+                }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            clock.advance(by: capture.pauses.last ?? 0)
+            let discard = capture.ending == .discard
+            if discard { Say.line(SoakLine.discarding(index: index, capture: id).rendered) }
+            do throws(KnotError) {
+                let state = try await disturbed(capture, save: 1) { () async throws(KnotError) -> CaptureState in
+                    discard ? try await self.engine.discard(id) : try await self.engine.end(id)
+                }
+                audio.end(id, state)
+                if state.outcome == .stored { injectAfterRecording(index, id) }
+            } catch {
+                Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
+            }
+            await arming.step("after_end")
+        }
+
+        private func injectAfterRecording(_ index: Int, _ id: CaptureID) {
+            guard index % 2 == 1 else { return }
+            switch options.fault {
+            case .recordingFileLost?: FaultyStoreWrites.loseAsset(of: id, in: locations)
+            case .assetFileOrphaned?: FaultyStoreWrites.orphanAsset(beside: id, in: locations)
+            default: break
             }
         }
 

@@ -23,11 +23,33 @@
         case skippedRecovery = "skipped-recovery"
         /// The engine answers one capture in five as begun and saved, and writes none of it.
         case vanishedCapture = "vanished-capture"
+        /// The engine says a second more of a recording is durable than the recorder synced: an
+        /// acknowledgement before the write, for audio.
+        case audioAcknowledgedAhead = "audio-acknowledged-ahead"
+        /// A recording's files stay in `Recording/` once its capture holds its asset.
+        case recordingFilesLeft = "recording-files-left"
+        /// A stored recording's file is lost from `Assets/`, for one recording in two.
+        case recordingFileLost = "recording-file-lost"
+        /// A file that no capture holds is left in `Assets/`, beside one recording in two.
+        case assetFileOrphaned = "asset-file-orphaned"
     }
 
     /// The store's writes that the faults make behind the engine's back, on a connection of
-    /// their own.
+    /// their own, and on its files.
     enum FaultyStoreWrites {
+        /// Removes a stored recording's file from `Assets/`.
+        static func loseAsset(of capture: CaptureID, in locations: StoreLocations) {
+            try? FileManager.default.removeItem(at: locations.asset(AssetID(capture), kind: .audio))
+        }
+
+        /// Leaves a file that no capture holds in `Assets/`, beside a recording's.
+        static func orphanAsset(beside capture: CaptureID, in locations: StoreLocations) {
+            let stored = locations.asset(AssetID(capture), kind: .audio)
+            let orphan = stored.deletingLastPathComponent().appending(
+                path: "\(UUID().uuidString.lowercased()).\(stored.pathExtension)", directoryHint: .notDirectory)
+            try? FileManager.default.copyItem(at: stored, to: orphan)
+        }
+
         /// Deletes a capture's row and leaves its segments, with foreign keys off on this
         /// connection, as a store that skipped the row would leave them.
         static func deleteCaptureRow(_ capture: CaptureID, in locations: StoreLocations) {

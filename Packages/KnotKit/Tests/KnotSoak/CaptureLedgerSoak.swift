@@ -139,6 +139,8 @@
             /// The temporaries of writes a kill cut that recovery left in `Inbox/`, counted over
             /// the run's launches (`SoakWitness.partialsLeft`).
             var partialsLeft = 0
+            /// The temporaries of cut peaks writes that recovery left in `Recording/`.
+            var peaksLeft = 0
 
             var isGreen: Bool { problems.isEmpty }
 
@@ -147,7 +149,8 @@
                 Verdict(
                     seed: seed, problems: problems, launches: launches, captures: captures,
                     acknowledgements: acknowledgements, configuration: configuration, duration: duration,
-                    stoppedByTimeBox: stoppedByTimeBox, keptStore: folder.path, partialsLeft: partialsLeft)
+                    stoppedByTimeBox: stoppedByTimeBox, keptStore: folder.path, partialsLeft: partialsLeft,
+                    peaksLeft: peaksLeft)
             }
 
             /// How many launches a kill ended.
@@ -185,6 +188,12 @@
                 ]
                 if let keptStore { lines.append("the store is kept at \(keptStore)") }
                 lines.append("kills by point: " + killTally)
+                if peaksLeft > 0 {
+                    lines.append(
+                        "peaks_temporaries_left \(peaksLeft): temporaries of peaks writes a kill cut, left in Recording/; "
+                            + "\(SoakRules.peaksTemporariesAreRed ? "red" : "counted, not red until WP-12 PR 3 clears them")"
+                    )
+                }
                 if partialsLeft > 0 {
                     lines.append(
                         "inbox_partials_left \(partialsLeft): temporaries of writes a kill cut, left in Inbox/; "
@@ -300,7 +309,8 @@
                 captures: witness.highestIntent + 1, acknowledgements: witness.acknowledged,
                 configuration: configuration, duration: ContinuousClock.now - started,
                 stoppedByTimeBox: stoppedByTimeBox,
-                keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft)
+                keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft,
+                peaksLeft: witness.peaksTemporaries.count)
         }
 
         /// The code of a run that its time box cut short: not a failure of the ledger, and one
@@ -341,6 +351,10 @@
                 case (.quit, _): .quit
                 default: .failed
                 }
+            // `KNOT_SOAK_TRACE=1` prints every line the child printed: IDs, numbers, codes and hashes.
+            if ProcessInfo.processInfo.environment["KNOT_SOAK_TRACE"] == "1" {
+                for line in child.lines { print("child \(number): \(line)") }
+            }
             let problems = witness.absorb(
                 child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled,
                 capturesDuringRecovery: SoakLaunch.recoversWhileCapturing(seed: configuration.seed, launch: number))

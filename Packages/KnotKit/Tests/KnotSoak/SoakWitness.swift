@@ -1,3 +1,4 @@
+import AVFAudio
 import CryptoKit
 import Foundation
 import GRDB
@@ -44,6 +45,16 @@ struct SoakWitness {
     }
 
     private(set) var acknowledgements: [CaptureID: [Acknowledgement]] = [:]
+    /// The frames of each recording the child said the engine acknowledged, by capture.
+    private(set) var audioAcknowledgements: [CaptureID: [AudioAcknowledgement]] = [:]
+
+    /// One acknowledgement of a recording's frames.
+    struct AudioAcknowledgement: Hashable, Sendable {
+        let index: Int
+        let frames: Int64
+        let state: State
+        let launch: Int
+    }
     /// The highest index of the script whose capture a launch began.
     private(set) var highestIntent = -1
     private(set) var acknowledged = 0
@@ -51,6 +62,9 @@ struct SoakWitness {
     /// (`InboxEntries`, `SoakRules.inboxPartialsAreRed`).
     private(set) var partials: Set<String> = []
     var partialsLeft: Int { partials.count }
+    /// The temporaries of cut peaks writes that recovery left in `Recording/`, each once, by name
+    /// (`RecordingEntries`, `SoakRules.peaksTemporariesAreRed`).
+    private(set) var peaksTemporaries: Set<String> = []
     /// The kills since the last launch whose report counted all of `Inbox/`: as many temporaries
     /// of cut writes may be new at the next such count.
     private(set) var killsSinceFullCount = 0
@@ -97,6 +111,8 @@ struct SoakWitness {
         var recoveryReported = false
         var reportedPartials: Set<String> = []
         var partialCount = 0
+        var reportedPeaks: Set<String> = []
+        var peaksCount = 0
         for line in parsed {
             switch line {
             case .intent(let index):
@@ -114,6 +130,16 @@ struct SoakWitness {
                         state: a.state, blank: a.blank, launch: launch, save: a.save))
                 acknowledged += 1
                 if !intents.contains(a.index) { problem("acknowledged_without_intent", "index=\(a.index)") }
+            case .ackAudio(let a):
+                audioAcknowledgements[a.capture, default: []].append(
+                    AudioAcknowledgement(index: a.index, frames: a.frames, state: a.state, launch: launch))
+                acknowledged += 1
+                if !intents.contains(a.index) { problem("acknowledged_without_intent", "index=\(a.index)") }
+            case .recordingLeft(let others, let temporaries):
+                if others > 0 { problem("recovery_left_recording_files", "count=\(others)") }
+                peaksCount = temporaries
+            case .peaksTemporary(let name):
+                reportedPeaks.insert(name)
             case .stopped(let point):
                 stops.append(point)
             case .recoveryLeft(let open, let inbox, let partials):
@@ -137,6 +163,7 @@ struct SoakWitness {
         // launch that captures while it recovers counts only what is provably an earlier
         // launch's, so the kills before it are left to the next launch that counts everything.
         if afterKill { killsSinceFullCount += 1 }
+        if reportedPeaks.count != peaksCount { problem("peaks_temporaries_miscounted") }
         if capturesDuringRecovery {
             if SoakRules.inboxPartialsAreRed, !reportedPartials.isEmpty {
                 problem("inbox_partials_left", "count=\(reportedPartials.count)")
@@ -145,9 +172,14 @@ struct SoakWitness {
             problems += Self.partialProblems(
                 reportedPartials, known: partials, allowance: killsSinceFullCount, red: SoakRules.inboxPartialsAreRed
             ).map { Problem(code: $0.code, ids: ["launch=\(launch)"] + $0.ids) }
+            problems += Self.peaksProblems(
+                reportedPeaks, known: peaksTemporaries, allowance: killsSinceFullCount,
+                red: SoakRules.peaksTemporariesAreRed
+            ).map { Problem(code: $0.code, ids: ["launch=\(launch)"] + $0.ids) }
             killsSinceFullCount = 0
         }
         partials.formUnion(reportedPartials)
+        peaksTemporaries.formUnion(reportedPeaks)
         if intents != Array(range.lowerBound..<(range.lowerBound + intents.count)) || intents.count > range.count {
             problem("intents_out_of_order", "from=\(range.lowerBound)", "count=\(intents.count)")
         }
@@ -233,6 +265,21 @@ struct SoakWitness {
         for (capture, saves) in acknowledgements {
             for save in saves { captures[save.index, default: []].insert(capture) }
         }
+        for (capture, saves) in audioAcknowledgements {
+            for save in saves { captures[save.index, default: []].insert(capture) }
+        }
+        // A recording that the stream shows, by its start: the script's clock fixes each
+        // capture's, so one the child never had the time to acknowledge is accounted too.
+        let starts = Dictionary(
+            script.captures.map { (Self.milliseconds(SoakScript.base.addingTimeInterval($0.startsAt)), $0.index) },
+            uniquingKeysWith: { first, _ in first })
+        for (capture, segments) in shown where segments.contains(where: { $0.kind == .voice && $0.origin == device }) {
+            // A manifest keeps a start to the millisecond, cut, not rounded: the neighbour is the same start.
+            guard let row = try await notes.capture(capture) else { continue }
+            let at = Self.milliseconds(row.startedAt)
+            guard let index = starts[at] ?? starts[at + 1] ?? starts[at - 1] else { continue }
+            captures[index, default: []].insert(capture)
+        }
         for segment in segments where segment.origin == device && segment.piece == 0 && segment.conflictOf == nil {
             guard let capture = segment.capture, let token = segment.token, let index = tokens[token] else { continue }
             captures[index, default: []].insert(capture)
@@ -245,10 +292,22 @@ struct SoakWitness {
             problems.append(Problem(code: "segment_of_no_capture_of_the_script", ids: [capture.description]))
         }
 
+        var recordingFiles: Set<String> = []
         for (index, ids) in captures.sorted(by: { $0.key < $1.key }) {
             let planned = script.captures[index]
             var stored: [CaptureID] = []
             for capture in ids.sorted() {
+                if planned.kind == .voice {
+                    let found = try await recordingExpectation(
+                        capture, index: index, saves: audioAcknowledgements[capture] ?? [],
+                        shown: shown[capture] ?? [], notes: notes, locations: locations)
+                    problems += found.problems
+                    if let file = found.file {
+                        stored.append(capture)
+                        recordingFiles.insert(file.standardizedFileURL.path)
+                    }
+                    continue
+                }
                 let saves = acknowledgements[capture] ?? []
                 for save in saves where !Self.isOfTheScript(save, planned) {
                     problems.append(
@@ -274,8 +333,118 @@ struct SoakWitness {
         problems += Self.inboxProblems(
             InboxEntries.list(locations), known: partials, allowance: killsSinceFullCount,
             red: SoakRules.inboxPartialsAreRed)
+
+        // Nor in `Recording/`: every entry counts, a working file, a manifest, peaks, a
+        // conversion's leftover or a temporary of one of them.
+        if let recording = RecordingEntries.list(locations) {
+            if recording.others > 0 {
+                problems.append(Problem(code: "recording_files_left", ids: ["count=\(recording.others)"]))
+            }
+            problems += Self.peaksProblems(
+                recording.peaksTemporaries, known: peaksTemporaries, allowance: killsSinceFullCount,
+                red: SoakRules.peaksTemporariesAreRed)
+        } else {
+            problems.append(Problem(code: "recording_not_listed", ids: []))
+        }
+        // And every file in `Assets/` is a stored recording's that the stream shows.
+        for file in Self.files(under: locations.assets) where !recordingFiles.contains(file) {
+            problems.append(Problem(code: "asset_file_of_no_capture", ids: ["bytes=\(Self.size(of: file))"]))
+        }
         return problems
     }
+
+    /// 3, for a recording: an acknowledged recording is in the store, in a note the stream
+    /// shows, with its file in `Assets/`, holding at least the frames the engine reported as
+    /// durable, as the recorder's own tests count them; exactly the frames of its end once the
+    /// end was acknowledged. A recording discarded as an accidental press keeps nothing, and one
+    /// with no durable frame may end empty. Returns the stored file, if the recording is stored.
+    private func recordingExpectation(
+        _ capture: CaptureID, index: Int, saves: [AudioAcknowledgement], shown: [Segment], notes: NoteRepository,
+        locations: StoreLocations
+    ) async throws -> (problems: [Problem], file: URL?) {
+        var problems: [Problem] = []
+        let launch = saves.last?.launch
+        let ids = [capture.description, "index=\(index)"]
+        func problem(_ code: String, _ more: [String] = []) {
+            problems.append(Problem(code: code, ids: ids + more, launch: launch))
+        }
+        let highest = saves.map(\.frames).max() ?? 0
+        let ended = saves.first { $0.state == .ended }
+        // A recording answered as begun, with no frame durable yet, was promised nothing: a kill
+        // that early may leave no row of it. Nor does one the script discarded: on the `Inbox/`
+        // path a discarded recording never had a row.
+        guard let row = try await notes.capture(capture) else {
+            let discardedHere = saves.contains { $0.state == .discarded } || discarding.contains(capture)
+            if (highest > 0 || ended != nil) && !discardedHere { problem("acknowledged_capture_missing") }
+            return (problems, nil)
+        }
+        let discarded = saves.contains { $0.state == .discarded }
+        switch row.outcome {
+        case .open:
+            return (problems, nil)  // reported above
+        case .failed(let code):
+            problem("recording_failed", [code.rawValue])
+            return (problems, nil)
+        case .discardedEmpty:
+            if ended != nil || (highest > 0 && !discarded && !discarding.contains(capture)) {
+                problem("acknowledged_audio_discarded", ["frames=\(highest)"])
+            }
+            return (problems, nil)
+        case .stored:
+            if discarded {
+                problem("acknowledged_discard_stored")
+                return (problems, nil)
+            }
+            guard let segment = shown.first(where: { $0.kind == .voice && $0.piece == 0 }) else {
+                problem("stored_capture_not_in_stream")
+                return (problems, nil)
+            }
+            guard let asset = segment.assetID else {
+                problem("stored_recording_without_asset")
+                return (problems, nil)
+            }
+            let file = locations.asset(asset, kind: .audio)
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                problem("stored_recording_without_file")
+                return (problems, nil)
+            }
+            // Frames out against frames in: the stored copy holds the frames the working file held.
+            guard let frames = Self.frames(of: file) else {
+                problem("stored_recording_unreadable")
+                return (problems, file)
+            }
+            if frames < highest {
+                problem("audio_frames_below_acknowledged", ["stored=\(frames)", "acknowledged=\(highest)"])
+            } else if let ended, frames != ended.frames {
+                problem("audio_frames_not_as_ended", ["stored=\(frames)", "ended=\(ended.frames)"])
+            }
+            return (problems, file)
+        }
+    }
+
+    /// The frames an audio file holds, as `AVAudioFile` reads its length.
+    static func frames(of file: URL) -> Int64? {
+        (try? AVAudioFile(forReading: file)).map(\.length)
+    }
+
+    /// Every file under `folder`, by standardized path.
+    static func files(under folder: URL) -> [String] {
+        guard let walk = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey])
+        else { return [] }
+        var found: [String] = []
+        for case let url as URL in walk
+        where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+            found.append(url.standardizedFileURL.path)
+        }
+        return found.sorted()
+    }
+
+    static func size(of path: String) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? -1
+    }
+
+    /// A date to the millisecond, as the store keeps a capture's start.
+    static func milliseconds(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
 
     /// 3. One capture against the script: an acknowledged capture is in the store, at least at
     /// the revision the engine reported as saved, and its stored text is exactly a text of the
@@ -369,6 +538,22 @@ struct SoakWitness {
         }
         if red, !found.isEmpty {
             problems.append(Problem(code: "inbox_partials_left", ids: ["count=\(found.count)"]))
+        }
+        return problems
+    }
+
+    /// What the temporaries of cut peaks writes in `Recording/` say, as `partialProblems` says of
+    /// `Inbox/`'s: more new ones than the kills that could have cut them is red, and any at all
+    /// once `red` is.
+    static func peaksProblems(_ found: Set<String>, known: Set<String>, allowance: Int, red: Bool) -> [Problem] {
+        var problems: [Problem] = []
+        let new = found.subtracting(known)
+        if new.count > allowance {
+            problems.append(
+                Problem(code: "peaks_temporaries_beyond_kills", ids: ["new=\(new.count)", "kills=\(allowance)"]))
+        }
+        if red, !found.isEmpty {
+            problems.append(Problem(code: "peaks_temporaries_left", ids: ["count=\(found.count)"]))
         }
         return problems
     }
