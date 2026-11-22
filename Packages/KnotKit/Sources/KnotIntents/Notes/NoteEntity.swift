@@ -53,6 +53,11 @@
 
         public init() {}
 
+        /// A query whose dependency is declared on `manager`, for tests.
+        public init(manager: AppDependencyManager) {
+            _knot = Dependency(manager: manager, default: KnotIntentEnvironment.unavailable)
+        }
+
         public func entities(for identifiers: [String]) async throws -> [NoteEntity] {
             try await Self.entities(for: identifiers, from: knot)
         }
