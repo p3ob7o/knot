@@ -10,7 +10,9 @@
 #   3. the soak with a fresh seed (scripts/verify.sh --soak);
 #   4. the launches on the iOS 27.0 runtime, the oldest system Knot supports, with their
 #      own simulators (KNOT_SIM_IOS_VERSION=27.0 scripts/verify.sh --only launch);
-#   5. the report of a model that changed with an update of the operating system
+#   5. the recorder's kill test and its shared recording state in the iOS Simulator, with a
+#      fresh seed (scripts/verify.sh --only recorder-sim);
+#   6. the report of a model that changed with an update of the operating system
 #      (scripts/verify.sh --only model-report).
 # It prints each run's status line, and exits non-zero when any run failed. A red night
 # stops the merge queue (docs/orchestrator.md).
@@ -42,6 +44,7 @@ run full "$KNOT_SCRIPTS/verify.sh" "${FULL[@]}"
 run tsan "$KNOT_SCRIPTS/verify.sh" --only tsan
 run soak "$KNOT_SCRIPTS/verify.sh" --soak
 run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_SCRIPTS/verify.sh" --only launch
+run recorder-sim "$KNOT_SCRIPTS/verify.sh" --only recorder-sim
 run models "$KNOT_SCRIPTS/verify.sh" --only model-report
 grep -e 'changed since' "$KNOT_LOGS/verify-model-report.log" 2>/dev/null || true
 

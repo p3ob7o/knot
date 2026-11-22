@@ -1,13 +1,15 @@
 #!/bin/bash
 # Keeps heavy builds on this Mac to a few at a time (docs/architecture.md §18).
 #
-#   scripts/build-slot.sh run [--gate] [--all] [--mac-ui] [--simulators] [--label <text>] -- <command…>
+#   scripts/build-slot.sh run [--gate] [--all] [--mac-ui | --mac-ui-only] [--simulators] [--label <text>] -- <command…>
 #   scripts/build-slot.sh status
 #
 # `run` waits for a slot, runs the command holding it, and returns the command's status.
 #   --gate        the merge gate: it may also take the slot kept for the gate
 #   --all         every build slot at once, as --perf needs
 #   --mac-ui      also the one exclusive slot for Mac UI tests, which need the desktop
+#   --mac-ui-only that slot and no build slot, for a command of a run that holds one already,
+#                 such as the launch step's Mac part
 #   --simulators  also one of the slots that limit how many simulator sets are booted
 #
 # A slot is a lock taken with /usr/bin/lockf, which the system releases when its holder
@@ -24,7 +26,7 @@ BUILD_SLOTS="${KNOT_BUILD_SLOTS:-3}"
 SIMULATOR_SLOTS="${KNOT_SIMULATOR_SLOTS:-2}"
 TIMEOUT="${KNOT_SLOT_TIMEOUT:-3600}"
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "build-slot-usage" "$1" "Run scripts/build-slot.sh --help." "safe" "nothing"; }
 
 # Whether a lock file is held now. lockf creates the file if needed.
@@ -87,13 +89,14 @@ try_run() {
 }
 
 run() {
-    local gate=0 all=0 mac_ui=0 simulators=0
+    local gate=0 all=0 mac_ui=0 mac_ui_only=0 simulators=0
     LABEL="$KNOT_WORKTREE_ID"
     while [[ $# -gt 0 && $1 != -- ]]; do
         case $1 in
             --gate) gate=1; shift ;;
             --all) all=1; shift ;;
             --mac-ui) mac_ui=1; shift ;;
+            --mac-ui-only) mac_ui=1; mac_ui_only=1; shift ;;
             --simulators) simulators=1; shift ;;
             --label) LABEL="$KNOT_WORKTREE_ID ${2:-}"; shift 2 ;;
             *) usage_fail "Unknown option: $1" ;;
@@ -107,7 +110,10 @@ run() {
     local open=$((BUILD_SLOTS - 1)) n
     ((gate)) && open=$BUILD_SLOTS
     local choices=()
-    if ((all)); then
+    if ((mac_ui_only)); then
+        # No build slot: the run that starts this command holds one already.
+        choices=("")
+    elif ((all)); then
         local every=""
         for ((n = 1; n <= BUILD_SLOTS; n++)); do every="$every $SLOT_DIR/build-$n.lock"; done
         choices=("$every")

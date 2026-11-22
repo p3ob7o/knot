@@ -66,5 +66,34 @@
                 }
             }
         }
+
+        /// The same rule for `Recording/`: the temporary of a peaks file's atomic creation, cut by a
+        /// kill, is counted and passes while its switch is off; a name like it that is not one is an
+        /// entry like any other.
+        @Test func aPeaksTemporaryIsCountedAndPassesWhileTheSwitchIsOff() throws {
+            let folder = SoakFolders.make("recording-rule")
+            defer { SoakFolders.remove(folder) }
+            let locations = StoreLocations.testing(root: folder)
+            try FileManager.default.createDirectory(at: locations.recording, withIntermediateDirectories: true)
+            let peaks = locations.recordingPeaks(capture).lastPathComponent
+            let temporary = "\(peaks).sb-02b61b33-LRPMB3"
+            for name in [temporary, "\(peaks).sb-zz", "\(peaks).tmp"] {
+                try Data([0]).write(to: locations.recording.appending(path: name, directoryHint: .notDirectory))
+            }
+            let entries = try #require(RecordingEntries.list(locations))
+            #expect(entries.peaksTemporaries == [temporary])
+            #expect(entries.others == 2)
+            #expect(
+                SoakWitness.peaksProblems(entries.peaksTemporaries, known: [temporary], allowance: 0, red: false)
+                    .isEmpty)
+            #expect(SoakRules.peaksTemporariesAreRed == false, "WP-12 turns it, with the fix.")
+            #expect(
+                SoakWitness.peaksProblems(entries.peaksTemporaries, known: [temporary], allowance: 0, red: true).map(
+                    \.code)
+                    == ["peaks_temporaries_left"])
+            #expect(
+                SoakWitness.peaksProblems(entries.peaksTemporaries, known: [], allowance: 0, red: false).map(\.code)
+                    == ["peaks_temporaries_beyond_kills"])
+        }
     }
 #endif

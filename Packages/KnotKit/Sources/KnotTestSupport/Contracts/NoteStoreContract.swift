@@ -118,6 +118,7 @@ public enum NoteStoreContract {
         Check(name: "peaks-purged", run: aPurgeRemovesPeaksWithTheSegment),
         Check(name: "peaks-deleted", run: aDeletedSegmentKeepsItsPeaks),
         Check(name: "peaks-moved", run: peaksMoveWithTheirSegment),
+        Check(name: "peaks-kept", run: peaksOutliveTheSegmentsOtherChanges),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
@@ -127,6 +128,11 @@ public enum NoteStoreContract {
         Check(name: "kept-item-ingested", run: aKeptItemReadLaterIsStoredInItsNote),
         Check(name: "kept-item-refused", run: aKeptItemThatIsNotOneIsRefused),
         Check(name: "kept-item-window", run: aKeptItemCountsForNoWindow),
+        Check(name: "kept-item-purged", run: aPurgeNamesTheKeptFilesOfWhatItRemoved),
+        Check(name: "purged-kept-ingest", run: aPurgedKeptItemIngestedStoresNothing),
+        Check(name: "purged-refused-ingest", run: aPurgedUnreadableItemStoresNothing),
+        Check(name: "purged-kept-again", run: aPurgedKeptItemRecordedAgainRecordsNothing),
+        Check(name: "purged-other-reason", run: aPurgedFailureForAnotherReasonIsStored),
         Check(name: "small-ones", run: theSmallOnes),
         Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
@@ -2337,7 +2343,9 @@ public enum NoteStoreContract {
             let item = h.keptItem(h.ids.make(), reason: reason, at: 1 + Double(index))
             // Found then, written later: the note is dated by the item, not by the store's clock.
             h.clock.set(h.at(20 + Double(index)))
-            let receipt = try await h.store.recordKeptItem(item)
+            let result = try await h.store.recordKeptItem(item)
+            #expect(result.applied && !result.purged, "It is recorded.")
+            let receipt = result.receipt
             #expect(receipt.outcome == .failed(reason), "It failed, and says why.")
             #expect(!receipt.joinedExistingNote && receipt.noteID != earlier.noteID, "A new note of its own.")
             let row = try #require(try await h.row(item.captureID), "The item has a row.")
@@ -2371,7 +2379,8 @@ public enum NoteStoreContract {
         again.foundAt = h.at(7)
         again.reason = KnotError.inboxItemNewerVersion.code
         let second = try await h.store.recordKeptItem(again)
-        #expect(second == first, "The first receipt.")
+        #expect(second.receipt == first.receipt, "The first receipt.")
+        #expect(!second.applied && !second.purged, "Not applied again.")
         #expect(try await h.row(item.captureID) == row, "The row is as it was.")
         #expect(try await h.store.changes(after: cursor, limit: 10).changes.isEmpty, "Nothing else changes.")
         let files = try await h.store.keptFiles(of: item.captureID)
@@ -2389,7 +2398,8 @@ public enum NoteStoreContract {
         let nearby = try await h.store.record(h.typed("Nearby", from: 0, to: 0.5))
         for (item, ready) in [(typed, SegmentState.typed(.ready)), (recording, .voice(.recorded))] {
             let kept = try await h.store.recordKeptItem(
-                h.keptItem(item.id, reason: KnotError.inboxItemNewerVersion.code, at: 9))
+                h.keptItem(item.id, reason: KnotError.inboxItemNewerVersion.code, at: 9)
+            ).receipt
             let result = try await h.store.ingest(item)
             #expect(result.applied && result.receipt.outcome == .stored, "\(item.kind): stored.")
             #expect(result.storedRevision >= item.revision)
@@ -2449,14 +2459,193 @@ public enum NoteStoreContract {
         let h = await Harness(make)
         let reason = KnotError.inboxItemUnreadable.code
         let earlier = try await h.store.record(h.typed("Earlier", from: 0, to: 0.5))
-        let kept = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 1))
+        let kept = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 1)).receipt
         let segment = try #require(try await h.store.segment(SegmentID(kept.captureID))).segment
         #expect(segment.arrivedAt == nil, "A kept segment carries no arrival mark.")
         let next = try await h.store.record(h.typed("Next", from: 1.2, to: 1.3))
         #expect(next.noteID == earlier.noteID, "It joins the note it would join were the kept note not there.")
-        let alone = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 30))
+        let alone = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 30)).receipt
         let after = try await h.store.record(h.typed("After", from: 30.2, to: 30.3))
         #expect(after.noteID != alone.noteID && !after.joinedExistingNote, "With nothing else near, a new note.")
+    }
+
+    /// A purge that removes a kept inbox item's failed segment, deleted with its note or on its
+    /// own, names that item's files in `Inbox/`, as `keptFiles(of:)` named them, once each, for
+    /// the caller to remove, and forgets them. A kept item still shown keeps its files.
+    public static func aPurgeNamesTheKeptFilesOfWhatItRemoved(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let reason = KnotError.inboxItemUnreadable.code
+        let withNote = h.keptItem(h.ids.make(), reason: reason, at: 0)
+        let alone = h.keptItem(h.ids.make(), reason: reason, at: 1)
+        let shown = h.keptItem(h.ids.make(), reason: reason, at: 2)
+        let note = try await h.store.recordKeptItem(withNote).receipt.noteID
+        _ = try await h.store.recordKeptItem(alone)
+        _ = try await h.store.recordKeptItem(shown)
+        let named = try await h.store.keptFiles(of: withNote.captureID) + h.store.keptFiles(of: alone.captureID)
+        #expect(named.count == withNote.fileNames.count + alone.fileNames.count)
+        _ = try await h.store.delete(.note(note))
+        _ = try await h.store.delete(.segment(SegmentID(alone.captureID)))
+        h.clock.advance(by: 31 * 86_400)
+        let purged = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(Set(purged.keptFiles) == Set(named), "The purge names the files of the kept items it removed.")
+        #expect(purged.keptFiles.count == named.count, "Each once.")
+        for item in [withNote, alone] {
+            #expect(try await h.store.keptFiles(of: item.captureID).isEmpty, "And the store forgets them.")
+        }
+        #expect(
+            try await h.store.keptFiles(of: shown.captureID).count == shown.fileNames.count,
+            "A kept item still shown keeps its files.")
+    }
+
+    // MARK: After a purge (a kept item gone)
+
+    /// Deletes each segment, with its note or on its own as `withNote` says, and purges them
+    /// 31 days later.
+    static func purgeDeleted(_ h: Harness, _ deleted: [(SegmentID, withNote: Bool)]) async throws -> PurgeResult {
+        for (segment, withNote) in deleted {
+            if withNote {
+                let note = try #require(try await h.store.segment(segment)).segment.noteID
+                _ = try await h.store.delete(.note(note))
+            } else {
+                _ = try await h.store.delete(.segment(segment))
+            }
+        }
+        h.clock.advance(by: 31 * 86_400)
+        let purged = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        for (segment, _) in deleted { #expect(try await h.store.segment(segment) == nil, "The segment is purged.") }
+        return purged
+    }
+
+    /// What `purged` holds a store to: nothing is applied, stored or recorded, the row is as it
+    /// was, no segment comes back, no file is kept, and the cursor does not move.
+    static func expectGone(
+        _ result: IngestResult, _ h: Harness, row: Capture?, cursor: StoreCursor, _ what: String
+    ) async throws {
+        let capture = try #require(row, "\(what): the row is kept.").id
+        #expect(result.purged && !result.applied, "\(what): purged, and nothing is applied.")
+        #expect(result.receipt.captureID == capture && result.storedRevision == row?.revision, "\(what): the row's.")
+        #expect(try await h.row(capture) == row, "\(what): the row is as it was.")
+        #expect(try await h.store.segment(SegmentID(capture)) == nil, "\(what): no segment comes back.")
+        #expect(try await h.store.keptFiles(of: capture).isEmpty, "\(what): no file is kept.")
+        #expect(try await h.store.cursor() == cursor, "\(what): nothing changes.")
+        #expect(try await h.store.openCaptures().isEmpty, "\(what): nothing is open.")
+    }
+
+    /// A kept item whose failed segment was deleted, with its note or on its own, and purged is
+    /// gone: its capture ingested whole, typed or a recording, stores nothing and answers
+    /// `purged`, for the caller to remove its files, and again the same.
+    public static func aPurgedKeptItemIngestedStoresNothing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let reasons = KeptInboxItem.reasons.sorted { $0.rawValue < $1.rawValue }
+        let whole = [h.inboxText("Read after the update", at: 0, revision: 2), h.watchRecording(from: 1, to: 2)]
+        for (index, item) in whole.enumerated() {
+            _ = try await h.store.recordKeptItem(h.keptItem(item.id, reason: reasons[index], at: 3 + Double(index)))
+        }
+        _ = try await purgeDeleted(
+            h, [(SegmentID(whole[0].id), withNote: true), (SegmentID(whole[1].id), withNote: false)])
+        for item in whole {
+            let row = try await h.row(item.id)
+            let cursor = try await h.store.cursor()
+            for time in ["once", "again"] {
+                let result = try await h.store.ingest(item)
+                try await expectGone(result, h, row: row, cursor: cursor, "\(item.kind), whole, \(time)")
+            }
+            if case .file(let asset, _) = item.body {
+                #expect(try await h.store.asset(asset.id) == nil, "No recording is stored.")
+            }
+        }
+    }
+
+    /// An item the store itself refused as `inbox_item_unreadable`, whose failed segment was
+    /// deleted and purged, is gone as a kept item is: ingested again, malformed still or whole,
+    /// it stores nothing and answers `purged`, with no error, for the caller to remove its
+    /// files. Its row names no file, and the purge names none for it.
+    public static func aPurgedUnreadableItemStoresNothing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let whole = [h.watchRecording(from: 0, to: 1), h.inboxText("Synthetic words", at: 600, revision: 1)]
+        var malformed = whole
+        if case .file(var asset, let duration) = malformed[0].body {
+            asset.sha256 = String(repeating: "a", count: 63)
+            malformed[0].body = .file(asset, duration: duration)
+        }
+        malformed[1].body = .file(h.asset(.ink, for: malformed[1].id), duration: nil)
+        for item in malformed {
+            await refuses(KnotError.inboxItemUnreadable, "\(item.kind)") { try await h.store.ingest(item) }
+        }
+        let purged = try await purgeDeleted(
+            h, [(SegmentID(whole[0].id), withNote: true), (SegmentID(whole[1].id), withNote: false)])
+        #expect(purged.keptFiles.isEmpty, "Its row names no file, and the purge names none.")
+        for (bad, good) in zip(malformed, whole) {
+            let row = try await h.row(bad.id)
+            #expect(row?.outcome == .failed(KnotError.inboxItemUnreadable.code), "The row it wrote stays.")
+            let cursor = try await h.store.cursor()
+            for (item, what) in [(bad, "malformed still"), (good, "whole"), (bad, "malformed again")] {
+                let result = try await h.store.ingest(item)
+                try await expectGone(result, h, row: row, cursor: cursor, "\(item.kind), \(what)")
+            }
+        }
+    }
+
+    /// A kept item whose failed segment was purged, recorded as kept again, for either reason,
+    /// records nothing, its files included, and answers `purged`, for the caller to remove its
+    /// files; and so does an item the store had itself refused, whatever its kind.
+    public static func aPurgedKeptItemRecordedAgainRecordsNothing(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let reasons = KeptInboxItem.reasons.sorted { $0.rawValue < $1.rawValue }
+        let kept = h.keptItem(h.ids.make(), reason: reasons[0], at: 0)
+        _ = try await h.store.recordKeptItem(kept)
+        var refused = h.inboxText("Synthetic words", at: 600, revision: 1)
+        refused.body = .file(h.asset(.ink, for: refused.id), duration: nil)
+        await refuses(KnotError.inboxItemUnreadable, "refused") { try await h.store.ingest(refused) }
+        _ = try await purgeDeleted(
+            h, [(SegmentID(kept.captureID), withNote: true), (SegmentID(refused.id), withNote: false)])
+        for capture in [kept.captureID, refused.id] {
+            let row = try await h.row(capture)
+            let cursor = try await h.store.cursor()
+            for reason in reasons {
+                let again = h.keptItem(capture, reason: reason, at: 50_000)
+                let result = try await h.store.recordKeptItem(again)
+                try await expectGone(result, h, row: row, cursor: cursor, "recorded again, \(reason)")
+            }
+        }
+    }
+
+    /// The deletion of a failure's placeholder is not taken for the deletion of a capture that
+    /// had not arrived: a capture that failed for another reason, whose segment was deleted and
+    /// purged, is stored when it arrives whole, and the answer is not `purged`.
+    public static func aPurgedFailureForAnotherReasonIsStored(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let start = h.recordingStart(at: 0, surface: .app)
+        _ = try await h.store.record(start)
+        _ = try await h.store.end(
+            CaptureEnd(captureID: start.id, endedAt: h.at(1), outcome: .failed(KnotError.writeFailed.code), revision: 0)
+        )
+        let draft = h.typedDraft("Lost connection", at: 600, revision: 1)
+        _ = try await h.store.record(draft)
+        _ = try await h.store.end(
+            CaptureEnd(captureID: draft.id, endedAt: h.at(601), outcome: .failed(KnotError.diskFull.code), revision: 1))
+        let purged = try await purgeDeleted(
+            h, [(SegmentID(start.id), withNote: true), (SegmentID(draft.id), withNote: false)])
+        #expect(purged.keptFiles.isEmpty, "Neither is a kept item.")
+        var recording = start
+        recording.endedAt = h.at(1)
+        let asset = h.asset(.audio, for: start.id)
+        recording.body = .file(asset, duration: .seconds(60))
+        var typed = draft
+        typed.endedAt = h.at(601)
+        typed.body = .text("Lost connection, back now")
+        typed.revision = 2
+        for (item, ready) in [(recording, SegmentState.voice(.recorded)), (typed, .typed(.ready))] {
+            let result = try await h.store.ingest(item)
+            #expect(result.applied && !result.purged, "\(item.kind): stored, not purged.")
+            #expect(result.receipt.outcome == .stored && result.storedRevision == item.revision)
+            #expect(try await h.row(item.id)?.outcome == .stored)
+            let segment = try #require(try await h.store.segment(SegmentID(item.id)), "\(item.kind)").segment
+            #expect(segment.state == ready && segment.deletedAt == nil, "\(item.kind): a live segment.")
+            #expect(try await h.store.note(segment.noteID)?.isShown == true, "Where a person sees it.")
+        }
+        #expect(try await h.store.segment(SegmentID(start.id))?.segment.assetID == asset.id, "With its recording.")
+        #expect(try await h.text(SegmentID(draft.id)) == "Lost connection, back now", "With its text.")
     }
 
     /// Witness 67: `changes` reports a "Remove recording".
@@ -2646,6 +2835,28 @@ public enum NoteStoreContract {
         }
         #expect(moved.to.note.id != first.noteID)
         #expect(try await h.store.peaks(of: segment) == peaks([4, 5, 6]), "The peaks go with the segment.")
+    }
+
+    /// A recording's peaks outlive the segment's other changes: a transcript, a cleanup that
+    /// replaces the text, and a person's edit of it each leave them as they were.
+    public static func peaksOutliveTheSegmentsOtherChanges(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        let given = peaks([3, 1, 4, 1, 5])
+        try await h.store.setPeaks(given, of: segment)
+        let job = try #require(try await h.store.jobs(for: segment).first)
+        _ = try await h.store.appendTranscript(
+            h.run("synthetic spoken words", from: .zero, resumeAt: nil), to: segment, job: job.id)
+        #expect(try await h.store.peaks(of: segment) == given, "A transcript leaves them.")
+        let cleaned = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .cleaned(body: "Synthetic spoken words."), title: nil, provenance: .init(osBuild: "b"),
+                modelName: "m"), to: segment)
+        #expect(cleaned.textReplaced, "The cleanup replaced the text.")
+        #expect(try await h.store.peaks(of: segment) == given, "A cleanup leaves them.")
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Synthetic words, edited", origin: .edited, writer: .app))
+        #expect(try await h.store.peaks(of: segment) == given, "An edit of the text leaves them.")
     }
 
     /// Witness 67: an `ingest` at a lower revision with the same text applies nothing and is

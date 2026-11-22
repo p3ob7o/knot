@@ -238,6 +238,20 @@ final class StoreTransaction {
     func put(_ row: CaptureRow) throws { try row.upsert(in: db) }
 
     /// The receipt of a capture as the store holds it.
+    /// Whether a capture's row is gone (`NoteStore.ingest(_:)`): failed with one of
+    /// `KeptInboxItem.reasons`, a kept inbox item's or an unreadable item's, and its segment
+    /// deleted and then purged. The ledger keeps every row, so this is answered for good.
+    func isGone(_ row: CaptureRow) throws -> Bool {
+        guard case .failed(let code) = row.capture.outcome, KeptInboxItem.reasons.contains(code) else { return false }
+        return try !exists(SegmentID(row.capture.id))
+    }
+
+    /// The answer of `ingest` and `recordKeptItem` for a capture whose row is gone: nothing is
+    /// stored, and the caller removes the item's files.
+    func gone(_ row: CaptureRow) -> IngestResult {
+        IngestResult(receipt: receipt(row), storedRevision: row.capture.revision, applied: false, purged: true)
+    }
+
     func receipt(_ row: CaptureRow) -> CaptureReceipt {
         CaptureReceipt(
             captureID: row.capture.id, noteID: row.receiptNote, segmentIDs: row.receiptSegments,

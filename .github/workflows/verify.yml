@@ -1,4 +1,6 @@
-# Runs scripts/verify.sh --quick on a GitHub-hosted runner that offers Xcode 27.
+# Runs scripts/verify.sh --quick on a GitHub-hosted runner that offers Xcode 27. For a pull
+# request whose diff reaches the Mac app, it also runs the Mac UI tests there, as the gate's
+# mac-ui step runs them, in a job that no merge requires.
 #
 # The repository gets no self-hosted runner. This workflow holds no secrets, never uses
 # pull_request_target, has read-only permissions, and pins its actions by revision.
@@ -45,5 +47,64 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verify-logs
+          path: .build/logs/
+          retention-days: 7
+
+  # Whether the pull request's diff reaches what MAC_UI in scripts/lib/knot_tool.py lists,
+  # the paths for which the gate takes its mac-ui step, read by the scripts as the gate reads
+  # it. It needs the history, for the merge base with the pull request's base.
+  mac-ui-scope:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mac_ui: ${{ steps.depth.outputs.mac_ui }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Whether the diff reaches the Mac app
+        id: depth
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          python3 -I scripts/lib/knot_tool.py depth --base "$BASE" | tee "$RUNNER_TEMP/depth.txt"
+          sed -n 's/^mac_ui=//p' "$RUNNER_TEMP/depth.txt" | sed 's/^/mac_ui=/' >> "$GITHUB_OUTPUT"
+
+  # The Mac UI tests on the hosted runner: whether it can bring the app to the front and read
+  # its accessibility tree, as this repository's tests need. It runs the gate's mac-ui step
+  # through the scripts, after the doctor: the step fails when the screen is locked, when a
+  # test fails or is skipped, and when no test ran. Its tests synthesize no event beyond what
+  # they do on the build Mac. No merge requires it.
+  mac-ui:
+    needs: mac-ui-scope
+    if: needs.mac-ui-scope.outputs.mac_ui == '1'
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      XCODEGEN_VERSION: "2.47.0"
+      XCODEGEN_SHA256: "6ef12a3ef5327c2c713397f46d9160550f8b1cdc5c925cd884d65c77c9f696cd"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen at its pinned version
+        run: |
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: scripts/verify.sh --only mac-ui
+        run: scripts/verify.sh --only mac-ui
+      # Kept for every run, a pass too: the gate with --mac-ui-hosted reads this run's Mac UI
+      # log, verify-mac-ui-tests.log, as the local step's, and its live smoke step reads the
+      # Mac's smoke test from it.
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-ui-logs
           path: .build/logs/
           retention-days: 7

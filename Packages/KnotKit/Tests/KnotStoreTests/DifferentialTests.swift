@@ -399,7 +399,7 @@ private actor Driver {
         case 26:
             let date = now.addingTimeInterval(-Double(random.next(in: 0...40)) * 86_400)
             advance(seconds: Double(random.next(in: 0...35)) * 86_400)
-            _ = await both("purge") { try await $0.purge(before: date) }
+            _ = await both("purge") { Self.comparable(try await $0.purge(before: date)) }
         case 27:
             // An item of `Inbox/` this build cannot read, kept, or the same again with the files
             // found now.
@@ -409,9 +409,9 @@ private actor Driver {
             let item = KeptInboxItem(
                 captureID: id, reason: pick(reasons) ?? KnotError.inboxItemUnreadable.code,
                 foundAt: now.addingTimeInterval(-Double(random.next(in: 0...600))), fileNames: names)
-            if let receipt = await both("keep item", { try await $0.recordKeptItem(item) }) {
+            if let result = await both("keep item", { try await $0.recordKeptItem(item) }) {
                 if !keptItems.contains(id) { keptItems.append(id) }
-                if !notes.contains(receipt.noteID) { notes.append(receipt.noteID) }
+                if !notes.contains(result.receipt.noteID) { notes.append(result.receipt.noteID) }
             }
         case 28:
             // A kept item read after an update: typed or a recording, through `ingest`.
@@ -498,7 +498,7 @@ private actor Driver {
     func finish() async {
         advance(seconds: 40 * 86_400)
         let date = now.addingTimeInterval(-31 * 86_400)
-        _ = await both("purge at the end") { try await $0.purge(before: date) }
+        _ = await both("purge at the end") { Self.comparable(try await $0.purge(before: date)) }
         await compareSignals()
         await compareChangeLog()
         await reads()
@@ -679,6 +679,20 @@ private actor Driver {
         case .newNote(let reason): "new \(reason)"
         case .refused(let error): "refused \(error.code)"
         }
+    }
+
+    /// A purge's answer, with the kept files it names read by name and role: each store
+    /// resolves the names against its own `Inbox/`.
+    struct Purge: Equatable, Sendable {
+        var removed: Int
+        var assets: [Asset]
+        var keptFiles: [String]
+    }
+
+    static func comparable(_ result: PurgeResult) -> Purge {
+        Purge(
+            removed: result.removed, assets: result.assets,
+            keptFiles: result.keptFiles.map { "\($0.url.lastPathComponent) \($0.role)" })
     }
 
     /// A capture row with its content hash read only as present or not.

@@ -225,6 +225,9 @@
         public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult {
             await waitIfHeld()
             try failIfScripted(capture.id)
+            // A kept or unreadable item whose segment was deleted and purged stores nothing,
+            // whole or not: its files go, and the deleted entry never comes back.
+            if let gone = gone(capture.id) { return gone }
             if !fits(capture) || capture.endedAt == nil { try writeUnreadable(capture) }
             try check(capture, ingesting: true)
             guard let endedAt = capture.endedAt else { throw KnotError.inboxItemUnreadable.about(capture: capture.id) }
@@ -235,7 +238,7 @@
             if next.captures[capture.id] == nil {
                 let receipt = try place(capture, ingesting: true, in: &next)
                 commit(next)
-                return IngestResult(receipt: receipt, storedRevision: capture.revision, applied: true)
+                return IngestResult(receipt: receipt, storedRevision: capture.revision, applied: true, purged: false)
             }
             let incoming: Incoming
             switch capture.body {
@@ -250,15 +253,17 @@
             guard let receipt = next.receipts[capture.id], let row = next.captures[capture.id] else {
                 throw KnotError.notFound
             }
-            return IngestResult(receipt: receipt, storedRevision: row.revision, applied: applied)
+            return IngestResult(receipt: receipt, storedRevision: row.revision, applied: applied, purged: false)
         }
 
-        public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+        public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult {
             await waitIfHeld()
             try failIfScripted(item.captureID)
             guard KeptInboxItem.reasons.contains(item.reason), !item.fileNames.isEmpty,
                 item.fileNames.allSatisfy({ KeptInboxItem.isFileName($0, of: item.captureID) })
             else { throw KnotError.captureInvalid.about(capture: item.captureID) }
+            // A row that is gone records nothing again: the caller removes the files.
+            if let gone = gone(item.captureID) { return gone }
             var next = state
             if let row = next.captures[item.captureID] {
                 // The same item again: only the record of its files changes.
@@ -267,7 +272,7 @@
                 }
                 next.keptFiles[item.captureID] = item.fileNames
                 state = next
-                return receipt
+                return IngestResult(receipt: receipt, storedRevision: row.revision, applied: false, purged: false)
             }
             // A new note dated when found, which closes no other note: the item's own time and
             // placement are not known.
@@ -288,7 +293,18 @@
             next.receipts[item.captureID] = receipt
             next.keptFiles[item.captureID] = item.fileNames
             commit(next)
-            return receipt
+            return IngestResult(receipt: receipt, storedRevision: 0, applied: true, purged: false)
+        }
+
+        /// The answer of `ingest` and `recordKeptItem` for a capture whose row is gone: failed
+        /// with one of `KeptInboxItem.reasons`, and its segment deleted and then purged. Nothing is
+        /// stored, and the caller removes the item's files. `nil` for any other capture.
+        private func gone(_ capture: CaptureID) -> IngestResult? {
+            guard let row = state.captures[capture], case .failed(let code) = row.outcome,
+                KeptInboxItem.reasons.contains(code), state.segments[SegmentID(capture)] == nil,
+                let receipt = state.receipts[capture]
+            else { return nil }
+            return IngestResult(receipt: receipt, storedRevision: row.revision, applied: false, purged: true)
         }
 
         /// A kept item's row, met by the item's own `ingest`, readable now: it takes the item's
@@ -394,6 +410,12 @@
         }
 
         public func asset(_ id: AssetID) throws(KnotError) -> Asset? { state.assets[id] }
+
+        /// Whether a row names the file of `asset`: its asset row, or a segment, as the real
+        /// store asks before it removes a file. `FileAssetStore` asks it.
+        func names(_ asset: AssetID) -> Bool {
+            state.assets[asset] != nil || state.segments.values.contains { $0.assetID == asset }
+        }
 
         public func stream(after position: StreamPosition?, limit: Int) throws(KnotError) -> StreamPage {
             var shown = state.notes.keys.compactMap { record($0, in: state) }.filter(\.isShown)
@@ -869,7 +891,13 @@
             var next = state
             var removed = 0
             var assets: [Asset] = []
+            var kept: [KeptFile] = []
             func drop(_ segment: Segment) {
+                // A kept inbox item's files go with its failed segment: the caller removes them.
+                if let capture = next.segmentCapture[segment.id], let names = next.keptFiles[capture] {
+                    kept += names.map { KeptFile(name: $0, in: inbox) }
+                    next.keptFiles[capture] = nil
+                }
                 next.segments[segment.id] = nil
                 next.segmentCapture[segment.id] = nil
                 next.moves[segment.id] = nil
@@ -895,7 +923,9 @@
             for (id, rows) in next.moves { next.moves[id] = rows.filter { $0.at >= date } }
             for (id, rows) in next.replaced { next.replaced[id] = rows.filter { $0.at >= date } }
             state = next
-            return PurgeResult(removed: removed, assets: assets.sorted { $0.id < $1.id })
+            return PurgeResult(
+                removed: removed, assets: assets.sorted { $0.id < $1.id },
+                keptFiles: kept.sorted { $0.url.path < $1.url.path })
         }
 
         // MARK: - Recording a capture

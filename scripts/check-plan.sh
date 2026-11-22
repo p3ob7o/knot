@@ -18,10 +18,15 @@
 
 set -euo pipefail
 scripts_dir="$(cd "$(dirname "$0")" && pwd -P)"
-# It checks the plan of the tree that KNOT_TREE names, or else of its own checkout.
-cd "${KNOT_TREE:-$scripts_dir/..}"
 # Every failure is reported through scripts/lib/fail.sh, after the check's own lines.
 source "$scripts_dir/lib/fail.sh"
+# It checks the plan of the tree that KNOT_TREE names, or else of its own checkout. It takes
+# the tree as every script does, in lib/tree.sh, and refuses one that another checkout's
+# scripts exported: started through that checkout's build-slot.sh, it would check that
+# checkout's plan, and with --write write into it. It needs no Xcode, so no common.sh.
+KNOT_SCRIPTS="$scripts_dir"
+source "$scripts_dir/lib/tree.sh"
+cd "$KNOT_ROOT"
 
 PYTHON="$(command -v python3 || true)"
 if [ -z "$PYTHON" ]; then

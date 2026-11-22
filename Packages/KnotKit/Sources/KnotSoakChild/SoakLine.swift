@@ -17,6 +17,12 @@
         /// How many captures of the running launch recovery finished: none, for recovery finishes
         /// only captures of earlier launches.
         case recoveredOwn(Int)
+        /// How many entries recovery left of earlier launches in `Recording/`: none, when it did its
+        /// work, and apart from them the temporaries of cut peaks writes (`RecordingEntries`).
+        case recordingLeft(others: Int, peaksTemporaries: Int)
+        /// A temporary of a cut peaks write left in `Recording/`, by its name, which holds a
+        /// capture ID.
+        case peaksTemporary(String)
         /// A row of an earlier launch that recovery left open.
         case leftOpen(CaptureID)
         /// A temporary of a cut write that recovery left in `Inbox/` (`InboxEntries`), by its name,
@@ -26,6 +32,9 @@
         case intent(Int)
         /// The engine answered a save as durable.
         case ack(Acknowledgement)
+        /// The engine answered frames of a recording as durable: as begun, with none yet; as more
+        /// of its audio is synced; or as it ended, with all of them.
+        case ackAudio(AudioAcknowledgement)
         /// The script discards that capture now.
         case discarding(index: Int, capture: CaptureID)
         /// An engine call threw: nothing of it was acknowledged.
@@ -56,17 +65,28 @@
             let blank: Bool
         }
 
+        struct AudioAcknowledgement: Hashable, Sendable {
+            let index: Int
+            let capture: CaptureID
+            /// The frames durable, as the engine's state said.
+            let frames: Int64
+            let state: Acknowledgement.State
+        }
+
         var rendered: String {
             switch self {
             case .launch(let number): "launch \(number)"
             case .recovered(let count): "recovered \(count)"
             case .recoveryLeft(let open, let inbox, let partials): "recovery-left \(open) \(inbox) \(partials)"
             case .recoveredOwn(let count): "recovered-own \(count)"
+            case .recordingLeft(let others, let temporaries): "recording-left \(others) \(temporaries)"
+            case .peaksTemporary(let name): "peaks-temporary \(name)"
             case .leftOpen(let capture): "left-open \(capture)"
             case .inboxPartial(let name): "inbox-partial \(name)"
             case .intent(let index): "intent \(index)"
             case .ack(let a):
                 "ack \(a.index) \(a.save) \(a.capture) \(a.revision) \(a.bytes) \(a.digest) \(a.state.rawValue) \(a.blank ? 1 : 0)"
+            case .ackAudio(let a): "ack-audio \(a.index) \(a.capture) \(a.frames) \(a.state.rawValue)"
             case .discarding(let index, let capture): "discarding \(index) \(capture)"
             case .refused(let index, let code): "refused \(index) \(code)"
             case .stopped(let point): "stopped \(point)"
@@ -87,6 +107,14 @@
                 }
                 return .recoveryLeft(open: open, inbox: inbox, partials: partials)
             case "recovered-own": return fields.count == 2 ? int(1).map(SoakLine.recoveredOwn) : nil
+            case "recording-left":
+                guard fields.count == 3, let others = int(1), let temporaries = int(2) else { return nil }
+                return .recordingLeft(others: others, peaksTemporaries: temporaries)
+            case "peaks-temporary":
+                guard fields.count == 2, fields[1].contains(".peaks.sb-"),
+                    InboxEntries.capture(ofFile: fields[1]) != nil
+                else { return nil }
+                return .peaksTemporary(fields[1])
             case "left-open": return fields.count == 2 ? CaptureID(fields[1]).map(SoakLine.leftOpen) : nil
             case "inbox-partial":
                 guard fields.count == 2, InboxEntries.capture(ofPartial: fields[1]) != nil else { return nil }
@@ -102,6 +130,11 @@
                     Acknowledgement(
                         index: index, save: save, capture: capture, revision: revision, bytes: bytes,
                         digest: fields[6], state: state, blank: fields[8] == "1"))
+            case "ack-audio":
+                guard fields.count == 5, let index = int(1), let capture = CaptureID(fields[2]),
+                    let frames = Int64(fields[3]), frames >= 0, let state = Acknowledgement.State(rawValue: fields[4])
+                else { return nil }
+                return .ackAudio(AudioAcknowledgement(index: index, capture: capture, frames: frames, state: state))
             case "discarding":
                 guard fields.count == 3, let index = int(1), let capture = CaptureID(fields[2]) else { return nil }
                 return .discarding(index: index, capture: capture)

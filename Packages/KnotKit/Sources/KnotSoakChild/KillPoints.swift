@@ -28,9 +28,9 @@
     /// - `log:<event>`: the moment a part of the child writes that log event, on any of the logs
     ///   the child gives its parts. Only the events listed here.
     /// - `step:<name>`: a moment of the child's own script: `after_begin`, `after_checkpoint`,
-    ///   `after_end`.
+    ///   `during_recording`, each time more of a recording is durable, and `after_end`.
     enum KillPointNames {
-        static let steps: Set<String> = ["after_begin", "after_checkpoint", "after_end"]
+        static let steps: Set<String> = ["after_begin", "after_checkpoint", "during_recording", "after_end"]
         /// The log events of the engine, ingest and recovery that a kill point may name.
         static let logEvents: Set<String> = [
             "capture_began", "capture_ended", "capture_fell_back", "store_answered_late", "inbox_item_stored",

@@ -25,7 +25,10 @@ public protocol AssetStore: Sendable {
     /// one with `not_found`.
     func verify(_ asset: AssetID, kind: AssetKind, sha256: String) async throws(KnotError)
 
-    /// Removes the file of `asset`. Removing one that is not there is not an error.
+    /// Removes the file of `asset`, unless a row of the notes names it, its asset row or a
+    /// segment: such a file is kept, and the call is no error. A caller that must know whether
+    /// the file went asks `find(_:kind:)`. A store given no rows names no file, and removes as
+    /// asked. Removing a file that is not there is not an error.
     func remove(_ asset: AssetID, kind: AssetKind) async throws(KnotError)
 }
 

@@ -82,6 +82,70 @@ else
     fail "a run that waited reported: $(cat "$scratch/waiter.err")"
 fi
 
+# 1d. The tree a script works on is never inherited from another checkout's scripts (item
+#     108): two scratch checkouts, a and b. b's common.sh sourced by a command that a's
+#     build-slot.sh runs refuses the tree that a's scripts exported, where before it built and
+#     tested a silently. A command of a's own scripts takes a's tree; b's own build-slot.sh
+#     gives b's; a tree named in the command's own environment is taken as named; and a tree
+#     that --tree named, as the gate's in-step children inherit it, stands.
+tc="$scratch/tree-checkouts"
+for checkout in a b; do
+    mkdir -p "$tc/$checkout"
+    cp -R "$KNOT_SCRIPTS" "$tc/$checkout/scripts"
+    cp "$KNOT_SELF/.xcode-version" "$tc/$checkout/"
+done
+tree_a="$(cd "$tc/a" && pwd -P)" tree_b="$(cd "$tc/b" && pwd -P)"
+tree_of() { # tree_of <build-slot.sh's checkout> <common.sh's checkout> [env…]: the tree, or the refusal's code
+    # The env words go to build-slot.sh; KNOT_SELF_TEST_NAME, when set, is a tree that the
+    # command itself names, with KNOT_TREE_NAMED=1 beside it.
+    local slot=$1 sourced=$2
+    shift 2
+    env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED "$@" KNOT_SLOT_DIR="$tc/slots" \
+        "$tc/$slot/scripts/build-slot.sh" run -- \
+        bash -c 'if [[ -n ${KNOT_SELF_TEST_NAME:-} ]]; then export KNOT_TREE=$KNOT_SELF_TEST_NAME KNOT_TREE_NAMED=1; fi
+            source "$1/scripts/lib/common.sh"; echo "tree $KNOT_ROOT"' _ "$tc/$sourced" 2>&1 |
+        sed -n -E 's/^(tree .*|FAIL [a-z-]+)$/\1/p' | head -n 1 || true
+}
+inherited="$(tree_of a b)"
+own_a="$(tree_of a a)"
+own_b="$(tree_of b b)"
+named_b="$(tree_of a b KNOT_SELF_TEST_NAME="$tree_a")"
+gate_b="$(tree_of a a KNOT_TREE="$tree_b")"
+if [[ $inherited == "FAIL knot-tree-inherited" && $own_a == "tree $tree_a" && $own_b == "tree $tree_b" &&
+    $named_b == "tree $tree_a" && $gate_b == "tree $tree_b" ]]; then
+    pass "a script refuses the tree that another checkout's scripts exported, and takes its own, a named one and the gate's"
+else
+    fail "the inherited tree: another checkout's '$inherited', its own '$own_a' and '$own_b', named '$named_b', the gate's '$gate_b'"
+fi
+# The plan check takes the tree as the other scripts do, though it sources no common.sh:
+# started from inside b through a's build-slot.sh, with b's plan broken and a's whole, it
+# checked a's plan and passed, and with --write would have written into it (the review of
+# 30ec9092). Now it refuses that tree, and b's own build-slot.sh checks b's plan.
+for checkout in a b; do
+    mkdir -p "$tc/$checkout/docs"
+    cp "$KNOT_SELF/PLAN.md" "$tc/$checkout/"
+    cp -R "$KNOT_SELF/docs/plan" "$tc/$checkout/docs/"
+done
+sed -i '' '1,/^## /s/^## \(.*\)$/## \1, renamed/' "$tc/b/docs/plan/$(cd "$tc/b/docs/plan" && ls WP-*.md | head -n 1)"
+plan_of() { # plan_of <build-slot.sh's checkout>: b's plan check's status and its FAIL code
+    local status=0
+    env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED KNOT_SLOT_DIR="$tc/slots" \
+        "$tc/$1/scripts/build-slot.sh" run -- "$tc/b/scripts/check-plan.sh" >"$tc/plan-$1.out" 2>&1 || status=$?
+    echo "$status $(sed -n -E 's/^FAIL ([a-z-]+)$/\1/p' "$tc/plan-$1.out" | head -n 1)"
+}
+plan_through_a="$(plan_of a)"
+plan_own="$(plan_of b)"
+# And knot_tool.py, which reads the lists only the orchestrator edits from its scripts' folder,
+# takes that folder from where it is, not from a KNOT_SCRIPTS that a's build-slot.sh exported.
+lists_through_a="$(env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED KNOT_SLOT_DIR="$tc/slots" \
+    "$tc/a/scripts/build-slot.sh" run -- python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import knot_tool; print(knot_tool.SCRIPTS)' \
+    "$tc/b/scripts/lib" 2>/dev/null | tail -n 1 || true)"
+if [[ $plan_through_a == "1 knot-tree-inherited" && $plan_own == "1 plan-check" && $lists_through_a == "$tree_b/scripts" ]]; then
+    pass "the plan check refuses the tree that another checkout's scripts exported, and checks its own; knot_tool.py reads its own lists"
+else
+    fail "the plan check's tree: through another checkout's build-slot.sh '$plan_through_a'; through its own '$plan_own'; knot_tool.py's lists, through another checkout's build-slot.sh, '$lists_through_a'"
+fi
+
 # 2. A failure prints the agreed fields: a code, what failed, the fix, whether a retry is
 #    safe, and what was changed, and exits 1.
 status=0
@@ -101,30 +165,57 @@ else
 fi
 
 # 3. The plan check catches a brief with a missing heading, and passes on the plan as it is.
+#    It runs on a copy of the real plan, which the plan step holds to the same check at every
+#    depth, so a documents pull request cannot pass that and fail this; and it names no brief
+#    or heading of the real plan: it renames the first heading of the first brief.
 plan="$scratch/plan"
 mkdir -p "$plan/docs" "$plan/scripts/lib"
 cp "$KNOT_SELF/PLAN.md" "$plan/"
 cp -R "$KNOT_SELF/docs/plan" "$plan/docs/"
 cp "$KNOT_SCRIPTS/check-plan.sh" "$plan/scripts/"
-cp "$KNOT_SCRIPTS/lib/fail.sh" "$plan/scripts/lib/"
+cp "$KNOT_SCRIPTS/lib/fail.sh" "$KNOT_SCRIPTS/lib/tree.sh" "$plan/scripts/lib/"
 if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
     pass "the plan check passes on the plan as it is"
 else
     fail "the plan check fails on an unchanged copy of the plan: $(tail -n 3 "$scratch/plan-ok.log")"
 fi
-sed -i '' 's/^## Prior art$/## Prior work/' "$plan/docs/plan/WP-10.md"
+renamed_brief="$(cd "$plan/docs/plan" && ls WP-*.md | head -n 1)"
+sed -i '' '1,/^## /s/^## \(.*\)$/## \1, renamed/' "$plan/docs/plan/$renamed_brief"
 status=0
 KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-bad.log" 2>&1 || status=$?
-if [[ $status == 1 ]] && grep -e "WP-10.md: its '##' headings must be exactly" "$scratch/plan-bad.log" >/dev/null &&
+if [[ $status == 1 ]] && grep -e "$renamed_brief: its '##' headings must be exactly" "$scratch/plan-bad.log" >/dev/null &&
     grep -e "^FAIL plan-check" "$scratch/plan-bad.log" >/dev/null; then
     pass "the plan check catches a brief with a missing heading"
 else
     fail "the plan check missed a brief with a missing heading (status $status)"
 fi
 
-# 4. The gate's helper reads the plan as it states it.
-cd "$KNOT_SELF"
-# The helper comes from the scripts' own folder; the plan it reads, from the tree.
+# 4. The gate's helper reads the plan as it states it. It reads a fixture plan of the
+#    self-test's own and pins nothing of the real one (item 104): a documents pull request
+#    that changes a brief's rows passes the gate at the documents depth, which does not run
+#    the self-test, so a check that read the real briefs failed only later, on the hosted
+#    runner. The fixture holds the forms the helper reads: a start table with notes and
+#    lettered rows, an Owns list with an 'except' clause, a part of a file, and a spike's
+#    branch. The real plan is the plan step's, at every depth.
+fp="$scratch/fixture-plan"
+mkdir -p "$fp/docs/plan"
+fixture_brief() { # fixture_brief <ID> <owns lines> <start table rows, one a line>
+    {
+        printf '# %s\n\n## Owns\n\n%s\n\n## Starts after\n\n| PR | After |\n|---|---|\n' "$1" "$2"
+        while IFS= read -r row; do printf '| %s | before |\n' "$row"; done <<<"$3"
+    } >"$fp/docs/plan/$1.md"
+}
+fixture_brief WP-00 '- `docs/architecture.md`' 'Notes'
+fixture_brief WP-01 '- `scripts/`, except `scripts/release.sh`' '1'
+fixture_brief WP-02 '- `Packages/KnotKit/Sources/KnotFakes/`, except its `Preview/` folder' $'1\n2\n3'
+fixture_brief WP-06 '- the soak step of `scripts/verify.sh`' '1'
+fixture_brief WP-10 '- `Packages/KnotKit/Sources/KnotStore/`' '1'
+fixture_brief WP-11 '- `Packages/KnotKit/Sources/KnotCapture/`' $'1\n11a\n2\n3\n4'
+fixture_brief WP-14 '- `Packages/KnotKit/Sources/KnotCleanup/`' $'Proof step\n1'
+fixture_brief WP-40 '- `Packages/KnotKit/Sources/KnotSync/`' $'Proof step\n40a\n40b\n40c\n40d'
+fixture_brief SP-1 '- `spike/locked-recording`' 'Notes'
+cd "$fp"
+# The helper comes from the scripts' own folder; the plan it reads, from the fixture.
 if python3 -I -B - "$KNOT_SCRIPTS/lib" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -142,10 +233,15 @@ assert k.classify(["Something/New.txt"])[0] == "everything"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[2] is True       # the soak
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[2] is False
 assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True                  # Mac UI tests
+assert k.classify(["Packages/KnotKit/Sources/KnotAudio/Recorder.swift"])[5] is True   # the recorder in the iOS Simulator
+assert k.classify(["Packages/KnotKit/Sources/KnotAudioCrashHost/KillTest.swift"])[5] is True
+assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[5] is False
 # The Mac UI step itself and a new Xcode pin reach the Mac UI tests (review of PR 38).
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["scripts/gate-steps.txt"])[3] is True, "gate-steps.txt alone reaches the Mac UI tests"
+assert k.classify([".github/workflows/verify.yml"])[3] is True, "the workflow that runs the Mac UI tests on the hosted runner reaches them"
+assert k.classify([".github/workflows/nightly.yml"])[3] is False
 # The accessibility audit that every UI test calls, WP-21's (finding 35).
 assert k.classify(["Apps/UITestSupport/Audit.swift"])[3] is True, "Apps/UITestSupport/ reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
@@ -224,6 +320,10 @@ assert named_missing("wp/11-engine-last", one * (planned - 1))[1] == ["selftest-
 assert named_missing("wp/14-note", [], "WP-14") == (0, []), named_missing("wp/14-note", [], "WP-14")
 assert named_missing("wp/14-cleaner", [("WP-14", True)], "WP-14") == (1, ["selftest-given-to-wp14-pr-one"])
 os.unlink(named.name)
+# The orchestrator's lines of scripts/ownership-extra.txt, which are the scripts' own: the
+# error catalog's document passes to the orchestrator once WP-02 has merged (item 89).
+owned, excluded, parts = k.owned_paths("WP-00")
+assert "docs/errors.md" in owned, owned
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
@@ -509,10 +609,14 @@ hang_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_pass knot_start_app 30 "$lim/hangs" "$lim/a-window"
 pass_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_fail knot_start_app 30 "$lim/quits" "$lim/no-window"
+# The start ends the app it started, and says so in its own words; bash's notice of the job
+# it ended, which names this script by its path, reaches no log (item 4 of the eighth list).
 if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 10 &&
     -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 10 && -z $pass_left &&
-    $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* ]]; then
-    pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, and leaves nothing running"
+    $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* &&
+    "$(cat "$lim/app_pass.out")" == *"ended hangs, which it started"* &&
+    "$(cat "$lim/app_pass.out" "$lim/app_hang.out")" != *"Terminated"* ]]; then
+    pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, leaves nothing running, and says that it ended the app with no notice of bash's"
 else
     fail "the app's start: hang $app_hang_status in ${app_hang_seconds}s (left: $hang_left), window $app_pass_status in ${app_pass_seconds}s (left: $pass_left), quit $app_fail_status: $(cat "$lim/app_hang.out" "$lim/app_fail.out")"
 fi
@@ -1107,6 +1211,9 @@ two"
 􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
 LOG
 cp "$sl/logs/lookalike.log" "$sl/logs/no-stream.log"
+# A run whose console says tests ran while its stream holds a run with no test in it, as a
+# filter that matched nothing writes it (item 108, its second half).
+cp "$sl/logs/lookalike.log" "$sl/logs/no-test-in-stream.log"
 cp "$sl/logs/lookalike.log" "$sl/logs/no-run-end.log"
 python3 -I - "$sl/logs" <<'PY'
 import json, os, sys
@@ -1116,6 +1223,10 @@ def stream(name, tests, events, ended=True):
     lines = [{"kind": "test", "payload": {"id": i, "name": n, "displayName": d, "kind": "function"}, "version": 0}
              for i, n, d in tests]
     lines.append({"kind": "event", "payload": {"kind": "runStarted"}, "version": 0})
+    skipped = {i for kind, i, _ in events if kind == "testSkipped"}
+    for i, _, _ in tests:
+        if i not in skipped:
+            lines.append({"kind": "event", "payload": {"kind": "testStarted", "testID": i}, "version": 0})
     for kind, i, case in events:
         payload = {"kind": kind, "testID": i}
         if case:
@@ -1139,6 +1250,7 @@ stream("reason-two-lines", [plain, ("r", "multiLineReason()", None)], [("testSki
 stream("name-two-lines", [plain, ("n", "multiLineName()", "two\nlines")], [("testSkipped", "n", None)])
 stream("cancel-two-lines", [plain, ("m", "cancelMultiLine()", None)], [("testCancelled", "m", None)])
 stream("no-run-end", [plain], [], ended=False)
+stream("no-test-in-stream", [], [])
 PY
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
     local status=0 run="$sl/run-$1-$2"
@@ -1173,14 +1285,16 @@ for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name
 done
 no_stream="$(skip_loop no-stream quick)"
 no_run_end="$(skip_loop no-run-end quick)"
+no_test_in_stream="$(skip_loop no-test-in-stream quick)"
 expected_verdicts=""
 for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
     expected_verdicts="$expected_verdicts $run: 1 FAIL · tests 2 passed, 0 failed, 1 skipped / 0 ok · tests 2 passed, 0 failed, 1 skipped;"
 done
-if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* ]]; then
+if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* &&
+    $no_test_in_stream == "1 FAIL"* ]]; then
     pass "the event stream fails the gate on a cancelled case printed as passed and on events over two lines, and a run with no complete stream fails"
 else
-    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end'"
+    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end', no test in the stream '$no_test_in_stream'"
 fi
 
 # worktree-remove.sh prints no path with the home folder in it, since its lines end in the
@@ -1285,7 +1399,8 @@ printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds."
 printf '%s\n' "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
 if [ -n "$stream" ]; then
     printf '%s\n' '{"kind":"test","payload":{"id":"w","name":"aWaitThatBlocks()","kind":"function"},"version":0}' \
-        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' >"$stream"
+        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' \
+        '{"kind":"event","payload":{"kind":"testStarted","testID":"w"},"version":0}' >"$stream"
     [ "$mode" = cancel-stream ] &&
         printf '%s\n' '{"kind":"event","payload":{"kind":"testCaseCancelled","testID":"w","_testCase":{"displayName":"2"}},"version":0}' >>"$stream"
     printf '%s\n' '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >>"$stream"
@@ -1331,8 +1446,185 @@ else
     fail "package-test-strict's skips and failures: a skip on the console alone at the gate: ${strict_skip_console%%$'\n'*}; a cancelled case in the stream alone at the gate: $strict_cancel_stream; a failure: $strict_fail"
 fi
 
+# The live smoke step (item 80): after launch and mac-ui it reads their results, and fails
+# unless each platform's smoke test, found by its named comment in the sources, ran and
+# passed in this run, and was not skipped. On a fixture tree of its own, so that it pins none
+# of the real sources: three smoke tests named in its named-tests.txt, two in launch's logs
+# and the Mac's in mac-ui's; a fourth, merged, marked in a package's test, which package-test
+# runs and named-tests requires, so that this step says so and does not ask for it; and a
+# fifth whose pull request has not merged, which is not asked for. The results are logs
+# written for each run, in both of XCTest's forms.
+st="$scratch/live-smoke"
+mkdir -p "$st/tree/docs/plan" "$st/tree/Apps/iOS/UITests" "$st/tree/Apps/watchOS/UITests" "$st/tree/Apps/macOS/UITests" \
+    "$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests"
+git -C "$st/tree" init -q -b main
+printf 'WP-30 PR 1\tlive-smoke-a-iphone\tThe iPhone.\nWP-32 PR 1\tlive-smoke-a-watch\tThe Watch.\nWP-33 PR 1\tlive-smoke-a-mac\tThe Mac.\nWP-22 PR 2\tlive-smoke-a-composition\tA package test.\nWP-23 PR 1\tlive-smoke-a-later\tNot merged.\n' \
+    >"$st/tree/docs/plan/named-tests.txt"
+# Between each class and its test stands a line with the word class that declares no class: a
+# comment, a class method, and Xcode's own class property. The test's class is the one
+# declared, with its name before a colon or a brace, outside comments.
+printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: type, kill, relaunch, read.\n    // This class launches the app once.\n    @MainActor\n    func testPhoneSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/iOS/UITests/PhoneTests.swift"
+printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class WatchSmokeTests: XCTestCase {\n    override class func setUp() { super.setUp() }\n    func testWatchSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
+printf '// live-smoke-a-mac: the Mac'"'"'s smoke test, named over its class and over its test.\nfinal class MacSmokeTests: XCTestCase {\n    override class var runsForEachTargetApplicationUIConfiguration: Bool { false }\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
+    >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
+# The package's form of a named test: Swift Testing's, the slug in the test's name, a function
+# of any name, and no comment.
+printf 'import Testing\n\n@Test("live-smoke-a-composition", .tags(.named)) func theCompositionTypesKillsAndReads() async throws {}\n' \
+    >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"
+# A package test whose comment only mentions the iPhone's slug marks nothing: the UI test is
+# looked for first, so a run in which the iPhone's test did not run still fails.
+printf 'import Testing\n\n// As live-smoke-a-iphone does on the phone, this reads a line back.\n@Test func readsALineBack() async throws {}\n' \
+    >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/MentionsTheIPhone.swift"
+smoke_logs() { # smoke_logs <folder> <iPhone line> <Watch line> <Mac line>: fresh logs of a run
+    mkdir -p "$1"
+    printf '%s\n' "$2" >"$1/verify-launch-tests.log"
+    printf '%s\n' "$3" >"$1/verify-launch-watch-tests.log"
+    printf '%s\n' "$4" >"$1/verify-mac-ui-tests.log"
+}
+phone_ok="Test case 'PhoneTests.testPhoneSmoke()' passed on 'set-iphone - Runner (1)' (7.4 seconds)"
+watch_ok="Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' passed (13.8 seconds)."
+mac_ok="Test Case '-[Knot_macOS_UITests.MacSmokeTests testMacSmoke]' passed (133.4 seconds)."
+smoke_start=$(($(date +%s) - 1))
+smoke_logs "$st/all" "$phone_ok" "$watch_ok" "$mac_ok"
+smoke_logs "$st/phone-missing" "Test case 'PhoneTests.testOther()' passed on 'set-iphone - Runner (1)' (1.0 seconds)" "$watch_ok" "$mac_ok"
+smoke_logs "$st/watch-skipped" "$phone_ok" "Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' skipped (0.001 seconds)." "$mac_ok"
+smoke_logs "$st/mac-old" "$phone_ok" "$watch_ok" "$mac_ok"
+# The iPhone's test runs on two destinations, the iPhone and the iPad: it passed on one, and
+# failed, or was skipped, on the other. Each fails the step: one destination's pass is not
+# the test's.
+smoke_logs "$st/pad-failed" "$phone_ok"$'\n'"Test case 'PhoneTests.testPhoneSmoke()' failed on 'set-ipad - Runner (1)' (180.0 seconds)" "$watch_ok" "$mac_ok"
+smoke_logs "$st/pad-skipped" "$phone_ok"$'\n'"Test case 'PhoneTests.testPhoneSmoke()' skipped on 'set-ipad - Runner (1)' (0.0 seconds)" "$watch_ok" "$mac_ok"
+touch -t 202001020304.05 "$st/mac-old/verify-mac-ui-tests.log"
+# A tree in which a helper file's comment also names the iPhone's slug, and sorts first: the
+# slug is marked in two places, which the step names, rather than judge the helper's test.
+cp -R "$st/tree" "$st/tree-two-marks"
+printf 'final class LaunchHelperTests: XCTestCase {\n    // Unlike live-smoke-a-iphone, this one does not kill the app.\n    func testLaunchOnly() throws {}\n}\n' \
+    >"$st/tree-two-marks/Apps/iOS/UITests/AppLaunchHelpers.swift"
+smoke_logs "$st/helper-ran" "Test case 'LaunchHelperTests.testLaunchOnly()' passed on 'set-iphone - Runner (1)' (2.0 seconds)" "$watch_ok" "$mac_ok"
+smoke() { # smoke <logs> <mac-ui 0|1> [tree]: status and the check's lines
+    python3 -I -B - "$KNOT_SCRIPTS/lib" "${3:-$st/tree}" "$1" "$smoke_start" "$2" <<'PY' 2>&1 || true
+import contextlib, io, os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+os.chdir(sys.argv[2])
+k.merged_prs = lambda source: [("WP-30", False), ("WP-32", False), ("WP-33", False), ("WP-22", False), ("WP-22", False)]
+# The fixture's packages plan two pull requests each, of which the first has merged.
+k.plan_rows = lambda package: ["1", "2"]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    status = k.cmd_live_smoke(sys.argv[3], int(sys.argv[4]), sys.argv[5] == "1")
+print(status)
+print(out.getvalue())
+PY
+}
+smoke_all="$(smoke "$st/all" 1)"
+smoke_no_mac="$(smoke "$st/all" 0)"
+smoke_phone="$(smoke "$st/phone-missing" 1)"
+smoke_watch="$(smoke "$st/watch-skipped" 1)"
+smoke_old="$(smoke "$st/mac-old" 1)"
+# A Mac UI log that the gate took from the hosted job begins with the hosted header: the
+# step judges the Mac's test from it as from a local log, and says it passed in the hosted job.
+smoke_logs "$st/mac-hosted" "$phone_ok" "$watch_ok" "$mac_ok"
+python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import knot_tool as k
+open(sys.argv[2], "w").write(k.HOSTED_MAC_UI_HEADER + " check run 7, https://example.invalid/job/7, workflow run 99, commit abc.\n" + sys.argv[3] + "\n")' \
+    "$KNOT_SCRIPTS/lib" "$st/mac-hosted/verify-mac-ui-tests.log" "$mac_ok"
+smoke_hosted="$(smoke "$st/mac-hosted" 1)"
+smoke_two="$(smoke "$st/helper-ran" 1 "$st/tree-two-marks")"
+smoke_pad_failed="$(smoke "$st/pad-failed" 1)"
+smoke_pad_skipped="$(smoke "$st/pad-skipped" 1)"
+if [[ ${smoke_all%%$'\n'*} == 0 &&
+    $smoke_all == *"live-smoke-a-composition"*"Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"*"a package test, which package-test runs"* &&
+    $smoke_all == *"live-smoke-a-later"*"has not merged"* &&
+    ${smoke_no_mac%%$'\n'*} == 0 && $smoke_no_mac == *"live-smoke-a-mac"*"not asked for"*"mac-ui"* &&
+    ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
+    ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
+    ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* &&
+    ${smoke_hosted%%$'\n'*} == 0 && $smoke_hosted == *"live-smoke-a-mac: MacSmokeTests.testMacSmoke passed in the hosted job mac-ui, check run 7, https://example.invalid/job/7"* &&
+    ${smoke_two%%$'\n'*} == 1 && $smoke_two == *"live-smoke-a-iphone"*"more than one"*"AppLaunchHelpers.swift"*"PhoneTests.swift"* &&
+    ${smoke_pad_failed%%$'\n'*} == 1 && $smoke_pad_failed == *"live-smoke-a-iphone"*"did not pass"*"passed, failed"* &&
+    ${smoke_pad_skipped%%$'\n'*} == 1 && $smoke_pad_skipped == *"live-smoke-a-iphone"*"skipped"* ]]; then
+    pass "the live smoke step asks each platform's smoke test, found by its named comment, to have passed in this run, and no other"
+else
+    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; the hosted job's Mac log '$smoke_hosted'; two marks '$smoke_two'; passed on one destination and failed on the other '$smoke_pad_failed', skipped on the other '$smoke_pad_skipped'"
+fi
+
+# The packaging step's scan for the debug launch arguments (item 99): a file that holds one of
+# the list's names is found, by name; one that holds none, or holds a name that is not on the
+# list, is clean. The list is the tool's own.
+da="$scratch/debug-arguments"
+mkdir -p "$da"
+printf 'some code\0-KnotTemporaryStore\0more code\n' >"$da/holds"
+printf 'some code\0-KnotSomethingElse\0more code\n' >"$da/clean"
+debug_list="$(python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments 2>&1 || true)"
+debug_holds="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3"' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/holds" "$debug_list" 2>&1 || true)"
+debug_clean="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3" && echo found' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/clean" "$debug_list" 2>&1 || true)"
+if [[ $(grep -c . <<<"$debug_list") == 8 && $debug_list == *"-KnotPreview"*"-KnotEnterLine"* &&
+    $debug_holds == "-KnotTemporaryStore" && -z $debug_clean ]]; then
+    pass "the scan for debug launch arguments finds one of the list's names in a file, by name, and nothing in a clean one"
+else
+    fail "the scan for debug launch arguments: the list '$debug_list'; a file that holds one '$debug_holds'; a clean one '$debug_clean'"
+fi
+
+# The launch step's Mac part and the desktop (item 105). Its app has the bundle ID of every
+# worktree's development build, so it comes to the front beside another worktree's Mac UI
+# test: it takes the exclusive Mac UI slot for as long as its app is up, and no second build
+# slot. And it builds the Mac app it starts, so that --only launch never starts an old one.
+# a. build-slot.sh run --mac-ui-only holds the Mac UI slot and no build slot while its
+#    command runs.
+ms="$scratch/mac-ui-only"
+mkdir -p "$ms/slots"
+KNOT_SLOT_DIR="$ms/slots" "$KNOT_SCRIPTS/build-slot.sh" run --mac-ui-only --label self-test -- \
+    bash -c 'for lock in "$1"/*.lock; do /usr/bin/lockf -s -t 0 -k "$lock" true || echo "held $(basename "$lock")"; done' _ "$ms/slots" \
+    >"$ms/held" 2>&1 || true
+# b. The Mac part builds the app, then starts it: a copy of scripts/ whose xcb and app start
+#    are stand-ins that write what they did, run as the launch step runs it.
+cp -R "$KNOT_SCRIPTS" "$ms/scripts"
+mkdir -p "$ms/tree/.build/logs"
+cp "$KNOT_SELF/.xcode-version" "$ms/tree/"
+python3 -I - "$ms/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("xcb", 'echo built >>"$KNOT_MAC_PART"'),):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+old = 'step_launch_mac() {'
+# On a version with no Mac part of its own, the edit finds nothing and the case says so.
+text = text.replace(old, 'knot_start_app() { echo started >>"$KNOT_MAC_PART"; echo "windows: 1 layer 0 320x240"; }\n' + old, 1)
+open(path, "w").write(text)
+PY
+env KNOT_MAC_PART="$ms/did" KNOT_TREE="$ms/tree" KNOT_SLOT_DIR="$ms/slots" \
+    "$ms/scripts/verify.sh" --in-step launch-mac >"$ms/part.out" 2>&1 || true
+# c. The launch step starts its Mac part only that way, as a call of build-slot.sh with
+#    --mac-ui-only, read with the wiring check's own shell reader.
+launch_wiring="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/verify.sh" <<'PY'
+import os, re, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+text = open(sys.argv[2]).read()
+start = text.index("step_launch() {")
+body = text[start:text.index("\n}\n", start)]
+calls = [k.command_words(k.shell_words(segment), {}, {}) for _, _, segment in k.shell_segments(body)]
+slot = [w for w in calls if w and os.path.basename(w[0]) == "build-slot.sh"]
+starts = [w for w in calls if w and w[0] == "knot_start_app"]
+print("slot" if any("--mac-ui-only" in w and "launch-mac" in w for w in slot) else "no-slot", "start" if starts else "no-start")
+PY
+)"
+if [[ "$(cat "$ms/held")" == "held mac-ui.lock" && "$(tr '\n' ' ' <"$ms/did" 2>/dev/null)" == "built started " &&
+    $launch_wiring == "slot no-start" ]]; then
+    pass "the launch step's Mac part holds the Mac UI slot and no build slot, and builds the app before it starts it"
+else
+    fail "the launch step's Mac part: locks held '$(tr '\n' ' ' <"$ms/held")'; what the part did '$(tr '\n' ' ' <"$ms/did" 2>/dev/null)'; the step's calls '$launch_wiring'"
+fi
+
 # The step's place in each tier: after package-test in --full and in the gate's leaf and
-# everything depths, and in neither --quick nor the gate of documents alone. A copy of
+# everything depths, and in neither --quick nor the gate of documents alone. And the live
+# smoke step's: last in --full and the everything depth, after launch and mac-ui, whose
+# results it reads (item 80); mac-ui is left out here, as --skip mac-ui and a diff that does
+# not reach the Mac app leave it. A copy of
 # scripts/ whose runner records each step's name and runs nothing, and whose gate takes its
 # depth from KNOT_SELF_TEST_DEPTH, runs each tier on a scratch tree.
 pl="$scratch/step-lists"
@@ -1370,15 +1662,19 @@ list_everything="$(step_list everything everything --gate --branch wp/01-self-te
 list_documents="$(step_list documents documents --gate --branch wp/01-self-test --package WP-01)"
 if [[ $list_quick == *"package-test "* && $list_quick != *"package-test-strict"* &&
     $list_full == *"package-test package-test-strict "* && $list_leaf == *"package-test package-test-strict "* &&
-    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* ]]; then
-    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents"
+    $list_everything == *"package-test package-test-strict "* && -n $list_documents && $list_documents != *"package-test"* &&
+    $list_full == *" launch live-smoke " && $list_everything == *" launch live-smoke " &&
+    $list_quick != *"live-smoke"* && $list_leaf != *"live-smoke"* && $list_documents != *"live-smoke"* ]]; then
+    pass "package-test-strict follows package-test in --full and the gate's leaf and everything depths, and is in neither --quick nor a gate of documents; live-smoke comes last in --full and the everything depth, after launch and mac-ui"
 else
     fail "the steps of each tier: quick '$list_quick'; full '$list_full'; gate leaf '$list_leaf'; everything '$list_everything'; documents '$list_documents'"
 fi
 
 # The team's ID leaves the logs the scripts keep, by pattern: the lines Xcode writes on a
 # Mac that knows the team, with a made-up ID. The filter keeps everything else, and the
-# scrub rewrites a kept log in place.
+# scrub rewrites a kept log in place, keeping its time (item 115): the log of a step that an
+# earlier run started, dated 2020 here, keeps that date, so that a reader of this run's logs
+# does not take it for this run's.
 fake_team="ZZ9QX42K7T"
 team_log="$scratch/verify-apps.log"
 {
@@ -1388,13 +1684,15 @@ team_log="$scratch/verify-apps.log"
     echo 'DEVELOPMENT_TEAM = '"$fake_team"
     echo 'keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52 KNOT_WORKTREE'
 } >"$team_log"
+touch -t 202001020304.05 "$team_log"
 filtered="$(knot_filter_team <"$team_log")"
 knot_scrub_logs "$scratch"
+scrubbed_time="$(date -r "$(stat -f %m "$team_log")" +%Y%m%d%H%M.%S)"
 if [[ $filtered != *"$fake_team"* && $filtered == *"keep: com.p3ob7o.knot.dev iCloud.com.p3ob7o.knot.dev Build version 27B52"* &&
-    $(grep -c -e '<TEAM>' "$team_log") == 4 ]] && ! grep -e "$fake_team" "$team_log" >/dev/null; then
-    pass "the team's ID leaves a build log, by pattern, and the rest stays"
+    $(grep -c -e '<TEAM>' "$team_log") == 4 && $scrubbed_time == 202001020304.05 ]] && ! grep -e "$fake_team" "$team_log" >/dev/null; then
+    pass "the team's ID leaves a build log, by pattern, and the rest stays, and the scrubbed log keeps its time"
 else
-    fail "the team filter left an ID or took too much: $filtered"
+    fail "the team filter left an ID or took too much, or the scrub changed the log's time to $scrubbed_time: $filtered"
 fi
 
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands
@@ -1671,6 +1969,241 @@ if [[ $doctor_out == *"ok"*"xcodegen"* && $doctor_out != *"infra-xcodegen"* &&
     pass "an XcodeGen that changes version after the doctor fails generation, which generates nothing"
 else
     fail "XcodeGen that changed after the doctor: $doctor_out / $generate_out"
+fi
+
+# The packaging step's reading of an app's App Intents metadata: an action among its actions,
+# and App Shortcuts that are not empty, naming their intents. On fixture metadata, in the form
+# the build writes: a key of actions, and autoShortcuts with each shortcut's actionIdentifier.
+ai="$scratch/app-intents"
+mkdir -p "$ai"
+printf '{"actions": {"CreateNoteIntent": {}, "FindNotesIntent": {}}, "autoShortcuts": [{"actionIdentifier": "CreateNoteIntent"}]}\n' >"$ai/full.json"
+printf '{"actions": {"KnotPlaceholderIntent": {}}, "autoShortcuts": []}\n' >"$ai/empty.json"
+printf 'not json\n' >"$ai/broken.json"
+app_intents() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" app-intents --metadata "$@" >/dev/null 2>&1 && echo pass || echo fail; }
+ai_found="$(app_intents "$ai/full.json" --action CreateNoteIntent)"
+ai_missing="$(app_intents "$ai/empty.json" --action CreateNoteIntent)"
+ai_shortcuts="$(app_intents "$ai/full.json" --shortcuts)"
+ai_no_shortcuts="$(app_intents "$ai/empty.json" --shortcuts)"
+ai_broken="$(app_intents "$ai/broken.json" --shortcuts)"
+ai_absent="$(app_intents "$ai/none.json" --action CreateNoteIntent)"
+if [[ "$ai_found $ai_missing $ai_shortcuts $ai_no_shortcuts $ai_broken $ai_absent" == "pass fail pass fail fail fail" ]]; then
+    pass "the packaging step finds an intent among an app's actions and its App Shortcuts not empty, and fails without them"
+else
+    fail "an app's App Intents metadata: the intent there '$ai_found', missing '$ai_missing'; shortcuts '$ai_shortcuts', none '$ai_no_shortcuts'; unreadable '$ai_broken', absent '$ai_absent'"
+fi
+
+# The recorder's step in the iOS Simulator passes only when state-check says ok and the kill
+# test passes all seven trials, and fails, naming the seed, on any other verdict. The step's
+# function from verify.sh, with stand-in crash hosts that print a verdict chosen per run, a
+# stand-in sim.sh, and builds that do nothing.
+rs="$scratch/recorder-sim"
+mkdir -p "$rs/scripts" "$rs/swiftpm/out/Products/Debug" "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator"
+printf '#!/bin/bash\n[[ $1 == udid ]] && echo SIM-UDID\nexit 0\n' >"$rs/scripts/sim.sh"
+cat >"$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" <<'HOST'
+#!/bin/bash
+case $1 in
+    state-check) echo "state-check ${KNOT_SELF_TEST_STATE:-ok}"; [[ ${KNOT_SELF_TEST_STATE:-ok} == ok ]] ;;
+    kill-test) echo "summary trials 7 passed ${KNOT_SELF_TEST_PASSED:-7} maxLossMs 0.0 seed 5"; [[ ${KNOT_SELF_TEST_PASSED:-7} == 7 ]] ;;
+esac
+HOST
+cp "$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/"
+chmod +x "$rs/scripts/sim.sh" "$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" \
+    "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/KnotAudioCrashHost"
+recorder_sim() { # recorder_sim [env…]: the step's status and its last line
+    python3 -I - "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/lib/common.sh" "$rs" <<'PY' | env "$@" bash 2>&1 | tail -n 1 || true
+import sys
+text = open(sys.argv[1]).read()
+start = text.index("crash_host_for_simulator() {")
+body = text[start:text.index("\n}\n", text.index("step_recorder_sim() {")) + 3]
+rs = sys.argv[3]
+print(f'source "{sys.argv[2]}"')
+print(f'KNOT_SCRIPTS="{rs}/scripts" KNOT_SWIFTPM="{rs}/swiftpm" KNOT_BUILD="{rs}/build" KNOT_LOGS="{rs}" SEED=5')
+print(body)
+print('knot_run_limited() { :; }')
+print('step_recorder_sim & code=0; wait $! || code=$?; echo "status $code"')
+PY
+}
+rs_ok="$(recorder_sim)"
+rs_state="$(recorder_sim KNOT_SELF_TEST_STATE="FAIL the state read is not the state written")"
+rs_kill="$(recorder_sim KNOT_SELF_TEST_PASSED=6)"
+if [[ $rs_ok == "status 0" && $rs_state == "status 1" && $rs_kill == "status 1" ]]; then
+    pass "the recorder's step in the iOS Simulator passes on state-check ok and seven trials passed, and fails on any other verdict"
+else
+    fail "the recorder's step in the iOS Simulator: all well '$rs_ok'; state-check red '$rs_state'; a trial failed '$rs_kill'"
+fi
+# A red soak prints its verdict's lines in the step's own output, the line that says how to
+# replay the recovery over a copy of the kept store among them, and not only in its log (item
+# 120). The step's function, from verify.sh, with a stand-in run whose soak is red.
+sk="$scratch/soak-verdict"
+mkdir -p "$sk"
+soak_out="$(python3 -I - "$KNOT_SCRIPTS/verify.sh" <<'PY' | KNOT_LOGS="$sk" bash 2>&1 || true
+import sys
+text = open(sys.argv[1]).read()
+start = text.index("step_soak() {")
+body = text[start:text.index("\n}\n", start) + 3]
+print('knot_swiftpm_flags() { KNOT_SWIFTPM_FLAGS=(); }')
+print('knot_skipped_tests() { :; }')
+print('''knot_swift_test_limited() {
+    printf '%s\\n' "capture ledger soak: RED at kill 3" "the store is kept at /tmp/kept" \\
+        "replay the recovery over a copy of the kept store with: knot-dev replay /tmp/kept" >"$KNOT_LOGS/verify-soak.out"
+    return 1
+}''')
+print(body)
+print("SEED=7 step_soak")
+PY
+)"
+if [[ $soak_out == *"capture ledger soak: RED"* && $soak_out == *"replay the recovery over a copy of the kept store with:"* &&
+    $soak_out == *"Repeat it with scripts/verify.sh --soak --seed 7"* ]]; then
+    pass "a red soak prints its verdict's lines, the replay of the recovery among them"
+else
+    fail "a red soak's lines: '$soak_out'"
+fi
+
+# The gate's Mac UI step met by the hosted job (--mac-ui-hosted). With stand-ins for GitHub's
+# answers: the check runs on a commit, the job, and the artifact the job kept. It passes only
+# on the job mac-ui of GitHub Actions, completed with success on the very commit, with its
+# log kept; it refuses every other answer, saying why, and refuses outright while the screen
+# is not locked or when the diff changes the scripts or the workflow the job ran.
+hm="$scratch/hosted-mac-ui"
+mkdir -p "$hm"
+hosted_cases="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$hm" <<'PY' 2>&1 || true
+import contextlib, io, os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+folder = sys.argv[2]
+SHA = "a" * 40
+LOG = "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).\n"
+
+def run(name, status="completed", conclusion="success", sha=SHA, app="github-actions", id=7):
+    return {"id": id, "name": name, "head_sha": sha, "status": status, "conclusion": conclusion,
+            "app": {"slug": app}, "html_url": f"https://example.invalid/job/{id}", "completed_at": "2026-11-22T10:00:00Z"}
+
+def case(label, runs, screen="locked", changed=(), kept=LOG, job_sha=SHA, ancestor=True):
+    k.changed_files = lambda base: list(changed)
+    k.is_ancestor = lambda base, sha: ancestor
+    def gh_json(path):
+        if "/check-runs" in path:
+            name = path.split("check_name=")[1].split("&")[0]
+            return {"check_runs": [r for r in runs if r["name"] == name]}
+        return {"run_id": 99, "head_sha": job_sha}
+    def download(run_id, name, dest):
+        assert (run_id, name) == (99, "mac-ui-logs"), (run_id, name)
+        if kept is not None:
+            open(os.path.join(dest, "verify-mac-ui-tests.log"), "w").write(kept)
+    k.gh_json, k.gh_download_artifact = gh_json, download
+    log = os.path.join(folder, label + ".log")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = k.cmd_hosted_mac_ui(SHA, "origin/main", screen, log)
+    text = open(log).read() if os.path.exists(log) else ""
+    print(f"{label}: {status} {out.getvalue().strip()} | {text.splitlines()[0] if text else ''}")
+
+case("pass", [run("mac-ui")])
+case("none", [])
+case("other-app", [run("mac-ui", app="someone-else")])
+case("running", [run("mac-ui", status="in_progress", conclusion=None)])
+case("failed", [run("mac-ui", conclusion="failure")])
+case("cancelled", [run("mac-ui", conclusion="cancelled")])
+case("skipped", [run("mac-ui", conclusion="skipped")])
+case("scope-said-no", [run("mac-ui", conclusion="skipped"), run("mac-ui-scope", id=6)])
+case("latest", [run("mac-ui", conclusion="success", id=7), run("mac-ui", conclusion="failure", id=8)])
+case("no-log", [run("mac-ui")], kept=None)
+case("job-elsewhere", [run("mac-ui")], job_sha="b" * 40)
+case("unlocked", [run("mac-ui")], screen="unlocked")
+case("unknown", [run("mac-ui")], screen="unknown")
+case("scripts", [run("mac-ui")], changed=["scripts/verify.sh"])
+case("workflow", [run("mac-ui")], changed=[".github/workflows/verify.yml"])
+case("behind", [run("mac-ui")], ancestor=False)
+case("ancestry-unknown", [run("mac-ui")], ancestor=None)
+PY
+)"
+hosted_line() { printf '%s\n' "$hosted_cases" | grep -e "^$1: " || echo "$1: missing"; }
+hosted_ok=1
+expect_hosted() { # expect_hosted <case> <status> <words the line must hold>
+    local line
+    line="$(hosted_line "$1")"
+    [[ $line == "$1: $2 "*"$3"* ]] || { hosted_ok=0; echo "  $line"; }
+}
+hosted_why="$(
+    expect_hosted pass 0 "passed on $(printf 'a%.0s' {1..40})"
+    [[ "$(hosted_line pass)" == *"| # The Mac UI tests' log of the hosted job mac-ui, not of this Mac: check run 7"* ]] || echo "  pass: no header"
+    expect_hosted none 1 "no check run mac-ui"
+    expect_hosted other-app 1 "no check run mac-ui"
+    expect_hosted running 1 "still in_progress"
+    expect_hosted failed 1 "ended failure"
+    expect_hosted cancelled 1 "ended cancelled"
+    expect_hosted skipped 1 "was skipped"
+    expect_hosted scope-said-no 1 "the scope job mac-ui-scope said the diff does not reach"
+    expect_hosted latest 1 "ended failure"
+    expect_hosted no-log 1 "keeps no verify-mac-ui-tests.log"
+    expect_hosted job-elsewhere 1 "not on"
+    expect_hosted unlocked 1 "screen reads unlocked"
+    expect_hosted unknown 1 "screen reads unknown"
+    expect_hosted scripts 1 "the diff changes scripts/verify.sh"
+    expect_hosted workflow 1 "the diff changes .github/workflows/verify.yml"
+    expect_hosted behind 1 "origin/main is not an ancestor of"
+    expect_hosted ancestry-unknown 1 "origin/main is not known to be an ancestor of"
+    ((hosted_ok)) || true
+)"
+# The step reads the kept log as the local step reads its own: a log with no test, or with
+# a failed or skipped case, fails even when the job's run says success. The step's function
+# from verify.sh, with a stand-in tool that writes the kept log it is given.
+hosted_step() { # hosted_step <kept log's lines>: the step's status and its last line
+    printf '%s\n' "$1" >"$hm/kept"
+    python3 -I - "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/lib/common.sh" "$hm" "$KNOT_SELF" <<'PY' | bash 2>&1 | tail -n 1 || true
+import sys
+text = open(sys.argv[1]).read()
+def function(name):
+    start = text.index(name + "() {")
+    return text[start:text.index("\n}\n", start) + 3]
+print(f'source "{sys.argv[2]}"')
+# The step reads the commit under test from a tree's head: this checkout's, whatever folder
+# an earlier case left the self-test in.
+print(f'KNOT_LOGS="{sys.argv[3]}" KNOT_ROOT="{sys.argv[4]}" BASE=origin/main TIER=gate')
+print('tool() { local log=""; while (($#)); do [[ $1 == --log ]] && log=$2; shift; done; cp "' + sys.argv[3] + '/kept" "$log"; }')
+print(function("report_skips"))
+print('slow_cases() { :; }')
+print(function("step_mac_ui_hosted"))
+# In the background, as verify.sh runs a light step, so that set -e holds inside it.
+print('step_mac_ui_hosted & code=0; wait $! || code=$?; echo "status $code"')
+PY
+}
+step_pass="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).")"
+step_none="$(hosted_step "# a log with no test")"
+step_failed="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' failed (1.0 seconds).")"
+step_skipped="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).
+Test Case '-[Knot_macOS_UITests.T testB]' skipped (0.0 seconds).")"
+# The option belongs to the gate alone.
+full_hosted="$(env -u KNOT_TREE "$KNOT_SCRIPTS/verify.sh" --full --mac-ui-hosted 2>&1 || true)"
+if [[ -z $hosted_why && $step_pass == "status 0" && $step_none == "status 1" && $step_failed == "status 1" &&
+    $step_skipped == "status 1" && $full_hosted == *"FAIL verify-usage"*"--mac-ui-hosted belongs to --gate"* ]]; then
+    pass "the gate takes the hosted job's Mac UI result only when it passed on the commit under test, kept its log, and that log holds passed tests and no skip"
+else
+    fail "the hosted Mac UI job: wrong answers$hosted_why; the step on a passing log '$step_pass', with no test '$step_none', a failed case '$step_failed', a skip '$step_skipped'; --full with the option '$full_hosted'"
+fi
+
+# A UI or hosted step prints one line for each case that took longer than a minute, with its
+# name, its destination and its seconds: how an idle wait that ran out shows when the test
+# goes on and passes. On a fixture log in each form the steps read: XCTest's with a
+# destination, XCTest's without, and Swift Testing's; a fast case and the run's own line print
+# nothing.
+sc="$scratch/slow-cases"
+mkdir -p "$sc"
+cat >"$sc/log" <<'LOG'
+Test case 'KnotIOSLaunchTests.testSlow()' passed on 'set-iphone - Knot-iOS-UITests-Runner (1)' (205.3 seconds)
+Test case 'KnotIOSLaunchTests.testFast()' passed on 'set-ipad - Knot-iOS-UITests-Runner (2)' (16.9 seconds)
+Test Case '-[Knot_macOS_UITests.MacTests testSlowOnTheMac]' failed (61.0 seconds).
+✔ Test hostedSlowly() passed after 75.5 seconds.
+✔ Test run with 3 tests in 0 suites passed after 300.0 seconds.
+LOG
+slow_out="$(python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" slow-cases --log "$sc/log" --over 60 --destination "this Mac" 2>&1 || true)"
+slow_want="slow: KnotIOSLaunchTests.testSlow() on set-iphone took 205.3 s, passed
+slow: Knot_macOS_UITests.MacTests testSlowOnTheMac on this Mac took 61.0 s, failed
+slow: hostedSlowly() on this Mac took 75.5 s, passed"
+if [[ $slow_out == "$slow_want" ]]; then
+    pass "a step names each case that took longer than a minute, with its destination and its seconds, and no other"
+else
+    fail "the slow cases: '$slow_out'"
 fi
 
 if ((FAILED)); then

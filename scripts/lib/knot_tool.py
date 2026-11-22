@@ -7,6 +7,9 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py owns <ID>
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
+    python3 scripts/lib/knot_tool.py slow-cases --log <path> [--over <seconds>] [--destination <name>]
+    python3 scripts/lib/knot_tool.py app-intents --metadata <extract.actionsdata> [--action <name>] [--shortcuts]
+    python3 scripts/lib/knot_tool.py hosted-mac-ui --sha <commit> --base <ref> --screen <state> --log <path>
     python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
     python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/] [--manifest <privacy manifest>]
@@ -22,15 +25,19 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 BRIEFS = "docs/plan"
 NAMED_TESTS = os.path.join(BRIEFS, "named-tests.txt")
-# The scripts' own folder. The gate may run main's scripts against another tree: then the
-# plan and the sources come from the current folder, the tree under test, and the lists that
-# only the orchestrator edits come from the scripts' checkout.
-SCRIPTS = os.environ.get("KNOT_SCRIPTS", "scripts")
+# The scripts' own folder, the one this file is in. The gate may run main's scripts against
+# another tree: then the plan and the sources come from the current folder, the tree under
+# test, and the lists that only the orchestrator edits come from the scripts' checkout. It is
+# never read from KNOT_SCRIPTS, which a command started through another checkout's
+# build-slot.sh inherits from that checkout.
+SCRIPTS = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 CONCURRENCY_ESCAPES = os.path.join(SCRIPTS, "concurrency-escapes.txt")
 
 
@@ -363,6 +370,12 @@ SOAK = [
     "Packages/KnotKit/Sources/KnotApp/", "Packages/KnotKit/Sources/KnotSoakChild/",
     "Packages/KnotKit/Tests/KnotSoak/", "Packages/KnotKit/Package.resolved",
 ]
+# The recorder's kill test and its shared recording state run in the iOS Simulator, driven by
+# the Mac, where the diff reaches the recorder or its crash host (docs/architecture.md §17).
+RECORDER_SIM = [
+    "Packages/KnotKit/Sources/KnotAudio/", "Packages/KnotKit/Sources/KnotAudioCrashHost/",
+    "Packages/KnotKit/Tests/KnotAudioTests/", "Packages/KnotKit/Package.swift",
+]
 # The tests hosted in the iOS app run where the diff reaches a module whose contract suite
 # runs only there (docs/architecture.md §5): KnotAudio for RecordingStateStore, KnotInk for
 # InkRecogniser, and the iOS app for RecordingActivity.
@@ -373,11 +386,12 @@ HOSTED = [
     "Apps/iOS/", "Packages/KnotKit/Package.swift", "project.yml",
 ]
 # Mac UI tests run where the diff reaches the Mac app or KnotUI, the scripts that run them,
-# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38).
+# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38), and the
+# workflow whose mac-ui job runs them on the hosted runner.
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
     "Packages/KnotKit/Sources/KnotUI/", "Packages/KnotKit/Sources/KnotApp/",
-    "scripts/", ".xcode-version", "Apps/UITestSupport/",
+    "scripts/", ".xcode-version", "Apps/UITestSupport/", ".github/workflows/verify.yml",
 ]
 
 
@@ -412,18 +426,203 @@ def classify(files, base="origin/main"):
             soak = True
     mac_ui = any(any(path.startswith(p) or path == p for p in MAC_UI) for path in files)
     hosted = any(any(path.startswith(p) or path == p for p in HOSTED) for path in files)
-    return depth, reasons, soak, mac_ui, hosted
+    recorder_sim = any(any(path.startswith(p) or path == p for p in RECORDER_SIM) for path in files)
+    return depth, reasons, soak, mac_ui, hosted, recorder_sim
 
 
 def cmd_depth(base):
     files = changed_files(base)
-    depth, reasons, soak, mac_ui, hosted = classify(files, base)
+    depth, reasons, soak, mac_ui, hosted, recorder_sim = classify(files, base)
     print(f"depth={depth}")
     print(f"hosted={'1' if hosted else '0'}")
+    print(f"recorder_sim={'1' if recorder_sim else '0'}")
     print(f"soak={'1' if soak else '0'}")
     print(f"mac_ui={'1' if mac_ui else '0'}")
     print(f"changed={len(files)}")
     print("reason=" + ", ".join(reasons))
+    return 0
+
+
+# ---------------------------------------------------------------- slow test cases
+
+
+# A test case's result line, in each form a UI or hosted step's log holds: XCTest's with the
+# destination, as `xcodebuild` prints it for a simulator; XCTest's without, as for the Mac and
+# the Watch; and Swift Testing's, as the hosted tests print it.
+CASE_RESULT_FORMS = (
+    re.compile(r"^Test [Cc]ase '(?P<name>[^']+)' (?P<result>passed|failed|skipped) on "
+               r"'(?P<destination>[^']+?)(?: - [^']*)?' \((?P<seconds>[0-9.]+) seconds\)"),
+    re.compile(r"^Test [Cc]ase '-\[(?P<name>[^\]]+)\]' (?P<result>passed|failed|skipped) \((?P<seconds>[0-9.]+) seconds\)"),
+    re.compile(r"^\S*\s*Test (?!run with )(?P<name>.+?) (?P<result>passed|failed) after (?P<seconds>[0-9.]+) seconds"),
+)
+
+
+def cmd_slow_cases(log, over, destination):
+    """One line for each test case of <log> that took longer than <over> seconds, with its name,
+    its destination and its seconds, and its result. A case that passes slowly is how an idle wait
+    that ran out shows (docs/dev-setup.md, "A UI test that waits for idle")."""
+    try:
+        with open(log, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return 0
+    for line in lines:
+        for form in CASE_RESULT_FORMS:
+            match = form.match(line)
+            if not match:
+                continue
+            seconds = float(match.group("seconds"))
+            if seconds > over:
+                where = match.groupdict().get("destination") or destination
+                print(f"slow: {match.group('name')} on {where} took {seconds:.1f} s, {match.group('result')}")
+            break
+    return 0
+
+
+# ---------------------------------------------------------------- an app's App Intents metadata
+
+
+def cmd_app_intents(metadata, action=None, shortcuts=False):
+    """What a bundle's Metadata.appintents/extract.actionsdata declares, which the packaging
+    step checks: with --action, that the action is among its actions; with --shortcuts, that
+    its App Shortcuts are not empty, naming their intents. It prints what it read."""
+    try:
+        with open(metadata) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as error:
+        print(f"app-intents: {metadata} cannot be read: {type(error).__name__}")
+        return 1
+    actions = sorted((data.get("actions") or {}).keys())
+    status = 0
+    if action is not None:
+        print(f"app-intents: actions {', '.join(actions) or 'none'}")
+        if action not in actions:
+            print(f"app-intents: {action} is not among them")
+            status = 1
+    if shortcuts:
+        names = [entry.get("actionIdentifier", "?") for entry in data.get("autoShortcuts") or []]
+        print(f"app-intents: App Shortcuts {', '.join(names) or 'none'}")
+        if not names:
+            status = 1
+    return status
+
+
+# ---------------------------------------------------------------- the hosted Mac UI job
+
+
+# The hosted workflow's Mac UI job, its scope job, and what it keeps (.github/workflows/verify.yml).
+HOSTED_MAC_UI_JOB = "mac-ui"
+HOSTED_MAC_UI_SCOPE = "mac-ui-scope"
+HOSTED_MAC_UI_ARTIFACT = "mac-ui-logs"
+HOSTED_MAC_UI_LOG = "verify-mac-ui-tests.log"
+# The hosted job runs the candidate's own scripts and workflow. Where the diff changes them,
+# main's have not checked what the job ran, so only the Mac UI step on this Mac counts.
+HOSTED_MAC_UI_UNTRUSTED = ("scripts/", ".github/")
+# The first line of a Mac UI log that the gate took from the hosted job.
+HOSTED_MAC_UI_HEADER = "# The Mac UI tests' log of the hosted job mac-ui, not of this Mac:"
+
+
+def gh_json(path):
+    """GitHub's answer for an API path of this repository, through gh, which reads no secret of
+    the scripts' own: the check runs and the artifacts of a public repository."""
+    out = subprocess.run(["gh", "api", path], check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+def gh_download_artifact(run_id, name, folder):
+    subprocess.run(["gh", "run", "download", str(run_id), "--name", name, "--dir", folder],
+                   check=True, capture_output=True, text=True)
+
+
+def hosted_check_run(sha, name):
+    """The latest check run of that name that GitHub Actions made on the commit, or None. A check
+    run of that name from another app is not the job's."""
+    answer = gh_json(f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?check_name={name}&filter=latest")
+    runs = [run for run in answer.get("check_runs", [])
+            if run.get("name") == name and run.get("head_sha") == sha
+            and (run.get("app") or {}).get("slug") == "github-actions"]
+    return max(runs, key=lambda run: run["id"]) if runs else None
+
+
+def is_ancestor(base, sha):
+    """Whether <base> is an ancestor of <sha>: True, False, or None when git cannot tell."""
+    code = subprocess.run(["git", "merge-base", "--is-ancestor", base, sha], capture_output=True).returncode
+    return {0: True, 1: False}.get(code)
+
+
+def cmd_hosted_mac_ui(sha, base, screen, log):
+    """The gate's Mac UI step, met by the hosted job: the check run mac-ui on the commit under
+    test, completed with success, and its kept log, written to <log> under a first line that
+    says whose it is. Every other answer fails, saying why. The caller reads the log's results
+    with the reader of the local step, which this does not replace."""
+    def refuse(message):
+        print(f"hosted mac-ui: FAIL {message}")
+        return 1
+
+    if screen != "locked":
+        return refuse(f"this Mac's screen reads {screen}. The gate takes the hosted job's result only while "
+                      "it is locked, by the owner's word; run the gate without --mac-ui-hosted.")
+    # On a pull request the job tests GitHub's merge of the head into the base as it then was,
+    # and the check run is recorded on the head. With the base an ancestor of the head, every
+    # earlier state of the base is too, so that merge has the head's own tree, and its scripts
+    # are main's wherever the diff changes none. A branch behind the base would show no change
+    # of the scripts, while the job ran the branch's older ones merged with the base's.
+    ancestor = is_ancestor(base, sha)
+    if ancestor is not True:
+        return refuse(f"{base} is {'not' if ancestor is False else 'not known to be'} an ancestor of {sha}, so the "
+                      "job tested a merge whose tree is not the one under test. Merge the base into the branch, "
+                      "push, and let the job run on the new head.")
+    untrusted = [path for path in changed_files(base) if path.startswith(HOSTED_MAC_UI_UNTRUSTED)]
+    if untrusted:
+        return refuse(f"the diff changes {', '.join(untrusted[:3])}{' and more' if len(untrusted) > 3 else ''}. "
+                      "The hosted job ran the candidate's own scripts and workflow, which main's have not "
+                      "checked, so only the Mac UI step on this Mac counts.")
+    try:
+        run = hosted_check_run(sha, HOSTED_MAC_UI_JOB)
+        if run is None:
+            return refuse(f"GitHub has no check run {HOSTED_MAC_UI_JOB} of GitHub Actions on {sha}. "
+                          "The commit under test must be pushed, and the verify workflow run on it.")
+        where = f"check run {run['id']}, {run.get('html_url', '')}"
+        if run.get("status") != "completed":
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} is still {run.get('status')} ({where}). Wait for it.")
+        conclusion = run.get("conclusion")
+        if conclusion == "skipped":
+            scope = hosted_check_run(sha, HOSTED_MAC_UI_SCOPE)
+            if scope and scope.get("status") == "completed" and scope.get("conclusion") == "success":
+                return refuse(f"the scope job {HOSTED_MAC_UI_SCOPE} said the diff does not reach the Mac UI paths, "
+                              f"and the gate's own depth, against {base}, says it does ({where}). The job ran on "
+                              "another base: run the Mac UI step on this Mac, or the workflow again on a commit "
+                              "with main merged in.")
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} was skipped ({where}).")
+        if conclusion != "success":
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} ended {conclusion} ({where}).")
+        job = gh_json(f"repos/{{owner}}/{{repo}}/actions/jobs/{run['id']}")
+        if job.get("head_sha") != sha:
+            return refuse(f"the job of {where} ran on {job.get('head_sha')}, not on {sha}.")
+        # The kept log is the job's output: data, read in a folder of its own.
+        folder = tempfile.mkdtemp(prefix="hosted-mac-ui-", dir=os.path.dirname(os.path.abspath(log)))
+        try:
+            try:
+                gh_download_artifact(job["run_id"], HOSTED_MAC_UI_ARTIFACT, folder)
+            except subprocess.CalledProcessError:
+                pass
+            kept = os.path.join(folder, HOSTED_MAC_UI_LOG)
+            if not os.path.isfile(kept):
+                return refuse(f"the workflow run {job['run_id']} keeps no {HOSTED_MAC_UI_LOG} in its artifact "
+                              f"{HOSTED_MAC_UI_ARTIFACT}, which lasts seven days ({where}). Run the job again.")
+            with open(kept, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        return refuse(f"GitHub's answer about {sha} could not be read ({type(error).__name__}). "
+                      "gh must be installed and signed in.")
+    with open(log, "w", encoding="utf-8") as f:
+        f.write(f"{HOSTED_MAC_UI_HEADER} {where}, workflow run {job['run_id']}, commit {sha}, "
+                f"completed {run.get('completed_at', '?')}.\n")
+        f.write(text)
+    print(f"hosted mac-ui: the job {HOSTED_MAC_UI_JOB} passed on {sha}: {where}, completed "
+          f"{run.get('completed_at', '?')}. Its kept log is {log}.")
     return 0
 
 
@@ -564,6 +763,16 @@ SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
 # A test that cancels itself, or one of its cases. Swift Testing prints a cancelled case of a
 # test with arguments as passed, so the gate could not tell it from a run (finding 51); a
 # test that cannot run here says so by a trait, which is printed as skipped.
+# The debug launch arguments, the one list of them (item 99). A release build ignores them;
+# the packaging step looks for each in every Release binary, and the lint holds the sources
+# to the list: an argument that a shell reads and the list lacks fails it. An optimised build
+# can keep a string of 15 bytes or fewer inside the code, where the scan cannot see it.
+DEBUG_ARGUMENTS = (
+    "-KnotPreview", "-KnotTemporaryStore", "-KnotEnterLine", "-KnotInjectedAudio",
+    "-KnotPreviewEndsAtLimit", "-KnotPreviewHoldsFirstConversion", "-KnotPreviewPressGap",
+    "-KnotPreviewStartFails",
+)
+DEBUG_ARGUMENT = re.compile(r'"(-Knot[A-Za-z]+)"')
 STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
 TEST_CANCEL = re.compile(r"\bTest\s*(?:\.\s*Case\s*)?\.\s*cancel\s*\(")
 LIBRARY_EXEMPT = ("Packages/KnotKit/Sources/knot/", "Packages/KnotKit/Sources/knot-eval/",
@@ -790,6 +999,12 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
             for name in re.findall(r"(?:[Aa]utosaveName|FrameAutosaveName)\s*[:=(]\s*\"([^\"]*)\"", line):
                 if not name.startswith("v1."):
                     problem(path, number, "autosave-name", f'the autosave name "{name}" needs the v1. prefix')
+            for argument in DEBUG_ARGUMENT.findall(line):
+                if argument not in DEBUG_ARGUMENTS:
+                    problem(path, number, "debug-argument",
+                            f"{argument} is a launch argument that is not in the list of debug arguments "
+                            "(DEBUG_ARGUMENTS in scripts/lib/knot_tool.py), which the packaging step looks for "
+                            "in every Release binary")
             if "eraseDatabaseOnSchemaChange" in line:
                 problem(path, number, "erase-database", "eraseDatabaseOnSchemaChange erases the store")
             if re.search(r"\bURLSession\b|\bURLRequest\b|\bNW(?:Connection|Listener|Browser|Endpoint)\b|\bnw_(?:connection|listener)_"
@@ -896,12 +1111,13 @@ def cmd_test_events(path, gate=False):
     object a line, every target's run appended to the one file. It prints each test skipped,
     test cancelled and case cancelled, which the console can print as passed or over two
     lines, and a summary line that the run's summary reads. It fails when the stream is
-    missing, or holds no run, or a run that did not end; and, with --gate, when any test or
+    missing, or holds no run, or a run that did not end, or no test started or skipped, as when
+    a filter matches nothing; and, with --gate, when any test or
     case did not run. Names are printed with a newline written as \\n, and no path."""
     if not os.path.exists(path):
         print(f"events: the run wrote no event stream at {os.path.basename(path)}")
         return 2
-    names, notes, runs_started, runs_ended, tests, malformed = {}, [], 0, 0, 0, 0
+    names, notes, runs_started, runs_ended, tests, malformed, reached = {}, [], 0, 0, 0, 0, 0
     with open(path, errors="replace") as f:
         for line in f:
             try:
@@ -922,7 +1138,10 @@ def cmd_test_events(path, gate=False):
                 runs_started += 1
             elif event == "runEnded":
                 runs_ended += 1
+            elif event == "testStarted":
+                reached += 1
             elif event == "testSkipped":
+                reached += 1
                 notes.append(f"skipped: {name}")
             elif event == "testCancelled":
                 notes.append(f"cancelled: {name}")
@@ -936,10 +1155,169 @@ def cmd_test_events(path, gate=False):
     if runs_started == 0 or runs_ended < runs_started:
         print("events: the stream holds no run, or a run that did not end, so it cannot say that every test ran")
         return 2
+    if reached == 0:
+        # A filter that matches nothing ends with status 0 and "No matching test cases were
+        # run": the run is complete and holds no test.
+        print("events: no test ran: the run's stream holds no test started or skipped, as when a filter matches nothing")
+        return 2
     if gate and notes:
         print("events: the gate requires every test and every case to run")
         return 1
     return 0
+
+
+# ---------------------------------------------------------------- the live smoke tests
+
+
+# Where each platform's UI tests run, by the folder of the test's source, and the log of that
+# step that holds XCTest's results.
+SMOKE_STEPS = (
+    ("Apps/iOS/", "launch", "verify-launch-tests.log"),
+    ("Apps/watchOS/", "launch", "verify-launch-watch-tests.log"),
+    ("Apps/macOS/", "mac-ui", "verify-mac-ui-tests.log"),
+)
+
+
+def package_test_naming(slug):
+    """The file under Packages/KnotKit/Tests/ whose Swift Testing test is named by the slug,
+    `@Test("<slug>", .tags(.named))` over a function of any name, as the package writes a named
+    test, or None. A comment marks nothing here: a package test that only mentions a UI smoke
+    test's slug must not turn that test's check off."""
+    for path in swift_files(SWIFT_TESTS):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            if f'@Test("{slug}"' in f.read():
+                return path
+    return None
+
+
+def swift_code_lines(text):
+    """The lines of a Swift source with its comments blanked, line for line, so that a word in
+    a comment is never read as code."""
+    text = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
+    return [re.sub(r"//.*", "", line) for line in text.splitlines()]
+
+
+# A class's declaration: its name before a colon or a brace, as in `final class Tests:
+# XCTestCase {`. `override class func setUp()` and `class var …: Bool` declare no class.
+CLASS_DECLARATION = re.compile(r"\bclass\s+(\w+)\s*(?:<[^>]*>\s*)?[:{]")
+TEST_METHOD = re.compile(r"\bfunc\s+(test\w*)\s*\(")
+
+
+def smoke_tests_marked(slug):
+    """Each place in the three UI-test folders that a named comment of the slug marks: the
+    source, the class and the test method of the first test method after the comment, in the
+    class declared before it, both read outside comments. Comments that lead to the same test,
+    as one over its class and one over the test do, are one place; a comment that leads to no
+    test is a place of its own, with no class or method. An empty list when no UI test names
+    it."""
+    mention = re.compile(r"(?<![\w-])" + re.escape(slug) + r"(?![\w-])")
+    places = []
+    for path in swift_files(tuple(prefix for prefix, _, _ in SMOKE_STEPS)):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        code = swift_code_lines(text)
+        for mark, line in enumerate(text.splitlines()):
+            if "//" not in line or not mention.search(line[line.index("//"):]):
+                continue
+            place = (path, None, None)
+            for n in range(mark, len(code)):
+                method = TEST_METHOD.search(code[n])
+                if method:
+                    owner = next((m.group(1) for code_line in reversed(code[:n])
+                                  if (m := CLASS_DECLARATION.search(code_line))), None)
+                    place = (path, owner, method.group(1))
+                    break
+            if place not in places:
+                places.append(place)
+    return places
+
+
+def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
+    """The live smoke tests of docs/plan/named-tests.txt, the slugs that begin live-smoke-,
+    each asked for once its pull request has merged, or is the one under test, as the named
+    tests are. Each is found by its named comment in the sources, and must have passed in the
+    log of the step that runs it, launch or mac-ui, written in this run (since <since>), with
+    no failure and no skip. The Mac's is not asked for in a run that does not start mac-ui.
+    The UI test is looked for first; only when none carries the slug does a package test
+    named by it, Swift Testing's `@Test("<slug>"` under Packages/KnotKit/Tests/, make it
+    package-test's and named-tests', which this step says, naming the file. A comment in a
+    package test marks nothing. A slug that neither names fails."""
+    merged = merged_prs("git")
+    if package and package != "contract":
+        merged.append((package, is_note_branch(branch)))
+    problems, asked = 0, 0
+    with open(NAMED_TESTS) as f:
+        rows = [line.rstrip("\n").split("\t", 2) for line in f if not line.startswith("#") and line.strip()]
+    for owner, slug, description in rows:
+        if not slug.startswith("live-smoke-"):
+            continue
+        if not named_test_required(owner, named_test_pr(owner, description), merged):
+            print(f"live-smoke: {slug}: not asked for: its pull request, {owner}, has not merged")
+            continue
+        # The UI test first, by its named comment, and judged when it is found. Only when no UI
+        # test carries the slug does a package's Swift Testing test of that name make it the
+        # package's: package-test runs it and the named-tests step requires it.
+        places = smoke_tests_marked(slug)
+        if len(places) > 1:
+            # Which of them is the smoke test is not the step's to guess: the first in the
+            # order of the files was a helper's comment, and its test was judged in place of
+            # the smoke test, which had not run.
+            named = "; ".join(f"{path}, {f'{owner}.{method}' if method else 'which leads to no test'}"
+                              for path, owner, method in places)
+            print(f"live-smoke: FAIL {slug}: its named comment is in more than one place, so which test is "
+                  f"the smoke test is ambiguous: {named}. Leave it on the smoke test alone.")
+            problems += 1
+            continue
+        if not places:
+            package_file = package_test_naming(slug)
+            if package_file:
+                print(f"live-smoke: {slug}: not asked for here: {package_file} names it, a package test, "
+                      f"which package-test runs and named-tests requires")
+                continue
+            print(f"live-smoke: FAIL {slug}: no UI test carries its named comment, and no package test is named by it")
+            problems += 1
+            continue
+        path, owner_class, method = places[0]
+        if method is None:
+            print(f"live-smoke: FAIL {slug}: its named comment in {path} leads to no test method")
+            problems += 1
+            continue
+        place = next(((step, log) for prefix, step, log in SMOKE_STEPS if path.startswith(prefix)), None)
+        if place is None:
+            print(f"live-smoke: FAIL {slug}: {path} is in no step that runs the UI tests")
+            problems += 1
+            continue
+        step, log = place
+        if step == "mac-ui" and not mac_ui:
+            print(f"live-smoke: {slug}: not asked for: this run does not start mac-ui")
+            continue
+        asked += 1
+        log_path = os.path.join(logs, log)
+        if not os.path.exists(log_path) or os.path.getmtime(log_path) < since:
+            print(f"live-smoke: FAIL {slug}: {log} is missing or from an earlier run, so {step} did not run it in this run")
+            problems += 1
+            continue
+        name = re.escape(owner_class or "") + r"[ .]" + re.escape(method)
+        result = re.compile(r"^Test [Cc]ase '(?:-\[[\w.]*?\.)?" + name + r"(?:\(\))?\]?' (passed|failed|skipped)")
+        with open(log_path, errors="replace") as f:
+            lines = f.read().splitlines()
+        outcomes = [m.group(1) for line in lines if (m := result.match(line))]
+        # A Mac UI log that the gate took from the hosted job (--mac-ui-hosted) says so on its
+        # first line, and so does this step, so that nobody reads the result as this Mac's.
+        if step == "mac-ui" and lines and lines[0].startswith(HOSTED_MAC_UI_HEADER):
+            where = lines[0][len(HOSTED_MAC_UI_HEADER):].split(", workflow run")[0].strip()
+            step = f"the hosted job mac-ui, {where}"
+        test = f"{owner_class}.{method}"
+        if "skipped" in outcomes:
+            print(f"live-smoke: FAIL {slug}: {test} was skipped in {step}")
+            problems += 1
+        elif "failed" in outcomes or "passed" not in outcomes:
+            print(f"live-smoke: FAIL {slug}: {test} did not pass in {step}: {', '.join(outcomes) or 'no result'}")
+            problems += 1
+        else:
+            print(f"live-smoke: ok   {slug}: {test} passed in {step}, {outcomes.count('passed')} time(s)")
+    print(f"live-smoke: {asked} smoke tests asked for, {problems} failing")
+    return 1 if problems else 0
 
 
 # ---------------------------------------------------------------- workflows
@@ -1740,11 +2118,25 @@ def main(argv):
         return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"), allowed)
     if command == "depth":
         return cmd_depth(option(args, "--base", "origin/main"))
+    if command == "slow-cases":
+        return cmd_slow_cases(option(args, "--log"), float(option(args, "--over", "60")),
+                              option(args, "--destination", "its destination"))
+    if command == "app-intents":
+        return cmd_app_intents(option(args, "--metadata"), option(args, "--action"), "--shortcuts" in args)
+    if command == "hosted-mac-ui":
+        return cmd_hosted_mac_ui(option(args, "--sha"), option(args, "--base", "origin/main"),
+                                 option(args, "--screen", "unknown"), option(args, "--log"))
     if command == "core-api-rule":
         return cmd_core_api_rule(option(args, "--package"), option(args, "--merged-from", "github"))
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "debug-arguments":
+        print("\n".join(DEBUG_ARGUMENTS))
+        return 0
+    if command == "live-smoke":
+        return cmd_live_smoke(option(args, "--logs"), int(option(args, "--since", "0")), option(args, "--mac-ui") == "1",
+                              option(args, "--package"), option(args, "--branch"))
     if command == "test-events":
         return cmd_test_events(args[0], "--gate" in args[1:])
     if command == "unended-tests":
