@@ -7,9 +7,11 @@
 #   scripts/verify.sh --full [--skip mac-ui]   all of it: the lint, ownership, KnotCore's API,
 #                                              the named tests, every app, the packaging
 #                                              proofs, the launches and the Mac UI tests
-#   scripts/verify.sh --gate --branch <name> [--package <ID>] [--base <ref>]
+#   scripts/verify.sh --gate --branch <name> [--package <ID>] [--base <ref>] [--mac-ui-hosted]
 #                                              the merge gate: its depth comes from the diff;
-#                                              --branch is required on a detached head
+#                                              --branch is required on a detached head;
+#                                              --mac-ui-hosted takes the hosted job's Mac UI
+#                                              result while this Mac's screen is locked
 #   scripts/verify.sh --soak [--seed <n>]      the capture ledger soak (its step is WP-06's)
 #   scripts/verify.sh --perf                   the timed targets, on an optimised build with
 #                                              the fakes, holding every build slot
@@ -23,7 +25,7 @@
 #
 # Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
 # named-tests, package-build, package-test, package-test-strict, contract-two-targets,
-# self-test, apps, packaging, launch, mac-ui, soak, perf, tsan, model-report.
+# self-test, apps, packaging, launch, mac-ui, recorder-sim, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
@@ -40,28 +42,28 @@
 # before anything else, because every path of the run depends on it.
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
-    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}"; fi
+    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}" KNOT_TREE_NAMED=1; fi
 done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
-model-report"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui recorder-sim live-smoke two-process soak
+perf tsan model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
         package-build | package-test | package-test-strict | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
-        launch | ios-hosted) echo "--simulators" ;;
+        launch | ios-hosted | recorder-sim) echo "--simulators" ;;
         mac-ui) echo "--mac-ui" ;;
         perf) echo "--all" ;;
         *) echo "none" ;;
     esac
 }
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "verify-usage" "$1" "Run scripts/verify.sh --help." "safe" "nothing"; }
 
 STATUS_FILE="$KNOT_LOGS/verify-status.txt"
@@ -90,6 +92,7 @@ else
     BASE=""
     SEED=""
     SKIP=""
+    MAC_UI_HOSTED=0
     ALLOW=()
     set_tier() {
         [[ -z $TIER ]] || usage_fail "One run takes one tier; got --$TIER and $1."
@@ -107,6 +110,7 @@ else
             --allow) [[ -n ${2:-} ]] || usage_fail "--allow needs a path."; ALLOW+=("$2"); shift 2 ;;
             --tree) [[ -n ${2:-} ]] || usage_fail "--tree needs the folder of the tree to check."; shift 2 ;;
             --base) BASE=${2:-}; [[ -n $BASE ]] || usage_fail "--base needs a ref."; shift 2 ;;
+            --mac-ui-hosted) MAC_UI_HOSTED=1; shift ;;
             --status-line)
                 [[ -f $STATUS_FILE ]] || knot_fail "verify-no-status" "No run has written $STATUS_FILE yet." \
                     "Run a tier first." "safe" "nothing"
@@ -125,7 +129,9 @@ else
     fi
     [[ -n $TIER || -n $ONLY || -n $MODULE ]] || usage_fail "Name a tier, --only <step> or --module <name>."
     [[ -z $SKIP || $TIER == full ]] || usage_fail "--skip mac-ui belongs to --full. The gate refuses it."
-    [[ -z $SEED || $TIER == soak ]] || usage_fail "--seed belongs to --soak."
+    [[ -z $SEED || $TIER == soak || $ONLY == recorder-sim ]] || usage_fail "--seed belongs to --soak and --only recorder-sim."
+    ((MAC_UI_HOSTED == 0)) || [[ $TIER == gate ]] ||
+        usage_fail "--mac-ui-hosted belongs to --gate: only the gate takes the hosted job's Mac UI result, while this Mac's screen is locked."
     # The steps that read the package and the branch take them alone too, as the gate runs
     # them.
     [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || " ownership named-tests core-api " == *" $ONLY "* ]] ||
@@ -172,9 +178,23 @@ check_events() {
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
 # xcodebuild's own test limits, for every run of tests in a simulator or on the desktop: a
-# case that hangs fails after its allowance, three minutes and five at most.
-KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
-    -maximum-test-execution-time-allowance 300)
+# case that hangs fails after its allowance, ten minutes, the contract suites' own bound.
+# It was three minutes, and twice on 2026-11-22 an iPhone UI test ran into it on the gate's
+# simulator: each "Wait for com.p3ob7o.knot.dev to idle" ran its 60 s and ended "App
+# animations complete notification not received, will attempt to continue", while the app
+# sat idle in its run loop, and three such waits are the three minutes. The test goes on
+# after each wait, so under ten minutes it will likely pass slowly; that is not shown, as no
+# stall came in 13 runs here. The bundles are kept in the build folder's review-evidence, as
+# pr95/rehearsal-launch-iphone-180s.xcresult and pr87/launch-iphone-smoke-180s.xcresult.
+# A longer bound only makes a real hang fail later, and each UI step prints the cases that
+# took longer than a minute (slow_cases), which is how the next stall will show.
+KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 600
+    -maximum-test-execution-time-allowance 600)
+
+# slow_cases <log> <destination>: one line for each case of a UI or hosted step's log that
+# took longer than a minute, with its name, its destination and its seconds (knot_tool.py
+# slow-cases). <destination> names it where the log's line does not, as for the Mac.
+slow_cases() { tool slow-cases --log "$1" --over 60 --destination "$2" || true; }
 
 # ended_by_signal <what> <status> <limit variable>: when an xcodebuild run ended by a signal
 # that the step's limit did not send, a status above 128 with no limit hit, it says so, with
@@ -223,6 +243,7 @@ ui_tests() {
     knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
     ! ended_by_signal "$what" "$status" KNOT_UI_TEST_LIMIT || return 1
+    slow_cases "$log" "the destination of $what"
     if ! knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"}; then
         # The reason is in the long log; the step's own log, which a failure shows, gives it.
         knot_xctest_failures "$log"
@@ -274,7 +295,8 @@ gate_state() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3; exit }' "$KNOT_S
 
 step_doctor() {
     local options=(--tier "${TIER:-quick}")
-    [[ ${RUN_MAC_UI:-0} == 1 ]] && options+=(--mac-ui)
+    # A gate whose Mac UI step the hosted job meets needs no Automation Mode here.
+    [[ ${RUN_MAC_UI:-0} == 1 && ${MAC_UI_HOSTED:-0} != 1 ]] && options+=(--mac-ui)
     [[ $TIER == gate ]] && options+=(--models)
     "$KNOT_SCRIPTS/doctor.sh" "${options[@]}"
 }
@@ -624,9 +646,15 @@ step_packaging() {
     ios="$(products Debug-iphonesimulator)/Knot.app"
     mac="$(products Debug)/Knot.app"
 
-    intent_in() { grep -q KnotPlaceholderIntent "$1/Metadata.appintents/extract.actionsdata"; }
-    check "App Intent declared in KnotIntents, in the iOS app's metadata" intent_in "$ios" || failed=1
+    # WP-19's text intents, declared in KnotIntents, reach the metadata of the iOS app and of
+    # its widget extension. The App Shortcuts, which Apps/Shared/KnotShortcuts.swift provides,
+    # reach the iOS app's and the Mac app's: a provider in the package reaches neither.
+    intent_in() { tool app-intents --metadata "$1/Metadata.appintents/extract.actionsdata" --action CreateNoteIntent; }
+    shortcuts_in() { tool app-intents --metadata "$1/Metadata.appintents/extract.actionsdata" --shortcuts; }
+    check "CreateNoteIntent, declared in KnotIntents, in the iOS app's metadata" intent_in "$ios" || failed=1
     check "the same intent in the widget extension's metadata" intent_in "$ios/PlugIns/Widgets-iOS.appex" || failed=1
+    check "the iOS app's App Shortcuts are not empty" shortcuts_in "$ios" || failed=1
+    check "the Mac app's App Shortcuts are not empty" shortcuts_in "$mac/Contents/Resources" || failed=1
 
     activity_in() {
         local f
@@ -685,6 +713,29 @@ step_packaging() {
     check "Release iOS app, its extension and the Watch app free of KnotFakes" \
         scan_for_fakes "$(products Release-iphonesimulator)/Knot.app" none || failed=1
     check "the Debug iOS app does hold KnotFakes, so the check can see it" scan_for_fakes "$ios" some || failed=1
+    # The debug launch arguments, from the one list (knot_tool.py debug-arguments), in every
+    # Mach-O file of each Release app (item 99). An optimised build can keep a name of 15
+    # bytes or fewer inside the code, where the scan cannot see it, and the scan says which
+    # those are. The Debug iOS app, whose shells read them, is the control.
+    scan_for_debug_arguments() {
+        local app=$1 want=$2 f found=0 held list short
+        list="$(tool debug-arguments)"
+        short="$(awk 'length($0) <= 15' <<<"$list" | tr '\n' ' ')"
+        while IFS= read -r -d '' f; do
+            if held="$(knot_debug_arguments_in "$f" "$list")"; then
+                echo "      debug arguments in ${f#"$app"/}: $(tr '\n' ' ' <<<"$held")"
+                found=$((found + 1))
+            fi
+        done < <(macho_files "$app")
+        echo "      the names of 15 bytes or fewer, which an optimised build can keep inside the code, the scan may not see: ${short:-none}"
+        if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
+    }
+    check "Release Mac app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release)/Knot.app" none || failed=1
+    check "Release iOS app, its extension and the Watch app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release-iphonesimulator)/Knot.app" none || failed=1
+    check "the Debug iOS app does hold debug launch arguments, so the check can see them" \
+        scan_for_debug_arguments "$ios" some || failed=1
     ((failed == 0))
 }
 
@@ -704,6 +755,7 @@ step_ios_hosted() {
         -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
     ! ended_by_signal "The hosted iOS tests" "$status" KNOT_HOSTED_TEST_LIMIT || return 1
+    slow_cases "$log" "the iPhone simulator"
     grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."
@@ -712,6 +764,57 @@ step_ios_hosted() {
     report_skips "The hosted iOS tests" "$log" || return 1
     if ((status != 0)); then
         echo "The hosted iOS tests: xcodebuild exited with $status after the tests above. Its log is $log."
+        return 1
+    fi
+}
+
+# The recorder's kill test and its recording state shared by two processes, in the iOS
+# Simulator (docs/architecture.md §17, docs/notes/WP-12.md). A test there cannot start or kill a
+# process, so the Mac drives it: the Mac's crash host runs `kill-test` and `state-check` with
+# `--runner "xcrun simctl spawn <udid>"` and the crash host built for the simulator as the
+# child, in this worktree's iPhone simulator. The kill test's trials are those of the Mac's
+# named test, recording-format-kill-test, with a fresh seed that a failure prints. At the gate
+# where the diff reaches the recorder, nightly, and with --only.
+crash_host_for_simulator() {
+    local destination='generic/platform=iOS Simulator' derived="$KNOT_BUILD/DerivedData-crash-hosts"
+    (cd "$KNOT_PACKAGE" && xcodebuild -scheme KnotAudioCrashHost -destination "$destination" -derivedDataPath "$derived" build) >>"$1" 2>&1 # limit: crash_host_for_simulator
+}
+crash_host_for_mac() { swift build "${KNOT_SWIFTPM_FLAGS[@]}" --product KnotAudioCrashHost >>"$1" 2>&1; }
+step_recorder_sim() {
+    local log="$KNOT_LOGS/verify-recorder-sim-build.log" output="$KNOT_LOGS/verify-recorder-sim.out"
+    local seed=${SEED:-$((RANDOM * 32768 + RANDOM))} host child udid runner folder status=0
+    : >"$log"
+    knot_swiftpm_flags
+    echo "recorder-sim: the crash host for the Mac and for the iOS Simulator"
+    knot_run_limited "The Mac's crash host" "$KNOT_BUILD_LIMIT" crash_host_for_mac "$log"
+    knot_run_limited "The crash host for the iOS Simulator" "$KNOT_BUILD_LIMIT" crash_host_for_simulator "$log"
+    host="$KNOT_SWIFTPM/out/Products/Debug/KnotAudioCrashHost"
+    child="$KNOT_BUILD/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/KnotAudioCrashHost"
+    [[ -x $host && -x $child ]] || {
+        echo "recorder-sim: a crash host is missing after its build: $host, $child. The build's log is $log."
+        return 1
+    }
+    "$KNOT_SCRIPTS/sim.sh" ensure >/dev/null
+    trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
+    "$KNOT_SCRIPTS/sim.sh" boot iphone >/dev/null
+    udid="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
+    runner="xcrun simctl spawn $udid"
+    folder="$KNOT_BUILD/recorder-sim"
+    mkdir -p "$folder"
+    echo "recorder-sim: state-check in the iPhone simulator"
+    : >"$output"
+    knot_limit 300 "$host" state-check --runner "$runner" --child "$child" >>"$output" 2>&1 || status=$?
+    grep -E '^state-check (ok|FAIL)' "$output" || echo "recorder-sim: state-check printed no verdict"
+    if ((status != 0)) || ! grep -E '^state-check ok$' "$output" >/dev/null; then
+        echo "recorder-sim: the recording state was not shared across two processes in the simulator. Its output is $output."
+        return 1
+    fi
+    echo "recorder-sim: the kill test in the iPhone simulator, seed $seed"
+    knot_limit 900 "$host" kill-test --dir "$folder/kill-$seed" --trials 4 --seed "$seed" --min-ms 300 --max-ms 2500 \
+        --early-every 4 --stages --runner "$runner" --child "$child" >>"$output" 2>&1 || status=$?
+    grep -E '^(trial .* FAIL|step-limit |summary )' "$output" || echo "recorder-sim: the kill test printed no summary"
+    if ((status != 0)) || ! grep -E '^summary trials 7 passed 7 ' "$output" >/dev/null; then
+        echo "recorder-sim: the kill test failed in the simulator, with seed $seed. Repeat it with scripts/verify.sh --only recorder-sim --seed $seed. Its output is $output."
         return 1
     fi
 }
@@ -765,11 +868,27 @@ step_launch() {
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds, 60: the first
-    # probe compiles its script, which a loaded Mac makes slow. The probe reads only what
-    # needs no Screen Recording permission; the Mac UI tests are the mac-ui step. Afterwards
-    # neither the app nor anything it started may be left running.
-    local mac status=0
+    # The Mac app (step_launch_mac). Its app has the bundle ID of every worktree's development
+    # build, so it would come to the front beside another worktree's Mac UI test: it holds the
+    # exclusive Mac UI slot for as long as the app is up, and no second build slot, since this
+    # step holds one already (item 105).
+    "$KNOT_SCRIPTS/build-slot.sh" run --mac-ui-only --label launch-mac -- "$KNOT_SCRIPTS/verify.sh" --in-step launch-mac
+}
+
+# The launch step's Mac part. It builds the Debug Mac app it starts, which after the apps step
+# has nothing to do, so that --only launch never starts an old one. The Mac app puts a window
+# on screen within KNOT_APP_START_LIMIT seconds, 60: the first probe compiles its script,
+# which a loaded Mac makes slow. The probe reads only what needs no Screen Recording
+# permission; the Mac UI tests are the mac-ui step. Afterwards neither the app nor anything
+# it started may be left running.
+step_launch_mac() {
+    local mac status=0 log="$KNOT_LOGS/verify-launch-mac-build.log"
+    : >"$log"
+    if ! knot_run_limited "The Debug build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build; then
+        echo "The Debug build of Knot-macOS for the launch failed. Its log is ${log#"$KNOT_ROOT"/}."
+        return 1
+    fi
     mac="$(products Debug)/Knot.app"
     knot_start_app "${KNOT_APP_START_LIMIT:-60}" "$mac/Contents/MacOS/Knot" \
         xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
@@ -817,12 +936,41 @@ end_mac_test_hosts() {
     kill -KILL $pids 2>/dev/null || true
 }
 
+# The gate's Mac UI step, met by the hosted job (--mac-ui-hosted), while this Mac's screen is
+# locked: the check run mac-ui on the commit under test, completed with success, and its kept
+# log, which becomes this run's Mac UI log under a first line that names the job
+# (knot_tool.py hosted-mac-ui). That log's results are then read as the local step's are: a
+# run with no test, a failed case or a skip fails. Its tests are counted apart, as the hosted
+# job's, and never in this Mac's totals.
+step_mac_ui_hosted() {
+    local log="$KNOT_LOGS/verify-mac-ui-tests.log" sha result status=0
+    : >"$log"
+    sha="$(git -C "$KNOT_ROOT" rev-parse HEAD)"
+    (cd "$KNOT_ROOT" && tool hosted-mac-ui --sha "$sha" --base "$BASE" --screen "$(knot_console_state)" --log "$log") ||
+        return 1
+    slow_cases "$log" "the hosted runner"
+    result="$(knot_xctest_result "$log")" || status=$?
+    echo "hosted $result"
+    if ((status != 0)); then
+        knot_xctest_failures "$log"
+        return 1
+    fi
+    report_skips "The hosted Mac UI tests" "$log"
+}
+
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
 # scripts/gate-steps.txt until their packages build them. Should a line turn to required
 # before the step is filled in, the gate fails here rather than pass a check it did not run.
+# The live smoke tests (docs/architecture.md §17), item 80 of the orchestrator's list. They
+# run inside launch and mac-ui; this step, after both, reads their results and fails unless
+# each platform's smoke test, found by its named comment in the sources, ran and passed in
+# this run and was not skipped (knot_tool.py live-smoke). The Mac's is not asked for in a run
+# that does not start mac-ui, and a test whose pull request has not merged is not asked for.
 step_live_smoke() {
-    echo "live-smoke: not built yet. WP-22 builds the .live smoke tests (docs/architecture.md §17)."
-    return 1
+    local mac_ui=0
+    [[ " $STEPS " == *" mac-ui "* ]] && mac_ui=1
+    (cd "$KNOT_ROOT" && tool live-smoke --logs "$KNOT_LOGS" --since "$START" --mac-ui "$mac_ui" \
+        ${PACKAGE:+--package "$PACKAGE"} ${BRANCH:+--branch "$BRANCH"})
 }
 step_two_process() {
     echo "two-process: not built yet. WP-34 builds it after G1 and SP-3 (docs/architecture.md §18)."
@@ -858,8 +1006,9 @@ step_soak() {
         status=1
     fi
     if ((status != 0)); then
-        # The verdict's own lines: the seed, the kill points, the kept store and the codes.
-        grep -E '^ *(capture ledger soak: RED|the store is kept at|kills by point|configuration:|repeat it with)' "$output" || true
+        # The verdict's own lines: the seed, the kill points, the kept store, the replay of the
+        # recovery over a copy of it, and the codes.
+        grep -E '^ *(capture ledger soak: RED|the store is kept at|replay the recovery|kills by point|configuration:|repeat it with)' "$output" || true
         echo "soak: failed with seed $seed. Repeat it with scripts/verify.sh --soak --seed $seed"
         return 1
     fi
@@ -1005,6 +1154,7 @@ else
             gate_soak="$(printf '%s\n' "$depth_out" | sed -n 's/^soak=//p')"
             gate_mac_ui="$(printf '%s\n' "$depth_out" | sed -n 's/^mac_ui=//p')"
             gate_hosted="$(printf '%s\n' "$depth_out" | sed -n 's/^hosted=//p')"
+            gate_recorder_sim="$(printf '%s\n' "$depth_out" | sed -n 's/^recorder_sim=//p')"
             reason="$(printf '%s\n' "$depth_out" | sed -n 's/^reason=//p')"
             common="doctor plan format ownership core-api package-build named-tests pins lint team-id links fixtures"
             case $DEPTH in
@@ -1020,10 +1170,17 @@ else
                     # docs/architecture.md §18: everything adds the two-process test and the
                     # .live smoke tests. They are pending until their packages build them.
                     STEPS="$common package-test package-test-strict contract-two-targets self-test apps packaging ios-hosted launch"
-                    STEPS="$STEPS live-smoke two-process" ;;
+                    STEPS="$STEPS two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
+            [[ $DEPTH != documents && $gate_recorder_sim == 1 ]] && STEPS="$STEPS recorder-sim"
+            if ((MAC_UI_HOSTED)) && [[ $STEPS != *" mac-ui"* ]]; then
+                echo "verify: --mac-ui-hosted: this gate takes no Mac UI step, so there is nothing for the hosted job to meet."
+                MAC_UI_HOSTED=0
+            fi
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
+            # The live smoke step reads the results of launch and mac-ui, so it comes after both.
+            [[ $DEPTH == everything ]] && STEPS="$STEPS live-smoke"
             # A step that scripts/gate-steps.txt lists as pending does not run yet.
             kept=""
             for step in $STEPS; do
@@ -1042,7 +1199,9 @@ else
             if [[ "$(cd "$KNOT_SCRIPTS/.." && pwd -P)" == "$KNOT_ROOT" ]]; then
                 echo "verify: the scripts are the tree's own. The gate runs main's scripts, except for a pull request that changes scripts/."
             fi
-            [[ -n $PENDING ]] && echo "verify: pending, not run:$PENDING" ;;
+            [[ -n $PENDING ]] && echo "verify: pending, not run:$PENDING"
+            ((MAC_UI_HOSTED && RUN_MAC_UI)) &&
+                echo "verify: the Mac UI step is met by the hosted job mac-ui on $(git -C "$KNOT_ROOT" rev-parse --short HEAD), if it passed there; this Mac runs no Mac UI test." ;;
     esac
     LABEL="--$TIER"
     [[ -n $DEPTH ]] && LABEL="--gate $DEPTH"
@@ -1063,6 +1222,8 @@ FAILED_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
+# The hosted job's Mac UI tests, which a gate with --mac-ui-hosted took: counted apart.
+HOSTED_TESTS=""
 
 count_tests() {
     local log=$1 n
@@ -1103,7 +1264,11 @@ for step in $STEPS; do
     # locked screen fails the step at once, before it takes its slot, and runs no test. A
     # read that says nothing never passes the step: the step runs, and fails by itself if the
     # screen is locked.
-    if [[ $step == mac-ui ]]; then
+    if [[ $step == mac-ui && $MAC_UI_HOSTED == 1 ]]; then
+        # The hosted job meets the step: nothing runs on this Mac, and the screen is read in it.
+        options=none
+        runner=step_mac_ui_hosted
+    elif [[ $step == mac-ui ]]; then
         case "$(knot_console_state)" in
             locked)
                 options=none
@@ -1138,20 +1303,27 @@ for step in $STEPS; do
         printf 'verify: skip  %-22s %s\n' "$step" "$(tail -n 1 "$log")"
     elif ((code == 0)); then
         PASSED=$((PASSED + 1))
-        printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
+        shown=$step
+        [[ $runner == step_mac_ui_hosted ]] && shown="mac-ui (hosted job)"
+        printf 'verify: ok    %-22s %s\n' "$shown" "$(knot_duration $(($(knot_now) - step_start)))"
+        if [[ $runner == step_mac_ui_hosted ]]; then
+            grep -E '^hosted mac-ui: ' "$log" | sed 's/^/        /' || true
+            HOSTED_TESTS=$(sed -n -E 's/^hosted xctest: ([0-9]+) passed.*/\1/p' "$log" | tail -n 1)
+        fi
         if [[ $step == ownership ]]; then
             ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
             # The paths the orchestrator allowed by hand show on the console, not only in the log.
             grep -E '^ownership: allowed by hand: ' "$log" | sed 's/^ownership: /        /' || true
         fi
-        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        # A failed step's tests count too, so the summary shows its failed cases.
-        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        # A failed step's tests count too, so the summary shows its failed cases: not the
+        # hosted job's, which are not this Mac's.
+        [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
@@ -1183,6 +1355,7 @@ xcode="$( [[ -n ${KNOT_XCODE_VERSION:-} ]] && knot_xcode_label || echo 'Xcode no
 duration="$(knot_duration $(($(knot_now) - START)))"
 allowed_text=""
 ((ALLOWED)) && allowed_text=" · $ALLOWED paths allowed by hand"
+[[ -n $HOSTED_TESTS ]] && allowed_text="$allowed_text · mac-ui met by the hosted job, its $HOSTED_TESTS tests not counted here"
 printf 'verify %s: %s · steps %d passed, %d failed, %d skipped, %d not run, %d pending · tests %d passed, %d failed, %d skipped%s · %s · %s · %s\n' \
     "$LABEL" "$status" "$PASSED" "$failed" "$SKIPPED_STEPS" "$not_run" "$pending" \
     "$TESTS_PASSED" "$TESTS_FAILED" "$TESTS_SKIPPED" "$allowed_text" "$duration" "$xcode" "$(knot_macos_label)"
@@ -1195,6 +1368,7 @@ short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}: $PASSED/$total steps
 ((SKIPPED_STEPS)) && short="$short, $SKIPPED_STEPS steps skipped"
 ((pending)) && short="$short, $pending pending"
 ((ALLOWED)) && short="$short, $ALLOWED allowed by hand"
+[[ -n $HOSTED_TESTS ]] && short="$short, mac-ui by hosted job"
 short="$short · $duration · Xcode ${KNOT_XCODE_VERSION:-?} ${KNOT_XCODE_BUILD:-}"
 [[ -n ${KNOT_XCODE_NOTE:-} ]] && short="$short*"
 candidate="$short · macOS $(sw_vers -buildVersion)"
