@@ -1,0 +1,609 @@
+[exit 1]
+knot: error[disk_full]: The disk filled while Knot wrote. The transaction or the file was not written.
+  fix: Free space on this Mac, then try again. (free_space)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help disk_full
+
+[exit 6]
+knot: error[store_busy]: Another writer holds the store for longer than the busy timeout.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help store_busy
+
+[exit 7]
+knot: error[store_damaged]: The store's database cannot be read.
+  fix: The store needs its owner: follow the troubleshooting guide. (follow_troubleshooting_guide)
+  retry: not safe
+  written: nothing
+  more: knot help store_damaged
+
+[exit 7]
+knot: error[store_newer_than_build]: The store was written by a newer Knot. This build does not open, change or delete it.
+  fix: Install a newer Knot. (update_knot)
+  retry: not safe
+  written: nothing
+  more: knot help store_newer_than_build
+
+[exit 7]
+knot: error[store_older_than_tool]: The store is older than the `knot` tool, which never migrates.
+  fix: Open Knot, which migrates or repairs what the tool cannot. (open_knot)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help store_older_than_tool
+
+[exit 7]
+knot: error[store_not_created_by_knot]: A database at the store's path that Knot did not create, told by its `store_meta` row.
+  fix: The store needs its owner: follow the troubleshooting guide. (follow_troubleshooting_guide)
+  retry: not safe
+  written: nothing
+  more: knot help store_not_created_by_knot
+
+[exit 6]
+knot: error[store_not_open]: The store is not open yet, is migrating, or did not answer in time. Capture goes on into `Inbox/`.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: kept_in_inbox
+  more: knot help store_not_open
+
+[exit 1]
+knot: error[write_failed]: A write to the store or to a file failed for a reason other than a full disk.
+  fix: Try again now. (retry)
+  retry: safe, up to 3 times
+  written: nothing
+  more: knot help write_failed
+
+[exit 7]
+knot: error[group_container_missing]: The app group's container is missing, so `StoreLocations` has no place for `Inbox/`.
+  fix: Reinstall Knot, whose installation lacks its shared container. (reinstall_knot)
+  retry: not safe
+  written: nothing
+  more: knot help group_container_missing
+
+[exit 7]
+knot: error[agent_refused_milestone_store]: `KNOT_AGENT=1` is set and something asked for the milestone store (docs/architecture.md §7).
+  fix: Use the development build, knot-dev, and its own store. (use_development_build)
+  retry: not safe
+  written: nothing
+  more: knot help agent_refused_milestone_store
+
+[exit 5]
+knot: error[asset_conflict]: An asset ID already holds a file with other content. A stored recording or drawing is never replaced, so the new file is refused and the stored one stays.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: nothing
+  more: knot help asset_conflict
+
+[exit 7]
+knot: error[dev_store_folder_invalid]: A development build on the Mac names no worktree folder for its store, or one that is not safe as a folder name. Development builds from two worktrees never share a store.
+  fix: Build the development app from its worktree, which names the worktree's store folder. (build_from_worktree)
+  retry: not safe
+  written: nothing
+  more: knot help dev_store_folder_invalid
+
+[exit 1]
+knot: error[microphone_permission_refused]: The microphone permission was refused.
+  fix: Allow the microphone in the system's settings. (allow_microphone)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help microphone_permission_refused
+
+[exit 1]
+knot: error[no_input_device]: No input device is connected.
+  fix: Connect a microphone. (connect_microphone)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help no_input_device
+
+[exit 1]
+knot: error[audio_session_busy]: Another app holds the audio session.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help audio_session_busy
+
+[exit 1]
+knot: error[too_little_space]: Too little free space to start a recording, so Knot refuses to start one.
+  fix: Free space on this Mac, then try again. (free_space)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help too_little_space
+
+[exit 1]
+knot: error[capture_stopped_disk_full]: The disk filled during a recording or a drawing. The capture stopped with the stop cue.
+  fix: Free space on this Mac, then try again. (free_space)
+  retry: safe, as often as needed
+  written: kept_up_to_failure
+  more: knot help capture_stopped_disk_full
+
+[exit 1]
+knot: error[conversion_failed]: The conversion to the final audio format failed. The working file stays as the recording.
+  fix: Try again now. (retry)
+  retry: safe, up to 5 times
+  written: content_kept
+  more: knot help conversion_failed
+
+[exit 5]
+knot: error[capture_blocked_by_recording]: A typing or drawing capture cannot start while a recording runs on this device.
+  fix: Stop the recording before typing or drawing. (stop_recording)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help capture_blocked_by_recording
+
+[exit 1]
+knot: error[speech_model_not_installed]: The speech model is not installed yet, or is still installing. The recording waits, pending, and plays.
+  fix: Wait for the on-device model to arrive. Knot finishes the work by itself. (wait_for_model)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help speech_model_not_installed
+
+[exit 1]
+knot: error[audio_unreadable]: The recording cannot be read. It is kept, with no text. This is final, not a failure to fix.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: content_kept
+  more: knot help audio_unreadable
+
+[exit 1]
+knot: error[speech_unavailable]: Speech recognition is unavailable on this device. The recording stays recorded and shows as kept with no text here, until another device takes the work. Final on this device.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: content_kept
+  more: knot help speech_unavailable
+
+[exit 1]
+knot: error[transcription_failed]: The transcriber returned an error, whose code `context.engineCode` carries. The recording is kept.
+  fix: Try again now. (retry)
+  retry: safe, up to 5 times
+  written: content_kept
+  more: knot help transcription_failed
+
+[exit 1]
+knot: error[cleanup_model_not_ready]: The cleanup model is still downloading or not ready.
+  fix: Wait for the on-device model to arrive. Knot finishes the work by itself. (wait_for_model)
+  retry: safe, as often as needed
+  written: text_unchanged
+  more: knot help cleanup_model_not_ready
+
+[exit 1]
+knot: error[cleanup_model_unavailable]: The device cannot use the cleanup model. The raw transcript is the final text.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: text_unchanged
+  more: knot help cleanup_model_unavailable
+
+[exit 1]
+knot: error[cleanup_declined]: Cleanup declined: a refusal, a guardrail violation, an empty or malformed result, a result the guard rejected, text too long for the model, an unsupported language or an unsupported request. The raw transcript is the text, and `context.detail` says which.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: text_unchanged
+  more: knot help cleanup_declined
+
+[exit 1]
+knot: error[cleanup_timed_out]: Cleanup took longer than its time allows. The raw transcript stays the text, and the job tries again.
+  fix: Try again now. (retry)
+  retry: safe, up to 5 times
+  written: text_unchanged
+  more: knot help cleanup_timed_out
+
+[exit 1]
+knot: error[recognition_failed]: Handwriting recognition failed. The drawing is kept.
+  fix: Try again now. (retry)
+  retry: safe, up to 5 times
+  written: content_kept
+  more: knot help recognition_failed
+
+[exit 1]
+knot: error[drawing_unreadable]: The drawing's data cannot be decoded. No retry fixes it: the job ends, and the drawing is kept, shown as "Kept, no text".
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: content_kept
+  more: knot help drawing_unreadable
+
+[exit 1]
+knot: error[handwriting_language_unsupported]: The recogniser does not read handwriting in the language set. The job ends, and the drawing is kept, shown as "Kept, no text".
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: content_kept
+  more: knot help handwriting_language_unsupported
+
+[exit 1]
+knot: error[requests_limited]: The system limits requests to the model for now. `context.retryAt` says when to try again, when the system gives a time.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help requests_limited
+
+[exit 1]
+knot: error[system_resources_limited]: The system limits its resources for now.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help system_resources_limited
+
+[exit 1]
+knot: error[no_background_time]: The app has no background time left.
+  fix: Open Knot, which migrates or repairs what the tool cannot. (open_knot)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help no_background_time
+
+[exit 1]
+knot: error[device_locked]: The device is locked and the step needs it unlocked.
+  fix: Unlock the device. Knot finishes the work by itself. (unlock_device)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help device_locked
+
+[exit 1]
+knot: error[app_not_in_foreground]: The step runs only while the app is in the foreground, as recognition does (`docs/architecture.md` §10). It is not counted, and it runs when the app comes forward.
+  fix: Open Knot, which migrates or repairs what the tool cannot. (open_knot)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help app_not_in_foreground
+
+[exit 1]
+knot: error[cancelled]: A step was cancelled: the task that awaited it was cancelled, because background time ran out or the queue was asked to stop. It is a yield: not an attempt, not a decline and not an error, and nothing from the step was saved.
+  fix: Nothing is needed. (none)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help cancelled
+
+[exit 1]
+knot: error[inbox_item_unreadable]: An inbox item cannot be read: its manifest, or a body that does not fit its kind, such as a file whose digest is not 64 hexadecimal digits. It becomes a failed segment that says so, and its files are kept in `Inbox/`. When a later version can read the item, it is stored where that failed segment is.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: content_kept
+  more: knot help inbox_item_unreadable
+
+[exit 1]
+knot: error[inbox_item_newer_version]: An inbox item was written by a newer Knot. It becomes a failed segment that says so, and its files are kept in `Inbox/`. After an update that can read it, it is stored where that failed segment is.
+  fix: Install a newer Knot. (update_knot)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help inbox_item_newer_version
+
+[exit 1]
+knot: error[manifest_too_large]: A manifest is larger than its bound.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: content_kept
+  more: knot help manifest_too_large
+
+[exit 1]
+knot: error[checksum_mismatch]: A file does not match the checksum its manifest or its record names: a file from the watch, which the watch sends again; a file placed in, or read from, the asset store; or a file the asset fetcher brought from another device, which is fetched again.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help checksum_mismatch
+
+[exit 1]
+knot: error[link_not_ready]: The watch link's session is not activated yet, or the iPhone is switching watches. The capture waits in the outbox.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help link_not_ready
+
+[exit 1]
+knot: error[counterpart_missing]: The other side of the watch link is missing: the devices are not paired, or the other app is not installed. The capture waits in the outbox, shown as waiting.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help counterpart_missing
+
+[exit 1]
+knot: error[counterpart_full]: The receiving side of the watch link, the iPhone, has no room. The capture waits in the outbox.
+  fix: Free space on the iPhone, which the Watch's recordings go to. (free_iphone_space)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help counterpart_full
+
+[exit 1]
+knot: error[delivery_failed]: A transfer over the watch link did not complete. It is an attempt, and the capture is queued again.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: content_kept
+  more: knot help delivery_failed
+
+[exit 1]
+knot: error[outbox_file_missing]: The outbox file of a capture is missing or cannot be read. The capture fails at once, and its manifest is kept.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: content_kept
+  more: knot help outbox_file_missing
+
+[exit 1]
+knot: error[sync_signed_out]: The device is signed out of iCloud. Sync pauses and the notes stay.
+  fix: Sign in to iCloud. (sign_in_to_icloud)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help sync_signed_out
+
+[exit 1]
+knot: error[sync_account_changed]: The device signed in to another iCloud account. Nothing uploads before the answer.
+  fix: Answer, in Knot, whether to upload the notes on this device. (answer_upload_question)
+  retry: not safe
+  written: nothing
+  more: knot help sync_account_changed
+
+[exit 1]
+knot: error[sync_zone_removed]: The notes were removed from iCloud. This device keeps its notes and pauses sync.
+  fix: Answer, in Knot, whether to upload the notes on this device. (answer_upload_question)
+  retry: not safe
+  written: nothing
+  more: knot help sync_zone_removed
+
+[exit 1]
+knot: error[sync_mass_delete_paused]: A fetch would delete more than the set share of the local notes, so sync paused.
+  fix: Answer, in Knot, whether to upload the notes on this device. (answer_upload_question)
+  retry: not safe
+  written: nothing
+  more: knot help sync_mass_delete_paused
+
+[exit 1]
+knot: error[sync_upload_needs_consent]: A restored store waits for consent before it uploads.
+  fix: Answer, in Knot, whether to upload the notes on this device. (answer_upload_question)
+  retry: not safe
+  written: nothing
+  more: knot help sync_upload_needs_consent
+
+[exit 1]
+knot: error[sync_transient]: The network, the account or the service is not available for now, or the server limits requests. The engine retries by itself, and `context.retryAt` says when, when the server gave a time.
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help sync_transient
+
+[exit 1]
+knot: error[sync_server_record_changed]: The server holds a newer version of a record. It is merged like a fetched record and sent again.
+  fix: Try again now. (retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help sync_server_record_changed
+
+[exit 1]
+knot: error[sync_zone_missing]: A send found the zone missing: the user deleted it, or it went with a reset of the encrypted data. It leads to the zone-removed pause.
+  fix: Answer, in Knot, whether to upload the notes on this device. (answer_upload_question)
+  retry: not safe
+  written: nothing
+  more: knot help sync_zone_missing
+
+[exit 1]
+knot: error[sync_limit_exceeded]: A batch was over the server's limits. The adapter splits it and sends again.
+  fix: Try again now. (retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help sync_limit_exceeded
+
+[exit 1]
+knot: error[sync_quota_exceeded]: The user's iCloud storage is full. Sending stops until the person frees some, and the status says so. A retry after that is safe.
+  fix: Free iCloud storage, which is full. (free_icloud_storage)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help sync_quota_exceeded
+
+[exit 1]
+knot: error[sync_unknown_item]: A record is gone from the server. The rule of a long absence decides what follows (`docs/architecture.md` §11).
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help sync_unknown_item
+
+[exit 1]
+knot: error[sync_final]: Any other error of the engine. No retry fixes it on this device.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: nothing
+  more: knot help sync_final
+
+[exit 2]
+knot: error[text_too_long]: Text is longer than the door it came through allows, such as a title of more than 200 characters.
+  fix: Make the text shorter. (shorten_text)
+  retry: not safe
+  written: nothing
+  more: knot help text_too_long
+
+[exit 5]
+knot: error[capture_id_conflict]: The same capture ID with different content.
+  fix: Use a new capture ID for new content. (use_new_capture_id)
+  retry: not safe
+  written: nothing
+  more: knot help capture_id_conflict
+
+[exit 1]
+knot: error[capture_invalid]: A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a recording that ends stored with no file, or a negative content revision. `record`, `checkpoint` and `end` refuse it, and nothing was written. `setPeaks` refuses level peaks that `RecordingPeaks.isStorable` does not take, bytes of another format or more values than thirty minutes have, and nothing was written either. An inbox item that does not fit is `inbox_item_unreadable` instead.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: nothing
+  more: knot help capture_invalid
+
+[exit 5]
+knot: error[revision_stale]: The segment or note changed since the revision the caller read.
+  fix: Read the note or segment again and use its current revision. (read_again)
+  retry: not safe
+  written: nothing
+  more: knot help revision_stale
+
+[exit 5]
+knot: error[revision_foreign]: A revision from another store, or from before a restore of this one.
+  fix: Read the note or segment again and use its current revision. (read_again)
+  retry: not safe
+  written: nothing
+  more: knot help revision_foreign
+
+[exit 5]
+knot: error[cursor_foreign]: A cursor from another store, or from another generation of this one.
+  fix: Read the changes again from the start, without a cursor. (read_from_start)
+  retry: not safe
+  written: nothing
+  more: knot help cursor_foreign
+
+[exit 5]
+knot: error[cursor_ahead_of_store]: A cursor ahead of the store's change counter.
+  fix: Read the changes again from the start, without a cursor. (read_from_start)
+  retry: not safe
+  written: nothing
+  more: knot help cursor_ahead_of_store
+
+[exit 3]
+knot: error[not_found]: No note or segment has that ID.
+  fix: Read the note or segment again and use its current revision. (read_again)
+  retry: not safe
+  written: nothing
+  more: knot help not_found
+
+[exit 3]
+knot: error[id_ambiguous]: The end of an ID given matches more than one note or segment.
+  fix: Give a full ID, or more of its last characters. (give_more_of_the_id)
+  retry: not safe
+  written: nothing
+  more: knot help id_ambiguous
+
+[exit 5]
+knot: error[note_deleted]: A capture was asked into a note that is deleted.
+  fix: Read the note or segment again and use its current revision. (read_again)
+  retry: not safe
+  written: nothing
+  more: knot help note_deleted
+
+[exit 5]
+knot: error[segment_capture_open]: The segment's capture is still open in the app, so it cannot be edited, deleted or moved.
+  fix: Wait for the capture to end in the app. (wait_for_capture_to_end)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help segment_capture_open
+
+[exit 5]
+knot: error[remove_recording_refused_no_text]: "Remove recording" of a segment that has no text yet. The recording is all there is, and its transcribe job still needs it; once the segment has text, the recording can go and the text stays (`docs/product-spec.md` §7).
+  fix: Try again a little later, unchanged. (wait_and_retry)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help remove_recording_refused_no_text
+
+[exit 5]
+knot: error[move_refused_open_capture]: A move of a segment whose capture is open.
+  fix: Wait for the capture to end in the app. (wait_for_capture_to_end)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help move_refused_open_capture
+
+[exit 5]
+knot: error[move_refused_deleted_segment]: A move of a deleted segment.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help move_refused_deleted_segment
+
+[exit 5]
+knot: error[move_refused_conflict_copy]: A move of a conflict copy, which always stays with the segment it copies.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help move_refused_conflict_copy
+
+[exit 5]
+knot: error[move_refused_only_segment]: A move of the only live segment of its note, apart from its own conflict copies.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help move_refused_only_segment
+
+[exit 5]
+knot: error[return_refused_note_changed]: A return after the segment's note changed again since the move.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help return_refused_note_changed
+
+[exit 5]
+knot: error[return_refused_note_gone]: A return to a note that is deleted or gone.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help return_refused_note_gone
+
+[exit 3]
+knot: error[return_refused_no_move]: A return with no move to undo on this device in the last 30 days.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help return_refused_no_move
+
+[exit 1]
+knot: error[job_died_twice]: A job was found running at launch twice. The process died inside it each time.
+  fix: Try again now. (retry)
+  retry: safe, once
+  written: content_kept
+  more: knot help job_died_twice
+
+[exit 1]
+knot: error[illegal_transition]: A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: nothing
+  more: knot help illegal_transition
+
+[exit 2]
+knot: error[hotkey_invalid]: A hotkey needs at least one modifier, or must be a function key.
+  fix: Choose another hotkey. (choose_another_key)
+  retry: not safe
+  written: nothing
+  more: knot help hotkey_invalid
+
+[exit 2]
+knot: error[hotkey_taken]: Another app already uses that key.
+  fix: Choose another hotkey. (choose_another_key)
+  retry: not safe
+  written: nothing
+  more: knot help hotkey_taken
+
+[exit 2]
+knot: error[append_window_invalid]: An append window outside its range.
+  fix: Nothing is needed. (none)
+  retry: not safe
+  written: nothing
+  more: knot help append_window_invalid
+
+[exit 2]
+knot: error[usage_missing_text]: A command that takes text got none, or got text that is empty. Nothing was written.
+  fix: Read the usage, which knot help prints, and run the command again as it says. (see_usage)
+  retry: not safe
+  written: nothing
+  more: knot help usage_missing_text
+
+[exit 2]
+knot: error[usage_unknown_command]: The first word is not a command.
+  fix: Read the usage, which knot help prints, and run the command again as it says. (see_usage)
+  retry: not safe
+  written: nothing
+  more: knot help usage_unknown_command
+
+[exit 2]
+knot: error[usage_invalid_argument]: A flag or an argument the command does not take, one that lacks its value, a value it cannot read, or a required argument other than text that is missing. Nothing was written.
+  fix: Read the usage, which knot help prints, and run the command again as it says. (see_usage)
+  retry: not safe
+  written: nothing
+  more: knot help usage_invalid_argument
+
+[exit 4]
+knot: error[access_off]: Command-line access is off on this Mac.
+  fix: The owner turns on command-line access in Knot's Settings on this Mac. The tool cannot turn it on. (turn_on_command_line_access)
+  retry: safe, as often as needed
+  written: nothing
+  more: knot help access_off
+
+[exit 1]
+knot: error[port_unavailable]: A port of `AppEnvironment.unavailable`: its package has not filled it in yet.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: nothing
+  more: knot help port_unavailable
+
+[exit 1]
+knot: error[unexpected]: Anything else. It carries a request ID once the logging facade records one.
+  fix: Report the problem with its code. (report_problem)
+  retry: not safe
+  written: unknown
+  more: knot help unexpected
+
