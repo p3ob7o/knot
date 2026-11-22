@@ -788,11 +788,27 @@ step_launch() {
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds, 60: the first
-    # probe compiles its script, which a loaded Mac makes slow. The probe reads only what
-    # needs no Screen Recording permission; the Mac UI tests are the mac-ui step. Afterwards
-    # neither the app nor anything it started may be left running.
-    local mac status=0
+    # The Mac app (step_launch_mac). Its app has the bundle ID of every worktree's development
+    # build, so it would come to the front beside another worktree's Mac UI test: it holds the
+    # exclusive Mac UI slot for as long as the app is up, and no second build slot, since this
+    # step holds one already (item 105).
+    "$KNOT_SCRIPTS/build-slot.sh" run --mac-ui-only --label launch-mac -- "$KNOT_SCRIPTS/verify.sh" --in-step launch-mac
+}
+
+# The launch step's Mac part. It builds the Debug Mac app it starts, which after the apps step
+# has nothing to do, so that --only launch never starts an old one. The Mac app puts a window
+# on screen within KNOT_APP_START_LIMIT seconds, 60: the first probe compiles its script,
+# which a loaded Mac makes slow. The probe reads only what needs no Screen Recording
+# permission; the Mac UI tests are the mac-ui step. Afterwards neither the app nor anything
+# it started may be left running.
+step_launch_mac() {
+    local mac status=0 log="$KNOT_LOGS/verify-launch-mac-build.log"
+    : >"$log"
+    if ! knot_run_limited "The Debug build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build; then
+        echo "The Debug build of Knot-macOS for the launch failed. Its log is ${log#"$KNOT_ROOT"/}."
+        return 1
+    fi
     mac="$(products Debug)/Knot.app"
     knot_start_app "${KNOT_APP_START_LIMIT:-60}" "$mac/Contents/MacOS/Knot" \
         xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?

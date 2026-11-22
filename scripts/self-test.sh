@@ -1488,6 +1488,59 @@ else
     fail "the scan for debug launch arguments: the list '$debug_list'; a file that holds one '$debug_holds'; a clean one '$debug_clean'"
 fi
 
+# The launch step's Mac part and the desktop (item 105). Its app has the bundle ID of every
+# worktree's development build, so it comes to the front beside another worktree's Mac UI
+# test: it takes the exclusive Mac UI slot for as long as its app is up, and no second build
+# slot. And it builds the Mac app it starts, so that --only launch never starts an old one.
+# a. build-slot.sh run --mac-ui-only holds the Mac UI slot and no build slot while its
+#    command runs.
+ms="$scratch/mac-ui-only"
+mkdir -p "$ms/slots"
+KNOT_SLOT_DIR="$ms/slots" "$KNOT_SCRIPTS/build-slot.sh" run --mac-ui-only --label self-test -- \
+    bash -c 'for lock in "$1"/*.lock; do /usr/bin/lockf -s -t 0 -k "$lock" true || echo "held $(basename "$lock")"; done' _ "$ms/slots" \
+    >"$ms/held" 2>&1 || true
+# b. The Mac part builds the app, then starts it: a copy of scripts/ whose xcb and app start
+#    are stand-ins that write what they did, run as the launch step runs it.
+cp -R "$KNOT_SCRIPTS" "$ms/scripts"
+mkdir -p "$ms/tree/.build/logs"
+cp "$KNOT_SELF/.xcode-version" "$ms/tree/"
+python3 -I - "$ms/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("xcb", 'echo built >>"$KNOT_MAC_PART"'),):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+old = 'step_launch_mac() {'
+# On a version with no Mac part of its own, the edit finds nothing and the case says so.
+text = text.replace(old, 'knot_start_app() { echo started >>"$KNOT_MAC_PART"; echo "windows: 1 layer 0 320x240"; }\n' + old, 1)
+open(path, "w").write(text)
+PY
+env KNOT_MAC_PART="$ms/did" KNOT_TREE="$ms/tree" KNOT_SLOT_DIR="$ms/slots" \
+    "$ms/scripts/verify.sh" --in-step launch-mac >"$ms/part.out" 2>&1 || true
+# c. The launch step starts its Mac part only that way, as a call of build-slot.sh with
+#    --mac-ui-only, read with the wiring check's own shell reader.
+launch_wiring="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$KNOT_SCRIPTS/verify.sh" <<'PY'
+import os, re, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+text = open(sys.argv[2]).read()
+start = text.index("step_launch() {")
+body = text[start:text.index("\n}\n", start)]
+calls = [k.command_words(k.shell_words(segment), {}, {}) for _, _, segment in k.shell_segments(body)]
+slot = [w for w in calls if w and os.path.basename(w[0]) == "build-slot.sh"]
+starts = [w for w in calls if w and w[0] == "knot_start_app"]
+print("slot" if any("--mac-ui-only" in w and "launch-mac" in w for w in slot) else "no-slot", "start" if starts else "no-start")
+PY
+)"
+if [[ "$(cat "$ms/held")" == "held mac-ui.lock" && "$(tr '\n' ' ' <"$ms/did" 2>/dev/null)" == "built started " &&
+    $launch_wiring == "slot no-start" ]]; then
+    pass "the launch step's Mac part holds the Mac UI slot and no build slot, and builds the app before it starts it"
+else
+    fail "the launch step's Mac part: locks held '$(tr '\n' ' ' <"$ms/held")'; what the part did '$(tr '\n' ' ' <"$ms/did" 2>/dev/null)'; the step's calls '$launch_wiring'"
+fi
+
 # The step's place in each tier: after package-test in --full and in the gate's leaf and
 # everything depths, and in neither --quick nor the gate of documents alone. And the live
 # smoke step's: last in --full and the everything depth, after launch and mac-ui, whose
