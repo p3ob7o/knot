@@ -40,7 +40,7 @@
 # before anything else, because every path of the run depends on it.
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
-    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}"; fi
+    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}" KNOT_TREE_NAMED=1; fi
 done
 source "$(dirname "$0")/lib/common.sh"
 

@@ -123,6 +123,14 @@ KNOT_TREE=<gate worktree> ~/knot/scripts/bootstrap.sh
 
 The build products, the logs and the status line go to the tree's own `.build/`. A pull request that changes `scripts/` is the stated exception: the orchestrator then runs the candidate's own scripts, `<gate worktree>/scripts/verify.sh --gate --branch …`, and says so in the journal. The gate prints which scripts checked which tree, by commit.
 
+**A replay, and the tree a script inherits.** A script's tree comes from `KNOT_TREE` when the environment holds one, and every script exports its own, so that a step in its own process checks the same tree. A replay of a worktree's scripts therefore starts them through that worktree's own `scripts/build-slot.sh`, from inside it:
+
+```sh
+cd <worktree> && scripts/build-slot.sh run --label replay -- scripts/verify.sh --only package-test
+```
+
+Started through another checkout's `build-slot.sh`, the worktree's scripts would inherit that checkout's tree and build and test it, silently: on 2026-11-21 a replay ran 18 times on the main checkout, each `swift test --filter` matching nothing. So `scripts/lib/common.sh` refuses a `KNOT_TREE` that is still the tree another checkout's scripts exported (`knot-tree-inherited`). A tree that `--tree` names, or one named with `KNOT_TREE_NAMED=1` beside it, is taken as named. So is one that differs from what was exported. The exporting scripts' own children inherit it, as the gate's steps do.
+
 **A trial of a scripts pull request on another head.** To see a pull request that changes `scripts/` run another package's gate before it merges, the orchestrator checks out the other head in a scratch worktree, merges the scripts pull request's head into it, not main alone, and runs that worktree's own scripts with `--base` at the scripts pull request's head:
 
 ```sh

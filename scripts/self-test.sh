@@ -82,6 +82,42 @@ else
     fail "a run that waited reported: $(cat "$scratch/waiter.err")"
 fi
 
+# 1d. The tree a script works on is never inherited from another checkout's scripts (item
+#     108): two scratch checkouts, a and b. b's common.sh sourced by a command that a's
+#     build-slot.sh runs refuses the tree that a's scripts exported, where before it built and
+#     tested a silently. A command of a's own scripts takes a's tree; b's own build-slot.sh
+#     gives b's; a tree named in the command's own environment is taken as named; and a tree
+#     that --tree named, as the gate's in-step children inherit it, stands.
+tc="$scratch/tree-checkouts"
+for checkout in a b; do
+    mkdir -p "$tc/$checkout"
+    cp -R "$KNOT_SCRIPTS" "$tc/$checkout/scripts"
+    cp "$KNOT_SELF/.xcode-version" "$tc/$checkout/"
+done
+tree_a="$(cd "$tc/a" && pwd -P)" tree_b="$(cd "$tc/b" && pwd -P)"
+tree_of() { # tree_of <build-slot.sh's checkout> <common.sh's checkout> [env…]: the tree, or the refusal's code
+    # The env words go to build-slot.sh; KNOT_SELF_TEST_NAME, when set, is a tree that the
+    # command itself names, with KNOT_TREE_NAMED=1 beside it.
+    local slot=$1 sourced=$2
+    shift 2
+    env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED "$@" KNOT_SLOT_DIR="$tc/slots" \
+        "$tc/$slot/scripts/build-slot.sh" run -- \
+        bash -c 'if [[ -n ${KNOT_SELF_TEST_NAME:-} ]]; then export KNOT_TREE=$KNOT_SELF_TEST_NAME KNOT_TREE_NAMED=1; fi
+            source "$1/scripts/lib/common.sh"; echo "tree $KNOT_ROOT"' _ "$tc/$sourced" 2>&1 |
+        sed -n -E 's/^(tree .*|FAIL [a-z-]+)$/\1/p' | head -n 1 || true
+}
+inherited="$(tree_of a b)"
+own_a="$(tree_of a a)"
+own_b="$(tree_of b b)"
+named_b="$(tree_of a b KNOT_SELF_TEST_NAME="$tree_a")"
+gate_b="$(tree_of a a KNOT_TREE="$tree_b")"
+if [[ $inherited == "FAIL knot-tree-inherited" && $own_a == "tree $tree_a" && $own_b == "tree $tree_b" &&
+    $named_b == "tree $tree_a" && $gate_b == "tree $tree_b" ]]; then
+    pass "a script refuses the tree that another checkout's scripts exported, and takes its own, a named one and the gate's"
+else
+    fail "the inherited tree: another checkout's '$inherited', its own '$own_a' and '$own_b', named '$named_b', the gate's '$gate_b'"
+fi
+
 # 2. A failure prints the agreed fields: a code, what failed, the fix, whether a retry is
 #    safe, and what was changed, and exits 1.
 status=0
