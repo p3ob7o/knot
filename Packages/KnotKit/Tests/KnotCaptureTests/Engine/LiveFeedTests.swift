@@ -10,7 +10,9 @@ import Testing
 @Suite struct LiveFeedTests {
     private static func feed() -> (LiveFeed, AsyncStream<AudioChunk>.Continuation) {
         let (audio, sink) = AsyncStream.makeStream(of: AudioChunk.self)
-        return (LiveFeed(capture: CaptureID(uuid: UUID()), audio: audio, transcriber: nil, log: KnotLog(.capture)), sink)
+        return (
+            LiveFeed(capture: CaptureID(uuid: UUID()), audio: audio, transcriber: nil, log: KnotLog(.capture)), sink
+        )
     }
 
     @Test func aSlowConsumerGetsTheNewestLevel() async throws {
