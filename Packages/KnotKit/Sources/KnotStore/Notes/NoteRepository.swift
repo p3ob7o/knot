@@ -434,10 +434,43 @@ public final class NoteRepository: NoteStore {
             }
             segment.assetID = nil
             try tx.put(segment)
+            // The recording's peaks go with it.
+            try tx.setPeaks(nil, of: segmentID)
             try tx.removeAsset(assetID)
             try tx.retireAsset(assetID)
             try tx.touch(segment.noteID, counter: tx.nextCounter(), at: tx.now())
             return .commit(asset)
+        }
+    }
+
+    // MARK: Peaks
+
+    public func setPeaks(_ peaks: Data, of segmentID: SegmentID) async throws(KnotError) {
+        try await write { tx in
+            guard let segment = try tx.segment(segmentID) else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            // A voice segment with its recording: none yet, or one removed, has nothing to keep
+            // them with.
+            guard segment.kind == .voice, let assetID = segment.assetID, try tx.asset(assetID) != nil else {
+                throw KnotError.illegalTransition.with(.init(segmentID: segmentID))
+            }
+            guard RecordingPeaks.isStorable(peaks) else {
+                throw KnotError.captureInvalid.with(.init(segmentID: segmentID))
+            }
+            // The same bytes again change nothing. Others are a change of the segment, which
+            // moves the cursor and is logged for sync, and leaves its own revision as it is.
+            guard try tx.peaks(of: segmentID) != peaks else { return .rollback(()) }
+            try tx.setPeaks(peaks, of: segmentID)
+            try tx.touch(segment.noteID, counter: tx.nextCounter(), at: tx.now())
+            return .commit(())
+        }
+    }
+
+    public func peaks(of segmentID: SegmentID) async throws(KnotError) -> Data? {
+        try await read { tx in
+            guard try tx.exists(segmentID) else { throw KnotError.notFound.with(.init(segmentID: segmentID)) }
+            return try tx.peaks(of: segmentID)
         }
     }
 

@@ -84,6 +84,15 @@ public struct RecordingPeaks: Hashable, Sendable {
         self.init(framesPerValue: Int(stretch), values: Array(bytes[Self.headerLength...]))
     }
 
+    /// Whether `data` is peaks a store keeps with a recording: it reads as this format, and holds
+    /// no more values than a recording of `Limits.longestRecording` has at 50 ms a value, 36,000.
+    /// A value is one byte, so that is 36,012 bytes with the header. A file of peaks does not say
+    /// its sample rate, so the bound is on the values. Both stores and the `NoteStore` suite hold
+    /// peaks to it.
+    public static func isStorable(_ data: Data) -> Bool {
+        data.count <= headerLength + Int(Limits.longestRecording) * 20 && RecordingPeaks(reading: data) != nil
+    }
+
     /// The values that cover the first `frames` frames of the audio, none past its end: peaks
     /// that ran ahead of the audio are held to its length.
     public func held(toFrames frames: Int64) -> [UInt8] {

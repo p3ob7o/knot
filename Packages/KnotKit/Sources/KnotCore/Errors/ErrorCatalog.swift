@@ -275,7 +275,8 @@ extension KnotError {
     /// A capture, or its end, that does not fit its kind: a body of another kind, a file whose
     /// digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a
     /// recording that ends stored with no file, or a negative content revision. Refused by
-    /// `record`, `checkpoint` and `end`, with nothing written.
+    /// `record`, `checkpoint` and `end`, with nothing written; and by `setPeaks`, for peaks that
+    /// `RecordingPeaks.isStorable(_:)` does not take.
     public static let captureInvalid = KnotError(
         code: "capture_invalid", next: .reportProblem, retry: .notSafe, written: .nothing, exitStatus: .unexpected)
     /// The segment or note changed since the revision the caller read.
@@ -344,7 +345,7 @@ extension KnotError {
         code: "job_died_twice", next: .retry, retry: .safe(times: 1), written: .contentKept,
         exitStatus: .unexpected)
     /// A state machine was asked for a transition it does not have, or the store for a change
-    /// its rules do not allow.
+    /// its rules do not allow, such as peaks for a segment with no recording.
     public static let illegalTransition = KnotError(
         code: "illegal_transition", next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)

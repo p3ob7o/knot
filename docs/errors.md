@@ -620,7 +620,7 @@ The same capture ID with different content.
 
 ### `capture_invalid`
 
-A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a recording that ends stored with no file, or a negative content revision. `record`, `checkpoint` and `end` refuse it, and nothing was written. An inbox item that does not fit is `inbox_item_unreadable` instead.
+A capture, or its end, that does not fit its kind: a body of another kind, a file whose digest is not 64 hexadecimal digits, a recording or drawing that starts with its file, a recording that ends stored with no file, or a negative content revision. `record`, `checkpoint` and `end` refuse it, and nothing was written. `setPeaks` refuses level peaks that `RecordingPeaks.isStorable` does not take, bytes of another format or more values than thirty minutes have, and nothing was written either. An inbox item that does not fit is `inbox_item_unreadable` instead.
 
 - Class: failure
 - Next: report_problem
@@ -804,7 +804,7 @@ A job was found running at launch twice. The process died inside it each time.
 
 ### `illegal_transition`
 
-A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, or a transcription run whose resume point is not after its start.
+A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed.
 
 - Class: failure
 - Next: report_problem
