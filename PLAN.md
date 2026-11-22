@@ -216,6 +216,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
+| WP-12 | 12a | The recorder's tests wait by an order and not by a bound: two waits of ten seconds ran out together at a loaded gate under the strict pool | WP-12 PR 2 |
 | WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
