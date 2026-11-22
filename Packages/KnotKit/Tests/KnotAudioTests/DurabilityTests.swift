@@ -15,7 +15,9 @@ import Testing
     /// those frames. The layer reads the file's length as each sync begins, and holds the sync
     /// until one more write has landed in the file, so that a recorder counting what it writes
     /// during the sync shows it. The test also asks that a write did land inside a sync: without
-    /// one, such a recorder could not be told apart.
+    /// one, such a recorder could not be told apart. The audio does not run dry, so every held
+    /// sync gets its write, whatever the load; the layer holds none once the test releases it,
+    /// before the stop.
     @Test(arguments: [false, true])
     func eachDurableCountFollowsASyncOfTheWorkingFile(privateForm: Bool) async throws {
         let folder = try ScratchFolder(privateForm: privateForm)
@@ -24,7 +26,7 @@ import Testing
             file: folder.locations.recordingAudio(request.captureID, format: .caf),
             folder: folder.locations.recording, slowSync: true)
         let recorder = LiveRecorder(
-            locations: folder.locations, layer: layer, input: injected(frames: 32_000),
+            locations: folder.locations, layer: layer, input: injected(),
             settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)))
         let session = try await recorder.start(request)
         let checked: [String] =
@@ -44,6 +46,7 @@ import Testing
             } ?? []
         #expect(!checked.isEmpty && checked.allSatisfy { $0 == "ok" }, "\(checked)")
         #expect(layer.syncsWithAWriteInside > 0, "No write landed inside a sync of the working file.")
+        layer.release()
         _ = await session.stop()
     }
 
@@ -103,8 +106,11 @@ import Testing
 
 /// The drive's file layer, observing one working file and its folder: each completed sync of the
 /// file, with the frames it held as the sync began and whether its header was closed, and each
-/// sync of the folder while the file exists. With `slowSync`, a sync of the file is held until one
-/// more write lands in the file, for at most 200 ms.
+/// sync of the folder while the file exists. With `slowSync`, a sync of the file while it holds
+/// frames and is open is held until one more write lands in it, or until the test releases the
+/// layer, as it does before its stop: a sync during a recording that is fed has a write inside
+/// it by order, not by a time. The hold is on the session's queue, never on the pool, and ends
+/// at `SuiteWait.limit` at the latest.
 ///
 /// A path the recorder gives is compared with a known one as written: both come from one
 /// `StoreLocations`. `standardizedFileURL` would read the same folder two ways, with `/private`
@@ -118,6 +124,7 @@ final class ObservingLayer: FileLayer {
     private let seen = Mutex<(syncs: Int, closedSyncs: Int, framesAtBegin: Int64, folderSyncs: Int, writesInside: Int)>(
         (0, 0, 0, 0, 0))
     private let placements = Mutex<[Bool]>([])
+    private let released = Flag()
 
     init(file: URL, folder: URL, manifest: URL? = nil, slowSync: Bool = false) {
         self.file = file.path
@@ -138,14 +145,17 @@ final class ObservingLayer: FileLayer {
     /// Completed syncs of the file during which one more write landed in it.
     var syncsWithAWriteInside: Int { seen.withLock { $0.writesInside } }
 
+    /// No sync is held from here on: before a stop, once no more audio will come.
+    func release() { released.set() }
+
     func syncFile(_ url: URL) throws(KnotError) {
         guard url.path == file else { return try disk.syncFile(url) }
         let frames = WorkingFileReader.contents(of: url)?.frames ?? 0
         let closed = Self.isClosed(url)
         var grew = false
-        if slowSync {
-            let deadline = ContinuousClock.now + .milliseconds(200)
-            while !grew, ContinuousClock.now < deadline {
+        if slowSync, frames > 0, !closed {
+            let deadline = ContinuousClock.now + SuiteWait.limit
+            while !grew, !released.value, ContinuousClock.now < deadline {
                 usleep(1_000)
                 grew = (WorkingFileReader.framesBySize(url) ?? 0) > frames
             }
