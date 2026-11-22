@@ -4,8 +4,9 @@ import KnotCore
 
 /// The schema of the store's database (docs/architecture.md §7).
 ///
-/// Schema version 1 is the schema of the M2 milestone build. Every change after that build is
-/// a numbered migration, whichever package makes it: a `Migration` appended to
+/// Schema version 1 is the schema of the first milestone's build, made from c2a1315b, which
+/// the owner's devices hold. Every change after that build is a numbered migration, whichever
+/// package makes it: a `Migration` appended to
 /// `StoreSchema.migrations`, never an edit of an earlier one. The version lives in
 /// `PRAGMA user_version`, and the store's identity in `store_meta`; `PRAGMA application_id`
 /// marks the file as Knot's, so that a database Knot did not create is refused before
@@ -18,7 +19,9 @@ public enum StoreSchema {
     static let applicationID: Int32 = 0x4B4E_4F54
 
     /// The migrations of this build, in order. Version 1 creates the store.
-    public static let migrations: [Migration] = [Migration(version: 1, apply: createVersion1)]
+    public static let migrations: [Migration] = [
+        Migration(version: 1, apply: createVersion1), Migration(version: 2, apply: migrateToVersion2),
+    ]
 
     /// One numbered step of the schema. It runs inside the migration's transaction.
     public struct Migration: Sendable {
@@ -35,6 +38,35 @@ public enum StoreSchema {
     static func createVersion1(_ db: Database) throws {
         try db.execute(sql: version1)
     }
+
+    /// Version 2: a voice segment keeps its recording's level peaks, in the format of
+    /// `RecordingPeaks`, in `recording_peaks`, empty for every segment there is. A change of
+    /// them is a change of the segment for sync, so the trigger that logs one is made again with
+    /// the column; it is version 1's otherwise.
+    static func migrateToVersion2(_ db: Database) throws {
+        try db.execute(sql: version2)
+    }
+
+    private static let version2 = """
+        ALTER TABLE segment ADD COLUMN recording_peaks BLOB;
+        DROP TRIGGER change_log_segment_update;
+        CREATE TRIGGER change_log_segment_update AFTER UPDATE ON segment
+        WHEN NEW.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing') AND (
+            OLD.note_id IS NOT NEW.note_id OR OLD.kind IS NOT NEW.kind
+            OR OLD.note_generation IS NOT NEW.note_generation OR OLD.origin IS NOT NEW.origin
+            OR OLD.started_at IS NOT NEW.started_at OR OLD.ended_at IS NOT NEW.ended_at OR OLD.text IS NOT NEW.text
+            OR OLD.text_origin IS NOT NEW.text_origin OR OLD.raw_transcript IS NOT NEW.raw_transcript
+            OR OLD.transcription IS NOT NEW.transcription OR OLD.cleanup IS NOT NEW.cleanup
+            OR OLD.recognition IS NOT NEW.recognition OR OLD.processing_owner IS NOT NEW.processing_owner
+            OR OLD.owner_generation IS NOT NEW.owner_generation OR OLD.state IS NOT NEW.state
+            OR OLD.asset_id IS NOT NEW.asset_id OR OLD.duration IS NOT NEW.duration
+            OR OLD.conflict_of IS NOT NEW.conflict_of OR OLD.deleted_at IS NOT NEW.deleted_at
+            OR OLD.piece IS NOT NEW.piece OR OLD.piece_of IS NOT NEW.piece_of
+            OR OLD.recording_peaks IS NOT NEW.recording_peaks) BEGIN
+            INSERT INTO change_log (record_type, record_id) SELECT 'segment', NEW.id
+                WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'segment' AND record_id = NEW.id);
+        END;
+        """
 
     // The text columns hold IDs in their canonical form, lower case with hyphens, whose order
     // is the order of `Identifier`'s fixed tie-break. Dates are `timeIntervalSinceReferenceDate`

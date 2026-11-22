@@ -120,7 +120,7 @@ A milestone build is made from `main` in a fresh worktree by the thread of the o
 | Milestone | Owning package | Also needs |
 |---|---|---|
 | M1 | WP-22 PR 1 | WP-05; WP-06 PR 1; WP-06a; WP-10 PR 1; WP-12 PR 1; WP-17 PR 1; WP-21 PR 1; WP-30 PR 1; WP-32 PR 1; WP-33 PR 1 |
-| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-12 PR 3; WP-13; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
+| M2 | WP-30 PR 2 | WP-11 PR 2; WP-11 PR 3; WP-12 PR 3; WP-13 PR 1; WP-14; WP-15 PR 2; WP-19 PR 2; WP-31 PR 1; WP-22 PR 2; SP-1; the design direction |
 | M3 | WP-32 PR 2 | WP-17 PR 2; WP-19 PR 3; SP-2 |
 | M4 | WP-33 PR 2 | WP-16; WP-34 PR 3; SP-3; SP-4; SP-5 |
 | M5 | WP-35 | WP-18; WP-11 PR 4; WP-16; WP-19 PR 4; WP-31 PR 2 |
@@ -218,6 +218,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
+| WP-13 | 13a | The cancel test no longer rests on a wall-clock second: a test of the transcriber's that failed a gate under load, made right | WP-13 PR 1 |
 | WP-14 | Proof step | The fidelity guard as a pure function with tests, ten cleanup pairs from the owner's recordings once they are on the Mac, and a short note saying whether the draft `Cleaner` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-14 | 1 | The whole package | WP-05 |
 | WP-15 | 1 | The job queue, the inbox ingestor and the published states | WP-05; the contract pull request for the purge of an unreadable item's files |
@@ -238,7 +239,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 22a | The ordering test keeps one live composition per store: a test of the composition's that failed under the strict cooperative pool, made right | WP-22 PR 1 |
-| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
+| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13 PR 1; WP-14 |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |

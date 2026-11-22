@@ -22,8 +22,8 @@
 #                                              gate does: main's scripts on the candidate
 #
 # Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
-# named-tests, package-build, package-test, contract-two-targets, self-test, apps, packaging,
-# launch, mac-ui, soak, perf, tsan, model-report.
+# named-tests, package-build, package-test, package-test-strict, contract-two-targets,
+# self-test, apps, packaging, launch, mac-ui, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
@@ -45,15 +45,15 @@ done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
 model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
-        package-build | package-test | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
+        package-build | package-test | package-test-strict | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
         launch | ios-hosted) echo "--simulators" ;;
         mac-ui) echo "--mac-ui" ;;
         perf) echo "--all" ;;
@@ -143,11 +143,31 @@ xcb() {
     shift
     knot_xcodebuild_settings
     # Xcode writes the team's prefix into the log of every app build on a Mac that knows the
-    # team, so the log is filtered as it is written (knot_filter_team).
-    xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log" # limit: xcb
+    # team, so the log is filtered as it is written (knot_filter_team). xcodebuild's own
+    # output goes to the log; the shell's standard error, where bash reports an xcodebuild
+    # that a signal ended with this script's path, goes nowhere: the step names the signal
+    # itself (ended_by_signal).
+    { xcodebuild -project "$KNOT_PROJECT" "${KNOT_XCODEBUILD[@]}" "$@" 2>&1 | knot_filter_team >>"$log"; } 2>/dev/null # limit: xcb
 }
 
 tool() { python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" "$@"; }
+
+# Swift Testing's event stream, which every step that runs Swift Testing writes and reads:
+# `--event-stream-output-path` with `--event-stream-version 0`, an option of `swift test`
+# that its --help does not list (docs/dev-setup.md). The console can print a cancelled case
+# of a test with arguments as passed, and an event whose reason or name holds a newline over
+# two lines; the stream says what ran.
+#   event_flags <stream>         sets EVENT_FLAGS for swift test, and removes an old stream
+#   check_events <stream>        prints what did not run, and fails on a missing or
+#                                incomplete stream, and at the gate on a test or case that
+#                                did not run (knot_tool.py test-events)
+event_flags() {
+    rm -f "$1"
+    EVENT_FLAGS=(--event-stream-output-path "$1" --event-stream-version 0)
+}
+check_events() {
+    if [[ $TIER == gate ]]; then tool test-events "$1" --gate; else tool test-events "$1"; fi
+}
 
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
@@ -156,13 +176,41 @@ products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
     -maximum-test-execution-time-allowance 300)
 
+# ended_by_signal <what> <status> <limit variable>: when an xcodebuild run ended by a signal
+# that the step's limit did not send, a status above 128 with no limit hit, it says so, with
+# the signal's number and name, and returns 0, so that the step fails on it at once and does
+# not judge the run as one with no tests. Something outside the step sent it.
+ended_by_signal() {
+    local what=$1 status=$2 limit=$3
+    ((status > 128 && KNOT_LIMIT_HIT == 0)) || return 1
+    echo "$what: xcodebuild ended by signal $((status - 128)) ($(kill -l $((status - 128)) 2>/dev/null || echo unknown)), which this step's limit ($limit) did not send: a process outside the step ended the run, so it says nothing of the tests."
+}
+
+# report_skips <what> <log>: the skipped or cancelled tests of a test log that is not the
+# step's own, as XCTest's and the hosted run's are (knot_skipped_tests, which reads XCTest's
+# "Test Case '…' skipped" too). It prints their lines once, as they are, so that the summary,
+# which reads the step's log, counts them; and at the gate it fails, since the gate requires
+# every test to run, as it does for the package's tests.
+report_skips() {
+    local skipped
+    skipped="$(knot_skipped_tests "$2")"
+    [[ -n $skipped ]] || return 0
+    echo "$1: skipped or cancelled:"
+    printf '%s\n' "$skipped"
+    if [[ $TIER == gate ]]; then
+        echo "$1: the gate requires every test to run."
+        return 1
+    fi
+}
+
 # ui_tests <what> <log> [destination name…] -- <xcodebuild arguments…>
 # Runs one UI test bundle, which the arguments name with -only-testing. xcodebuild's own test
 # limits are on, so a case that hangs fails after its allowance, and an outer limit round the
 # whole call (KNOT_UI_TEST_LIMIT, 20 minutes) ends a run that a system dialog holds. The
 # results are read first: a run that executed no test, a failed case, or a destination with
-# no pass fails (knot_xctest_result). Then xcodebuild's own status: a run whose cases passed
-# and that still exited with an error fails too.
+# no pass fails (knot_xctest_result), and the step's log then gives the failed cases' error
+# lines and names the long log (knot_xctest_failures). Then xcodebuild's own status: a run
+# whose cases passed and that still exited with an error fails too.
 ui_tests() {
     local what=$1 log=$2 limit=${KNOT_UI_TEST_LIMIT:-1200} status=0
     local destinations=()
@@ -174,7 +222,13 @@ ui_tests() {
     shift
     knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
-    knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"} || return 1
+    ! ended_by_signal "$what" "$status" KNOT_UI_TEST_LIMIT || return 1
+    if ! knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"}; then
+        # The reason is in the long log; the step's own log, which a failure shows, gives it.
+        knot_xctest_failures "$log"
+        return 1
+    fi
+    report_skips "$what" "$log" || return 1
     if ((status != 0)); then
         echo "$what: xcodebuild exited with $status after the cases above. Its log is $log."
         return 1
@@ -261,7 +315,15 @@ step_format() {
         scripts/lib/models.swift)
 }
 
-step_lint() { (cd "$KNOT_ROOT" && tool lint); }
+# The lint, and the tree's workflows: the nightly one makes the audio before the package
+# tests under Thread Sanitizer (knot_tool.py workflows). The workflow is read here, on the
+# tree, since the self-test reads its own checkout; the lint runs at every depth of the gate.
+step_lint() {
+    local status=0
+    (cd "$KNOT_ROOT" && tool lint) || status=$?
+    (cd "$KNOT_ROOT" && tool workflows) || status=1
+    return "$status"
+}
 
 # The signing team's ID in no tracked file. Without the owner's local configuration on this
 # Mac there is no ID to look for: the step then exits 3 and counts as skipped, never as
@@ -399,15 +461,16 @@ step_package_build() {
 
 step_package_test() {
     knot_swiftpm_flags
-    local filter=() output="$KNOT_LOGS/verify-package-test.out"
+    local filter=() output="$KNOT_LOGS/verify-package-test.out" stream="$KNOT_LOGS/verify-package-test-events.jsonl"
     if [[ -n $MODULE ]]; then
         # The Swift module of a test target turns "-" into "_": knot-evalTests is
         # knot_evalTests.
         filter=(--filter "^${TEST_TARGET//-/_}\.")
     fi
+    event_flags "$stream"
     package_tests() {
         swift test "${KNOT_SWIFTPM_FLAGS[@]}" --explicit-target-dependency-import-check error \
-            ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
+            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} 2>&1 | tee "$output" # limit: package_tests
     }
     knot_swift_test_limited package-test package_tests
     # A run that matched no test is a failure, not a pass.
@@ -415,11 +478,70 @@ step_package_test() {
         echo "No test ran${MODULE:+ for $TEST_TARGET}."
         return 1
     fi
+    # The stream says what ran: a run whose stream is missing or did not end fails, and at
+    # the gate a test or case that did not run fails it, whatever the console printed. The
+    # console's own reading below stays as a second one.
+    check_events "$stream" || return 1
     # The gate requires the on-device models, so a test skipped because a model is missing,
     # or cancelled at run time, fails it (docs/architecture.md §17).
     if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        # Indented, so that the summary, which reads this step's log, counts each test once.
         echo "The gate requires every test to run. Skipped or cancelled:"
-        knot_skipped_tests "$output"
+        knot_skipped_tests "$output" | sed 's/^/    /'
+        return 1
+    fi
+}
+
+# The package's tests once more, with Swift's cooperative pool held strict
+# (LIBDISPATCH_COOPERATIVE_POOL_STRICT=1): one thread for each priority, so that a test whose
+# wait blocks a pool thread while the work that would end it needs a thread of the same
+# priority hangs here, as it does on the three-core hosted runner, where three such waits
+# take every thread (docs/dev-setup.md). It builds the tests without the variable, which
+# package-build has done already, and runs them under it, with a limit of its own
+# (KNOT_STRICT_TEST_LIMIT, 30 minutes). At the limit, or on a failure, it names the tests
+# that had started and not ended, and those that failed. Not in --quick, and not on the
+# hosted runner, which is the other proof.
+step_package_test_strict() {
+    knot_swiftpm_flags
+    local output="$KNOT_LOGS/verify-package-test-strict.out" limit=${KNOT_STRICT_TEST_LIMIT:-1800} status=0
+    local stream="$KNOT_LOGS/verify-package-test-strict-events.jsonl"
+    local filter=()
+    if [[ -n $MODULE ]]; then
+        filter=(--filter "^${TEST_TARGET//-/_}\.")
+    fi
+    : >"$output"
+    event_flags "$stream"
+    strict_build() {
+        swift build "${KNOT_SWIFTPM_FLAGS[@]}" --build-tests --explicit-target-dependency-import-check error # limit: strict_build
+    }
+    strict_tests() {
+        env LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 swift test "${KNOT_SWIFTPM_FLAGS[@]}" --skip-build \
+            "${EVENT_FLAGS[@]}" ${filter[@]+"${filter[@]}"} >"$output" 2>&1 # limit: strict_tests
+    }
+    knot_run_limited "The package build" "$KNOT_BUILD_LIMIT" strict_build || return 1
+    knot_limit "$limit" strict_tests || status=$?
+    cat "$output"
+    local unended
+    unended="$(tool unended-tests "$output")"
+    if ((KNOT_LIMIT_HIT)); then
+        echo "The package's tests under the strict pool did not end within $(knot_duration "$limit") (KNOT_STRICT_TEST_LIMIT)."
+        echo "A test may be blocking a thread of the cooperative pool while the work that would end its wait needs a thread of the same priority. These had started and not ended:"
+        printf '%s\n' "${unended:-    none that Swift Testing printed}" | sed 's/^/    /'
+        return 1
+    fi
+    if ((status != 0)); then
+        echo "The package's tests failed under the strict pool. A test that fails here and passes in package-test may be blocking a thread of the cooperative pool:"
+        printf '%s\n' "${unended:-    none that Swift Testing named}" | sed 's/^/    /'
+        return 1
+    fi
+    if ! grep -E 'Test run with [1-9][0-9]* tests?' "$output" >/dev/null; then
+        echo "No test ran${MODULE:+ for $TEST_TARGET} under the strict pool."
+        return 1
+    fi
+    check_events "$stream" || return 1
+    if [[ $TIER == gate && -n "$(knot_skipped_tests "$output")" ]]; then
+        echo "The gate requires every test to run. Skipped or cancelled under the strict pool:"
+        knot_skipped_tests "$output" | sed 's/^/    /'
         return 1
     fi
 }
@@ -436,11 +558,14 @@ step_contract_two_targets() {
         local targets target ran=0
         targets="$(swift test "${KNOT_SWIFTPM_FLAGS[@]}" list 2>/dev/null | grep -e "$suite" | cut -d. -f1 | sort -u)" # limit: contract_runs
         for target in $targets; do
-            swift test "${KNOT_SWIFTPM_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
+            event_flags "$KNOT_LOGS/verify-contract-run-$target-events.jsonl"
+            swift test "${KNOT_SWIFTPM_FLAGS[@]}" "${EVENT_FLAGS[@]}" --filter "^$target\.$suite" >"$output" 2>&1 || { # limit: contract_runs
                 echo "FAIL  the dummy contract suite failed in $target"
                 continue
             }
-            if grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
+            if ! check_events "$KNOT_LOGS/verify-contract-run-$target-events.jsonl"; then
+                echo "FAIL  the dummy contract suite's run in $target did not run every test"
+            elif grep -E 'Test run with 1 test .*passed' "$output" >/dev/null; then
                 echo "ok    the dummy contract suite ran and passed in $target"
                 ran=$((ran + 1))
             else
@@ -578,11 +703,13 @@ step_ios_hosted() {
     knot_run_limited "The hosted iOS tests" "$limit" xcb "$log" -scheme Knot-iOS -configuration Debug \
         -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
+    ! ended_by_signal "The hosted iOS tests" "$status" KNOT_HOSTED_TEST_LIMIT || return 1
     grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."
         return 1
     }
+    report_skips "The hosted iOS tests" "$log" || return 1
     if ((status != 0)); then
         echo "The hosted iOS tests: xcodebuild exited with $status after the tests above. Its log is $log."
         return 1
@@ -761,8 +888,11 @@ step_perf() {
 # The package tests under Thread Sanitizer, as the nightly run does (named test
 # package-tests-under-thread-sanitizer-nightly).
 step_tsan() {
+    local stream="$KNOT_LOGS/verify-tsan-events.jsonl"
+    event_flags "$stream"
     knot_swift_test_limited tsan \
-        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread
+        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$KNOT_BUILD/swiftpm-tsan" --sanitize=thread "${EVENT_FLAGS[@]}"
+    check_events "$stream"
 }
 
 # Reports a change in the on-device models since the last report, as the nightly run on
@@ -884,12 +1014,12 @@ else
                 # ID is most easily written down.
                 documents) STEPS="doctor plan links ownership named-tests lint team-id" ;;
                 leaf)
-                    STEPS="$common package-test contract-two-targets self-test apps launch"
+                    STEPS="$common package-test package-test-strict contract-two-targets self-test apps launch"
                     [[ $gate_hosted == 1 ]] && STEPS="$STEPS ios-hosted" ;;
                 everything)
                     # docs/architecture.md §18: everything adds the two-process test and the
                     # .live smoke tests. They are pending until their packages build them.
-                    STEPS="$common package-test contract-two-targets self-test apps packaging ios-hosted launch"
+                    STEPS="$common package-test package-test-strict contract-two-targets self-test apps packaging ios-hosted launch"
                     STEPS="$STEPS live-smoke two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
@@ -939,8 +1069,15 @@ count_tests() {
     for n in $(grep -E 'Test run with [0-9]+ tests? .* passed' "$log" | sed -E 's/.*Test run with ([0-9]+) tests?.*/\1/'); do
         TESTS_PASSED=$((TESTS_PASSED + n))
     done
-    TESTS_FAILED=$((TESTS_FAILED + $(grep -c -E 'Test .* failed after' "$log" || true)))
-    TESTS_SKIPPED=$((TESTS_SKIPPED + $(knot_skipped_tests "$log" | grep -c . || true)))
+    TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
+    # The console's reading and the event stream's, the larger: a cancelled case prints as
+    # passed, and an event over two lines matches no pattern, while the stream counts both.
+    local console stream=0
+    console=$(knot_skipped_tests "$log" | grep -c . || true)
+    for n in $(sed -n -E 's/^events: [0-9]+ of [0-9]+ runs ended, [0-9]+ tests, ([0-9]+) skipped or cancelled.*/\1/p' "$log"); do
+        stream=$((stream + n))
+    done
+    TESTS_SKIPPED=$((TESTS_SKIPPED + (stream > console ? stream : console)))
     # XCTest cases, such as UI tests, from knot_xctest_result's lines.
     for n in $(sed -n -E 's/^xctest: ([0-9]+) passed, ([0-9]+) failed.*/\1/p' "$log"); do
         TESTS_PASSED=$((TESTS_PASSED + n))
@@ -955,6 +1092,8 @@ export KNOT_VERIFY_TIER=$TIER KNOT_VERIFY_MODULE=$MODULE KNOT_VERIFY_TEST_TARGET
 
 # The steps whose logs hold test results, which the summary counts, whether they pass or fail.
 COUNTED_STEPS="package-test tsan soak ios-hosted launch mac-ui"
+# package-test-strict runs the same tests as package-test, which counts them: the summary
+# adds only its failures.
 for step in $STEPS; do
     log="$KNOT_LOGS/verify-$step.log"
     step_start=$(knot_now)
@@ -1013,6 +1152,7 @@ for step in $STEPS; do
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
         # A failed step's tests count too, so the summary shows its failed cases.
         [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
         [[ -n $MODULE && $step == package-* ]] && rerun="scripts/verify.sh --module $MODULE"

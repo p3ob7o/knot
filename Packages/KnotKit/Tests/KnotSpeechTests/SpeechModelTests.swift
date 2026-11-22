@@ -225,17 +225,6 @@ import Testing
             }
         }
 
-        /// How long a cancel takes to be seen by a task that does nothing but wait: what this
-        /// machine's load adds to any cancel at this moment.
-        static func cancelDelay() async -> Duration {
-            let idle = Task { try? await Task.sleep(for: SuiteWait.limit) }
-            try? await Task.sleep(for: .milliseconds(20))
-            let cancelled = ContinuousClock.now
-            idle.cancel()
-            await idle.value
-            return ContinuousClock.now - cancelled
-        }
-
         /// How long an uncancelled run of `url` takes on this Mac now.
         static func timedRun(_ url: URL) async throws -> (TranscriptionRun, Duration) {
             let started = ContinuousClock.now
@@ -397,29 +386,58 @@ import Testing
         }
 
         @Test func aRunCancelledWhileTheEngineRunsYieldsAtOnce() async throws {
+            // Three runs of the long clip start together, so that the load is the same for all:
+            // the run to cancel, an uncancelled run of this transcriber, and a bare analyzer, the
+            // probe, which is stopped as the cancel stops ours. No sleep orders anything.
             let long = try SpeechClips.url(SpeechClips.long)
-            let (_, uncancelled) = try await SpeechClips.timedRun(long)
-            let transcriber = SpeechClips.transcriber()
-            let before = await SpeechClips.cancelDelay()
+            let analysing = SpeechFlag()
+            let transcriber = SpeechClips.transcriber(hooks: SpeechRunHooks(beforeAnalyzing: { _ in analysing.set() }))
+            let probe = SpeechEngineProbe(file: long)
+            let finished = SpeechFlag()
+            let reference = Task {
+                defer { finished.set() }
+                return try await SpeechClips.transcriber().transcribe(file: long, from: .zero, budget: nil)
+            }
             let run = Task { try await transcriber.transcribe(file: long, from: .zero, budget: nil) }
-            // Long enough for the file to be read and the analyzer to be running.
-            try await Task.sleep(for: uncancelled / 4)
+
+            // The cancel lands while both analyzers run: once ours has been handed its audio,
+            // and the probe has finished two more phrases since.
+            await SuiteWait.until("the run's analyzer to start") { analysing.isSet }
+            let seen = probe.phrases
+            await SuiteWait.until("the probe to go on analysing") { probe.phrases >= seen + 2 }
             let cancelled = ContinuousClock.now
             run.cancel()
-            let result = await SuiteWait.value("the cancelled run to return") { await run.result }
-            let took = ContinuousClock.now - cancelled
-            let after = await SpeechClips.cancelDelay()
+            probe.cancel()
+            let outcome = await SuiteWait.value("the cancelled run to return") {
+                () -> (Result<TranscriptionRun, any Error>, Bool, ContinuousClock.Instant) in
+                let result = await run.result
+                return (result, finished.isSet, ContinuousClock.now)
+            }
+            let stopped = await SuiteWait.value("the probe to stop") { await probe.stopped() }
+            _ = await SuiteWait.value("the uncancelled run to finish") { await reference.result }
+
+            guard let (result, referenceWasDone, returned) = outcome else { return }
+            guard let stopped = stopped ?? nil else {
+                Issue.record("The probe's analysis never returned.")
+                return
+            }
             switch result {
-            case .failure(let error as KnotError)?: #expect(error.code == KnotError.cancelled.code)
+            case .failure(let error as KnotError): #expect(error.code == KnotError.cancelled.code)
             default: Issue.record("A cancelled run throws the yield, and nothing else.")
             }
-            // The engine stops, and does not finish the file.
-            #expect(took < uncancelled / 4, "The engine stops when the run is cancelled, not when it is done.")
-            // Within a second, beside what this machine's load adds to any cancel now.
-            let load = max(before, after)
-            print("speech: a cancelled run came back after \(took), load \(load), uncancelled run \(uncancelled)")
+            // The engine stops when the run is cancelled, not when the file is done: an uncancelled
+            // run of the same file, started at the same moment, is still going.
             #expect(
-                took < .seconds(1) + load, "A cancelled run came back after \(took), with \(load) of load.")
+                !referenceWasDone, "The cancelled run came back only after an uncancelled one had finished the file.")
+            // Within a second of the engine's own stop at that moment (the port: a cancelled run
+            // throws within a second). The probe is stopped as a cancel stops ours, under the
+            // same load, so the second is what the transcriber adds to it.
+            let took = returned - cancelled
+            let engine = stopped - cancelled
+            print("speech: a cancelled run came back after \(took); the engine itself stopped after \(engine)")
+            #expect(
+                took <= engine + .seconds(1),
+                "A cancelled run came back after \(took), the engine stopped after \(engine).")
         }
 
         /// Where a cancel lands in the gap between a run's last check and the analyzer's start.
@@ -607,6 +625,69 @@ import Testing
                 let allowed = name == "SpeechModelTests.swift" && pattern == live ? 1 : 0
                 #expect(uses == allowed, "\(name) uses \(pattern) \(uses) times.")
             }
+        }
+    }
+
+    /// A flag one task sets and another reads.
+    final class SpeechFlag: Sendable {
+        private let value = Mutex(false)
+        var isSet: Bool { value.withLock { $0 } }
+        func set() { value.withLock { $0 = true } }
+    }
+
+    /// A bare analyzer over a file, set up as the transcriber sets up its own, which a test stops
+    /// with `cancelAndFinishNow()` as the transcriber stops its own: what the engine itself takes
+    /// to stop at that moment, under that load.
+    final class SpeechEngineProbe: Sendable {
+        /// What the probe's tasks write and the test reads.
+        private final class Counts: Sendable {
+            private struct State {
+                var phrases = 0
+                var stopped: ContinuousClock.Instant?
+            }
+            private let state = Mutex(State())
+            var phrases: Int { state.withLock { $0.phrases } }
+            var stopped: ContinuousClock.Instant? { state.withLock { $0.stopped } }
+            func phrase() { state.withLock { $0.phrases += 1 } }
+            func stop() { state.withLock { $0.stopped = $0.stopped ?? ContinuousClock.now } }
+        }
+
+        private let counts = Counts()
+        private let analyzer: SpeechAnalyzer
+        private let work: Task<Void, Never>
+
+        init(file: URL) {
+            let module = SpeechModules.file(Locale(identifier: "en_US"))
+            let analyzer = SpeechAnalyzer(modules: [module])
+            let counts = counts
+            self.analyzer = analyzer
+            let collector = Task {
+                do {
+                    for try await result in module.results where result.isFinal { counts.phrase() }
+                } catch {}
+            }
+            work = Task {
+                guard let audio = try? AVAudioFile(forReading: file) else { return }
+                let end = try? await analyzer.analyzeSequence(from: audio)
+                counts.stop()
+                if let end, !Task.isCancelled { try? await analyzer.finalizeAndFinish(through: end) }
+                collector.cancel()
+            }
+        }
+
+        /// How many phrases the probe has finished.
+        var phrases: Int { counts.phrases }
+
+        /// Stops the analyzer, as the transcriber's cancellation handler does.
+        func cancel() {
+            let analyzer = analyzer
+            Task { await analyzer.cancelAndFinishNow() }
+        }
+
+        /// When the analyzer's analysis returned, once it has.
+        func stopped() async -> ContinuousClock.Instant? {
+            await work.value
+            return counts.stopped
         }
     }
 

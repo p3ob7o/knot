@@ -128,13 +128,14 @@
             let before = try await noteCount(database)
             try database.close()
             let locations = StoreLocations.testing(root: root)
-            let copy = StoreCopies.preMigrationCopy(locations, from: 1)
+            let current = StoreSchema.currentVersion
+            let copy = StoreCopies.preMigrationCopy(locations, from: current)
 
             for point in ["inside_pre_migration_copy", "inside_migration"] {
                 let host = try KillableHost(["migrate", root.path, point])
                 #expect(await host.waitFor("stopped \(point)"), "The host reached \(point): \(host.text)")
                 await host.kill()
-                #expect(try version(of: locations) == 1, "Killed at \(point), the store keeps its version.")
+                #expect(try version(of: locations) == current, "Killed at \(point), the store keeps its version.")
                 if point == "inside_pre_migration_copy" {
                     #expect(!FileManager.default.fileExists(atPath: copy.path), "No copy counts that is not whole.")
                 }
@@ -142,7 +143,7 @@
             #expect(FileManager.default.fileExists(atPath: copy.path), "Killed inside the migration, the copy stays.")
 
             database = try openStore(in: root, migrations: StoreSchema.migrations + [crashHostMigration])
-            #expect(try version(of: locations) == 2, "The next launch migrates.")
+            #expect(try version(of: locations) == current + 1, "The next launch migrates.")
             #expect(try await noteCount(database) == before, "Every note is there.")
             let leftovers = try FileManager.default.contentsOfDirectory(atPath: StoreCopies.folder(locations).path)
                 .filter { $0.contains(DurableFile.partialSuffix) }
@@ -152,8 +153,8 @@
         }
     }
 
-    /// The crash host's version 2, as the test applies it after the kill.
-    let crashHostMigration = StoreSchema.Migration(version: 2) { db in
+    /// The crash host's version after this build's newest, as the test applies it after the kill.
+    let crashHostMigration = StoreSchema.Migration(version: StoreSchema.currentVersion + 1) { db in
         try db.execute(sql: "CREATE TABLE crash_host_v2 (id INTEGER PRIMARY KEY)")
     }
 #endif
