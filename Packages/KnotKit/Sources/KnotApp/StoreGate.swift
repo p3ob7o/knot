@@ -164,7 +164,7 @@ struct GatedNoteStore: NoteStore {
         try await notes().ingest(capture)
     }
 
-    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult {
         try await notes().recordKeptItem(item)
     }
 

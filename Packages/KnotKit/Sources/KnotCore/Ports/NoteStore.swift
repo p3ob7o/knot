@@ -90,6 +90,12 @@ public protocol NoteStore: Sendable {
     /// by then, is stored through the failed-row path in the note its failed segment is in,
     /// whatever its own times and placement say, and the files `keptFiles(of:)` named are
     /// cleared in the same transaction, since the caller then removes them.
+    ///
+    /// A row failed with one of `KeptInboxItem.reasons`, a kept item's or one this call wrote for
+    /// an item that does not fit its kind, whose segment was deleted and then purged, is gone:
+    /// the item, whole or not, stores nothing, and the result says `purged`, so that the caller
+    /// removes its files and a deleted entry never comes back. A row that failed for any other
+    /// reason is not gone: in doubt, Knot keeps a capture.
     func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult
 
     /// Writes an item of `Inbox/` that this build cannot read, or that a newer Knot wrote, as
@@ -102,15 +108,15 @@ public protocol NoteStore: Sendable {
     /// resolves against the store's own `Inbox/`; the store never looks in `Inbox/` itself, and
     /// nothing it does removes them.
     ///
-    /// The same capture again changes nothing but that record, which takes the files the call
-    /// names now, and returns the first receipt. Refused with `capture_invalid` for a reason
-    /// that is not one of `KeptInboxItem.reasons`, no file, or a name that
-    /// `KeptInboxItem.isFileName(_:of:)` does not accept; with `capture_id_conflict` when the store holds a capture
-    /// of that ID that is not a kept item. Nothing is written then.
-    ///
-    /// It came after the second pull request merged, so it has a default implementation that
-    /// answers `port_unavailable`: a store written against that pull request still conforms.
-    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt
+    /// It answers as `ingest` does: the receipt, the row's content revision, `applied` when the
+    /// call wrote the row. The same capture again changes nothing but that record, which takes
+    /// the files the call names now, and answers the first receipt, not applied. A capture whose
+    /// row is gone, as `ingest(_:)` says, records nothing and answers `purged`, so that the
+    /// caller removes the item's files. Refused with `capture_invalid` for a reason that is not
+    /// one of `KeptInboxItem.reasons`, no file, or a name that `KeptInboxItem.isFileName(_:of:)`
+    /// does not accept; with `capture_id_conflict` when the store holds a capture of that ID that
+    /// is not a kept item and is not gone. Nothing is written then.
+    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult
 
     /// Saves the text of a typed capture. Saves are ordered by revision: a checkpoint never
     /// lowers the stored revision, so one that arrives late, from a slow save or from
@@ -320,7 +326,9 @@ public protocol NoteStore: Sendable {
     /// Removes notes and segments deleted before `date`, notes left empty and unchanged since
     /// then, and history older than it. A tombstone keeps each deletion reportable. The asset
     /// rows and the peaks of what it removed go too, and the result names the assets' files
-    /// for the caller to remove through the `AssetStore`.
+    /// for the caller to remove through the `AssetStore`. When it removes the failed segment of
+    /// a kept inbox item (`recordKeptItem(_:)`), the result names that item's files in `Inbox/`
+    /// too, as `keptFiles(of:)` named them, for the caller to remove, and the store forgets them.
     func purge(before date: Date) async throws(KnotError) -> PurgeResult
 }
 
@@ -329,11 +337,6 @@ extension NoteStore {
     public func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
         -> SegmentRead
     { throw KnotError.portUnavailable.with(.init(segmentID: segment)) }
-
-    /// The default of an operation added after the second pull request: not there yet.
-    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
-        throw KnotError.portUnavailable.about(capture: item.captureID)
-    }
 
     /// The default of an operation added after the second pull request: not there yet.
     public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
@@ -553,7 +556,7 @@ public struct CaptureReceipt: Hashable, Sendable {
     }
 }
 
-/// What an ingest did.
+/// What an ingest did, or the record of a kept inbox item.
 public struct IngestResult: Hashable, Sendable {
     /// The capture's receipt as the store now holds it.
     public var receipt: CaptureReceipt
@@ -561,11 +564,16 @@ public struct IngestResult: Hashable, Sendable {
     public var storedRevision: Int64
     /// False when the store already held this content, or newer content of the capture.
     public var applied: Bool
+    /// True when the capture's row is gone (`NoteStore.ingest(_:)`): it failed with one of
+    /// `KeptInboxItem.reasons` and its segment was deleted and purged. Nothing is stored or
+    /// recorded, `applied` is false, and the caller removes the item's files.
+    public var purged: Bool
 
-    public init(receipt: CaptureReceipt, storedRevision: Int64, applied: Bool) {
+    public init(receipt: CaptureReceipt, storedRevision: Int64, applied: Bool, purged: Bool) {
         self.receipt = receipt
         self.storedRevision = storedRevision
         self.applied = applied
+        self.purged = purged
     }
 }
 
@@ -575,10 +583,15 @@ public struct PurgeResult: Hashable, Sendable {
     public var removed: Int
     /// The assets whose rows it removed, whose files the caller removes.
     public var assets: [Asset]
+    /// The files that `Inbox/` keeps for the kept items whose failed segments it removed, as
+    /// `keptFiles(of:)` named them: the caller removes them. The store forgets them, so that
+    /// `keptFiles(of:)` answers none for those items afterwards.
+    public var keptFiles: [KeptFile]
 
-    public init(removed: Int, assets: [Asset]) {
+    public init(removed: Int, assets: [Asset], keptFiles: [KeptFile]) {
         self.removed = removed
         self.assets = assets
+        self.keptFiles = keptFiles
     }
 }
 

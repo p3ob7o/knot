@@ -166,7 +166,8 @@ private func check(_ name: String) async throws {
         let id: CaptureID = ids.make()
         let reason = KnotError.inboxItemUnreadable.code
         let receipt = try await store.recordKeptItem(
-            KeptInboxItem(captureID: id, reason: reason, foundAt: clock.now(), fileNames: ["\(id).json"]))
+            KeptInboxItem(captureID: id, reason: reason, foundAt: clock.now(), fileNames: ["\(id).json"])
+        ).receipt
         #expect(receipt.outcome == .failed(reason))
         let files = try await store.keptFiles(of: id)
         #expect(
@@ -187,19 +188,30 @@ private func check(_ name: String) async throws {
 
 /// The suites of `AssetStore`, `SettingsStore` and `AssetFetcher` on the store's own.
 @Suite struct PortContractTests {
+    /// The store's own `AssetRepository`, with the database whose rows name its files, as the
+    /// live environment wires it.
     @Test(.tags(.contract)) func assetRepositoryPassesTheAssetStoreSuite() async throws {
         let folders = TemporaryFolders()
         defer { folders.removeAll() }
-        let locations = StoreLocations.testing(root: folders.make())
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 150, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        defer { try? database.close() }
+        let locations = database.locations
+        let notes = NoteRepository(database: database)
         let scratch = folders.make("scratch")
         try await AssetStoreContract.run {
             AssetStoreSubject(
-                store: AssetRepository(locations: locations), locations: locations,
+                store: AssetRepository(locations: locations, database: database), locations: locations,
                 writeScratch: { data in
                     let url = scratch.appending(path: UUID().uuidString)
                     try data.write(to: url)
                     return url
-                }, exists: { FileManager.default.fileExists(atPath: $0.path) })
+                }, exists: { FileManager.default.fileExists(atPath: $0.path) },
+                nameInRow: { file in
+                    _ = try await notes.record(
+                        capture(naming: file, ids: ids, device: database.deviceID, at: clock.now()))
+                })
         }
     }
 

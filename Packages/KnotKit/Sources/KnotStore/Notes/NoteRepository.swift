@@ -164,6 +164,9 @@ public final class NoteRepository: NoteStore {
         try await enterCaptureWrite(capture.id)
         return try await write { tx -> Completion<IngestResult?> in
             let unreadable = KnotError.inboxItemUnreadable.about(capture: capture.id)
+            // A kept or unreadable item whose segment was deleted and purged stores nothing,
+            // whole or not: its files go, and the deleted entry never comes back.
+            if let row = try tx.captureRow(capture.id), try tx.isGone(row) { return .rollback(tx.gone(row)) }
             if !StoreTransaction.fits(capture) || capture.endedAt == nil {
                 return try tx.writeUnreadable(capture) ? .commitAndFail(unreadable) : .rollback(nil)
             }
@@ -174,7 +177,8 @@ public final class NoteRepository: NoteStore {
             }
             if try tx.captureRow(capture.id) == nil {
                 let receipt = try tx.place(capture, ingesting: true)
-                return .commit(IngestResult(receipt: receipt, storedRevision: capture.revision, applied: true))
+                return .commit(
+                    IngestResult(receipt: receipt, storedRevision: capture.revision, applied: true, purged: false))
             }
             let incoming: Incoming
             switch capture.body {
@@ -188,25 +192,32 @@ public final class NoteRepository: NoteStore {
             // Stored, a kept item's files are no longer kept: the caller removes them.
             if row.capture.outcome == .stored { try tx.clearKeptFiles(of: capture.id) }
             return .commit(
-                IngestResult(receipt: tx.receipt(row), storedRevision: row.capture.revision, applied: applied))
+                IngestResult(
+                    receipt: tx.receipt(row), storedRevision: row.capture.revision, applied: applied, purged: false))
         }.unwrap(orFail: KnotError.inboxItemUnreadable.about(capture: capture.id))
     }
 
-    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> CaptureReceipt {
+    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult {
         try await enterCaptureWrite(item.captureID)
         return try await write { tx in
             guard KeptInboxItem.reasons.contains(item.reason), !item.fileNames.isEmpty,
                 item.fileNames.allSatisfy({ KeptInboxItem.isFileName($0, of: item.captureID) })
             else { throw KnotError.captureInvalid.about(capture: item.captureID) }
             if let row = try tx.captureRow(item.captureID) {
+                // A row that is gone records nothing again: the caller removes the files.
+                if try tx.isGone(row) { return .rollback(tx.gone(row)) }
                 // The same item again: only the record of its files changes.
                 guard row.capture.kind == .keptInboxItem else {
                     throw KnotError.captureIDConflict.about(capture: item.captureID)
                 }
                 try tx.setKeptFiles(item.fileNames, of: item.captureID)
-                return .commit(tx.receipt(row))
+                return .commit(
+                    IngestResult(
+                        receipt: tx.receipt(row), storedRevision: row.capture.revision, applied: false, purged: false))
             }
-            return .commit(try tx.recordKeptItem(item))
+            let receipt = try tx.recordKeptItem(item)
+            let revision = try tx.captureRow(item.captureID)?.capture.revision ?? 0
+            return .commit(IngestResult(receipt: receipt, storedRevision: revision, applied: true, purged: false))
         }
     }
 
@@ -747,6 +758,7 @@ public final class NoteRepository: NoteStore {
     public func purge(before date: Date) async throws(KnotError) -> PurgeResult {
         var removed = 0
         var assets: [Asset] = []
+        var keptNames: [String] = []
         while true {
             let batch: StoreTransaction.PurgeBatch
             do {
@@ -760,9 +772,13 @@ public final class NoteRepository: NoteStore {
             }
             removed += batch.removed
             assets += batch.assets
+            keptNames += batch.keptFileNames
             if !batch.more { break }
         }
-        return PurgeResult(removed: removed, assets: assets.sorted { $0.id < $1.id })
+        let inbox = database.locations.inbox
+        return PurgeResult(
+            removed: removed, assets: assets.sorted { $0.id < $1.id },
+            keptFiles: keptNames.map { KeptFile(name: $0, in: inbox) }.sorted { $0.url.path < $1.url.path })
     }
 
     static func isPast30Days(_ date: Date, now: Date) -> Bool {

@@ -164,6 +164,10 @@ struct WitnessStore: NoteStore {
         wroteAround("ingest")
         return try await store.ingest(capture)
     }
+    /// As before the requirement changed: this wrapper does not record kept items.
+    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult {
+        throw KnotError.portUnavailable.about(capture: item.captureID)
+    }
     func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
         wroteAround("checkpoint")
         return try await store.checkpoint(checkpoint)
