@@ -138,11 +138,17 @@
                 "\(codes.sorted())")
         }
 
-        /// A recording's files stay in `Recording/` once its capture holds its asset.
+        /// A recording's files stay in `Recording/` once its capture holds its asset: the next
+        /// launch's report of what recovery left says so, and the run stops there.
         @Test func recordingFilesLeftAreRed() async throws {
             let codes = try await soak("recording-files-left", seed: 68, replayingRecovery: true)
-            #expect(
-                !codes.isDisjoint(with: ["recovery_left_recording_files", "recording_files_left"]), "\(codes.sorted())")
+            #expect(codes.contains("recovery_left_recording_files"), "\(codes.sorted())")
+        }
+
+        /// A file left in `Recording/` after the last launch's report: the count at the end sees it.
+        @Test func recordingFileLeftAtTheEndIsRed() async throws {
+            let codes = try await soak("recording-file-left-at-end", seed: 74)
+            #expect(codes.contains("recording_files_left"), "\(codes.sorted())")
         }
 
         /// A stored recording's file is lost from `Assets/`.
@@ -155,6 +161,25 @@
         @Test func orphanedAssetFileIsRed() async throws {
             let codes = try await soak("asset-file-orphaned", seed: 70)
             #expect(codes.contains("asset_file_of_no_capture"), "\(codes.sorted())")
+        }
+
+        /// The script ends a recording and the engine discards it, answering it discarded: only
+        /// the script's own discard excuses a recording that keeps nothing.
+        @Test func endAnsweredDiscardedIsRed() async throws {
+            let codes = try await soak("recording-end-discarded", seed: 71)
+            #expect(codes.contains("acknowledged_audio_discarded"), "\(codes.sorted())")
+        }
+
+        /// A recording is stored a second time, under another capture ID.
+        @Test func recordingStoredTwiceIsRed() async throws {
+            let codes = try await soak("recording-stored-twice", seed: 72)
+            #expect(codes.contains("capture_stored_twice"), "\(codes.sorted())")
+        }
+
+        /// The store keeps a recording's segment and loses its row.
+        @Test func lostRecordingRowIsMissing() async throws {
+            let codes = try await soak("recording-row-lost", seed: 73)
+            #expect(codes.contains("acknowledged_capture_missing"), "\(codes.sorted())")
         }
 
         /// The engine answers a capture as begun and saved, and writes none of it.

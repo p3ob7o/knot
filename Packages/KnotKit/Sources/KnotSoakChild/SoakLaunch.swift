@@ -186,6 +186,8 @@
         private let locations: StoreLocations
         private let database: StoreDatabase
         private let notes: NoteRepository
+        /// The store's assets, which the fault `recordingStoredTwice` writes to behind the engine.
+        private let assets: AssetRepository
         private let engine: StandardCaptureEngine
         private let ingest: InboxIngest
         private let recovery: LaunchRecovery
@@ -223,7 +225,7 @@
             }
             notes = NoteRepository(database: database)
             let layer = PosixFileLayer()
-            let assets = AssetRepository(locations: locations, layer: layer, database: database)
+            assets = AssetRepository(locations: locations, layer: layer, database: database)
             let recorder = SoakRecorder(
                 locations: locations, clock: clock, log: KnotLog(.audio, sink: SoakLogSink(arming: arming)),
                 fault: options.fault)
@@ -284,6 +286,11 @@
                 await end(open.index, open.id, text: open.text, discard: false)
             }
             _ = await ingest.ingestAll()
+            if options.fault == .recordingFileLeftAtEnd, options.range.isEmpty {
+                let stray = locations.recording.appending(
+                    path: "\(UUID().uuidString.lowercased()).caf", directoryHint: .notDirectory)
+                FileManager.default.createFile(atPath: stray.path, contents: Data([0]))
+            }
             // The app quits as a process does: its last line, then the exit, with the store as it
             // stands. Closing the store first would fail the engine's own work in flight, such as
             // an ingest it started, which the next launch finishes.
@@ -400,25 +407,49 @@
             clock.advance(by: capture.pauses.last ?? 0)
             let discard = capture.ending == .discard
             if discard { Say.line(SoakLine.discarding(index: index, capture: id).rendered) }
+            // The fault `recordingEndDiscarded`: the script ends the recording, and the engine
+            // discards it, unsaid.
+            let lost = !discard && options.fault == .recordingEndDiscarded && index % 2 == 1
             do throws(KnotError) {
                 let state = try await disturbed(capture, save: 1) { () async throws(KnotError) -> CaptureState in
-                    discard ? try await self.engine.discard(id) : try await self.engine.end(id)
+                    discard || lost ? try await self.engine.discard(id) : try await self.engine.end(id)
                 }
                 audio.end(id, state)
-                if state.outcome == .stored { injectAfterRecording(index, id) }
+                if state.outcome == .stored { await injectAfterRecording(capture, id) }
             } catch {
                 Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
             }
             await arming.step("after_end")
         }
 
-        private func injectAfterRecording(_ index: Int, _ id: CaptureID) {
-            guard index % 2 == 1 else { return }
+        private func injectAfterRecording(_ capture: SoakScript.Capture, _ id: CaptureID) async {
+            guard capture.index % 2 == 1 else { return }
             switch options.fault {
             case .recordingFileLost?: FaultyStoreWrites.loseAsset(of: id, in: locations)
             case .assetFileOrphaned?: FaultyStoreWrites.orphanAsset(beside: id, in: locations)
+            case .recordingRowLost?: FaultyStoreWrites.deleteCaptureRow(id, in: locations)
+            case .recordingStoredTwice?: await storeAgain(capture, id)
             default: break
             }
+        }
+
+        /// The fault `recordingStoredTwice`: the recording is stored again under a new capture
+        /// ID, with a copy of its file and its start, in a note of its own.
+        private func storeAgain(_ capture: SoakScript.Capture, _ id: CaptureID) async {
+            let other: CaptureID = ids.make()
+            let copy = locations.recording.appending(path: "\(other).m4a", directoryHint: .notDirectory)
+            guard (try? FileManager.default.copyItem(at: locations.asset(AssetID(id), kind: .audio), to: copy)) != nil,
+                let moved = try? await assets.move(copy, as: AssetID(other), kind: .audio)
+            else { Say.fail("the injected fault could not copy a recording") }
+            let startedAt = SoakScript.base.addingTimeInterval(capture.startsAt)
+            let asset = Asset(
+                id: AssetID(other), segmentID: SegmentID(other), kind: .audio, byteCount: moved.byteCount,
+                sha256: moved.sha256)
+            _ = try? await notes.record(
+                NewCapture(
+                    id: other, kind: .voice, origin: CaptureOrigin(source: .device(database.deviceID), surface: .app),
+                    launchID: launchID, placement: .newNote, startedAt: startedAt, endedAt: clock.now(),
+                    body: .file(asset, duration: .seconds(Double(capture.frames) / SoakScript.sampleRate))))
         }
 
         private func end(_ index: Int, _ id: CaptureID, text: String, discard: Bool) async {

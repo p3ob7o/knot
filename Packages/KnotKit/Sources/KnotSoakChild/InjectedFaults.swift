@@ -32,6 +32,18 @@
         case recordingFileLost = "recording-file-lost"
         /// A file that no capture holds is left in `Assets/`, beside one recording in two.
         case assetFileOrphaned = "asset-file-orphaned"
+        /// The engine discards one recording in two that the script ends, and answers it
+        /// discarded: the frames it said were durable are lost.
+        case recordingEndDiscarded = "recording-end-discarded"
+        /// One stored recording in two is stored a second time, under another capture ID, with a
+        /// copy of its file.
+        case recordingStoredTwice = "recording-stored-twice"
+        /// The store keeps a stored recording's segment and loses its capture row, for one
+        /// recording in two.
+        case recordingRowLost = "recording-row-lost"
+        /// A file is left in `Recording/` by the last launch, which runs no capture, after its
+        /// report of what recovery left: only the count at the end can see it.
+        case recordingFileLeftAtEnd = "recording-file-left-at-end"
     }
 
     /// The store's writes that the faults make behind the engine's back, on a connection of

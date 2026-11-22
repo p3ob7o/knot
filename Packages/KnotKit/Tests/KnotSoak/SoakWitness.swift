@@ -370,15 +370,19 @@ struct SoakWitness {
         }
         let highest = saves.map(\.frames).max() ?? 0
         let ended = saves.first { $0.state == .ended }
+        // Only the script excuses a recording that keeps nothing: its discard, said before the
+        // call, or no frame ever acknowledged as durable. What the engine answered excuses
+        // nothing: an `end` it answered as discarded, after frames it said were durable, lost them.
+        let scriptDiscarded = discarding.contains(capture)
         // A recording answered as begun, with no frame durable yet, was promised nothing: a kill
         // that early may leave no row of it. Nor does one the script discarded: on the `Inbox/`
         // path a discarded recording never had a row.
         guard let row = try await notes.capture(capture) else {
-            let discardedHere = saves.contains { $0.state == .discarded } || discarding.contains(capture)
-            if (highest > 0 || ended != nil) && !discardedHere { problem("acknowledged_capture_missing") }
+            if (highest > 0 || ended != nil) && !scriptDiscarded { problem("acknowledged_capture_missing") }
             return (problems, nil)
         }
-        let discarded = saves.contains { $0.state == .discarded }
+        // The engine answered the recording as discarded: what it stored must say so too.
+        let answeredDiscarded = saves.contains { $0.state == .discarded }
         switch row.outcome {
         case .open:
             return (problems, nil)  // reported above
@@ -386,12 +390,12 @@ struct SoakWitness {
             problem("recording_failed", [code.rawValue])
             return (problems, nil)
         case .discardedEmpty:
-            if ended != nil || (highest > 0 && !discarded && !discarding.contains(capture)) {
+            if ended != nil || (highest > 0 && !scriptDiscarded) {
                 problem("acknowledged_audio_discarded", ["frames=\(highest)"])
             }
             return (problems, nil)
         case .stored:
-            if discarded {
+            if answeredDiscarded {
                 problem("acknowledged_discard_stored")
                 return (problems, nil)
             }
