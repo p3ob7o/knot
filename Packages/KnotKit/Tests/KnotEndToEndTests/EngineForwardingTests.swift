@@ -41,7 +41,10 @@ struct EngineForwardingTests {
             var live = engine.live(state.captureID).makeAsyncIterator()
             return await live.next()
         }
-        #expect(first != nil, "The live view of an open recording ended at once.")
+        // `SuiteWait.value` answers `nil` at its limit, and the body answers `nil` for a live view
+        // that ended at once: both are that the live view gave nothing (the review of pull
+        // request 91, N3).
+        #expect(first.flatMap { $0 } != nil, "The live view of an open recording ended at once.")
         _ = await SuiteWait.value("the discard") { try? await engine.discard(state.captureID) }
     }
 
