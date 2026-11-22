@@ -18,6 +18,12 @@
         /// and `job_found_running`. They are not listed here, since a point that never kills proves
         /// nothing. Until then the queue's deaths are held by KnotCaptureTests, through real
         /// launches over one store (`LaunchQueueTests`).
+        ///
+        /// What this list does not catch: an ingestor that removes an item before the store took it
+        /// stays green here (the review of pull request 97, seeds 22 and 11), since none of these
+        /// points falls between that removal and the store's commit. The capture ledger soak, which
+        /// runs in the same step, is red on it at both seeds, and KnotCaptureTests'
+        /// `disk-fills-during-ingest` fails on it.
         static let processingAndIngest: [SoakKillPoint] = [
             .engine(.betweenTypedManifestAndPayload, passes: 1...3),
             .log("inbox_item_stored", passes: 1...3),

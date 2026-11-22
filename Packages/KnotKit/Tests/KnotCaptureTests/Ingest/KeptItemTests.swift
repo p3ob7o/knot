@@ -109,6 +109,37 @@ import Testing
         #expect(await next.ingest.ingestAll().isEmpty, "Nothing left to ingest.")
     }
 
+    /// A manifest one byte over `Limits.manifestBytes` is not read: the item is kept as
+    /// unreadable, with a failed row, and its files stay.
+    @Test func manifestOverTheLimitIsKept() async throws {
+        let r = Rig(engineIngests: false)
+        let id: CaptureID = r.ids.make()
+        try Self.place(r, id, manifest: Data(repeating: UInt8(ascii: " "), count: Limits.manifestBytes + 1), text: "x")
+        #expect(await r.ingest.ingestAll() == [id: .kept(KnotError.inboxItemUnreadable.code)])
+        #expect(try await r.notes.capture(id)?.outcome == .failed(KnotError.inboxItemUnreadable.code))
+        #expect(try await r.notes.segment(SegmentID(id))?.kind == .keptInboxItem)
+        #expect(r.inboxFiles() == ["\(id).json", "\(id).txt"], "The files stay.")
+    }
+
+    /// A death between the purge's transaction and the removal of the kept files leaves an
+    /// unreadable item's files in `Inbox/`. The next ingest finds them, still unreadable: the store
+    /// answers that the capture is gone, and ingest removes the files and stores nothing. The
+    /// review's probe of pull request 97.
+    @Test func keptFilesLeftByADeathAfterThePurgeGo() async throws {
+        let r = Rig(engineIngests: false)
+        let id: CaptureID = r.ids.make()
+        try Self.place(r, id, manifest: Data("{\"format\":".utf8), text: "words")
+        #expect(await r.ingest.ingestAll() == [id: .kept(KnotError.inboxItemUnreadable.code)])
+        _ = try await Self.deleteAndPurge(r, id)
+        #expect(r.inboxFiles().isEmpty)
+        // The files as a death after the purge's transaction leaves them.
+        try Self.place(r, id, manifest: Data("{\"format\":".utf8), text: "words")
+        #expect(await r.ingest.ingestAll() == [id: .purged])
+        #expect(r.inboxFiles().isEmpty)
+        #expect(try await r.notes.segment(SegmentID(id)) == nil)
+        #expect(try await r.stream().notes.isEmpty)
+    }
+
     /// A kind this build does not know is an item of a newer Knot.
     @Test func itemOfAnUnknownKindIsKeptAsNewer() async throws {
         let r = Rig(engineIngests: false)

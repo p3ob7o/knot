@@ -211,6 +211,47 @@ import Testing
         #expect(try await rig.notes.segment(segment)?.rawTranscript == "first second third")
     }
 
+    /// A step that fails every time: each failure is an attempt, and the job waits 30, 60, 120 and
+    /// 240 seconds before the next. The fifth fails the job, its segment says so, and there is no
+    /// sixth run.
+    @Test func aJobFailsAfterFiveAttemptsWithItsBackoff() async throws {
+        let models = Models(Rig())
+        let rig = models.rig
+        let segment = try await Self.storedRecording(rig)
+        rig.transcriber.failNextRuns(
+            with: .transcriptionFailed, .transcriptionFailed, .transcriptionFailed,
+            .transcriptionFailed, .transcriptionFailed, .transcriptionFailed)
+        let queue = models.launch()
+        var waits: [TimeInterval] = []
+        for attempt in 1...5 {
+            let failedAt = rig.clock.now()
+            #expect(await Self.drain(queue) == .idle)
+            let job = try await Self.job(rig, segment, .transcribe)
+            #expect(job.attempts == attempt)
+            #expect(models.transcriber.holds.calls == attempt, "One run for each attempt.")
+            if attempt < 5 {
+                #expect(job.state == .queued)
+                let wait = try #require(job.notBefore).timeIntervalSince(failedAt)
+                waits.append(wait)
+                // Not before its time: a drain now runs nothing.
+                #expect(await Self.drain(queue) == .idle)
+                #expect(models.transcriber.holds.calls == attempt)
+                rig.clock.advance(by: wait)
+            } else {
+                #expect(job.state == .failed(KnotError.transcriptionFailed.code))
+            }
+        }
+        #expect(waits == [30, 60, 120, 240])
+        guard case .voice(.failed(_, let code)) = try await rig.notes.segment(segment)?.state else {
+            Issue.record("The segment does not offer a retry.")
+            return
+        }
+        #expect(code == KnotError.transcriptionFailed.code)
+        rig.clock.advance(by: 3_600)
+        #expect(await Self.drain(queue) == .idle)
+        #expect(models.transcriber.holds.calls == 5, "No sixth run.")
+    }
+
     /// The queue runs the jobs of the segments this device processes, and leaves another device's
     /// alone (docs/architecture.md §11).
     @Test func aJobOfAnotherDevicesSegmentIsLeftToIt() async throws {
