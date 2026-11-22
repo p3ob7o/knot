@@ -13,6 +13,11 @@ import Testing
 @Suite struct InterruptionTests {
     /// An interruption, a call taking the session, ends the recording as `interrupted`, and
     /// everything written before it is kept, in the working file.
+    ///
+    /// A reset of the media services follows the interruption. The input acts on the first of
+    /// the session's events that ends a recording and on none after it, so the reset changes
+    /// nothing here; an input that ignored the interruption ends on the reset instead, at once.
+    /// The wait for the end rests on that order, not on a time.
     @Test func anInterruptionEndsTheRecordingWithEverythingKept() async throws {
         let folder = try ScratchFolder()
         let (input, engine, hardware) = Self.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
@@ -22,7 +27,8 @@ import Testing
         for _ in 0..<3 { engine.deliver(try tone.next(4_800)) }
         await durable(atLeast: 14_400, of: session)
         hardware.interrupt()
-        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
+        hardware.resetServices()
+        guard case .ended(let audio)? = await allEvents(of: session).last else {
             Issue.record("The recording did not end by itself.")
             return
         }
@@ -37,18 +43,21 @@ import Testing
     /// puts its tap back in the new format and starts again, and what it delivers from then on is
     /// converted into the working file's rate. The file keeps its rate for its whole length, and
     /// the tone after the change is still a 1 kHz tone at the file's rate.
+    ///
+    /// The restart has put its tap back once the engine's start is called a second time; an
+    /// input that loses itself at the change gives its session back instead. The wait ends on
+    /// whichever comes, never on a time.
     @Test func aNewRateIsCarriedIntoTheFilesRate() async throws {
         let folder = try ScratchFolder()
-        let (input, engine, _) = Self.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
+        let (input, engine, hardware) = Self.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
         let live = recorder(folder.locations, input: input)
         let session = try await live.start(request())
         var before = try #require(Tone(rate: 48_000, channels: 1))
         engine.deliver(try before.next(4_800))
         engine.setShape(InputShape(sampleRate: 44_100, channels: 2))
         engine.changeConfiguration()
-        let restarted = ["installTap", "start", "stop", "removeTap", "installTap", "start"]
-        #expect(
-            await SuiteWait.until("the restart", limit: .seconds(10)) { engine.calls == restarted }, "\(engine.calls)")
+        #expect(await SuiteWait.until("the restart") { engine.starts == 2 || hardware.uses.contains("deactivate") })
+        #expect(engine.calls == ["installTap", "start", "stop", "removeTap", "installTap", "start"], "\(engine.calls)")
         var after = try #require(Tone(rate: 44_100, channels: 2))
         for _ in 0..<10 { engine.deliver(try after.next(4_410)) }
         let audio = await session.stop()
@@ -67,6 +76,12 @@ import Testing
 
     /// An engine that cannot start again after its change ends the recording as `input_lost`,
     /// with everything written before it kept. The tap it put back is taken away.
+    ///
+    /// The failed restart delivers its ending and then takes its tap away, in that order, on the
+    /// input's queue: once the tap is gone, the recording's ending has begun, and a stop then
+    /// answers with it, the first ending. A restart that delivered no ending is stopped instead,
+    /// at once, and an input that never restarts gives its session back: the wait rests on that
+    /// order, not on a time.
     @Test func anEngineThatCannotStartAgainLosesTheInput() async throws {
         let folder = try ScratchFolder()
         let (input, engine, hardware) = Self.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
@@ -77,11 +92,12 @@ import Testing
         await durable(atLeast: 4_800, of: session)
         engine.failNextStart(with: .audioSessionBusy)
         engine.changeConfiguration()
-        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
-            Issue.record("The recording did not end by itself.")
-            return
-        }
-        #expect(audio.ending == .inputLost, "\(audio)")
+        #expect(
+            await SuiteWait.until("the failed restart's tap to go") {
+                engine.calls.count >= 7 || hardware.uses.contains("deactivate")
+            })
+        let audio = await session.stop()
+        #expect(audio.ending == .inputLost, "The recording did not end by itself: \(audio)")
         let working = try #require(audio.workingFile)
         #expect(audio.frames == 4_800 && WorkingFileReader.contents(of: working)?.frames == 4_800)
         #expect(
@@ -92,7 +108,8 @@ import Testing
 
     /// A configuration change at the same rate starts the engine again on a fresh tap, and the
     /// recording goes on: no ending is delivered, and both buffers are. Once the input is
-    /// stopped, nothing watches the engine or the session any more.
+    /// stopped, nothing watches the engine or the session any more. The wait is for the restart
+    /// or, from an input that loses itself at the change, an ending: whichever comes.
     @Test func aChangeAtTheSameRateGoesOn() async throws {
         let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
@@ -101,7 +118,7 @@ import Testing
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         engine.deliver(buffer)
         engine.changeConfiguration()
-        #expect(await SuiteWait.until("the restart", limit: .seconds(10)) { opened.restarts == 1 })
+        #expect(await SuiteWait.until("the restart") { opened.restarts == 1 || Self.ended(deliveries) })
         engine.deliver(buffer)
         await opened.stop()
         #expect(deliveries.withLock { $0 } == ["audio 1600", "audio 1600"])
@@ -114,14 +131,17 @@ import Testing
     }
 
     /// A reset of the media services ends the recording as `input_lost`. After the stop, the
-    /// session's events deliver nothing.
+    /// session's events deliver nothing. An interruption follows the reset, which the input
+    /// never reaches once the reset has ended the recording: an input that ignored the reset
+    /// ends on the interruption, at once, so the wait rests on the events' order.
     @Test func aResetOfTheMediaServicesLosesTheInput() async throws {
         let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let deliveries = Mutex<[String]>([])
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         hardware.resetServices()
-        #expect(await SuiteWait.until("the ending") { !deliveries.withLock { $0 }.isEmpty })
+        hardware.interrupt()
+        #expect(await SuiteWait.until("the ending") { Self.ended(deliveries) })
         await opened.stop()
         hardware.interrupt()
         #expect(deliveries.withLock { $0 } == ["ended lost"])
@@ -130,7 +150,8 @@ import Testing
 
     /// A route change alone changes nothing: the engine's own change follows one that changes the
     /// hardware. The events are handled in their order, so the interruption after it is the one
-    /// ending.
+    /// ending, and the reset after that is never reached: an input that ignored the interruption
+    /// ends on the reset, at once, so the wait rests on that order, not on a time.
     @Test func aRouteChangeAloneChangesNothing() async throws {
         let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
@@ -138,7 +159,8 @@ import Testing
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         hardware.changeRoute()
         hardware.interrupt()
-        #expect(await SuiteWait.until("the ending", limit: .seconds(10)) { !deliveries.withLock { $0 }.isEmpty })
+        hardware.resetServices()
+        #expect(await SuiteWait.until("the ending") { Self.ended(deliveries) })
         await opened.stop()
         #expect(deliveries.withLock { $0 } == ["ended interrupted"])
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"], "\(engine.calls)")
@@ -147,10 +169,17 @@ import Testing
     /// A stop asked for while the restart puts its tap back waits for the restart, which then
     /// starts nothing and takes the tap away: when the stop returns, nothing runs. The hook holds
     /// the input's own queue, never a thread of the cooperative pool.
+    ///
+    /// The test waits for the stop that the hook asks for, or for what a wrong input does in its
+    /// place: an ending, from one that loses itself at the change, or an engine started again,
+    /// from a restart that puts no tap back and so never reaches the hook. Whichever comes
+    /// first, with no time to wait out. The hook's own wait is checked by the test, as its own
+    /// issue.
     @Test func aStopDuringTheRestartWaitsForIt() async throws {
         let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let stopping = StopTask()
+        let hooks = HookWaits()
         let seen = Mutex<[String]?>(nil)
         engine.whenAt(.installingTheTap) { engine in
             guard engine.calls.filter({ $0 == "installTap" }).count == 2 else { return }
@@ -158,12 +187,18 @@ import Testing
                 await opened.stop()
                 seen.withLock { $0 = engine.calls }
             }
-            HardwareInputTests.waitUntil { opened.suspendedStops >= 1 || seen.withLock { $0 } != nil }
+            hooks.wait("the stop to wait for the restart") {
+                opened.suspendedStops >= 1 || seen.withLock { $0 } != nil
+            }
         }
-        try opened.start(format: format) { _ in }
+        let ended = Flag()
+        try opened.start(format: format) { delivery in
+            if case .ended = delivery { ended.set() }
+        }
         engine.changeConfiguration()
-        #expect(await SuiteWait.until("the stop", limit: .seconds(10)) { opened.stopRequested })
-        await stopping.wait()
+        await stopping.wait(instead: { ended.value || opened.restarts > 0 })
+        hooks.check()
+        #expect(!ended.value, "The change ended the recording.")
         #expect(
             seen.withLock { $0 } == ["installTap", "start", "stop", "removeTap", "installTap", "removeTap"],
             "\(String(describing: seen.withLock { $0 }))")
@@ -175,10 +210,18 @@ import Testing
     /// press, is carried out once the start has ended: the engine, which stopped itself, starts
     /// again on a fresh tap (finding 1 of the review). The hook holds the start on a thread of
     /// Dispatch's until the input has noted the change, so the order rests on no time.
+    ///
+    /// The restart is put on the input's queue as the start ends. An interruption given once the
+    /// start has returned is handled on that queue after it, so once its ending is delivered the
+    /// restart has run, or never will: the test waits for that ending, not for a time. A reset
+    /// follows it, which a right input never reaches, for one that ignored the interruption; the
+    /// hook's wait ends too on an ending, from an input that loses itself at the change.
     @Test func aChangeDuringTheStartIsCarriedOut() async throws {
-        let (opened, engine, _) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let hooks = HookWaits()
         let fired = Mutex(false)
+        let endings = Mutex<[String]>([])
         engine.whenAt(.starting) { engine in
             let first = fired.withLock { fired in
                 defer { fired = true }
@@ -186,48 +229,60 @@ import Testing
             }
             guard first else { return }
             engine.changeConfiguration()
-            HardwareInputTests.waitUntil(limit: .seconds(10)) { opened.changesDuringTheStart == 1 }
+            hooks.wait("the change to reach the input during the start") {
+                opened.changesDuringTheStart == 1 || !endings.withLock { $0 }.isEmpty
+            }
         }
-        let endings = Mutex<[String]>([])
         try await HardwareInputTests.startOffThePool(opened, format: format) { delivery in
             if case .ended(let why) = delivery { endings.withLock { $0.append(why.rawValue) } }
         }
+        hardware.interrupt()
+        hardware.resetServices()
+        #expect(await SuiteWait.until("the interruption's ending") { !endings.withLock { $0 }.isEmpty })
+        hooks.check()
         #expect(
-            await SuiteWait.until("the restart", limit: .seconds(10)) { opened.restarts == 1 },
+            opened.restarts == 1,
             "No restart after a change during the start: \(engine.calls), endings \(endings.withLock { $0 })")
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap", "installTap", "start"], "\(engine.calls)")
-        #expect(endings.withLock { $0 }.isEmpty)
+        #expect(endings.withLock { $0 } == ["interrupted"])
         await opened.stop()
     }
 
     /// What the converter holds is drained before its tap goes, at a restart and at a stop
     /// (finding 2 of the review): a tenth of a second at 48 kHz, a second at 44.1 kHz in two
     /// channels, and, back at 48 kHz, a tenth more, or a stop while it converts. In against out,
-    /// every frame the tap took reaches the recorder, to the converter's own rounding.
+    /// every frame the tap took reaches the recorder, to the converter's own rounding. Each wait
+    /// is for the restart or for an ending, which an input that loses itself at a change
+    /// delivers instead: whichever comes.
     @Test(arguments: [false, true])
     func theConvertersTailIsDelivered(stoppedWhileConverting: Bool) async throws {
         let (opened, engine, _) = try await HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let frames = Mutex(0)
+        let ended = Flag()
         try opened.start(format: format) { delivery in
-            if case .audio(let buffer) = delivery { frames.withLock { $0 += Int(buffer.frameLength) } }
+            switch delivery {
+            case .audio(let buffer): frames.withLock { $0 += Int(buffer.frameLength) }
+            case .ended: ended.set()
+            }
         }
         var at48 = try #require(Tone(rate: 48_000, channels: 1))
         engine.deliver(try at48.next(4_800))
         engine.setShape(InputShape(sampleRate: 44_100, channels: 2))
         engine.changeConfiguration()
-        #expect(await SuiteWait.until("the first restart", limit: .seconds(10)) { opened.restarts == 1 })
+        #expect(await SuiteWait.until("the first restart") { opened.restarts == 1 || ended.value })
         var at44 = try #require(Tone(rate: 44_100, channels: 2))
         for _ in 0..<10 { engine.deliver(try at44.next(4_410)) }
         var expected = 4_800 + 48_000
         if !stoppedWhileConverting {
             engine.setShape(InputShape(sampleRate: 48_000, channels: 1))
             engine.changeConfiguration()
-            #expect(await SuiteWait.until("the second restart", limit: .seconds(10)) { opened.restarts == 2 })
+            #expect(await SuiteWait.until("the second restart") { opened.restarts == 2 || ended.value })
             engine.deliver(try at48.next(4_800))
             expected += 4_800
         }
         await opened.stop()
+        #expect(!ended.value, "A change ended the recording.")
         let delivered = frames.withLock { $0 }
         #expect(abs(delivered - expected) <= 1, "\(delivered) frames out of \(expected)")
     }
@@ -273,6 +328,11 @@ import Testing
         case .audio(let buffer): "audio \(buffer.frameLength)"
         case .ended(let why): "ended \(why.rawValue)"
         }
+    }
+
+    /// True once an ending is among the described deliveries.
+    static func ended(_ deliveries: borrowing Mutex<[String]>) -> Bool {
+        deliveries.withLock { $0.contains { $0.hasPrefix("ended ") } }
     }
 }
 
