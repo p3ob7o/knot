@@ -30,6 +30,24 @@ import Testing
 
     /// The microphone's buffers are 32-bit floats: the file holds them as 16-bit integers, and
     /// a float made from an integer sample comes back as that sample.
+    /// Injected audio delivers its buffers from a queue of its own, as the hardware's tap does
+    /// from the audio's thread, never from a thread of the cooperative pool: the recorder writes
+    /// and measures each buffer in the delivery, where a real recording does that.
+    @Test func injectedAudioDeliversFromAQueueOfItsOwn() async throws {
+        let opened = try await injected(frames: 4_800).open()
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false))
+        let queues = Mutex<[String]>([])
+        try opened.start(format: format) { _ in
+            let queue = String(cString: __dispatch_queue_get_label(nil))
+            queues.withLock { $0.append(queue) }
+        }
+        #expect(await SuiteWait.until("the three buffers") { queues.withLock { $0.count } >= 3 })
+        await opened.stop()
+        let seen = queues.withLock { $0 }
+        #expect(seen.count == 3 && seen.allSatisfy { $0 == "knot.audio.injected" }, "\(seen)")
+    }
+
     @Test func floatAudioIsWrittenAsSixteenBitSamples() async throws {
         let folder = try ScratchFolder()
         let recorder = recorder(folder.locations, input: FloatInput(frames: 32_000))
