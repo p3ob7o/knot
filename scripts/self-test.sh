@@ -2162,6 +2162,7 @@ print(f'source "{sys.argv[2]}"')
 print(f'KNOT_LOGS="{sys.argv[3]}" KNOT_ROOT="{sys.argv[4]}" BASE=origin/main TIER=gate')
 print('tool() { local log=""; while (($#)); do [[ $1 == --log ]] && log=$2; shift; done; cp "' + sys.argv[3] + '/kept" "$log"; }')
 print(function("report_skips"))
+print('slow_cases() { :; }')
 print(function("step_mac_ui_hosted"))
 # In the background, as verify.sh runs a light step, so that set -e holds inside it.
 print('step_mac_ui_hosted & code=0; wait $! || code=$?; echo "status $code"')
@@ -2179,6 +2180,30 @@ if [[ -z $hosted_why && $step_pass == "status 0" && $step_none == "status 1" && 
     pass "the gate takes the hosted job's Mac UI result only when it passed on the commit under test, kept its log, and that log holds passed tests and no skip"
 else
     fail "the hosted Mac UI job: wrong answers$hosted_why; the step on a passing log '$step_pass', with no test '$step_none', a failed case '$step_failed', a skip '$step_skipped'; --full with the option '$full_hosted'"
+fi
+
+# A UI or hosted step prints one line for each case that took longer than a minute, with its
+# name, its destination and its seconds: how an idle wait that ran out shows when the test
+# goes on and passes. On a fixture log in each form the steps read: XCTest's with a
+# destination, XCTest's without, and Swift Testing's; a fast case and the run's own line print
+# nothing.
+sc="$scratch/slow-cases"
+mkdir -p "$sc"
+cat >"$sc/log" <<'LOG'
+Test case 'KnotIOSLaunchTests.testSlow()' passed on 'set-iphone - Knot-iOS-UITests-Runner (1)' (205.3 seconds)
+Test case 'KnotIOSLaunchTests.testFast()' passed on 'set-ipad - Knot-iOS-UITests-Runner (2)' (16.9 seconds)
+Test Case '-[Knot_macOS_UITests.MacTests testSlowOnTheMac]' failed (61.0 seconds).
+✔ Test hostedSlowly() passed after 75.5 seconds.
+✔ Test run with 3 tests in 0 suites passed after 300.0 seconds.
+LOG
+slow_out="$(python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" slow-cases --log "$sc/log" --over 60 --destination "this Mac" 2>&1 || true)"
+slow_want="slow: KnotIOSLaunchTests.testSlow() on set-iphone took 205.3 s, passed
+slow: Knot_macOS_UITests.MacTests testSlowOnTheMac on this Mac took 61.0 s, failed
+slow: hostedSlowly() on this Mac took 75.5 s, passed"
+if [[ $slow_out == "$slow_want" ]]; then
+    pass "a step names each case that took longer than a minute, with its destination and its seconds, and no other"
+else
+    fail "the slow cases: '$slow_out'"
 fi
 
 if ((FAILED)); then

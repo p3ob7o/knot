@@ -178,9 +178,23 @@ check_events() {
 products() { printf '%s/Build/Products/%s' "$KNOT_DERIVED" "$1"; }
 
 # xcodebuild's own test limits, for every run of tests in a simulator or on the desktop: a
-# case that hangs fails after its allowance, three minutes and five at most.
-KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 180
-    -maximum-test-execution-time-allowance 300)
+# case that hangs fails after its allowance, ten minutes, the contract suites' own bound.
+# It was three minutes, and twice on 2026-11-22 an iPhone UI test ran into it on the gate's
+# simulator: each "Wait for com.p3ob7o.knot.dev to idle" ran its 60 s and ended "App
+# animations complete notification not received, will attempt to continue", while the app
+# sat idle in its run loop, and three such waits are the three minutes. The test goes on
+# after each wait, so under ten minutes it will likely pass slowly; that is not shown, as no
+# stall came in 13 runs here. The bundles are kept in the build folder's review-evidence, as
+# pr95/rehearsal-launch-iphone-180s.xcresult and pr87/launch-iphone-smoke-180s.xcresult.
+# A longer bound only makes a real hang fail later, and each UI step prints the cases that
+# took longer than a minute (slow_cases), which is how the next stall will show.
+KNOT_TEST_LIMIT_FLAGS=(-test-timeouts-enabled YES -default-test-execution-time-allowance 600
+    -maximum-test-execution-time-allowance 600)
+
+# slow_cases <log> <destination>: one line for each case of a UI or hosted step's log that
+# took longer than a minute, with its name, its destination and its seconds (knot_tool.py
+# slow-cases). <destination> names it where the log's line does not, as for the Mac.
+slow_cases() { tool slow-cases --log "$1" --over 60 --destination "$2" || true; }
 
 # ended_by_signal <what> <status> <limit variable>: when an xcodebuild run ended by a signal
 # that the step's limit did not send, a status above 128 with no limit hit, it says so, with
@@ -229,6 +243,7 @@ ui_tests() {
     knot_run_limited "$what" "$limit" xcb "$log" "$@" "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
     ! ended_by_signal "$what" "$status" KNOT_UI_TEST_LIMIT || return 1
+    slow_cases "$log" "the destination of $what"
     if ! knot_xctest_result "$log" ${destinations[@]+"${destinations[@]}"}; then
         # The reason is in the long log; the step's own log, which a failure shows, gives it.
         knot_xctest_failures "$log"
@@ -740,6 +755,7 @@ step_ios_hosted() {
         -destination "id=$iphone" -only-testing:Knot-iOS-Tests "${KNOT_TEST_LIMIT_FLAGS[@]}" test || status=$?
     ((KNOT_LIMIT_HIT == 0)) || return 1
     ! ended_by_signal "The hosted iOS tests" "$status" KNOT_HOSTED_TEST_LIMIT || return 1
+    slow_cases "$log" "the iPhone simulator"
     grep -E 'Test run with [0-9]+ tests?|passed after|failed after' "$log" | tail -n 5 || true
     grep -E 'Test run with [1-9][0-9]* tests? .*passed' "$log" >/dev/null || {
         echo "No hosted test ran."
@@ -932,6 +948,7 @@ step_mac_ui_hosted() {
     sha="$(git -C "$KNOT_ROOT" rev-parse HEAD)"
     (cd "$KNOT_ROOT" && tool hosted-mac-ui --sha "$sha" --base "$BASE" --screen "$(knot_console_state)" --log "$log") ||
         return 1
+    slow_cases "$log" "the hosted runner"
     result="$(knot_xctest_result "$log")" || status=$?
     echo "hosted $result"
     if ((status != 0)); then

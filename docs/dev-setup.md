@@ -176,7 +176,7 @@ It cannot know what a value holds. A value named `noteID` that holds text passes
 | Each xcodebuild build, in `apps` and `packaging`, and the package resolution in `pins` | 40 minutes | `KNOT_BUILD_LIMIT` |
 | Each xcodebuild run of UI tests, in `launch` and `mac-ui` | 20 minutes | `KNOT_UI_TEST_LIMIT` |
 | The xcodebuild run of the hosted iOS tests, in `ios-hosted` | 20 minutes | `KNOT_HOSTED_TEST_LIMIT` |
-| Each case in those runs, by xcodebuild's own test limits | 3 minutes, 5 at most | |
+| Each case in those runs, by xcodebuild's own test limits | 10 minutes | |
 | `simctl bootstatus`, `install`, `launch` and `screenshot`, in `launch` | 300, 120, 60 and 30 seconds | |
 | Every other simctl call of `scripts/sim.sh`, such as in `ensure` and in `shutdown`, which a step's exit runs, the doctor's and bootstrap's list of runtimes, and each simctl call of `scripts/worktree-remove.sh` | 120 seconds | `KNOT_SIMCTL_LIMIT` |
 | `xcodebuild -version`, when a script chooses the pinned Xcode | 120 seconds | `KNOT_XCODE_ANSWER_LIMIT` |
@@ -224,7 +224,15 @@ At its limit the step says that a test may be blocking a thread of the cooperati
 
 Its cost here: on 2026-11-21 main's suite, 746 tests in 21 runs, passed under the variable in 3m18s, against 4m35s for `package-test` just before, on the same build. The load average ran from 84 to 204 from other agents, so the difference is load. The variable made the run no longer that could be measured.
 
-For later: xcodebuild allows a case three minutes, five at most, while a contract suite waits up to ten minutes (`SuiteWait.limit`). A contract suite hosted on iOS whose wait runs long is cut off by xcodebuild first, with a less exact message than the suite's own.
+xcodebuild allows a case ten minutes, as long as a contract suite waits (`SuiteWait.limit`), so a contract suite hosted on iOS whose wait runs long ends with the suite's own message.
+
+**A UI test that waits for idle.** Twice on 2026-11-22, in about twenty-four launch runs, an iPhone UI test ran into its allowance, then three minutes, on the gate's iPhone simulator: once in pull request 87's first gate, once in a rehearsal of pull request 95. Neither set nor test was the same, and the iPad passed the same test in the same run.
+- **What it looks like in the bundle:** the app launches and shows the capture field within seconds. Then each "Wait for com.p3ob7o.knot.dev to idle", at the first action after the keyboard comes up and at each one after, runs its 60 s and ends "App animations complete notification not received, will attempt to continue". The test goes on after each, and three such waits were the allowance.
+- **The app was idle:** the spindump at the end has its main thread asleep in its run loop, and the screen recording shows the field focused, the keyboard up and nothing in the way.
+- **Not reproduced here:** 13 runs in a worktree's own set, two of them straight after deleting and remaking it, had no such wait. Its cause is not known.
+- **The bundles** are kept in the build folder's `review-evidence/`, as `pr95/rehearsal-launch-iphone-180s.xcresult` and `pr87/launch-iphone-smoke-180s.xcresult`.
+
+So the allowance is ten minutes, which three or six failed waits fit in. That the test then passes slowly is likely and not shown. A longer bound only makes a real hang fail later. No test is retried, since a retry would turn a real hang green. And each UI step, `launch`, `ios-hosted` and `mac-ui`, prints one line for each case that took longer than a minute, read from the log its result is read from: `slow: <case> on <destination> took <seconds> s, <result>`. That is how the next stall will show (`knot_tool.py slow-cases`).
 
 **The team's ID in build logs.** On a Mac whose Xcode knows the owner's team, every app build writes the team's prefix into its log, whatever the signing: `TeamIdentifierPrefix`, `AppIdentifierPrefix` and the entitlements it prints, such as `application-identifier`. So `scripts/verify.sh` filters every log it keeps, and everything it prints from them, through `knot_filter_team` in `scripts/lib/common.sh`, and at the start of each run it rewrites the logs that earlier runs left in `.build/logs`. The filter masks, as `<TEAM>`, ten capitals and digits where those keys, `DEVELOPMENT_TEAM` or an identifier such as `<ID>.com.…` or `<ID>.*` put them, as a plist's whole `<string>`, as codesign's `[String]` value, and as the parenthesised end of a certificate's name. A run that has the owner's configuration also masks the ID itself wherever it stands. The filter reads it, as the `team-id` step does, from `KNOT_TEAM_CONFIG`, else `KNOT_LOCAL_CONFIG`, else the configuration that bootstrap linked into `.build/config/`, and never prints it. Other runs know no ID and go by the patterns alone. Xcode's own logs in DerivedData keep the prefix; the scripts never print them, and nothing from a build log goes into a note, a commit or a pull request unfiltered.
 

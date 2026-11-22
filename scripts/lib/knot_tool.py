@@ -7,6 +7,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py owns <ID>
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
+    python3 scripts/lib/knot_tool.py slow-cases --log <path> [--over <seconds>] [--destination <name>]
     python3 scripts/lib/knot_tool.py app-intents --metadata <extract.actionsdata> [--action <name>] [--shortcuts]
     python3 scripts/lib/knot_tool.py hosted-mac-ui --sha <commit> --base <ref> --screen <state> --log <path>
     python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
@@ -439,6 +440,42 @@ def cmd_depth(base):
     print(f"mac_ui={'1' if mac_ui else '0'}")
     print(f"changed={len(files)}")
     print("reason=" + ", ".join(reasons))
+    return 0
+
+
+# ---------------------------------------------------------------- slow test cases
+
+
+# A test case's result line, in each form a UI or hosted step's log holds: XCTest's with the
+# destination, as `xcodebuild` prints it for a simulator; XCTest's without, as for the Mac and
+# the Watch; and Swift Testing's, as the hosted tests print it.
+CASE_RESULT_FORMS = (
+    re.compile(r"^Test [Cc]ase '(?P<name>[^']+)' (?P<result>passed|failed|skipped) on "
+               r"'(?P<destination>[^']+?)(?: - [^']*)?' \((?P<seconds>[0-9.]+) seconds\)"),
+    re.compile(r"^Test [Cc]ase '-\[(?P<name>[^\]]+)\]' (?P<result>passed|failed|skipped) \((?P<seconds>[0-9.]+) seconds\)"),
+    re.compile(r"^\S*\s*Test (?!run with )(?P<name>.+?) (?P<result>passed|failed) after (?P<seconds>[0-9.]+) seconds"),
+)
+
+
+def cmd_slow_cases(log, over, destination):
+    """One line for each test case of <log> that took longer than <over> seconds, with its name,
+    its destination and its seconds, and its result. A case that passes slowly is how an idle wait
+    that ran out shows (docs/dev-setup.md, "A UI test that waits for idle")."""
+    try:
+        with open(log, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return 0
+    for line in lines:
+        for form in CASE_RESULT_FORMS:
+            match = form.match(line)
+            if not match:
+                continue
+            seconds = float(match.group("seconds"))
+            if seconds > over:
+                where = match.groupdict().get("destination") or destination
+                print(f"slow: {match.group('name')} on {where} took {seconds:.1f} s, {match.group('result')}")
+            break
     return 0
 
 
@@ -2081,6 +2118,9 @@ def main(argv):
         return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"), allowed)
     if command == "depth":
         return cmd_depth(option(args, "--base", "origin/main"))
+    if command == "slow-cases":
+        return cmd_slow_cases(option(args, "--log"), float(option(args, "--over", "60")),
+                              option(args, "--destination", "its destination"))
     if command == "app-intents":
         return cmd_app_intents(option(args, "--metadata"), option(args, "--action"), "--shortcuts" in args)
     if command == "hosted-mac-ui":
