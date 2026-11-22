@@ -1,0 +1,24 @@
+$ knot status --json
+{
+  "schema": 1,
+  "tool": {
+    "name": "knot",
+    "version": "1.0",
+    "flavour": "dev"
+  },
+  "store": {
+    "location": "in memory",
+    "store_id": "01a1ee56-5e00-7003-8724-6d77eff2ad7f",
+    "generation": 0,
+    "cursor": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1"
+  },
+  "command_line_access": "on",
+  "sync": "off",
+  "append_window_minutes": 5,
+  "next_capture": {
+    "placement": "joins_note",
+    "note_id": "01a1ee57-4860-7005-8704-c879c789544b",
+    "reason": "inside_window",
+    "window_closes_at": "2026-11-18T11:12:40Z"
+  }
+}
