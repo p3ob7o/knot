@@ -606,8 +606,14 @@ knot_start_app() {
     if ((exited)); then
         wait "$pid" || status=$?
     else
-        knot_end_process "$pid"
-        wait "$pid" 2>/dev/null || true
+        # bash reports the app that TERM ended, "<pid> Terminated: 15 "$app" …", with this
+        # file's path, on its own standard error as it reaps it: the start says it in its own
+        # words instead.
+        {
+            knot_end_process "$pid"
+            wait "$pid" || true
+        } 2>/dev/null
+        echo "$(basename "$app"): ended $(basename "$app"), which it started, $( [[ -n $found ]] && echo "once its window came" || echo "when its time ran out")."
     fi
     cat "$app_errors" >&2
     rm -f "$out" "$errors" "$app_errors"

@@ -545,10 +545,14 @@ hang_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_pass knot_start_app 30 "$lim/hangs" "$lim/a-window"
 pass_left="$(pgrep -f "$lim/hangs" || true)"
 timed app_fail knot_start_app 30 "$lim/quits" "$lim/no-window"
+# The start ends the app it started, and says so in its own words; bash's notice of the job
+# it ended, which names this script by its path, reaches no log (item 4 of the eighth list).
 if [[ $app_hang_status == 1 && "$(cat "$lim/app_hang.out")" == *"no window within 2s"*"system dialog"* && $app_hang_seconds -lt 10 &&
     -z $hang_left && $app_pass_status == 0 && $app_pass_seconds -lt 10 && -z $pass_left &&
-    $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* ]]; then
-    pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, and leaves nothing running"
+    $app_fail_status == 1 && "$(cat "$lim/app_fail.out")" == *"exited with status 1"* &&
+    "$(cat "$lim/app_pass.out")" == *"ended hangs, which it started"* &&
+    "$(cat "$lim/app_pass.out" "$lim/app_hang.out")" != *"Terminated"* ]]; then
+    pass "the Mac app's start ends at its limit naming a dialog, is not slowed by a window, fails when it quits, leaves nothing running, and says that it ended the app with no notice of bash's"
 else
     fail "the app's start: hang $app_hang_status in ${app_hang_seconds}s (left: $hang_left), window $app_pass_status in ${app_pass_seconds}s (left: $pass_left), quit $app_fail_status: $(cat "$lim/app_hang.out" "$lim/app_fail.out")"
 fi
