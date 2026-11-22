@@ -92,7 +92,8 @@
             + "store refuses or holds past the engine's deadline; it does not fix the order of the engine's work in "
             + "the background beside the script, which can move a pass of a store or log point, and so a launch's "
             + "end and the launches after it; nor where an anywhere kill lands, a seeded delay after its "
-            + "acknowledgement, in whatever the child is doing then"
+            + "acknowledgement, in whatever the child is doing then. So the seed alone may not repeat a finding: "
+            + "what repeats one is the kept store, with a launch of the child that only recovers, over a copy of it"
 
         /// One launch of the child and how it ended.
         struct Launch: Sendable, CustomStringConvertible {
@@ -153,6 +154,21 @@
                     peaksLeft: peaksLeft)
             }
 
+            /// The command that runs, over a copy of the kept store, the launch after the run's last,
+            /// which runs no capture and only recovers: what repeats a finding whose kill landed by
+            /// time. A copy, for recovery changes the store it runs over.
+            var recoveryReplay: String? {
+                guard let keptStore, let child = CrashHost.executableURL(named: "KnotSoakChild") else { return nil }
+                let end = String(configuration.captures)
+                var arguments = [
+                    "run", "--root", "\"$copy\"", "--seed", String(seed), "--launch", String(launches.count + 1),
+                    "--from", end, "--to", end, "--count", end,
+                ]
+                if let fault = configuration.fault { arguments += ["--fault", fault] }
+                return "copy=\"$(mktemp -d)/store\"; cp -R '\(keptStore)' \"$copy\"; '\(child.path)' "
+                    + arguments.joined(separator: " ")
+            }
+
             /// How many launches a kill ended.
             var kills: Int { launches.filter { $0.ending == .killedAtPoint || $0.ending == .killedAnywhere }.count }
 
@@ -203,6 +219,9 @@
                     lines.append("configuration: \(configuration.line)")
                     lines.append("repeat it with: \(configuration.replay)")
                     lines.append(CaptureLedgerSoak.whatASeedFixes)
+                    if let recovery = recoveryReplay {
+                        lines.append("replay the recovery over a copy of the kept store with: \(recovery)")
+                    }
                     if problems.contains(where: { $0.code == CaptureLedgerSoak.timeBoxCode }) {
                         lines.append(
                             "the time box cut the run short: that is not a failure of the ledger, and the run may be "

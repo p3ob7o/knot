@@ -1,6 +1,7 @@
 #if os(macOS)
     import Foundation
     import KnotTestSupport
+    @testable import KnotSoakChild
     import Testing
 
     /// The checks are shown to fail (docs/architecture.md §17): each of four faults that the child
@@ -10,13 +11,15 @@
         /// Runs the soak with `fault` and returns the codes of what it found. The same run with no
         /// fault comes first and must be green, so that what turns the soak red is the fault.
         private func soak(
-            _ fault: String, seed: UInt64, killPoints: [SoakKillPoint] = SoakKillPoint.captures, captures: Int = 30
+            _ fault: String, seed: UInt64, killPoints: [SoakKillPoint] = SoakKillPoint.captures, captures: Int = 30,
+            replayingRecovery: Bool = false
         ) async throws -> Set<String> {
             var configuration = CaptureLedgerSoak.Configuration(seed: seed, captures: captures, killPoints: killPoints)
             let control = try await run(configuration, "\(fault)-control", expectGreen: true)
             #expect(control.isGreen, "The run is red with no fault:\n\(control.report)")
             configuration.fault = fault
-            let verdict = try await run(configuration, fault, expectGreen: false)
+            let verdict = try await run(
+                configuration, fault, expectGreen: false, replayingRecovery: replayingRecovery)
             print("\(fault): \(verdict.summary)")
             #expect(!verdict.isGreen, "The soak stays green with the fault \(fault):\n\(verdict.report)")
             return Set(verdict.problems.map(\.code))
@@ -25,16 +28,58 @@
         /// Runs the soak in a folder of its own, which goes when the run came out as expected. A
         /// run that did not, a red control or a fault the soak missed, keeps its store, and its
         /// report names where.
-        private func run(_ configuration: CaptureLedgerSoak.Configuration, _ name: String, expectGreen: Bool)
-            async throws -> CaptureLedgerSoak.Verdict
-        {
+        private func run(
+            _ configuration: CaptureLedgerSoak.Configuration, _ name: String, expectGreen: Bool,
+            replayingRecovery: Bool = false
+        ) async throws -> CaptureLedgerSoak.Verdict {
             let folder = SoakFolders.make(name)
             let verdict = try await CaptureLedgerSoak(configuration: configuration).run(in: folder)
+            if replayingRecovery, !verdict.isGreen { try replayRecovery(of: verdict, in: folder) }
             if verdict.isGreen == expectGreen {
                 SoakFolders.remove(folder)
                 return verdict
             }
             return verdict.keeping(folder)
+        }
+
+        /// Runs the line a red report gives to replay the recovery, as a reader would, and checks
+        /// that it ran the launch after the run's last to its end, over a copy: the kept store is
+        /// left as the run left it.
+        private func replayRecovery(of verdict: CaptureLedgerSoak.Verdict, in folder: URL) throws {
+            let command = try #require(verdict.recoveryReplay, "A red report gives no line to replay its recovery")
+            #expect(verdict.report.contains(command))
+            let before = try Self.files(in: folder)
+            // The copy goes in a folder of the test's own, which it removes.
+            let copies = SoakFolders.make("replay")
+            defer { SoakFolders.remove(copies) }
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/sh")
+            process.arguments = ["-c", command.replacingOccurrences(of: "$(mktemp -d)", with: copies.path)]
+            let output = Pipe()
+            process.standardOutput = output
+            try process.run()
+            let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            let lines = printed.split(separator: "\n").map(String.init)
+            #expect(process.terminationStatus == 0, "\(lines.last ?? "")")
+            #expect(lines.first == SoakLine.launch(verdict.launches.count + 1).rendered)
+            #expect(lines.last == SoakLine.done.rendered)
+            #expect(!lines.contains { $0.hasPrefix("intent ") }, "The replay ran a capture")
+            #expect(FileManager.default.fileExists(atPath: copies.appending(path: "store").path))
+            #expect(try Self.files(in: folder) == before, "The replay changed the kept store")
+        }
+
+        /// Every file under `folder`, by its path there, with its bytes: a small store's whole state.
+        private static func files(in folder: URL) throws -> [String: Data] {
+            var files: [String: Data] = [:]
+            for path in try FileManager.default.subpathsOfDirectory(atPath: folder.path) {
+                var isFolder: ObjCBool = false
+                let url = folder.appending(path: path)
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue
+                else { continue }
+                files[path] = try Data(contentsOf: url)
+            }
+            return files
         }
 
         /// The engine says a save is durable before it writes it, and writes it at the capture's
@@ -95,7 +140,7 @@
 
         /// A recording's files stay in `Recording/` once its capture holds its asset.
         @Test func recordingFilesLeftAreRed() async throws {
-            let codes = try await soak("recording-files-left", seed: 68)
+            let codes = try await soak("recording-files-left", seed: 68, replayingRecovery: true)
             #expect(
                 !codes.isDisjoint(with: ["recovery_left_recording_files", "recording_files_left"]), "\(codes.sorted())")
         }
