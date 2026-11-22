@@ -1,4 +1,5 @@
 import Foundation
+import KnotCore
 
 /// Whether this process may open a hardware audio input (docs/architecture.md §8 and §19).
 ///
@@ -47,18 +48,21 @@ public enum HardwareInputPolicy {
         }
     }
 
-    /// The environment variables that a test runner sets in the process it starts.
-    static let testEnvironment = ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
+    /// The environment variables that a test runner sets in the process it starts, as KnotCore's
+    /// `ProcessSigns` reads them.
+    static let testEnvironment = ProcessSigns.testEnvironment
     /// The names of the processes that run package tests.
-    static let testRunners: Set<String> = ["xctest", "swiftpm-testing-helper"]
+    static let testRunners = ProcessSigns.testRunners
 
-    /// Why `process` may not open a hardware input, or `nil` when it may.
+    /// Why `process` may not open a hardware input, or `nil` when it may. The signs are KnotCore's
+    /// `ProcessSigns`; the recorder heeds all three, the simulator first.
     public static func refusal(for process: Process) -> Refusal? {
-        if process.isSimulator { return .simulator }
-        if process.environment["KNOT_AGENT"] == "1" { return .agent }
-        if testEnvironment.contains(where: { process.environment[$0] != nil }) { return .test }
-        if testRunners.contains(process.processName) { return .test }
-        if process.bundlePaths.contains(where: { $0.hasSuffix(".xctest") }) { return .test }
+        let signs = ProcessSigns(
+            environment: process.environment, bundlePaths: process.bundlePaths, processName: process.processName,
+            isSimulator: process.isSimulator)
+        if signs.holds(.simulator) { return .simulator }
+        if signs.holds(.agent) { return .agent }
+        if signs.holds(.test) { return .test }
         return nil
     }
 
