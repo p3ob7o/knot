@@ -58,16 +58,18 @@ struct SoakKillPoint: Hashable, Sendable, CustomStringConvertible {
 }
 
 extension SoakKillPoint {
-    /// The kill points of typed captures, WP-06's: inside the store's two transactions of a
-    /// capture, after each step of the script, at the engine's fall back to `Inbox/` and its
+    /// The kill points of WP-06's captures, typed ones and recordings: inside the store's two
+    /// transactions of a capture, after each step of the script and while a recording records,
+    /// at the engine's fall back to `Inbox/` and its
     /// late answers, inside ingest and recovery, and anywhere at all. A late answer is rare, and
     /// recovery finishes a capture only when the launch before left one open, so those two kill
     /// at their first pass.
-    static let typedCaptures: [SoakKillPoint] = [
+    static let captures: [SoakKillPoint] = [
         .store(.insideRecord, passes: 1...12),
         .store(.insideSave, passes: 1...40),
         .step("after_begin", passes: 1...12),
         .step("after_checkpoint", passes: 1...40),
+        .step("during_recording", passes: 1...6),
         .step("after_end", passes: 1...12),
         .log("capture_fell_back", passes: 1...2),
         .log("store_answered_late", passes: 1...1),

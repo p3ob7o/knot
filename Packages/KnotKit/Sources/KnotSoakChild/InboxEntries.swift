@@ -83,6 +83,64 @@
         }
     }
 
+    /// What the soak finds in `Recording/`: every entry, whatever its name. Once recovery has run,
+    /// a recording of an earlier launch leaves none of its files there: its manifest, its working
+    /// file, its peaks, a conversion's leftover, or a temporary of one of them. One form alone is
+    /// set apart: the temporary of the peaks file's atomic creation (`FileManager.createFile`),
+    /// `<capture>.peaks.sb-<8 hex>-<6 characters>`, which a kill can cut before its rename, so that
+    /// it never held audio. Nothing clears these yet (`SoakRules.peaksTemporariesAreRed`).
+    struct RecordingEntries: Hashable, Sendable {
+        /// The temporaries of cut peaks writes, by name: each names a capture ID, no content.
+        let peaksTemporaries: Set<String>
+        /// How many other entries there are.
+        let others: Int
+
+        /// Lists `Recording/`, or `nil` when it cannot be listed. With `besides`, the launch that
+        /// is recording while it looks, only what an earlier launch provably left counts: the files
+        /// of a capture whose manifest names another launch, or that has no manifest of this launch.
+        static func list(_ locations: StoreLocations, besides current: LaunchID? = nil) -> RecordingEntries? {
+            let path = locations.recording.path
+            guard FileManager.default.fileExists(atPath: path) else {
+                return RecordingEntries(peaksTemporaries: [], others: 0)
+            }
+            guard var names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+            if let current {
+                var mine: Set<CaptureID> = []
+                for name in names where name.hasSuffix(".json") && !name.hasPrefix(".") {
+                    let url = locations.recording.appending(path: name, directoryHint: .notDirectory)
+                    guard let data = try? Data(contentsOf: url), let manifest = try? CaptureManifest.decode(data) else {
+                        continue
+                    }
+                    if manifest.launchID == current { mine.insert(manifest.captureID) }
+                }
+                let all = names
+                names = names.filter { name in
+                    let id =
+                        name.hasPrefix(".")
+                        ? InboxEntries.capture(ofPartial: name) : InboxEntries.capture(ofFile: name)
+                    // A temporary with no manifest yet may be this launch's first write.
+                    if name.hasPrefix("."), let id, !all.contains("\(id).json") { return false }
+                    return id.map { !mine.contains($0) } ?? true
+                }
+            }
+            let temporaries = Set(names.filter { isPeaksTemporary($0, locations) })
+            return RecordingEntries(peaksTemporaries: temporaries, others: names.count - temporaries.count)
+        }
+
+        /// Whether `name` is the temporary of a peaks file's atomic creation, as Foundation names
+        /// one: the peaks file's name, `.sb-`, eight hexadecimal digits, `-`, six letters or digits.
+        static func isPeaksTemporary(_ name: String, _ locations: StoreLocations) -> Bool {
+            guard let range = name.range(of: ".sb-") else { return false }
+            let file = String(name[..<range.lowerBound])
+            let rest = name[range.upperBound...].split(separator: "-", omittingEmptySubsequences: false)
+            guard rest.count == 2, rest[0].count == 8, rest[0].allSatisfy(\.isHexDigit), rest[1].count == 6,
+                rest[1].allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+                let id = InboxEntries.capture(ofFile: file)
+            else { return false }
+            return locations.recordingPeaks(id).lastPathComponent == file
+        }
+    }
+
     /// The soak's rules that wait for a fix elsewhere.
     enum SoakRules {
         /// Whether a temporary of a cut write left in `Inbox/` turns the soak red. Not yet: no part
@@ -91,5 +149,13 @@
         /// counted, and more of them than kills that could have cut them is red
         /// (`inbox_partials_beyond_kills`).
         static let inboxPartialsAreRed = false
+
+        /// Whether a temporary of a cut peaks write left in `Recording/` turns the soak red. Not
+        /// yet: the recorder makes its peaks file atomically, through a temporary that a kill can
+        /// leave, and its recovery looks only at working files, manifests and its own partials.
+        /// Nothing acknowledged is lost in one. The fix is the recorder's, in WP-12's third pull
+        /// request, which turns this to true. Until then each is counted, and more of them than kills that could have
+        /// cut them is red (`peaks_temporaries_beyond_kills`).
+        static let peaksTemporariesAreRed = false
     }
 #endif

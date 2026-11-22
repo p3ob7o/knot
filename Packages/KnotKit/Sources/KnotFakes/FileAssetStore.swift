@@ -10,11 +10,17 @@
         private let locations: StoreLocations
         private let layer: any FileLayer
         private let files: StoreFiles
+        /// The store whose rows name the files, which a removal asks first.
+        private let notes: InMemoryNoteStore?
 
-        public init(locations: StoreLocations, layer: any FileLayer) {
+        /// - Parameter notes: the store whose rows name the files, so that a removal keeps a file
+        ///   a row names, as the real store's does. With none, the store has no rows, names no
+        ///   file, and removes as asked.
+        public init(locations: StoreLocations, layer: any FileLayer, notes: InMemoryNoteStore? = nil) {
             self.locations = locations
             self.layer = layer
             self.files = locations.durableFiles(layer: layer)
+            self.notes = notes
         }
 
         public func place(_ data: Data, as asset: AssetID, kind: AssetKind) throws(KnotError) -> StoredFile {
@@ -63,9 +69,13 @@
             }
         }
 
-        public func remove(_ asset: AssetID, kind: AssetKind) throws(KnotError) {
+        /// Removes the file, unless a row of its notes names it. Unlike the real store's, the
+        /// question and the removal are not one step against the notes' writes: a fake has no
+        /// writer's lock to hold.
+        public func remove(_ asset: AssetID, kind: AssetKind) async throws(KnotError) {
             let url = try destination(asset, kind)
             guard layer.entryKind(url) != nil else { return }
+            if let notes, await notes.names(asset) { return }
             try files.remove(url)
         }
 

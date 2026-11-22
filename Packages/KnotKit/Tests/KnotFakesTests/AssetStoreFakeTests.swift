@@ -17,9 +17,16 @@ func fileAssetStore() throws -> (FileAssetStore, PowerCutFileLayer, StoreLocatio
 }
 
 @Suite struct FileAssetStoreTests {
+    /// The fake with the in-memory notes whose rows name its files, as the real store has its
+    /// database.
     @Test(.tags(.contract)) func theContract() async throws {
         try await AssetStoreContract.run {
-            let (store, layer, locations) = try fileAssetStore()
+            let clock = FakeClock()
+            let ids = SeededIDGenerator(seed: 151, clock: clock)
+            let device: DeviceID = ids.make()
+            let notes = InMemoryNoteStore(clock: clock, ids: ids, deviceID: device)
+            let (_, layer, locations) = try fileAssetStore()
+            let store = FileAssetStore(locations: locations, layer: layer, notes: notes)
             let count = Mutex(0)
             return AssetStoreSubject(
                 store: store, locations: locations,
@@ -32,7 +39,19 @@ func fileAssetStore() throws -> (FileAssetStore, PowerCutFileLayer, StoreLocatio
                     try layer.write(data, to: url)
                     return url
                 },
-                exists: { layer.exists($0) })
+                exists: { layer.exists($0) },
+                nameInRow: { file in
+                    let id: CaptureID = ids.make()
+                    let asset = Asset(
+                        id: file.asset, segmentID: SegmentID(id), kind: file.kind, byteCount: file.byteCount,
+                        sha256: file.sha256)
+                    _ = try await notes.record(
+                        NewCapture(
+                            id: id, kind: file.kind == .audio ? .voice : .ink,
+                            origin: CaptureOrigin(source: .device(device), surface: .app), launchID: ids.make(),
+                            placement: .newNote, startedAt: clock.now(), endedAt: clock.now(),
+                            body: .file(asset, duration: file.kind == .audio ? .seconds(1) : nil)))
+                })
         }
     }
 
