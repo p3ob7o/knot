@@ -1006,24 +1006,33 @@ CLASS_DECLARATION = re.compile(r"\bclass\s+(\w+)\s*(?:<[^>]*>\s*)?[:{]")
 TEST_METHOD = re.compile(r"\bfunc\s+(test\w*)\s*\(")
 
 
-def smoke_test_of(slug):
-    """The source, class and test method that a UI smoke test's named comment marks, in the
-    three UI-test folders: the first test method after the comment, in the class declared
-    before it, both read outside comments. None when no UI test names it."""
+def smoke_tests_marked(slug):
+    """Each place in the three UI-test folders that a named comment of the slug marks: the
+    source, the class and the test method of the first test method after the comment, in the
+    class declared before it, both read outside comments. Comments that lead to the same test,
+    as one over its class and one over the test do, are one place; a comment that leads to no
+    test is a place of its own, with no class or method. An empty list when no UI test names
+    it."""
+    mention = re.compile(r"(?<![\w-])" + re.escape(slug) + r"(?![\w-])")
+    places = []
     for path in swift_files(tuple(prefix for prefix, _, _ in SMOKE_STEPS)):
         with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
-        source = text.splitlines()
         code = swift_code_lines(text)
-        marks = [n for n, line in enumerate(source) if slug in line and "//" in line]
-        if not marks:
-            continue
-        for n in range(marks[0], len(code)):
-            method = TEST_METHOD.search(code[n])
-            if method:
-                owner = next((m.group(1) for line in reversed(code[:n]) if (m := CLASS_DECLARATION.search(line))), None)
-                return path, owner, method.group(1)
-    return None
+        for mark, line in enumerate(text.splitlines()):
+            if "//" not in line or not mention.search(line[line.index("//"):]):
+                continue
+            place = (path, None, None)
+            for n in range(mark, len(code)):
+                method = TEST_METHOD.search(code[n])
+                if method:
+                    owner = next((m.group(1) for code_line in reversed(code[:n])
+                                  if (m := CLASS_DECLARATION.search(code_line))), None)
+                    place = (path, owner, method.group(1))
+                    break
+            if place not in places:
+                places.append(place)
+    return places
 
 
 def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
@@ -1051,8 +1060,18 @@ def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
         # The UI test first, by its named comment, and judged when it is found. Only when no UI
         # test carries the slug does a package's Swift Testing test of that name make it the
         # package's: package-test runs it and the named-tests step requires it.
-        found = smoke_test_of(slug)
-        if not found:
+        places = smoke_tests_marked(slug)
+        if len(places) > 1:
+            # Which of them is the smoke test is not the step's to guess: the first in the
+            # order of the files was a helper's comment, and its test was judged in place of
+            # the smoke test, which had not run.
+            named = "; ".join(f"{path}, {f'{owner}.{method}' if method else 'which leads to no test'}"
+                              for path, owner, method in places)
+            print(f"live-smoke: FAIL {slug}: its named comment is in more than one place, so which test is "
+                  f"the smoke test is ambiguous: {named}. Leave it on the smoke test alone.")
+            problems += 1
+            continue
+        if not places:
             package_file = package_test_naming(slug)
             if package_file:
                 print(f"live-smoke: {slug}: not asked for here: {package_file} names it, a package test, "
@@ -1061,7 +1080,11 @@ def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
             print(f"live-smoke: FAIL {slug}: no UI test carries its named comment, and no package test is named by it")
             problems += 1
             continue
-        path, owner_class, method = found
+        path, owner_class, method = places[0]
+        if method is None:
+            print(f"live-smoke: FAIL {slug}: its named comment in {path} leads to no test method")
+            problems += 1
+            continue
         place = next(((step, log) for prefix, step, log in SMOKE_STEPS if path.startswith(prefix)), None)
         if place is None:
             print(f"live-smoke: FAIL {slug}: {path} is in no step that runs the UI tests")

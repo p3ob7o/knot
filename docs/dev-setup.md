@@ -189,7 +189,8 @@ The package tests' limit is not about a dialog. At 50 minutes it stays under the
 
 - **The Mac's test** is asked for only in a run that starts `mac-ui`. Otherwise the step says it was not asked for, as in `--full --skip mac-ui`, or a gate whose diff does not reach the Mac app.
 - **A test whose row's pull request has not merged**, or is not the one under test, is not asked for either, by the rule the named tests follow.
-- **The UI test is looked for first.** It is marked by a comment that names the slug, in `Apps/iOS/`, `Apps/watchOS/` or `Apps/macOS/`, over the first `func test…` after it, and judged when found.
+- **The UI test is looked for first.** It is marked by a comment that names the slug, in `Apps/iOS/`, `Apps/watchOS/` or `Apps/macOS/`, over the first `func test…` after it, in the class declared before that, by its name before a colon or a brace. Both are read outside comments, so `override class func setUp()` or a comment that says "this class" names no class. It is judged when found.
+- **A slug marked in more than one place** fails as ambiguous, and the step names the places, since which is the smoke test is not its to guess. Comments that lead to the same test, as one over its class and one over the test do, are one place. A comment elsewhere that only mentions the slug, as a helper's might, is a second place: leave the slug on the smoke test alone.
 - **A package's test.** Only when no UI test carries the slug does a package's Swift Testing test of that name, `@Test("<slug>", .tags(.named))` under `Packages/KnotKit/Tests/`, make it the package's. `package-test` runs it and the named-tests step requires it, and this step names the file. A comment in a package test marks nothing, so no mention can turn a platform's check off. A slug that neither names fails the step.
 - **`--only live-smoke`** alone fails, since no step of its run wrote the logs. It comes last in `--full` and the gate's everything depth.
 

@@ -1462,7 +1462,7 @@ printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: typ
     >"$st/tree/Apps/iOS/UITests/PhoneTests.swift"
 printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class WatchSmokeTests: XCTestCase {\n    override class func setUp() { super.setUp() }\n    func testWatchSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
-printf 'final class MacSmokeTests: XCTestCase {\n    override class var runsForEachTargetApplicationUIConfiguration: Bool { false }\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
+printf '// live-smoke-a-mac: the Mac'"'"'s smoke test, named over its class and over its test.\nfinal class MacSmokeTests: XCTestCase {\n    override class var runsForEachTargetApplicationUIConfiguration: Bool { false }\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
 # The package's form of a named test: Swift Testing's, the slug in the test's name, a function
 # of any name, and no comment.
@@ -1487,8 +1487,14 @@ smoke_logs "$st/phone-missing" "Test case 'PhoneTests.testOther()' passed on 'se
 smoke_logs "$st/watch-skipped" "$phone_ok" "Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' skipped (0.001 seconds)." "$mac_ok"
 smoke_logs "$st/mac-old" "$phone_ok" "$watch_ok" "$mac_ok"
 touch -t 202001020304.05 "$st/mac-old/verify-mac-ui-tests.log"
-smoke() { # smoke <logs> <mac-ui 0|1>: status and the check's lines
-    python3 -I -B - "$KNOT_SCRIPTS/lib" "$st/tree" "$1" "$smoke_start" "$2" <<'PY' 2>&1 || true
+# A tree in which a helper file's comment also names the iPhone's slug, and sorts first: the
+# slug is marked in two places, which the step names, rather than judge the helper's test.
+cp -R "$st/tree" "$st/tree-two-marks"
+printf 'final class LaunchHelperTests: XCTestCase {\n    // Unlike live-smoke-a-iphone, this one does not kill the app.\n    func testLaunchOnly() throws {}\n}\n' \
+    >"$st/tree-two-marks/Apps/iOS/UITests/AppLaunchHelpers.swift"
+smoke_logs "$st/helper-ran" "Test case 'LaunchHelperTests.testLaunchOnly()' passed on 'set-iphone - Runner (1)' (2.0 seconds)" "$watch_ok" "$mac_ok"
+smoke() { # smoke <logs> <mac-ui 0|1> [tree]: status and the check's lines
+    python3 -I -B - "$KNOT_SCRIPTS/lib" "${3:-$st/tree}" "$1" "$smoke_start" "$2" <<'PY' 2>&1 || true
 import contextlib, io, os, sys
 sys.path.insert(0, sys.argv[1])
 import knot_tool as k
@@ -1508,16 +1514,18 @@ smoke_no_mac="$(smoke "$st/all" 0)"
 smoke_phone="$(smoke "$st/phone-missing" 1)"
 smoke_watch="$(smoke "$st/watch-skipped" 1)"
 smoke_old="$(smoke "$st/mac-old" 1)"
+smoke_two="$(smoke "$st/helper-ran" 1 "$st/tree-two-marks")"
 if [[ ${smoke_all%%$'\n'*} == 0 &&
     $smoke_all == *"live-smoke-a-composition"*"Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"*"a package test, which package-test runs"* &&
     $smoke_all == *"live-smoke-a-later"*"has not merged"* &&
     ${smoke_no_mac%%$'\n'*} == 0 && $smoke_no_mac == *"live-smoke-a-mac"*"not asked for"*"mac-ui"* &&
     ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
     ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
-    ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* ]]; then
+    ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* &&
+    ${smoke_two%%$'\n'*} == 1 && $smoke_two == *"live-smoke-a-iphone"*"more than one"*"AppLaunchHelpers.swift"*"PhoneTests.swift"* ]]; then
     pass "the live smoke step asks each platform's smoke test, found by its named comment, to have passed in this run, and no other"
 else
-    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'"
+    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; two marks '$smoke_two'"
 fi
 
 # The packaging step's scan for the debug launch arguments (item 99): a file that holds one of
