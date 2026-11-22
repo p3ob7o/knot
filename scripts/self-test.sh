@@ -1486,6 +1486,11 @@ smoke_logs "$st/all" "$phone_ok" "$watch_ok" "$mac_ok"
 smoke_logs "$st/phone-missing" "Test case 'PhoneTests.testOther()' passed on 'set-iphone - Runner (1)' (1.0 seconds)" "$watch_ok" "$mac_ok"
 smoke_logs "$st/watch-skipped" "$phone_ok" "Test Case '-[Knot_watchOS_UITests.WatchSmokeTests testWatchSmoke]' skipped (0.001 seconds)." "$mac_ok"
 smoke_logs "$st/mac-old" "$phone_ok" "$watch_ok" "$mac_ok"
+# The iPhone's test runs on two destinations, the iPhone and the iPad: it passed on one, and
+# failed, or was skipped, on the other. Each fails the step: one destination's pass is not
+# the test's.
+smoke_logs "$st/pad-failed" "$phone_ok"$'\n'"Test case 'PhoneTests.testPhoneSmoke()' failed on 'set-ipad - Runner (1)' (180.0 seconds)" "$watch_ok" "$mac_ok"
+smoke_logs "$st/pad-skipped" "$phone_ok"$'\n'"Test case 'PhoneTests.testPhoneSmoke()' skipped on 'set-ipad - Runner (1)' (0.0 seconds)" "$watch_ok" "$mac_ok"
 touch -t 202001020304.05 "$st/mac-old/verify-mac-ui-tests.log"
 # A tree in which a helper file's comment also names the iPhone's slug, and sorts first: the
 # slug is marked in two places, which the step names, rather than judge the helper's test.
@@ -1515,6 +1520,8 @@ smoke_phone="$(smoke "$st/phone-missing" 1)"
 smoke_watch="$(smoke "$st/watch-skipped" 1)"
 smoke_old="$(smoke "$st/mac-old" 1)"
 smoke_two="$(smoke "$st/helper-ran" 1 "$st/tree-two-marks")"
+smoke_pad_failed="$(smoke "$st/pad-failed" 1)"
+smoke_pad_skipped="$(smoke "$st/pad-skipped" 1)"
 if [[ ${smoke_all%%$'\n'*} == 0 &&
     $smoke_all == *"live-smoke-a-composition"*"Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"*"a package test, which package-test runs"* &&
     $smoke_all == *"live-smoke-a-later"*"has not merged"* &&
@@ -1522,10 +1529,12 @@ if [[ ${smoke_all%%$'\n'*} == 0 &&
     ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
     ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
     ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* &&
-    ${smoke_two%%$'\n'*} == 1 && $smoke_two == *"live-smoke-a-iphone"*"more than one"*"AppLaunchHelpers.swift"*"PhoneTests.swift"* ]]; then
+    ${smoke_two%%$'\n'*} == 1 && $smoke_two == *"live-smoke-a-iphone"*"more than one"*"AppLaunchHelpers.swift"*"PhoneTests.swift"* &&
+    ${smoke_pad_failed%%$'\n'*} == 1 && $smoke_pad_failed == *"live-smoke-a-iphone"*"did not pass"*"passed, failed"* &&
+    ${smoke_pad_skipped%%$'\n'*} == 1 && $smoke_pad_skipped == *"live-smoke-a-iphone"*"skipped"* ]]; then
     pass "the live smoke step asks each platform's smoke test, found by its named comment, to have passed in this run, and no other"
 else
-    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; two marks '$smoke_two'"
+    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; two marks '$smoke_two'; passed on one destination and failed on the other '$smoke_pad_failed', skipped on the other '$smoke_pad_skipped'"
 fi
 
 # The packaging step's scan for the debug launch arguments (item 99): a file that holds one of
