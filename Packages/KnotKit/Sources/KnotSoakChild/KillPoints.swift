@@ -35,6 +35,8 @@
         static let logEvents: Set<String> = [
             "capture_began", "capture_ended", "capture_fell_back", "store_answered_late", "inbox_item_stored",
             "inbox_item_kept", "capture_recovered", "start_waits_for_open_capture",
+            // The recorder's (WP-12): a start live, a stop's last sync done, a copy in place.
+            "recording_live", "recording_stopped", "recording_converted",
         ]
 
         static var all: [String] {

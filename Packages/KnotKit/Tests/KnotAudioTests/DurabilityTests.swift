@@ -102,6 +102,67 @@ import Testing
         #expect(layer.folderSyncsWithTheFile > 0, "Live before the working file's name was synced.")
         _ = await session.stop()
     }
+
+    /// The start's durable writes, the folder's creation, the manifest's placement, the working
+    /// file's making and the folder's sync, run on the start's own queue and never on a thread of
+    /// the cooperative pool: a full sync there would hold one of a watch's two pool threads at
+    /// every start. The periodic sync is slow here, so every write before the start returns is
+    /// the start's.
+    @Test func theStartsWritesRunOnTheStartsQueue() async throws {
+        let folder = try ScratchFolder()
+        let layer = QueueWitnessLayer()
+        let recorder = LiveRecorder(
+            locations: folder.locations, layer: layer, input: injected(frames: 1_600),
+            settings: LiveRecorder.Settings(syncInterval: .seconds(600)))
+        let session = try await recorder.start(request())
+        let calls = layer.calls
+        #expect(calls.contains { $0.hasPrefix("write ") } && calls.contains { $0.hasPrefix("syncFolder ") }, "\(calls)")
+        #expect(calls.allSatisfy { $0.hasSuffix(" on knot.audio.start") }, "\(calls)")
+        _ = await session.stop()
+    }
+}
+
+/// The drive's file layer, saying which queue each write, sync, rename and creation of a folder
+/// ran on, as `<call> <name> on <queue's label>`.
+final class QueueWitnessLayer: FileLayer {
+    private let disk = PosixFileLayer()
+    private let seen = Mutex<[String]>([])
+
+    var calls: [String] { seen.withLock { $0 } }
+
+    private func note(_ call: String, _ url: URL) {
+        let queue = String(cString: __dispatch_queue_get_label(nil))
+        seen.withLock { $0.append("\(call) \(url.lastPathComponent) on \(queue)") }
+    }
+
+    func createFolder(_ url: URL) throws(KnotError) {
+        note("createFolder", url)
+        try disk.createFolder(url)
+    }
+    func write(_ data: Data, to url: URL) throws(KnotError) {
+        note("write", url)
+        try disk.write(data, to: url)
+    }
+    func syncFile(_ url: URL) throws(KnotError) {
+        note("syncFile", url)
+        try disk.syncFile(url)
+    }
+    func rename(_ source: URL, to destination: URL) throws(KnotError) {
+        note("rename", destination)
+        try disk.rename(source, to: destination)
+    }
+    func syncFolder(_ url: URL) throws(KnotError) {
+        note("syncFolder", url)
+        try disk.syncFolder(url)
+    }
+    func remove(_ url: URL) throws(KnotError) {
+        note("remove", url)
+        try disk.remove(url)
+    }
+    func read(_ url: URL) throws(KnotError) -> Data { try disk.read(url) }
+    func exists(_ url: URL) -> Bool { disk.exists(url) }
+    func entryKind(_ url: URL) -> FileEntryKind? { disk.entryKind(url) }
+    func contents(of folder: URL) throws(KnotError) -> [String] { try disk.contents(of: folder) }
 }
 
 /// The drive's file layer, observing one working file and its folder: each completed sync of the
