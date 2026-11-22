@@ -11,19 +11,34 @@ import Synchronization
 /// opens a microphone on the build Mac. Nothing here runs on this Mac's hardware, so what it
 /// does on a device is checked at the owner's sittings.
 ///
-/// Interruptions and route changes are WP-12's second pull request. Here, an engine that
-/// changes its configuration ends the recording as `input_lost`, with everything written kept.
+/// An interruption, a call, Siri or an alarm that takes the audio session, ends the recording
+/// as `interrupted`, with everything written kept. A route change that changes the hardware, as
+/// AirPods that connect, makes the engine change its configuration and stop itself: the input then
+/// puts its tap back in the new format and starts again, and a new rate goes through a converter
+/// into the working file's, which keeps its rate for its whole length (docs/architecture.md §8).
+/// An engine that cannot start again, or media services that were reset, end the recording as
+/// `input_lost`.
+///
+/// A recording holds the process's `AudioActivity` from the open to the stop: it stops every
+/// player that plays as it takes the session, and a play is refused while it holds it.
 public struct MicrophoneInput: AudioInput {
     let hardware: any HardwareAudio
     let policy: @Sendable () -> HardwareInputPolicy.Refusal?
+    let activity: AudioActivity
 
     public init() {
-        self.init(hardware: SystemHardwareAudio(), policy: HardwareInputPolicy.refusalForThisProcess)
+        self.init(
+            hardware: SystemHardwareAudio(), policy: HardwareInputPolicy.refusalForThisProcess, activity: .process)
     }
 
-    init(hardware: any HardwareAudio, policy: @escaping @Sendable () -> HardwareInputPolicy.Refusal?) {
+    /// With an activity of its own unless one is given, as a test gives the one its player shares.
+    init(
+        hardware: any HardwareAudio, policy: @escaping @Sendable () -> HardwareInputPolicy.Refusal?,
+        activity: AudioActivity = AudioActivity()
+    ) {
         self.hardware = hardware
         self.policy = policy
+        self.activity = activity
     }
 
     public func prepare() async {}
@@ -32,12 +47,20 @@ public struct MicrophoneInput: AudioInput {
         // First, before anything reaches the hardware or asks for a permission.
         if policy() != nil { throw KnotError.noInputDevice }
         guard await hardware.recordPermission() else { throw KnotError.microphonePermissionRefused }
-        try hardware.activateSession()
+        // The recording wins: a player that plays stops before the session is taken.
+        let claim = await activity.recordingBegins()
+        do {
+            try hardware.activateSession()
+        } catch {
+            claim.end()
+            throw error
+        }
         let engine: any InputEngine
         do {
             engine = try hardware.makeEngine()
         } catch {
             hardware.deactivateSession()
+            claim.end()
             throw error
         }
         // The input node's input format is the hardware's: a rate or a channel count of zero
@@ -48,9 +71,10 @@ public struct MicrophoneInput: AudioInput {
         let tap = engine.tap
         guard hardwareShape.sampleRate > 0, hardwareShape.channels > 0, tap.sampleRate > 0, tap.channels > 0 else {
             hardware.deactivateSession()
+            claim.end()
             throw KnotError.noInputDevice
         }
-        return OpenMicrophone(engine: engine, sampleRate: tap.sampleRate, hardware: hardware)
+        return OpenMicrophone(engine: engine, sampleRate: tap.sampleRate, hardware: hardware, claim: claim)
     }
 }
 
@@ -64,6 +88,20 @@ protocol HardwareAudio: Sendable {
     /// Gives the audio session back, on iOS and watchOS.
     func deactivateSession()
     func makeEngine() throws(KnotError) -> any InputEngine
+    /// What the audio session tells a recording, from the moment it is asked, on iOS and watchOS.
+    /// The Mac has no audio session, and the stream ends at once.
+    func sessionEvents() -> AsyncStream<SessionEvent>
+}
+
+/// What the audio session tells a recording.
+enum SessionEvent: Hashable, Sendable {
+    /// The system took the session: a call, Siri or an alarm.
+    case interrupted
+    /// The media services were reset, and every audio object with them.
+    case servicesReset
+    /// The route changed, for the session's reason. When the hardware changed, the engine's own
+    /// configuration change follows, and the input starts again on it.
+    case routeChanged(reason: UInt)
 }
 
 /// A rate and a channel count, read from a format.
@@ -115,6 +153,11 @@ struct SystemHardwareAudio: HardwareAudio {
             let session = AVAudioSession.sharedInstance()
             do {
                 try session.setCategory(.record, mode: .default, options: [])
+                // Haptics and system sounds are held back while the session takes input unless it
+                // allows them, and by default it does not (AVAudioSession.h,
+                // allowHapticsAndSystemSoundsDuringRecording): without this, the live cue's
+                // haptic is never felt. The live cue's gap keeps its sound out of the recording.
+                try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
                 try session.setActive(true)
             } catch {
                 throw SessionError.knotError(code: (error as NSError).code)
@@ -135,6 +178,39 @@ struct SystemHardwareAudio: HardwareAudio {
 
     func makeEngine() throws(KnotError) -> any InputEngine {
         SystemInputEngine(engine: AVAudioEngine())
+    }
+
+    /// The session's interruptions, resets and route changes. From OS 27 an interruption is a
+    /// deactivation by the system, which `AVAudioSession.DidBecomeInactiveMessage` gives with
+    /// `.systemInterruption`; the interruption notification is deprecated (AVAudioSessionTypes.h).
+    func sessionEvents() -> AsyncStream<SessionEvent> {
+        #if os(iOS) || os(watchOS)
+            AsyncStream { continuation in
+                let session = AVAudioSession.sharedInstance()
+                let center = NotificationCenter.default
+                let inactive = center.addObserver(of: session, for: .didBecomeInactive) { message in
+                    if case .systemInterruption = message.deactivationResult { continuation.yield(.interrupted) }
+                }
+                let resets = Task {
+                    for await _ in center.notifications(named: AVAudioSession.mediaServicesWereResetNotification) {
+                        continuation.yield(.servicesReset)
+                    }
+                }
+                let routes = Task {
+                    for await notification in center.notifications(named: AVAudioSession.routeChangeNotification) {
+                        let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+                        continuation.yield(.routeChanged(reason: reason))
+                    }
+                }
+                continuation.onTermination = { _ in
+                    center.removeObserver(inactive)
+                    resets.cancel()
+                    routes.cancel()
+                }
+            }
+        #else
+            AsyncStream { $0.finish() }
+        #endif
     }
 }
 
@@ -208,32 +284,53 @@ struct SystemInputEngine: InputEngine {
 
 /// The microphone opened for one recording.
 ///
-/// The engine is touched in two places only, never at once: inside the start, and inside the one
-/// stop that finishes the input, which no start runs beside. A stop asked for while the start
-/// runs, its own undoing included, waits for it, and the start then takes away what it put
-/// there. One stop finishes the input and every other waits until it has. Every delivery, of the
-/// tap or of the configuration change, is counted while it runs, and none begins once the input
-/// is finishing. So every stop, during the start, after it or at once with another, returns only
-/// once the tap is gone, the engine stopped, every delivery under way ended and the session given
-/// back: no delivery follows it.
+/// The engine is touched in three places only, never at once: inside the start, inside a restart
+/// after the engine changed its configuration, and inside the one stop that finishes the input,
+/// which no start or restart runs beside. A stop asked for while a start or a restart runs, its
+/// own undoing included, waits for it, and the start then takes away what it put there. One stop
+/// finishes the input and every other waits until it has. Every delivery, of the tap, of a
+/// configuration change or of the session, is counted while it runs, and none begins once the
+/// input is finishing, but one: the converter's tail, the audio the tap took before the engine
+/// stopped, which the stop delivers itself before the tap goes. So every stop, during the start,
+/// after it or at once with another, returns only once the tap is gone, the engine stopped, every
+/// delivery under way ended and the session given back: no delivery follows it.
 final class OpenMicrophone: OpenAudioInput {
     let sampleRate: Double
     let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
     private let engine: any InputEngine
     private let hardware: any HardwareAudio
+    /// The recording's hold on the process's audio, given back with the session.
+    private let claim: RecordingClaim?
     private let state = Mutex(State())
+    /// Where a configuration change and the session's events are handled: a queue of the input's
+    /// own, never a thread of the cooperative pool, so that a restart, which starts the engine,
+    /// and a handler that holds its delivery hold no thread a task needs.
+    private let changeQueue = DispatchQueue(label: "knot.microphone.configuration-change")
 
     private struct State {
-        /// True while the start runs.
+        /// True while the start or a restart runs.
         var starting = false
         /// True once a stop has been asked for.
         var stopped = false
         var tapInstalled = false
         var engineStarted = false
         var sessionReleased = false
-        /// Watches for the engine's configuration change.
-        var watcher: Task<Void, Never>?
-        /// Stops asked for while the start runs, waiting for it.
+        /// The working file's format and the counted delivery, which a restart takes again.
+        var format: AVAudioFormat?
+        var deliver: (@Sendable (AudioDelivery) -> Void)?
+        /// The recorder's own delivery, for the converter's tail, which goes out as the tap goes.
+        var tail: (@Sendable (AudioDelivery) -> Void)?
+        /// The tap's carrier, drained before its tap goes.
+        var carrier: Carrier?
+        /// How many times the engine was started again after a configuration change.
+        var restarts = 0
+        /// A configuration change that came while the start ran, carried out once it has ended.
+        var restartPending = false
+        /// How many configuration changes came while the start ran, for a test.
+        var changesDuringTheStart = 0
+        /// Watch for the engine's configuration changes and for the session's events.
+        var watchers: [Task<Void, Never>] = []
+        /// Stops asked for while the start or a restart runs, waiting for it.
         var waiting: [CheckedContinuation<Void, Never>] = []
         /// True once a stop has begun to finish the input, and once it has finished it.
         var finishing = false
@@ -250,10 +347,11 @@ final class OpenMicrophone: OpenAudioInput {
         var deliveryWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
-    init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio) {
+    init(engine: any InputEngine, sampleRate: Double, hardware: any HardwareAudio, claim: RecordingClaim? = nil) {
         self.engine = engine
         self.sampleRate = sampleRate
         self.hardware = hardware
+        self.claim = claim
     }
 
     /// True once a stop has been asked for, which a test reads to order a stop inside a start.
@@ -261,6 +359,12 @@ final class OpenMicrophone: OpenAudioInput {
 
     /// How many stops are waiting, which a test reads to see that a stop waits.
     var suspendedStops: Int { state.withLock { $0.suspended } }
+
+    /// How many times the engine started again after a configuration change, for a test.
+    var restarts: Int { state.withLock { $0.restarts } }
+
+    /// How many configuration changes came while the start ran, for a test.
+    var changesDuringTheStart: Int { state.withLock { $0.changesDuringTheStart } }
 
     func start(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void) throws(KnotError) {
         // A stop that came first leaves nothing to start.
@@ -270,32 +374,18 @@ final class OpenMicrophone: OpenAudioInput {
             return true
         }
         guard proceed else { return }
+        let raw = deliver
         let deliver = counted(deliver)
+        state.withLock {
+            $0.format = format
+            $0.deliver = deliver
+            $0.tail = raw
+        }
         var failure: KnotError?
         do throws(KnotError) {
-            // The tap delivers the hardware's format, every 100 ms or more; each buffer is mixed
-            // down to one channel in the working file's format before it is written.
-            try engine.installTap(bufferSize: AVAudioFrameCount(sampleRate / 10)) { buffer in
-                // An empty buffer holds nothing to write and says nothing about the input.
-                guard buffer.frameLength > 0 else { return }
-                guard let mono = Downmix.mono(buffer, into: format) else {
-                    // Another rate or a sample format the file cannot take: the input changed.
-                    deliver(.ended(.lost))
-                    return
-                }
-                deliver(.audio(mono))
-            }
-            state.withLock { $0.tapInstalled = true }
-            let changes = engine.configurationChanges()
-            let watcher = Task {
-                // The engine stopped itself because the hardware changed. WP-12's second pull
-                // request restarts it into the file's rate; until then the recording ends, kept.
-                for await _ in changes {
-                    deliver(.ended(.lost))
-                    return
-                }
-            }
-            state.withLock { $0.watcher = watcher }
+            // Watched before the tap goes in, so that no change of the engine's goes unseen.
+            watch(deliver)
+            try attach(format: format, deliver: deliver)
             // A stop asked for meanwhile: the engine is not started, and the microphone never opens.
             if !state.withLock({ $0.stopped }) {
                 try engine.start()
@@ -304,18 +394,123 @@ final class OpenMicrophone: OpenAudioInput {
         } catch {
             failure = error
         }
-        // A stop asked for while it ran, or a failure, takes away what it put there. The start is
-        // over only then: a stop asked for meanwhile waits for that too, and the stops that
-        // waited for it go on.
-        if state.withLock({ $0.stopped }) || failure != nil { tearDown() }
-        let waiting = state.withLock { state in
+        endStart(undo: state.withLock { $0.stopped } || failure != nil)
+        if let failure { throw failure }
+    }
+
+    /// Installs the tap in the input's present format. Each buffer is mixed down to one channel
+    /// and carried into the working file's format, at the file's rate, before it is delivered.
+    private func attach(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void)
+        throws(KnotError)
+    {
+        let shape = engine.tap
+        guard shape.sampleRate > 0, shape.channels > 0, let carrier = Carrier(tapRate: shape.sampleRate, into: format)
+        else { throw KnotError.noInputDevice }
+        // The tap delivers the hardware's format, every 100 ms or more.
+        try engine.installTap(bufferSize: AVAudioFrameCount(shape.sampleRate / 10)) { buffer in
+            // An empty buffer holds nothing to write and says nothing about the input.
+            guard buffer.frameLength > 0 else { return }
+            guard let carried = carrier.carry(buffer) else {
+                // A sample format the file cannot take, or a rate the tap did not promise.
+                deliver(.ended(.lost))
+                return
+            }
+            if carried.frameLength > 0 { deliver(.audio(carried)) }
+        }
+        state.withLock {
+            $0.tapInstalled = true
+            $0.carrier = carrier
+        }
+    }
+
+    /// Watches, once, for the engine's configuration changes, which start it again, and for the
+    /// session's events: an interruption ends the recording as `interrupted`, a reset of the media
+    /// services as `input_lost`, and a route change alone changes nothing.
+    private func watch(_ deliver: @escaping @Sendable (AudioDelivery) -> Void) {
+        let changes = engine.configurationChanges()
+        let events = hardware.sessionEvents()
+        let changeQueue = self.changeQueue
+        let configuration = Task { [weak self] in
+            for await _ in changes {
+                guard let input = self else { return }
+                changeQueue.async { input.restart() }
+            }
+        }
+        let session = Task {
+            for await event in events {
+                switch event {
+                case .interrupted:
+                    changeQueue.async { deliver(.ended(.interrupted)) }
+                    return
+                case .servicesReset:
+                    changeQueue.async { deliver(.ended(.lost)) }
+                    return
+                case .routeChanged:
+                    continue
+                }
+            }
+        }
+        state.withLock { $0.watchers = [configuration, session] }
+    }
+
+    /// Starts the engine again after it changed its configuration and stopped itself: its tap is
+    /// put back in the new format, carried into the file's rate. A stop asked for meanwhile waits
+    /// for it, as for a start. An engine that cannot start again ends the recording as
+    /// `input_lost`, with everything written kept. On the input's own queue.
+    ///
+    /// A change that comes while the start runs, as headphones that connect at the press, is
+    /// noted, and the restart runs once the start has ended: the engine that stopped itself never
+    /// stays stopped under a recording that goes on.
+    private func restart() {
+        let taken = state.withLock { state -> (AVAudioFormat, @Sendable (AudioDelivery) -> Void)? in
+            guard !state.stopped, !state.closed, let format = state.format, let deliver = state.deliver else {
+                return nil
+            }
+            guard !state.starting else {
+                state.restartPending = true
+                state.changesDuringTheStart += 1
+                return nil
+            }
+            state.starting = true
+            return (format, deliver)
+        }
+        guard let (format, deliver) = taken else { return }
+        detach()
+        var failure: KnotError?
+        do throws(KnotError) {
+            if !state.withLock({ $0.stopped }) {
+                try attach(format: format, deliver: deliver)
+                if !state.withLock({ $0.stopped }) {
+                    try engine.start()
+                    state.withLock {
+                        $0.engineStarted = true
+                        $0.restarts += 1
+                    }
+                }
+            }
+        } catch {
+            failure = error
+        }
+        if failure != nil { deliver(.ended(.lost)) }
+        endStart(undo: state.withLock { $0.stopped } || failure != nil)
+    }
+
+    /// Ends a start or a restart. A stop asked for while it ran, or a failure, takes away what it
+    /// put there. The start is over only then: a stop asked for meanwhile waits for that too, and
+    /// the stops that waited for it go on. A configuration change that came meanwhile is carried
+    /// out now, on the input's queue, unless the input is stopping.
+    private func endStart(undo: Bool) {
+        if undo { tearDown() }
+        let (waiting, restartNow) = state.withLock { state in
             state.starting = false
             state.suspended -= state.waiting.count
+            let restartNow = state.restartPending && !undo && !state.stopped && !state.closed
+            state.restartPending = false
             defer { state.waiting = [] }
-            return state.waiting
+            return (state.waiting, restartNow)
         }
         for stop in waiting { stop.resume() }
-        if let failure { throw failure }
+        if restartNow { changeQueue.async { [self] in restart() } }
     }
 
     func stop() async {
@@ -355,7 +550,10 @@ final class OpenMicrophone: OpenAudioInput {
             defer { state.sessionReleased = true }
             return !state.sessionReleased
         }
-        if release { hardware.deactivateSession() }
+        if release {
+            hardware.deactivateSession()
+            claim?.end()
+        }
         let waiters = state.withLock { state in
             state.finished = true
             state.suspended -= state.finishWaiters.count
@@ -399,20 +597,131 @@ final class OpenMicrophone: OpenAudioInput {
         }
     }
 
-    /// Stops the engine and takes the tap away, if they are there, once. No delivery begins after.
-    private func tearDown() {
-        let (engineStarted, tapInstalled, watcher) = state.withLock { state in
-            state.closed = true
+    /// Stops the engine and takes the tap away, if they are there, for a restart and at the end.
+    /// The converter's tail, audio the tap took before the engine stopped, is delivered first:
+    /// counted as every delivery is, and the one that goes out once the input is finishing.
+    private func detach() {
+        let (engineStarted, tapInstalled, carrier, tail) = state.withLock { state in
             defer {
                 state.engineStarted = false
                 state.tapInstalled = false
-                state.watcher = nil
+                state.carrier = nil
             }
-            return (state.engineStarted, state.tapInstalled, state.watcher)
+            return (state.engineStarted, state.tapInstalled, state.carrier, state.tail)
         }
-        watcher?.cancel()
         if engineStarted { engine.stop() }
+        if let tail, let rest = carrier?.drain() { deliverTail(rest, through: tail) }
         if tapInstalled { engine.removeTap() }
+    }
+
+    /// Hands the converter's tail to the recorder, counted while it runs, so that a stop waits for
+    /// it as for any delivery.
+    private func deliverTail(
+        _ rest: AVReadOnlyAudioPCMBuffer, through deliver: @escaping @Sendable (AudioDelivery) -> Void
+    ) {
+        state.withLock { $0.delivering += 1 }
+        deliver(.audio(rest))
+        let waiters = state.withLock { state in
+            state.delivering -= 1
+            guard state.delivering == 0 else { return [CheckedContinuation<Void, Never>]() }
+            state.suspended -= state.deliveryWaiters.count
+            defer { state.deliveryWaiters = [] }
+            return state.deliveryWaiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Stops the engine and takes the tap away, if they are there, once, and stops watching. No
+    /// delivery begins after.
+    private func tearDown() {
+        let watchers = state.withLock { state in
+            state.closed = true
+            defer { state.watchers = [] }
+            return state.watchers
+        }
+        for watcher in watchers { watcher.cancel() }
+        detach()
+    }
+}
+
+/// Carries a tap's buffers into the working file's format: mixed down to one channel and, when
+/// the tap's rate is not the file's, converted into the file's rate (docs/architecture.md §8). One
+/// carrier for each tap, so that its converter's state runs from one buffer to the next. What the
+/// converter still holds when its tap goes, at a restart or a stop, is drained out of it first
+/// (`drain()`): nothing of what the tap took is lost to the conversion. The tap's thread and the
+/// one that drains take the converter in turn.
+final class Carrier: Sendable {
+    /// The working file's format.
+    private let format: AVAudioFormat
+    /// One channel at the tap's rate.
+    private let mono: AVAudioFormat
+    private let converter: AVAudioConverter?
+    /// True once the converter is drained: it takes nothing more.
+    private let drained = Mutex(false)
+
+    /// `nil` when no converter can be made between the two rates.
+    init?(tapRate: Double, into format: AVAudioFormat) {
+        self.format = format
+        guard tapRate != format.sampleRate else {
+            mono = format
+            converter = nil
+            return
+        }
+        guard
+            let mono = AVAudioFormat(
+                commonFormat: format.commonFormat, sampleRate: tapRate, channels: 1, interleaved: false),
+            let converter = AVAudioConverter(from: mono, to: format)
+        else { return nil }
+        self.mono = mono
+        self.converter = converter
+    }
+
+    /// `buffer` in the file's format, perhaps with no frame while the converter fills; `nil`
+    /// when it cannot be mixed or converted.
+    func carry(_ buffer: AVReadOnlyAudioPCMBuffer) -> AVReadOnlyAudioPCMBuffer? {
+        guard let mixed = Downmix.mono(buffer, into: mono) else { return nil }
+        guard let converter else { return mixed }
+        let ratio = format.sampleRate / mono.sampleRate
+        let capacity = AVAudioFrameCount((Double(mixed.frameLength) * ratio).rounded(.up)) + 64
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+        return drained.withLock { drained -> AVReadOnlyAudioPCMBuffer? in
+            // A late buffer after the drain has nowhere to go: the tap that took it is gone.
+            guard !drained else { return AVReadOnlyAudioPCMBuffer(copying: output) }
+            // The converter asks for input until it has none for now: the one buffer, then no
+            // data, which keeps its state for the next buffer. The block runs inside the call
+            // only (AVAudioConverter.h, convertToBuffer:error:withInputFromBlock:).
+            var pending: AVAudioPCMBuffer? = AVAudioPCMBuffer(copying: mixed)
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, inputStatus in
+                let next = pending
+                pending = nil
+                inputStatus.pointee = next == nil ? .noDataNow : .haveData
+                return next
+            }
+            guard status != .error, error == nil else { return nil }
+            return AVReadOnlyAudioPCMBuffer(copying: output)
+        }
+    }
+
+    /// What the converter still holds, in the file's format, once: the end of the tap's audio,
+    /// asked for with `endOfStream` (AVAudioConverter.h, AVAudioConverterInputStatus). `nil` when
+    /// there is no converter, or it held nothing.
+    func drain() -> AVReadOnlyAudioPCMBuffer? {
+        guard let converter else { return nil }
+        // The filter's length at most: a tenth of a second at the file's rate.
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate / 10))
+        else { return nil }
+        return drained.withLock { drained -> AVReadOnlyAudioPCMBuffer? in
+            guard !drained else { return nil }
+            drained = true
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            guard status != .error, error == nil, output.frameLength > 0 else { return nil }
+            return AVReadOnlyAudioPCMBuffer(copying: output)
+        }
     }
 }
 

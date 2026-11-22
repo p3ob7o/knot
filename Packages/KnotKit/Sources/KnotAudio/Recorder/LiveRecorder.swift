@@ -7,7 +7,19 @@ import Synchronization
 ///
 /// It records from the `AudioInput` it is given: the microphone in the app, injected audio
 /// under test. Its files sit where `StoreLocations` puts them, in `Recording/`, named by the
-/// capture's ID: the manifest, the working file in Core Audio Format, and the converted copy.
+/// capture's ID: the manifest, the working file in Core Audio Format, the level peaks and the
+/// converted copy.
+///
+/// It gives the three cues that only it can time, through the `CueEmitter` it is given, as the
+/// port says: `recordingLive` as a start returns live, `couldNotStart` for every start that
+/// throws, and `stoppedEarly` after the last sync of every recording that ended neither
+/// `stopped`, `discarded` nor `recovered`. A cue is handed to the emitter on a queue of the
+/// recorder's own: never on the audio's thread, and no recording waits for it.
+///
+/// It publishes its recording in the `RecordingStateStore` it is given, for controls and widgets
+/// in other processes: starting, recording and stopping as they change, with a heartbeat every
+/// second, then idle when the recording ends, however it ends. Recovery clears a state that an
+/// earlier launch left, and never one of the current launch.
 public final class LiveRecorder: Recorder {
     /// How the recorder runs.
     public struct Settings: Sendable {
@@ -17,11 +29,47 @@ public final class LiveRecorder: Recorder {
         /// How many stretches of live audio wait for a consumer that falls behind. Older ones
         /// are dropped: the file never waits for the live text.
         public var liveAudioChunksKept: Int
+        /// How much audio, at the input's rate, the volume must have room for before a recording
+        /// starts: with less, the start is refused with `too_little_space` and nothing is written
+        /// (docs/product-spec.md §4).
+        public var spaceToStart: Duration
+        /// Below this many free bytes the volume is full: a write or a sync that fails then ends
+        /// the recording as `disk_full`, and otherwise as `write_failed`, because the audio file's
+        /// error does not say which.
+        public var fullBelowBytes: Int64
+        /// How long the live cue plays, so that it is not recorded: the audio that arrives in that
+        /// time after the start, counted in the input's frames, goes nowhere, not into the file,
+        /// the live audio, the levels or the peaks. It is held to `longestLiveCueGap`, so that a
+        /// wrong setting never eats the start of a sentence.
+        ///
+        /// It stays zero in the composition, and nothing may set it above zero until the order of
+        /// "live" against the gap is settled with what the owner finds of the cue in the file at
+        /// the M2 sitting (finding 3 of the second pull request's review). Today the state and the
+        /// live cue say live while a gap above zero still drops audio, and the gap counts from the
+        /// input's first frames, not from when the cue plays.
+        public var liveCueGap: Duration
 
-        public init(syncInterval: Duration = .seconds(1), liveAudioChunksKept: Int = 32) {
+        /// How often the recording state's heartbeat is written while a recording is starting,
+        /// running or stopping: every second (docs/plan/WP-12.md). Tests take less.
+        public var heartbeatInterval: Duration
+
+        /// The most of a recording's start the live cue's gap may drop.
+        public static let longestLiveCueGap: Duration = .milliseconds(500)
+
+        public init(
+            syncInterval: Duration = .seconds(1), liveAudioChunksKept: Int = 32, spaceToStart: Duration = .seconds(60),
+            fullBelowBytes: Int64 = 1 << 20, liveCueGap: Duration = .zero, heartbeatInterval: Duration = .seconds(1)
+        ) {
             self.syncInterval = syncInterval
             self.liveAudioChunksKept = liveAudioChunksKept
+            self.spaceToStart = spaceToStart
+            self.fullBelowBytes = fullBelowBytes
+            self.liveCueGap = liveCueGap
+            self.heartbeatInterval = heartbeatInterval
         }
+
+        /// The live cue's gap, held between zero and `longestLiveCueGap`.
+        var heldLiveCueGap: Duration { min(max(liveCueGap, .zero), Self.longestLiveCueGap) }
     }
 
     public let locations: StoreLocations
@@ -31,6 +79,12 @@ public final class LiveRecorder: Recorder {
     let input: any AudioInput
     private let settings: Settings
     private let log: KnotLog
+    private let freeSpace: any FreeSpaceProbe
+    private let cues: any CueEmitter
+    private let publisher: RecordingStatePublisher
+    /// Where the cues are handed to the emitter, one at a time and in order.
+    private let cueQueue = DispatchQueue(label: "knot.audio.cues", qos: .userInitiated)
+    private let workingFiles: WorkingFileMaker
     /// The recordings of this process, from the start's first write to the end: a start
     /// reserves its capture before it writes anything.
     private let sessions = Mutex<[CaptureID: Entry]>([:])
@@ -42,9 +96,32 @@ public final class LiveRecorder: Recorder {
         case live(LiveSession)
     }
 
-    public init(
+    /// A recorder that writes in `locations`. `freeSpace` reads the volume's free space, to
+    /// refuse a start with too little and to tell a full disk. `cues` plays the cues the recorder
+    /// gives, and `state` keeps the recording state that it publishes: the shell's, or none.
+    public convenience init(
         locations: StoreLocations, layer: any FileLayer = PosixFileLayer(), clock: any WallClock = SystemWallClock(),
-        input: any AudioInput, settings: Settings = Settings(), log: KnotLog = KnotLog(.audio)
+        input: any AudioInput, settings: Settings = Settings(), freeSpace: any FreeSpaceProbe = SystemFreeSpaceProbe(),
+        cues: any CueEmitter = UnavailableCueEmitter(),
+        state: any RecordingStateStore = UnavailableRecordingStateStore(),
+        log: KnotLog = KnotLog(.audio)
+    ) {
+        self.init(
+            locations: locations, layer: layer, clock: clock, input: input, settings: settings, freeSpace: freeSpace,
+            cues: cues, state: state, log: log
+        ) { url, rate, format, layer throws(KnotError) in
+            try WorkingFile.create(at: url, sampleRate: rate, commonFormat: format, layer: layer)
+        }
+    }
+
+    /// The same, with the working files made by `workingFiles`: a test's, which fail as a full
+    /// drive does.
+    init(
+        locations: StoreLocations, layer: any FileLayer = PosixFileLayer(), clock: any WallClock = SystemWallClock(),
+        input: any AudioInput, settings: Settings = Settings(), freeSpace: any FreeSpaceProbe = SystemFreeSpaceProbe(),
+        cues: any CueEmitter = UnavailableCueEmitter(),
+        state: any RecordingStateStore = UnavailableRecordingStateStore(),
+        log: KnotLog = KnotLog(.audio), workingFiles: @escaping WorkingFileMaker
     ) {
         self.locations = locations
         self.layer = layer
@@ -52,7 +129,11 @@ public final class LiveRecorder: Recorder {
         self.clock = clock
         self.input = input
         self.settings = settings
+        self.freeSpace = freeSpace
+        self.cues = cues
+        self.publisher = RecordingStatePublisher(store: state, clock: clock, interval: settings.heartbeatInterval)
         self.log = log
+        self.workingFiles = workingFiles
     }
 
     // MARK: Prepare and start
@@ -78,14 +159,25 @@ public final class LiveRecorder: Recorder {
         }
         guard reserved, layer.entryKind(files.manifest) == nil, layer.entryKind(files.workingFile) == nil else {
             if reserved { sessions.withLock { _ = $0.removeValue(forKey: id) } }
-            return failed(KnotError.writeFailed.with(ErrorContext(captureID: id, posixError: EEXIST)), id)
+            // Refused before it published anything: the state, of a recording of the same capture
+            // perhaps, stays as it is.
+            return failed(
+                KnotError.writeFailed.with(ErrorContext(captureID: id, posixError: EEXIST)), id, published: false)
         }
+        publisher.starting(request)
         let opened: any OpenAudioInput
         do {
             opened = try await input.open()
         } catch {
             sessions.withLock { _ = $0.removeValue(forKey: id) }
             return failed(error, id)
+        }
+        // With too little room for the start's minute of audio, nothing is written.
+        let needed = Int64(Double(settings.spaceToStart.components.seconds) * opened.sampleRate) * 2
+        if let free = freeSpace.availableBytes(forVolumeAt: locations.recording), free < needed {
+            await opened.stop()
+            sessions.withLock { _ = $0.removeValue(forKey: id) }
+            return failed(KnotError.tooLittleSpace.with(ErrorContext(captureID: id)), id)
         }
         var wrote = false
         do throws(KnotError) {
@@ -94,14 +186,14 @@ public final class LiveRecorder: Recorder {
             let manifest = request.manifest(startedAt: clock.now())
             wrote = true
             try store.place(try manifest.encoded(), at: files.manifest)
-            let file = try WorkingFile.create(
-                at: files.workingFile, sampleRate: opened.sampleRate, commonFormat: opened.commonFormat, layer: layer)
+            let file = try workingFiles(files.workingFile, opened.sampleRate, opened.commonFormat, layer)
             // The working file's name is on the drive before the recording is live.
             try layer.syncFolder(locations.recording)
+            let publisher = self.publisher
             let session = LiveSession(
                 request: request, manifest: manifest, input: opened, file: file, files: files, clock: clock,
-                settings: settings, log: log
-            ) { [weak self] audio in self?.ended(audio) }
+                settings: settings, freeSpace: freeSpace, log: log, willEnd: { publisher.stopping(id) },
+                ended: { [weak self] audio in self?.ended(audio) })
             sessions.withLock { $0[id] = .live(session) }
             do {
                 try session.begin(format: file.processingFormat)
@@ -110,7 +202,14 @@ public final class LiveRecorder: Recorder {
                 file.close()
                 throw error
             }
-            log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
+            // Live, unless its ending has begun inside the start: then no live cue and no
+            // "recording", and its ending's cue and state are the only ones.
+            if session.goLive({ give(.recordingLive) }) {
+                log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
+                publisher.recording(id, since: manifest.startedAt)
+            } else {
+                log.capture(id, "recording_ended_while_starting")
+            }
             return .success(session)
         } catch {
             // Nothing is left: no file, and no manifest that recovery would end as a recording
@@ -122,10 +221,19 @@ public final class LiveRecorder: Recorder {
         }
     }
 
-    private func failed(_ error: KnotError, _ id: CaptureID) -> Result<LiveSession, KnotError> {
+    /// A start that failed: logged, its published state idle again, and the could-not-start cue.
+    private func failed(_ error: KnotError, _ id: CaptureID, published: Bool = true) -> Result<LiveSession, KnotError> {
         let error = error.about(capture: id)
         log.failure(error, "recording_not_started")
+        if published { publisher.ended(id) }
+        give(.couldNotStart)
         return .failure(error)
+    }
+
+    /// Hands `cue` to the emitter, on the cues' queue: the caller never waits for it.
+    private func give(_ cue: Cue) {
+        let cues = self.cues
+        cueQueue.async { cues.emit(cue) }
     }
 
     /// A start fails only with the cases the port names: a full volume is too little space to
@@ -140,12 +248,24 @@ public final class LiveRecorder: Recorder {
         }
     }
 
-    /// A session's end: it is no longer this process's recording.
+    /// A session's end, after its last sync: it is no longer this process's recording. A
+    /// recording that ended neither `stopped`, `discarded` nor `recovered` stopped early, and the
+    /// recorder gives that cue; for the others the caller gives one, or nobody does.
     private func ended(_ audio: RecordedAudio) {
         sessions.withLock { _ = $0.removeValue(forKey: audio.captureID) }
+        publisher.ended(audio.captureID)
         log.capture(
             audio.captureID, Self.event(for: audio.ending), .duration("length", audio.duration),
             .flag("by_itself", audio.ending.endedByItself))
+        if Self.stoppedEarly(audio.ending) { give(.stoppedEarly) }
+    }
+
+    /// Whether a recording that ended so stopped early, for its cue.
+    static func stoppedEarly(_ ending: RecordingEnding) -> Bool {
+        switch ending {
+        case .stopped, .discarded, .recovered: false
+        case .limitReached, .interrupted, .inputLost, .diskFull, .writeFailed: true
+        }
     }
 
     private static func event(for ending: RecordingEnding) -> StaticString {
@@ -188,6 +308,10 @@ public final class LiveRecorder: Recorder {
             }
         }
         for session in earlier { _ = await session.recover() }
+        // The state that an earlier launch's recording left: that recording is an orphan now.
+        if let cleared = publisher.clearLeft(byLaunchOtherThan: currentLaunch)?.captureID {
+            log.capture(cleared, "recording_state_of_earlier_launch_cleared")
+        }
         return try await onWork { () throws(KnotError) in try self.scan(currentLaunch: currentLaunch) }
     }
 
@@ -296,9 +420,10 @@ public final class LiveRecorder: Recorder {
         return ConvertedRecording(captureID: id, file: destination, duration: converted.duration)
     }
 
-    /// Removes a recording's working file, a conversion's leftover and its manifest. A capture
-    /// whose recording is live in this process, starting or recording, is refused with
-    /// `illegal_transition` and nothing is removed: its working file is the only copy of its audio.
+    /// Removes a recording's peaks, its working file, a conversion's leftover and its manifest,
+    /// the peaks first. A capture whose recording is live in this process, starting or recording,
+    /// is refused with `illegal_transition` and nothing is removed: its working file is the only
+    /// copy of its audio.
     public func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
         guard sessions.withLock({ $0[capture] == nil }) else {
             let error = KnotError.illegalTransition.about(capture: capture)
