@@ -137,6 +137,9 @@ else
 fi
 
 # 3. The plan check catches a brief with a missing heading, and passes on the plan as it is.
+#    It runs on a copy of the real plan, which the plan step holds to the same check at every
+#    depth, so a documents pull request cannot pass that and fail this; and it names no brief
+#    or heading of the real plan: it renames the first heading of the first brief.
 plan="$scratch/plan"
 mkdir -p "$plan/docs" "$plan/scripts/lib"
 cp "$KNOT_SELF/PLAN.md" "$plan/"
@@ -148,19 +151,42 @@ if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1;
 else
     fail "the plan check fails on an unchanged copy of the plan: $(tail -n 3 "$scratch/plan-ok.log")"
 fi
-sed -i '' 's/^## Prior art$/## Prior work/' "$plan/docs/plan/WP-10.md"
+renamed_brief="$(cd "$plan/docs/plan" && ls WP-*.md | head -n 1)"
+sed -i '' '1,/^## /s/^## \(.*\)$/## \1, renamed/' "$plan/docs/plan/$renamed_brief"
 status=0
 KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-bad.log" 2>&1 || status=$?
-if [[ $status == 1 ]] && grep -e "WP-10.md: its '##' headings must be exactly" "$scratch/plan-bad.log" >/dev/null &&
+if [[ $status == 1 ]] && grep -e "$renamed_brief: its '##' headings must be exactly" "$scratch/plan-bad.log" >/dev/null &&
     grep -e "^FAIL plan-check" "$scratch/plan-bad.log" >/dev/null; then
     pass "the plan check catches a brief with a missing heading"
 else
     fail "the plan check missed a brief with a missing heading (status $status)"
 fi
 
-# 4. The gate's helper reads the plan as it states it.
-cd "$KNOT_SELF"
-# The helper comes from the scripts' own folder; the plan it reads, from the tree.
+# 4. The gate's helper reads the plan as it states it. It reads a fixture plan of the
+#    self-test's own and pins nothing of the real one (item 104): a documents pull request
+#    that changes a brief's rows passes the gate at the documents depth, which does not run
+#    the self-test, so a check that read the real briefs failed only later, on the hosted
+#    runner. The fixture holds the forms the helper reads: a start table with notes and
+#    lettered rows, an Owns list with an 'except' clause, a part of a file, and a spike's
+#    branch. The real plan is the plan step's, at every depth.
+fp="$scratch/fixture-plan"
+mkdir -p "$fp/docs/plan"
+fixture_brief() { # fixture_brief <ID> <owns lines> <start table rows, one a line>
+    {
+        printf '# %s\n\n## Owns\n\n%s\n\n## Starts after\n\n| PR | After |\n|---|---|\n' "$1" "$2"
+        while IFS= read -r row; do printf '| %s | before |\n' "$row"; done <<<"$3"
+    } >"$fp/docs/plan/$1.md"
+}
+fixture_brief WP-01 '- `scripts/`, except `scripts/release.sh`' '1'
+fixture_brief WP-02 '- `Packages/KnotKit/Sources/KnotFakes/`, except its `Preview/` folder' $'1\n2\n3'
+fixture_brief WP-06 '- the soak step of `scripts/verify.sh`' '1'
+fixture_brief WP-10 '- `Packages/KnotKit/Sources/KnotStore/`' '1'
+fixture_brief WP-11 '- `Packages/KnotKit/Sources/KnotCapture/`' $'1\n11a\n2\n3\n4'
+fixture_brief WP-14 '- `Packages/KnotKit/Sources/KnotCleanup/`' $'Proof step\n1'
+fixture_brief WP-40 '- `Packages/KnotKit/Sources/KnotSync/`' $'Proof step\n40a\n40b\n40c\n40d'
+fixture_brief SP-1 '- `spike/locked-recording`' 'Notes'
+cd "$fp"
+# The helper comes from the scripts' own folder; the plan it reads, from the fixture.
 if python3 -I -B - "$KNOT_SCRIPTS/lib" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
