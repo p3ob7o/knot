@@ -9,18 +9,22 @@ public protocol TextInput: Sendable {
     func read(atMost limit: Int) throws(KnotError) -> Data?
 }
 
-/// The process's standard input, read with `read(2)`.
+/// The process's standard input, or another descriptor, read with `read(2)`.
 public struct StandardInput: TextInput {
-    public init() {}
+    public let descriptor: Int32
+
+    public init(descriptor: Int32 = STDIN_FILENO) {
+        self.descriptor = descriptor
+    }
 
     public func read(atMost limit: Int) throws(KnotError) -> Data? {
         // A terminal would wait for a person to type (docs/product-spec.md §10).
-        if isatty(STDIN_FILENO) == 1 { return nil }
+        if isatty(descriptor) == 1 { return nil }
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while data.count <= limit {
             let wanted = min(buffer.count, limit + 1 - data.count)
-            let count = buffer.withUnsafeMutableBytes { Darwin.read(STDIN_FILENO, $0.baseAddress, wanted) }
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, wanted) }
             if count > 0 {
                 data.append(contentsOf: buffer[..<count])
             } else if count == 0 {

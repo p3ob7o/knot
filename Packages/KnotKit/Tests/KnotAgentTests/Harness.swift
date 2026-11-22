@@ -94,6 +94,7 @@ struct TestSession {
         await run(arguments, in: context(input: GivenInput(input)))
     }
 
+    @discardableResult
     func run(_ arguments: [String], in context: AgentContext) async -> ExampleRun {
         clock.advance(by: 30)
         let status = await Agent.run(arguments, in: context)

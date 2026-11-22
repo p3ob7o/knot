@@ -21,8 +21,8 @@ let output = StandardOutput()
 
 // An agent never runs the milestone tool, so it cannot open the owner's notes by accident
 // (docs/architecture.md §7).
-if tool.flavour == "milestone", ProcessInfo.processInfo.environment["KNOT_AGENT"] == "1" {
-    exit(Agent.refuse(.agentRefusedMilestoneStore, arguments: arguments, tool: tool, output: output).rawValue)
+if let refusal = Agent.refusal(flavour: tool.flavour, environment: ProcessInfo.processInfo.environment) {
+    exit(Agent.refuse(refusal, arguments: arguments, tool: tool, output: output).rawValue)
 }
 
 let unfilled = AppEnvironment.unavailable

@@ -168,15 +168,14 @@ struct Render {
     }
 
     func status(
-        store: String?, cursor: StoreCursor, window: AppendWindow, decision: AppendDecision, closesAt: Date?,
-        sync: Bool?
+        store: String?, cursor: StoreCursor, window: AppendWindow, decision: AppendDecision, sync: Bool?
     ) -> String {
         let next: [(String, JSON)]
         switch decision {
         case .join(let note, let reason):
             next = [
                 ("placement", .string("joins_note")), ("note_id", .string(note.description)),
-                ("reason", .string(reason.rawValue)), ("window_closes_at", .string(closesAt.map(Self.time))),
+                ("reason", .string(reason.rawValue)),
             ]
         case .newNote(let reason):
             next = [("placement", .string("new_note")), ("reason", .string(reason.rawValue))]
@@ -216,7 +215,6 @@ struct Render {
         switch decision {
         case .join(let note, let reason):
             lines.append("next_capture: joins note \(note) (\(reason.rawValue))")
-            if let closesAt { lines.append("window_closes_at: \(Self.time(closesAt))") }
         case .newNote(let reason): lines.append("next_capture: starts a new note (\(reason.rawValue))")
         case .refused(let error): lines.append("next_capture: refused (\(error.code))")
         }
@@ -285,10 +283,39 @@ struct Render {
 
     /// Note text, each line behind the data marker, so that nothing in it reads as the tool's own.
     private static func data(_ text: String, label: String?, indent: String) -> [String] {
-        var lines = label.map { [$0] } ?? []
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            lines.append(indent + dataMarker + line)
+        (label.map { [$0] } ?? []) + dataLines(text).map { indent + dataMarker + $0 }
+    }
+
+    /// The characters that end a line for some reader: a terminal, or a program that splits
+    /// lines as Unicode does. Each one starts a new line of data.
+    static let lineEnds: Set<Unicode.Scalar> = [
+        "\n", "\r", "\u{0B}", "\u{0C}", "\u{1C}", "\u{1D}", "\u{1E}", "\u{85}", "\u{2028}", "\u{2029}",
+    ]
+
+    /// Note text as lines of data: split at every character that ends a line, a carriage
+    /// return and a line feed together counting as one, and every other control character,
+    /// C0, C1 and DEL, written in a visible form, `\u{1B}`, so that none reaches a terminal raw.
+    /// A tab stays.
+    static func dataLines(_ text: String) -> [String] {
+        var lines: [String] = []
+        var line = ""
+        var afterReturn = false
+        for scalar in text.unicodeScalars {
+            if afterReturn {
+                afterReturn = false
+                if scalar == "\n" { continue }
+            }
+            if lineEnds.contains(scalar) {
+                lines.append(line)
+                line = ""
+                afterReturn = scalar == "\r"
+            } else if scalar != "\t", scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) {
+                line += "\\u{" + String(scalar.value, radix: 16, uppercase: true) + "}"
+            } else {
+                line.unicodeScalars.append(scalar)
+            }
         }
+        lines.append(line)
         return lines
     }
 

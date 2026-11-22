@@ -18,7 +18,6 @@ $ knot status --json
   "next_capture": {
     "placement": "joins_note",
     "note_id": "01a1ee57-4860-7005-8704-c879c789544b",
-    "reason": "inside_window",
-    "window_closes_at": "2026-11-18T11:12:40Z"
+    "reason": "inside_window"
   }
 }

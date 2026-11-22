@@ -151,15 +151,11 @@ struct Session {
         let decision = try await store { () async throws(KnotError) in
             try await notes.predictPlacement(request, kind: .typed, surface: .commandLine)
         }
-        var closesAt: Date?
-        if let joined = decision.joinedNote,
-            let record = try await store({ () async throws(KnotError) in try await notes.note(joined) })
-        {
-            closesAt = record.note.lastCaptureEndedAt.addingTimeInterval(settings.appendWindow.length)
-        }
+        // No time at which the window closes: a capture still open holds it open, and the
+        // decision does not say whether one does (docs/architecture.md §6, rule 1). The append
+        // rule stays in KnotCore and is not written again here.
         return render.status(
-            store: context.store, cursor: cursor, window: settings.appendWindow, decision: decision,
-            closesAt: closesAt, sync: sync)
+            store: context.store, cursor: cursor, window: settings.appendWindow, decision: decision, sync: sync)
     }
 
     func add(_ arguments: Arguments) async throws(Failure) -> String {
@@ -276,8 +272,15 @@ struct ListedSegment {
 }
 
 extension Agent {
-    /// Refuses the whole run with `error`, before any command is read: the milestone tool
-    /// started with `KNOT_AGENT` set (docs/architecture.md §7).
+    /// The refusal of the whole run, before any command is read, or `nil` when the tool may
+    /// run: the milestone tool refuses while `KNOT_AGENT` is set, so that an agent cannot open
+    /// the owner's notes by accident (docs/architecture.md §7).
+    public static func refusal(flavour: String, environment: [String: String]) -> KnotError? {
+        flavour == "milestone" && environment["KNOT_AGENT"] == "1" ? .agentRefusedMilestoneStore : nil
+    }
+
+    /// Writes `error` on standard error, as text or as JSON as `arguments` ask, and returns its
+    /// exit status.
     public static func refuse(_ error: KnotError, arguments: [String], tool: ToolInfo, output: any TextOutput)
         -> ExitStatus
     {
