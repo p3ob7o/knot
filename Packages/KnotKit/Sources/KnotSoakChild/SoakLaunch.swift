@@ -244,7 +244,8 @@
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: database.deviceID, launchID: launchID, locations: locations, layer: layer,
                 deadline: scriptedDeadline.deadline, ingest: ingest, log: log,
-                killPoint: { point, _ in await arming.reach("engine:\(point.rawValue)") })
+                killPoint: { point, _ in await arming.reach("engine:\(point.rawValue)") },
+                stopsInsideWrite: { point, _ in arming.stopsInsideWrite("engine:\(point.rawValue)") })
         }
 
         func run() async {
