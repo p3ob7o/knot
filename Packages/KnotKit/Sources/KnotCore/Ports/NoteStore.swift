@@ -210,11 +210,37 @@ public protocol NoteStore: Sendable {
     func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor
 
     /// "Remove recording" (docs/product-spec.md §7): keeps a voice segment's text and removes
-    /// its recording's row. Returns the asset whose file the caller then removes through the
-    /// `AssetStore`. Refused while the capture is open; `not_found` when it has no recording;
-    /// `remove_recording_refused_no_text` until the segment has text, since the recording is
-    /// then all there is and its transcribe job still needs it.
+    /// its recording's row, and the recording's peaks with it. Returns the asset whose file the
+    /// caller then removes through the `AssetStore`. Refused while the capture is open;
+    /// `not_found` when it has no recording; `remove_recording_refused_no_text` until the
+    /// segment has text, since the recording is then all there is and its transcribe job still
+    /// needs it.
     func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset
+
+    /// Keeps `peaks`, in the format of `RecordingPeaks`, with a voice segment's recording, so
+    /// that a waveform never needs the audio decoded (docs/architecture.md §8). It replaces what
+    /// the segment held. Bytes that differ from those it holds are a change of the segment: its
+    /// note takes the counter's next value, so the cursor moves, and sync sends the segment
+    /// again; the segment's own revision does not rise, since peaks are not its text. The same
+    /// bytes again change nothing. A deleted segment, in its 30 days, takes them as a live one
+    /// does.
+    ///
+    /// Refused, with nothing written: `not_found` for no segment; `illegal_transition` for one
+    /// that is not a voice segment, or that has no recording, none yet or one removed; and
+    /// `capture_invalid` for bytes that `RecordingPeaks.isStorable(_:)` refuses. A caller never
+    /// fails, ends or waits a capture on it, and gives the peaks before
+    /// `Recorder.removeWorkingFile(of:)`.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`.
+    func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError)
+
+    /// The peaks kept with a segment's recording, or `nil` when it holds none, whatever its
+    /// kind; `not_found` for no segment.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`.
+    func peaks(of segment: SegmentID) async throws(KnotError) -> Data?
 
     /// Clears the marks of late arrivals in one note, which the note view does when it opens.
     /// It is local and changes no revision.
@@ -293,8 +319,8 @@ public protocol NoteStore: Sendable {
 
     /// Removes notes and segments deleted before `date`, notes left empty and unchanged since
     /// then, and history older than it. A tombstone keeps each deletion reportable. The asset
-    /// rows of what it removed go too, and the result names their files for the caller to
-    /// remove through the `AssetStore`.
+    /// rows and the peaks of what it removed go too, and the result names the assets' files
+    /// for the caller to remove through the `AssetStore`.
     func purge(before date: Date) async throws(KnotError) -> PurgeResult
 }
 
@@ -312,6 +338,16 @@ extension NoteStore {
     /// The default of an operation added after the second pull request: not there yet.
     public func keptFiles(of capture: CaptureID) async throws(KnotError) -> [KeptFile] {
         throw KnotError.portUnavailable.about(capture: capture)
+    }
+
+    /// The default of an operation added after the second pull request: not there yet.
+    public func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError) {
+        throw KnotError.portUnavailable.with(.init(segmentID: segment))
+    }
+
+    /// The default of an operation added after the second pull request: not there yet.
+    public func peaks(of segment: SegmentID) async throws(KnotError) -> Data? {
+        throw KnotError.portUnavailable.with(.init(segmentID: segment))
     }
 }
 
