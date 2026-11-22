@@ -76,6 +76,7 @@ Keep the repository, its worktrees, the build folder (`~/knot-build`, or `KNOT_B
 | Mac tool | `knot-dev` | `knot` |
 | Name on the device | Knot Dev | Knot |
 | Build settings | `KNOT_FLAVOUR=dev`, the default | `KNOT_FLAVOUR=milestone KNOT_MILESTONE_LEVEL=M1 … M7 KNOT_SIGNING=team` |
+| Configuration | Debug, `project.yml`'s default | Release, made with `-configuration Release`, so that it holds no fakes and honours no debug-only launch argument |
 
 The identifiers are constants in `Apps/Config/Identifiers.xcconfig`. The Mac's app-group form stays open until SP-3 reports. A milestone build carries a version above 0.2.0, the retired app's, and a build phase refuses one whose level, signing or version does not agree. A feature whose milestone has not passed is switched off by a gate that reads the level from the Info.plist: sync and the command line open at M4, and ink at M5.
 
@@ -133,7 +134,9 @@ The tree then holds both changes, as the merge queue would. With `--base` at the
 
 **The status line.** GitHub cuts a commit status's description at 140 characters, and the summary line is longer. So every run also writes a status line of at most 140 characters, such as `gate everything ok: 18/18 steps, 27 tests, 1 pending · 9m12s · Xcode 27.2 27B52 · macOS 26C5047e`, to `.build/logs/verify-status.txt`. `scripts/verify.sh --status-line` prints the last one, for the orchestrator to post as `knot/gate`. A `*` after the Xcode means it was named by `KNOT_XCODE`.
 
-**Build slots.** A heavy step waits for a build slot (`scripts/build-slot.sh`): three on this Mac, one of them kept for the gate, an exclusive one for the Mac UI tests, and two for booted simulator sets. A slot is a `lockf` lock, so a killed build frees it at once. A waiting run prints the holders each minute. `scripts/build-slot.sh status` shows who holds what. `KNOT_SLOT_DIR`, `KNOT_BUILD_SLOTS`, `KNOT_SIMULATOR_SLOTS` and `KNOT_SLOT_TIMEOUT` change the defaults.
+**Build slots.** A heavy step waits for a build slot (`scripts/build-slot.sh`): three on this Mac, one of them kept for the gate, an exclusive one for the Mac UI tests, and two for booted simulator sets. A slot is a `lockf` lock, so a killed build frees it at once. A waiting run prints the holders each minute. `scripts/build-slot.sh status` shows who holds what. `KNOT_SLOT_DIR`, `KNOT_BUILD_SLOTS`, `KNOT_SIMULATOR_SLOTS` and `KNOT_SLOT_TIMEOUT` change the defaults. A script of another worktree, such as the replay of a pull request, is started with that worktree's own `scripts/build-slot.sh`, from inside it: `build-slot.sh` exports its own checkout's tree in `KNOT_TREE` to the command it runs, so through another checkout's it builds and tests that checkout, silently (docs/architecture.md §18).
+
+**The Mac app's saved window state.** A launch of the Mac app by a script or a test passes `-ApplePersistenceIgnoreState YES` first, before any flag that takes no value, such as `-KnotPreview`, after which AppKit does not see the pair. Every development build has one bundle ID, and so one saved window state (docs/architecture.md §18).
 
 **The nightly run.** `scripts/nightly.sh`, on a checkout of `main`, runs `--full`, the package tests under Thread Sanitizer, the soak with a fresh seed, the launches on the iOS 27.0 runtime, and a report of models that changed with an update of the system. `.github/workflows/nightly.yml` runs the Thread Sanitizer part on a hosted runner too.
 
@@ -230,6 +233,7 @@ For later: xcodebuild allows a case three minutes, five at most, while a contrac
 
 - Set up signing so that `scripts/doctor.sh --require-signing` passes: the gate's development-signed step must sign without a prompt.
 - Confirm the identifiers in the table above, pair the devices for development builds, and register the other Mac.
+- Before the first milestone build, register the milestone identifiers: they need explicit App IDs and development profiles of their own, with the app group, iCloud and push, since the wildcard team profiles authorise none of them. The development identifiers' profiles do not serve. Whether a build below M4 signs without iCloud and push is an open point (docs/plan/open-points.md, "Signing below M4").
 
 ## Continuous integration
 
