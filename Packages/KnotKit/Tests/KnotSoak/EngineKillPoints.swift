@@ -17,6 +17,9 @@
         /// - `before_ending_followed`: a start answered, before it ends the capture it follows;
         /// - `after_save`: an update's save is durable, before it answers;
         /// - `after_typed_end`: a typed capture's end is durable, before it answers;
+        /// - `between_typed_manifest_and_payload`: a typed item's manifest is placed in `Inbox/`
+        ///   and its payload is not, inside the item lock, where the child's `stopsInsideWrite`
+        ///   stops the write (pull request 97);
         /// - `after_recording_manifest`: a recording's first manifest and working file are on the
         ///   drive, before its row;
         /// - `before_conversion`: a recording is stopped and synced, not converted or moved;
@@ -32,8 +35,9 @@
         /// one in five a recording, so `after_start` is passed by each, `after_save` several times
         /// by most typed captures, and `after_typed_end` by most of them. A recording passes each
         /// of its points once, so they are armed at their first pass, as are the rare ones: a
-        /// start that ends a capture of another surface, a discard, and a late answer, which
-        /// follows the script's held writes, about one capture in sixteen.
+        /// start that ends a capture of another surface, a discard, a typed item in `Inbox/`, which
+        /// follows the script's refused writes, and a late answer, which follows its held writes,
+        /// about one capture in sixteen.
         ///
         /// `after_failed_conversion` is not in the list: the child's recorder converts every
         /// recording it stops, so no launch passes it. The engine's own kill tests reach it
@@ -43,6 +47,7 @@
             .engine(.beforeEndingFollowed, passes: 1...1),
             .engine(.afterSave, passes: 1...12),
             .engine(.afterTypedEnd, passes: 1...4),
+            .engine(.betweenTypedManifestAndPayload, passes: 1...1),
             .engine(.afterRecordingManifest, passes: 1...1),
             .engine(.beforeConversion, passes: 1...1),
             .engine(.afterRecordingMoved, passes: 1...1),
