@@ -23,7 +23,7 @@
         }
     }
 
-    /// The soak's captures, all of them typed for now, as the seed makes them. Every launch of
+    /// The soak's captures, typed ones and recordings, as the seed makes them. Every launch of
     /// the child makes the same script from the same seed and runs the part its parent names,
     /// so a relaunch goes on where the killed launch stopped. The parent makes the same script
     /// too, and knows every text the child sends at every save: it checks the store against it
@@ -44,13 +44,18 @@
 
         struct Capture {
             let index: Int
+            /// Typed, or a recording on the live recorder with injected audio.
+            let kind: SegmentKind
+            /// For a recording: how many frames of audio it holds at least when it ends, at
+            /// `sampleRate`. It records until that much is durable, then ends.
+            let frames: Int64
             /// When it begins, after `base`.
             let startsAt: TimeInterval
             let surface: CaptureSurface
             let placement: CapturePlacement
             /// Whether its text is only spaces and line breaks: it ends discarded as empty.
             let blank: Bool
-            /// The whole text after each save: the begin, then each update.
+            /// The whole text after each save: the begin, then each update. None for a recording.
             let texts: [String]
             /// The seconds before each update, and before the end.
             let pauses: [TimeInterval]
@@ -62,7 +67,9 @@
             var length: TimeInterval { pauses.reduce(0, +) }
 
             /// The token its text begins with, or none for a blank capture.
-            var token: String? { blank ? nil : texts[0].split(separator: " ", maxSplits: 1).first.map(String.init) }
+            var token: String? {
+                blank || kind != .typed ? nil : texts[0].split(separator: " ", maxSplits: 1).first.map(String.init)
+            }
         }
 
         enum Ending: String {
@@ -101,6 +108,11 @@
         /// Every capture whose index this gives carries a body past one piece: so that even a
         /// short script holds one.
         static let alwaysLong = 2
+        /// Every capture whose index this gives is a recording: so that even a short script holds
+        /// one.
+        static let alwaysRecording = 3
+        /// The injected audio's rate.
+        static let sampleRate: Double = 16_000
 
         init(seed: UInt64, count: Int) {
             self.seed = seed
@@ -124,6 +136,29 @@
                     ? (previous?.surface == .app ? .macPanel : .app)
                     : (Int.random(in: 0..<4, using: &random) == 0 ? .macPanel : .app)
                 let placement: CapturePlacement = Int.random(in: 0..<10, using: &random) == 0 ? .newNote : .window
+                let recording =
+                    index == Self.alwaysRecording
+                    || (index != Self.alwaysLong && Int.random(in: 0..<5, using: &random) == 0)
+                if recording {
+                    // 0.3 to 2 seconds of audio, a few of them discarded, never left open: while a
+                    // recording runs no surface takes typing (rule 15).
+                    let frames = Int64(Int.random(in: 3...20, using: &random)) * 1_600
+                    let ending: Ending =
+                        index != count - 1 && Int.random(in: 0..<100, using: &random) < 8 ? .discard : .end
+                    let disturbanceRoll = Int.random(in: 0..<100, using: &random)
+                    let disturbance: Disturbance? =
+                        disturbanceRoll < 10
+                        ? Disturbance(kind: .refused, save: Int.random(in: 0..<2, using: &random))
+                        : disturbanceRoll < 16
+                            ? Disturbance(kind: .held, save: Int.random(in: 0..<2, using: &random)) : nil
+                    let capture = Capture(
+                        index: index, kind: .voice, frames: frames, startsAt: time, surface: surface,
+                        placement: placement, blank: false, texts: [],
+                        pauses: [Double(frames) / Self.sampleRate], ending: ending, disturbance: disturbance)
+                    captures.append(capture)
+                    previous = capture
+                    continue
+                }
                 let blank = index != Self.alwaysLong && Int.random(in: 0..<14, using: &random) == 0
                 let long = !blank && (index == Self.alwaysLong || Int.random(in: 0..<40, using: &random) == 0)
                 let updates = Int.random(in: 0...6, using: &random)
@@ -143,8 +178,8 @@
                     : disturbanceRoll < 16
                         ? Disturbance(kind: .held, save: Int.random(in: 0..<saves, using: &random)) : nil
                 let capture = Capture(
-                    index: index, startsAt: time, surface: surface, placement: placement, blank: blank, texts: texts,
-                    pauses: pauses, ending: ending, disturbance: disturbance)
+                    index: index, kind: .typed, frames: 0, startsAt: time, surface: surface, placement: placement,
+                    blank: blank, texts: texts, pauses: pauses, ending: ending, disturbance: disturbance)
                 captures.append(capture)
                 previous = capture
             }
