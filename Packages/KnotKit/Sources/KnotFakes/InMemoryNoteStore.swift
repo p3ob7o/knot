@@ -411,6 +411,12 @@
 
         public func asset(_ id: AssetID) throws(KnotError) -> Asset? { state.assets[id] }
 
+        /// Whether a row names the file of `asset`: its asset row, or a segment, as the real
+        /// store asks before it removes a file. `FileAssetStore` asks it.
+        func names(_ asset: AssetID) -> Bool {
+            state.assets[asset] != nil || state.segments.values.contains { $0.assetID == asset }
+        }
+
         public func stream(after position: StreamPosition?, limit: Int) throws(KnotError) -> StreamPage {
             var shown = state.notes.keys.compactMap { record($0, in: state) }.filter(\.isShown)
             shown.sort { StreamRule.precedes($0.note, $1.note) }

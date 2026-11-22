@@ -220,3 +220,15 @@ func version(of locations: StoreLocations) throws -> Int {
     defer { try? queue.close() }
     return try queue.read { db in try StoreDatabase.userVersion(db) }
 }
+
+/// A recording, or a drawing, ended now with `file` as its file: a capture whose rows name it.
+func capture(naming file: StoredFile, ids: any IDGenerator, device: DeviceID, at now: Date) -> NewCapture {
+    let id: CaptureID = ids.make()
+    let asset = Asset(
+        id: file.asset, segmentID: SegmentID(id), kind: file.kind, byteCount: file.byteCount, sha256: file.sha256)
+    return NewCapture(
+        id: id, kind: file.kind == .audio ? .voice : .ink,
+        origin: CaptureOrigin(source: .device(device), surface: .app),
+        launchID: ids.make(), placement: .newNote, startedAt: now, endedAt: now,
+        body: .file(asset, duration: file.kind == .audio ? .seconds(1) : nil))
+}
