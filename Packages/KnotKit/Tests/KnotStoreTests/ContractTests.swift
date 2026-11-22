@@ -166,7 +166,8 @@ private func check(_ name: String) async throws {
         let id: CaptureID = ids.make()
         let reason = KnotError.inboxItemUnreadable.code
         let receipt = try await store.recordKeptItem(
-            KeptInboxItem(captureID: id, reason: reason, foundAt: clock.now(), fileNames: ["\(id).json"]))
+            KeptInboxItem(captureID: id, reason: reason, foundAt: clock.now(), fileNames: ["\(id).json"])
+        ).receipt
         #expect(receipt.outcome == .failed(reason))
         let files = try await store.keptFiles(of: id)
         #expect(

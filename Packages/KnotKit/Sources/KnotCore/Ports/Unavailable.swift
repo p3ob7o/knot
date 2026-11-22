@@ -16,6 +16,7 @@ public struct UnavailableNoteStore: NoteStore {
         async throws(KnotError) -> AppendDecision
     { throw missing }
     public func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult { throw missing }
+    public func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult { throw missing }
     public func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt { throw missing }
     public func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
         throw missing

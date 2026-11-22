@@ -409,9 +409,9 @@ private actor Driver {
             let item = KeptInboxItem(
                 captureID: id, reason: pick(reasons) ?? KnotError.inboxItemUnreadable.code,
                 foundAt: now.addingTimeInterval(-Double(random.next(in: 0...600))), fileNames: names)
-            if let receipt = await both("keep item", { try await $0.recordKeptItem(item) }) {
+            if let result = await both("keep item", { try await $0.recordKeptItem(item) }) {
                 if !keptItems.contains(id) { keptItems.append(id) }
-                if !notes.contains(receipt.noteID) { notes.append(receipt.noteID) }
+                if !notes.contains(result.receipt.noteID) { notes.append(result.receipt.noteID) }
             }
         case 28:
             // A kept item read after an update: typed or a recording, through `ingest`.
