@@ -203,12 +203,26 @@ import Testing
     /// `Inbox/`, and the call then committed. The engine is killed before it takes the late
     /// answer. After relaunch the capture is stored once, from its row and its item, with what
     /// its calls answered as saved.
-    @Test(arguments: [SegmentKind.typed, .voice])
-    func lateAnswerSurvivesAKill(_ kind: SegmentKind) async throws {
+    struct LateCase: CustomTestStringConvertible, Sendable {
+        let kind: SegmentKind
+        let point: EngineKillPoint
+        var testDescription: String { "\(kind) at \(point.rawValue)" }
+    }
+
+    /// The late answer's two seams: `beforeLateAnswer` for either kind, and `lateRecordingRow`,
+    /// the moment between a recording's late row and its file.
+    static let lateCases = [
+        LateCase(kind: .typed, point: .beforeLateAnswer), LateCase(kind: .voice, point: .beforeLateAnswer),
+        LateCase(kind: .voice, point: .lateRecordingRow),
+    ]
+
+    @Test(arguments: lateCases)
+    func lateAnswerSurvivesAKill(_ late: LateCase) async throws {
+        let kind = late.kind
         let r = Rig(engineIngests: false)
         let manual = ManualDeadline()
         let killSwitch = KillSwitch()
-        killSwitch.arm(.beforeLateAnswer)
+        killSwitch.arm(late.point)
         let engine = r.engine(deadline: manual.deadline, killPoint: killSwitch.hook, ingests: false)
         let hold = await r.notes.holdNextCaptureWrite()
         let starting = Task {
