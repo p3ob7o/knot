@@ -2610,18 +2610,26 @@ public enum NoteStoreContract {
         }
     }
 
-    /// A deleted segment, in its 30 days, keeps its peaks and takes new ones, and a restore
-    /// shows them.
+    /// A deleted segment, in its 30 days, keeps its peaks and takes new ones, deleted with its
+    /// note or on its own, and a restore shows them.
     public static func aDeletedSegmentKeepsItsPeaks(_ make: NoteStoreFactory) async throws {
         let h = await Harness(make)
-        let receipt = try await storedRecording(h, at: 0)
-        let segment = receipt.segmentIDs[0]
-        try await h.store.setPeaks(peaks([1, 1]), of: segment)
-        _ = try await h.store.delete(.note(receipt.noteID))
-        #expect(try await h.store.peaks(of: segment) == peaks([1, 1]), "A deleted segment keeps its peaks.")
-        try await h.store.setPeaks(peaks([2, 2]), of: segment)
-        _ = try await h.store.restore(.note(receipt.noteID))
-        #expect(try await h.store.peaks(of: segment) == peaks([2, 2]), "And takes new ones, which a restore shows.")
+        let inNote = try await storedRecording(h, at: 0)
+        let alone = try await storedRecording(h, at: 600)
+        let deleted = [
+            (inNote.segmentIDs[0], RestoreTarget.note(inNote.noteID)),
+            (alone.segmentIDs[0], RestoreTarget.segment(alone.segmentIDs[0])),
+        ]
+        for (segment, _) in deleted { try await h.store.setPeaks(peaks([1, 1]), of: segment) }
+        _ = try await h.store.delete(.note(inNote.noteID))
+        _ = try await h.store.delete(.segment(alone.segmentIDs[0]))
+        for (segment, target) in deleted {
+            #expect(try await h.store.peaks(of: segment) == peaks([1, 1]), "A deleted segment keeps its peaks.")
+            try await h.store.setPeaks(peaks([2, 2]), of: segment)
+            _ = try await h.store.restore(target)
+            #expect(
+                try await h.store.peaks(of: segment) == peaks([2, 2]), "And takes new ones, which a restore shows.")
+        }
     }
 
     /// The peaks are the segment's: a move to a note of its own takes them with it.
