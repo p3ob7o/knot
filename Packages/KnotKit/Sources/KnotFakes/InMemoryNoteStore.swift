@@ -589,7 +589,7 @@
 
         // MARK: Peaks
 
-        public func setPeaks(_ peaks: Data, of segmentID: SegmentID) throws(KnotError) {
+        public func setPeaks(_ peaks: Data, of segmentID: SegmentID) async throws(KnotError) {
             guard let segment = state.segments[segmentID] else {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }
@@ -611,7 +611,7 @@
             commit(next)
         }
 
-        public func peaks(of segmentID: SegmentID) throws(KnotError) -> Data? {
+        public func peaks(of segmentID: SegmentID) async throws(KnotError) -> Data? {
             guard state.segments[segmentID] != nil else {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }

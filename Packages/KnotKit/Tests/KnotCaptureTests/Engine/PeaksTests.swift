@@ -25,11 +25,11 @@ import Testing
         return RecordingPeaks(framesPerValue: written.framesPerValue, values: written.held(toFrames: frames)).encoded()
     }
 
-    /// The peaks a store keeps with a capture's segment, read through the port: called on the
-    /// in-memory store's actor directly, `peaks(of:)` resolves to the port's default instead.
+    /// The peaks the store keeps with a capture's segment, read on the in-memory store itself, so
+    /// that the suite fails if its two peaks operations ever stop being its own: a synchronous
+    /// member beside the port's `async` default resolves to the default on a concrete call.
     private static func peaks(_ r: Rig, _ capture: CaptureID) async throws -> Data? {
-        let store: any NoteStore = r.notes
-        return try await store.peaks(of: SegmentID(capture))
+        try await r.notes.peaks(of: SegmentID(capture))
     }
 
     private static func writePeaks(_ r: Rig, _ capture: CaptureID) throws {
