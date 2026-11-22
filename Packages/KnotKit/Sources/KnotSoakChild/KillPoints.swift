@@ -86,6 +86,18 @@
             Say.fail("waited \(Int(Self.stopLimit)) s at \(name) and no parent killed it")
         }
 
+        /// WP-15: whether the engine stops a write inside the item lock at `name`, its one point
+        /// there, `engine:between_typed_manifest_and_payload`. At the armed count it answers true,
+        /// and the engine's `reach` of the same point that follows, outside the lock, stops.
+        func stopsInsideWrite(_ name: String) -> Bool {
+            guard isTheStop(name) else { return false }
+            stopDue.withLock { $0 = name }
+            return true
+        }
+
+        /// The point `stopsInsideWrite` answered true for, which the next `reach` of it stops at.
+        private let stopDue = Mutex<String?>(nil)
+
         /// Passes one of the script's own steps, which wait without holding a thread.
         func step(_ name: String) async {
             await reach("step:\(name)")
@@ -94,7 +106,11 @@
         /// Passes a point that is reached in async code, the engine's or the script's: the stop
         /// waits without holding a thread.
         func reach(_ name: String) async {
-            guard isTheStop(name) else { return }
+            let due = stopDue.withLock { due in
+                defer { if due == name { due = nil } }
+                return due == name
+            }
+            guard due || isTheStop(name) else { return }
             Say.line(SoakLine.stopped(name).rendered)
             let until = Date().addingTimeInterval(Self.stopLimit)
             while Date() < until { try? await Task.sleep(for: .seconds(1)) }

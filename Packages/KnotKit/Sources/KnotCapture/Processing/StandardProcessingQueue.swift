@@ -1,13 +1,17 @@
 import Foundation
 import KnotCore
 
-/// The one processing queue (docs/architecture.md §4 and §5), the tracer's version: it
-/// transcribes a stored recording in resumable runs and cleans its transcript.
+/// The one processing queue (docs/architecture.md §4 and §5): it transcribes a stored recording
+/// in resumable runs, cleans its transcript and proposes its note's title, and recognises a
+/// stored drawing.
 ///
 /// The store writes a stored recording's transcribe job; the queue writes the clean job,
 /// when the transcription's last run is saved and, in `resume()`, for a transcribed recording
 /// that lacks one. It looks for the segment's clean job first, so writing it twice changes
-/// nothing. Recognise jobs wait for the ink types.
+/// nothing. A recognise job runs only on a queue given a recogniser.
+///
+/// The queue runs the jobs of the segments this device processes (docs/architecture.md §11): a
+/// segment whose `processingOwner` is another device is left to it, and its job is not touched.
 ///
 /// Each drain runs inside the runner its caller passes. Drains do not overlap: a second one
 /// waits for the first. Within a drain, a job that defers is not tried again, so a drain
@@ -22,6 +26,10 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private let clock: any WallClock
     private let ids: any IDGenerator
     private let runBudget: Duration?
+    private let recogniser: (any InkRecogniser)?
+    private let recognitionLanguage: Locale.Language
+    private let device: DeviceID?
+    private let layer: any FileLayer
     private let autoDrain: (any BackgroundRunner)?
     private let log: KnotLog
     private let broadcast = Broadcast<Job>()
@@ -37,14 +45,23 @@ public actor StandardProcessingQueue: ProcessingQueue {
     private var availabilityWatch: Task<Void, Never>?
 
     /// - Parameters:
-    ///   - runBudget: the most audio one transcription run reads.
+    ///   - runBudget: the most audio one transcription run reads, 60 s by default
+    ///     (docs/architecture.md §9). Only the tests ask for a run with no budget.
+    ///   - recogniser: the recogniser of handwriting. Without one, recognise jobs wait.
+    ///   - recognitionLanguage: the English variant set in Settings, which recognition uses.
+    ///   - layer: the file layer a stored drawing is read through.
+    ///   - device: this device. Given, the queue runs only the jobs of segments this device
+    ///     processes, or that no device has taken; without it, every job.
     ///   - autoDrain: a runner that holds time whenever the queue is woken, such as the
     ///     foreground's. With it, `enqueue` and `wake` start a drain, and a change of the
     ///     cleaner's availability wakes the queue. Without it, only callers drain.
     public init(
         notes: any NoteStore, assets: any AssetStore, transcriber: any Transcriber, cleaner: any Cleaner,
         clock: any WallClock, ids: any IDGenerator, runBudget: Duration? = .seconds(60),
-        autoDrain: (any BackgroundRunner)? = nil, log: KnotLog = KnotLog(.capture)
+        recogniser: (any InkRecogniser)? = nil,
+        recognitionLanguage: Locale.Language = Locale.Language(identifier: "en-US"),
+        device: DeviceID? = nil, layer: any FileLayer = PosixFileLayer(), autoDrain: (any BackgroundRunner)? = nil,
+        log: KnotLog = KnotLog(.capture)
     ) {
         self.notes = notes
         self.assets = assets
@@ -53,6 +70,10 @@ public actor StandardProcessingQueue: ProcessingQueue {
         self.clock = clock
         self.ids = ids
         self.runBudget = runBudget
+        self.recogniser = recogniser
+        self.recognitionLanguage = recognitionLanguage
+        self.device = device
+        self.layer = layer
         self.autoDrain = autoDrain
         self.log = log
     }
@@ -181,7 +202,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
             let now = clock.now()
             let runnable = all.filter { job in
                 job.state == .queued && (job.notBefore ?? .distantPast) <= now && !deferred.contains(job.id)
-                    && (job.kind == .transcribe || job.kind == .clean)
+                    && runsKind(job.kind)
                     // A clean job waits for its segment's transcription.
                     && (job.kind == .transcribe
                         || !all.contains {
@@ -189,11 +210,17 @@ public actor StandardProcessingQueue: ProcessingQueue {
                         })
             }
             guard let job = runnable.min(by: { Self.order($0) < Self.order($1) }) else { return }
+            if try await isProcessedElsewhere(job) {
+                // Another device runs it: this drain leaves it as it is.
+                deferred.insert(job.id)
+                continue
+            }
             let total = finished + runnable.count
             report(BackgroundProgress(fraction: Double(finished) / Double(max(total, 1)), step: job.kind))
             switch job.kind {
             case .transcribe: try await transcribe(job)
-            default: try await clean(job)
+            case .clean: try await clean(job)
+            default: try await recognise(job)
             }
             finished += 1
             report(BackgroundProgress(fraction: Double(finished) / Double(max(total, 1)), step: job.kind))
@@ -227,13 +254,33 @@ public actor StandardProcessingQueue: ProcessingQueue {
         guard let all = try? await notes.jobs(for: nil) else { return nil }
         let now = clock.now()
         return all.contains { job in
-            job.state == .queued && (job.kind == .transcribe || job.kind == .clean)
-                && (job.notBefore ?? .distantPast) <= now && !deferred.contains(job.id)
+            job.state == .queued && runsKind(job.kind) && (job.notBefore ?? .distantPast) <= now
+                && !deferred.contains(job.id)
         }
     }
 
+    /// Whether this queue runs jobs of `kind`: a recognise job needs a recogniser.
+    private func runsKind(_ kind: JobKind) -> Bool {
+        switch kind {
+        case .transcribe, .clean: true
+        case .recognise: recogniser != nil
+        }
+    }
+
+    /// Whether the job's segment is processed by another device (docs/architecture.md §11).
+    private func isProcessedElsewhere(_ job: Job) async throws(KnotError) -> Bool {
+        guard let device, let owner = try await notes.segment(job.segmentID)?.processingOwner else { return false }
+        return owner != device
+    }
+
     private static func order(_ job: Job) -> (Int, JobID) {
-        (job.kind == .transcribe ? 0 : 1, job.id)
+        let rank =
+            switch job.kind {
+            case .transcribe: 0
+            case .clean: 1
+            default: 2
+            }
+        return (rank, job.id)
     }
 
     // MARK: Transcription
@@ -256,6 +303,8 @@ public actor StandardProcessingQueue: ProcessingQueue {
                 let before = job.resumeAt
                 job = try await reread(job)
                 broadcast.send(job)
+                // A run's text and the job's resume time are saved, together.
+                log.capture(Self.capture(of: segment), "transcript_run_saved", .job(job.id))
                 if job.state == .running, job.resumeAt == before {
                     // The store applied nothing: the run was not at the job's resume point, so
                     // another would add nothing either.
@@ -286,6 +335,7 @@ public actor StandardProcessingQueue: ProcessingQueue {
                 for: segment, segmentsInOrder: record.segments, title: record.note.title)
             let result = try await cleaner.clean(read.rawTranscript ?? read.text, proposeTitle: proposeTitle)
             applied = try await notes.applyCleanup(result, to: segment)
+            log.capture(Self.capture(of: segment), "cleanup_applied", .job(job.id))
         } catch {
             try await stepFailed(job, error, step: .clean)
             return
@@ -302,6 +352,49 @@ public actor StandardProcessingQueue: ProcessingQueue {
         }
         await moveSegment(segment, applied.textReplaced ? .cleaned : .keepRawTranscript)
         log.capture(Self.capture(of: segment), "cleaned", .job(job.id), .flag("replaced", applied.textReplaced))
+    }
+
+    // MARK: Recognition
+
+    private func recognise(_ queued: Job) async throws(KnotError) {
+        guard let recogniser else { return }
+        let segment = queued.segmentID
+        defer { runningHere.remove(queued.id) }
+        var job = try await start(queued)
+        let language = recognitionLanguage
+        do throws(KnotError) {
+            guard let read = try await notes.segment(segment), let assetID = read.assetID,
+                let file = try await assets.find(assetID, kind: .ink)
+            else { throw KnotError.drawingUnreadable.with(.init(segmentID: segment, jobID: job.id)) }
+            guard await recogniser.availability(for: language) == .available else {
+                throw KnotError.handwritingLanguageUnsupported.with(.init(segmentID: segment, jobID: job.id))
+            }
+            let bytes: Data
+            do throws(KnotError) {
+                bytes = try layer.read(file.url)
+            } catch {
+                // A drawing on the drive that cannot be read now, as one protected while the
+                // device is locked, is an attempt: it is tried again, and kept.
+                throw KnotError.recognitionFailed.with(
+                    .init(segmentID: segment, jobID: job.id, posixError: error.context.posixError))
+            }
+            let recognition = try await recogniser.recognise(InkDrawingData(bytes: bytes), language: language)
+            _ = try await notes.applyRecognition(recognition, to: segment)
+        } catch {
+            try await stepFailed(job, error, step: .recognise)
+            return
+        }
+        job = try Self.reduce(job, .succeeded)
+        let done = job
+        let notes = self.notes
+        do throws(KnotError) {
+            broadcast.send(
+                try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(done) })
+        } catch {
+            try await stepFailed(job, error, step: .recognise)
+            return
+        }
+        log.capture(Self.capture(of: segment), "recognised", .job(job.id))
     }
 
     // MARK: Jobs
@@ -342,7 +435,11 @@ public actor StandardProcessingQueue: ProcessingQueue {
         let retryAt = error.isDeferral ? error.context.retryAt : clock.now().addingTimeInterval(backoff(current))
         let next = try Self.reduce(current, .stepFailed(error, retryAt: retryAt))
         broadcast.send(try await outsideCancellation { () async throws(KnotError) in try await notes.saveJob(next) })
-        await moveSegment(job.segmentID, segmentEvent(after: error, job: next, step: step))
+        if step == .recognise {
+            await moveDrawing(job.segmentID, after: error, job: next)
+        } else {
+            await moveSegment(job.segmentID, segmentEvent(after: error, job: next, step: step))
+        }
         log.failure(
             error.with(.init(captureID: Self.capture(of: job.segmentID), segmentID: job.segmentID, jobID: job.id)),
             "job_step_failed")
@@ -382,6 +479,27 @@ public actor StandardProcessingQueue: ProcessingQueue {
             throw KnotError.notFound.with(.init(segmentID: job.segmentID, jobID: job.id))
         }
         return stored
+    }
+
+    /// Moves a drawing by `InkMachine` after its recognise step failed: a failed job fails it,
+    /// with a retry offered, and a final error leaves it ready with no text, shown as "Kept, no
+    /// text" (docs/architecture.md §4). A deferral or an attempt leaves it recognising.
+    private func moveDrawing(_ segment: SegmentID, after error: KnotError, job: Job) async {
+        let event: InkEvent
+        if case .failed(let code) = job.state {
+            event = .stepFailed(code)
+        } else if error.isFinal {
+            event = .recognised
+        } else {
+            return
+        }
+        let notes = self.notes
+        _ = try? await outsideCancellation { () async throws(KnotError) in
+            guard let read = try await notes.segment(segment), case .ink(let state) = read.state,
+                let next = try? InkMachine.reduce(state, event), next != state
+            else { return }
+            _ = try await notes.setState(.ink(next), of: segment)
+        }
     }
 
     /// Moves a voice segment by `VoiceMachine`, and leaves it when the event does not apply.
