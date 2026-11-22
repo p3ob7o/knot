@@ -4,7 +4,12 @@ import Synchronization
 
 /// The one capture engine (docs/architecture.md §5 and §6): typed captures and recordings,
 /// through the one `NoteStore` operation for each save, with `Inbox/` behind every one of them.
-/// Drawings come with WP-11 PR 3: a drawing's `begin` throws `port_unavailable`.
+/// Drawings come with WP-11 PR 4: a drawing's `begin` throws `port_unavailable`.
+///
+/// The press and the live view. Where there is an engine, it is the one applier of a press of a
+/// record control (`press`): the press rule against its own recordings and the saved state, with
+/// the cues that are the recorder's caller's. Each open recording has a live view (`live`), its
+/// levels and its words so far, for the screen only.
 ///
 /// The paths. A capture begins on the store path, where the capture row is its first durable
 /// write. A recording writes its manifest first, through the `Recorder`, and its row after.
@@ -86,6 +91,12 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// of its note. Every manifest of this capture names it, so that ingest and recovery
         /// place the capture there, whichever launch stored the first (finding 36).
         var follows: CaptureID?
+        /// The press that started a recording through `press`, which the press rule weighs.
+        var startedBy: Press?
+        /// True while a recording's end or discard runs: a press then is ignored.
+        var stopping = false
+        /// The ending the recording's stop returned, which says whose the end's cue is.
+        var stopEnding: RecordingEnding?
     }
 
     private let notes: any NoteStore
@@ -97,9 +108,13 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let deviceID: DeviceID
     private let launchID: LaunchID
     private let inbox: InboxItems
+    private let peaks: StoredPeaks
     private let ownAsset: OwnRecordingAsset
     private let deadline: StoreDeadline
     private let ingest: InboxIngest?
+    private let transcriber: (any Transcriber)?
+    private let recordingState: (any RecordingStateStore)?
+    private let cues: (any CueEmitter)?
     private let log: KnotLog
     #if DEBUG || KNOT_FAKES
         /// The kill-point hook of the kill tests and the soak, which only a debug build or one
@@ -107,6 +122,8 @@ public actor StandardCaptureEngine: CaptureEngine {
         private let killPoints = KillPointHook()
     #endif
     private let broadcast = Broadcast<CaptureState>()
+    /// The live view of each open recording, which `live(_:)` reads from any thread.
+    private let liveFeeds = Mutex<[CaptureID: LiveFeed]>([:])
     private var entries: [CaptureID: Entry] = [:]
     private var line = KeyedLine<CaptureID>()
     /// Recordings discarded while the store did not take their end: their audio is gone, and
@@ -123,6 +140,9 @@ public actor StandardCaptureEngine: CaptureEngine {
         let triedAt: Date
     }
     private var pendingConversions: [CaptureID: PendingConversion] = [:]
+    /// Recordings whose recorder's `start` was called and did not return a session: the recorder
+    /// gave their `couldNotStart` cue.
+    private var recorderRefused: Set<CaptureID> = []
 
     /// - Parameters:
     ///   - deviceID: this device, the origin of every capture the engine makes.
@@ -131,11 +151,18 @@ public actor StandardCaptureEngine: CaptureEngine {
     ///   - deadline: how long the store has to answer, 100 ms in the app.
     ///   - ingest: run on an item once its capture has ended in `Inbox/`, so that the store
     ///     takes it as soon as it answers. Without it, the item waits for the next ingest.
+    ///   - transcriber: the live path of a recording's words (`live(_:)`). Without one, live text
+    ///     is unavailable with `port_unavailable`, and levels flow.
+    ///   - recordingState: the saved recording state that `press` weighs. Without one, a press
+    ///     finds no saved state.
+    ///   - cues: where `press` gives the cues that are the recorder's caller's.
     public init(
         notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
         clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, launchID: LaunchID,
         locations: StoreLocations, layer: any FileLayer, deadline: StoreDeadline = .standard,
-        ingest: InboxIngest? = nil, log: KnotLog = KnotLog(.capture)
+        ingest: InboxIngest? = nil, transcriber: (any Transcriber)? = nil,
+        recordingState: (any RecordingStateStore)? = nil, cues: (any CueEmitter)? = nil,
+        log: KnotLog = KnotLog(.capture)
     ) {
         self.notes = notes
         self.assets = assets
@@ -146,28 +173,38 @@ public actor StandardCaptureEngine: CaptureEngine {
         self.deviceID = deviceID
         self.launchID = launchID
         self.inbox = InboxItems(locations: locations, layer: layer)
+        self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
         self.ownAsset = OwnRecordingAsset(notes: notes, assets: assets, locations: locations, layer: layer, log: log)
         self.deadline = deadline
         self.ingest = ingest
+        self.transcriber = transcriber
+        self.recordingState = recordingState
+        self.cues = cues
         self.log = log
     }
 
     #if DEBUG || KNOT_FAKES
         /// The engine of the kill tests and the soak's child: `killPoint` is awaited at each
         /// `EngineKillPoint`, with the capture's ID. A hook that never returns stops the engine
-        /// there, as a kill would. Only a debug build, or one that sets `KNOT_FAKES`, has it.
+        /// there, as a kill would. `stopsInsideWrite` is asked at the one point that falls inside
+        /// a write that cannot wait, `betweenTypedManifestAndPayload`: true stops the write there,
+        /// and the engine then awaits `killPoint`. Only a debug build, or one that sets
+        /// `KNOT_FAKES`, has them.
         public init(
             notes: any NoteStore, assets: any AssetStore, recorder: any Recorder, queue: any ProcessingQueue,
             clock: any WallClock, ids: any IDGenerator, deviceID: DeviceID, launchID: LaunchID,
             locations: StoreLocations, layer: any FileLayer, deadline: StoreDeadline = .standard,
-            ingest: InboxIngest? = nil, log: KnotLog = KnotLog(.capture),
-            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void
+            ingest: InboxIngest? = nil, transcriber: (any Transcriber)? = nil,
+            recordingState: (any RecordingStateStore)? = nil, cues: (any CueEmitter)? = nil,
+            log: KnotLog = KnotLog(.capture),
+            killPoint: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void,
+            stopsInsideWrite: (@Sendable (EngineKillPoint, CaptureID) -> Bool)? = nil
         ) {
             self.init(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids,
                 deviceID: deviceID, launchID: launchID, locations: locations, layer: layer, deadline: deadline,
-                ingest: ingest, log: log)
-            killPoints.set(killPoint)
+                ingest: ingest, transcriber: transcriber, recordingState: recordingState, cues: cues, log: log)
+            killPoints.set(killPoint, stops: stopsInsideWrite)
         }
     #endif
 
@@ -178,11 +215,143 @@ public actor StandardCaptureEngine: CaptureEngine {
         #endif
     }
 
+    /// Whether a write stops at `point`, which falls inside it. A release build never stops.
+    private nonisolated func stopsInsideWrite(_ point: EngineKillPoint, _ capture: CaptureID) -> Bool {
+        #if DEBUG || KNOT_FAKES
+            return killPoints.stops(point, capture)
+        #else
+            return false
+        #endif
+    }
+
     // MARK: CaptureEngine
+
+    /// The live view of an open recording of this engine: levels as the recorder reports them,
+    /// and the words so far from the transcriber's live path, which starts with the first
+    /// consumer. The stream ends when the recording ends, and at once for any other capture.
+    public nonisolated func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> {
+        guard let feed = liveFeeds.withLock({ $0[capture] }) else { return AsyncStream { $0.finish() } }
+        return feed.stream()
+    }
+
+    /// A press of a record control in this process, decided by `RecordingPressRule` against this
+    /// engine's own recordings, which are the truth here, and the saved state, and carried out.
+    ///
+    /// The decision is made and its first step taken with no suspension between, so a second
+    /// press that arrives at once finds the recording starting or stopping, and is ignored. A
+    /// recording that `begin` started counts as started by a tap at its start. A saved state with
+    /// no recording here is an orphan of an earlier launch: the new recording starts at once,
+    /// and launch recovery, which never touches the current launch, recovers the orphan beside
+    /// it. The engine gives the cues that are the recorder's caller's: `saved` after a stop whose
+    /// recording it keeps, `discarded` after one that keeps nothing, and `couldNotStart` only for
+    /// a start that failed before the recorder's `start` was called.
+    public func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+        -> RecordingPressOutcome
+    {
+        let (activity, open) = recorderActivity()
+        let saved = recordingState.flatMap { SavedRecordingState($0.read()) }
+        switch RecordingPressRule.decide(press, recorder: activity, saved: saved) {
+        case .ignore:
+            if let open { log.capture(open, "press_ignored") }
+            return .ignored
+        case .start:
+            return .started(try await pressStart(press, request))
+        case .recoverOrphanThenStart(let orphan):
+            // Launch recovery recovers it beside the new recording: the start never waits for it.
+            log.capture(orphan, "press_found_orphan")
+            return .started(try await pressStart(press, request))
+        case .stopAndKeep:
+            guard let open else { return .ignored }
+            return .stopped(try await pressStop(open, discarding: false))
+        case .stopAndDiscard:
+            guard let open else { return .ignored }
+            return .stopped(try await pressStop(open, discarding: true))
+        }
+    }
+
+    /// What the recorder in this process is doing, from the engine's own recordings, and the
+    /// recording it is doing it to.
+    private func recorderActivity() -> (RecorderActivity, CaptureID?) {
+        guard
+            let entry = entries.values.filter({ $0.kind == .voice && $0.outcome == .open })
+                .max(by: { ($0.startedAt, $0.id) < ($1.startedAt, $1.id) })
+        else { return (.idle, nil) }
+        if entry.stopping { return (.stopping, entry.id) }
+        if !entry.answered { return (.starting, entry.id) }
+        return (.recording(startedBy: entry.startedBy ?? Press(.tap, at: entry.startedAt)), entry.id)
+    }
+
+    private func pressStart(_ press: Press, _ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+        guard request.kind == .voice else {
+            cues?.emit(.couldNotStart)
+            throw KnotError.illegalTransition
+        }
+        do throws(KnotError) {
+            let state = try await start(request, startedBy: press)
+            log.capture(state.captureID, "press_started")
+            return state
+        } catch {
+            // The recorder gave the cue of a start it was asked for; the engine gives the cue of one
+            // that failed before.
+            let asked = error.context.captureID.map { recorderRefused.remove($0) != nil } ?? false
+            if !asked { cues?.emit(.couldNotStart) }
+            throw error
+        }
+    }
+
+    private func pressStop(_ capture: CaptureID, discarding: Bool) async throws(KnotError) -> CaptureState {
+        if discarding {
+            let state = try await discard(capture)
+            log.capture(capture, "press_discarded")
+            cues?.emit(.discarded)
+            return state
+        }
+        do throws(KnotError) {
+            let state = try await end(capture)
+            log.capture(capture, "press_stopped")
+            if let cue = Self.stopCue(entries[capture]?.stopEnding, outcome: state.outcome, kept: true) {
+                cues?.emit(cue)
+            }
+            return state
+        } catch {
+            // A recording on the drive whose item could not be written is kept, and recovered.
+            let kept = error.written == .contentKept
+            if let cue = Self.stopCue(entries[capture]?.stopEnding, outcome: nil, kept: kept) { cues?.emit(cue) }
+            throw error
+        }
+    }
+
+    /// The engine's cue after a stop: none when the recording ended by itself, for which the
+    /// recorder gave the cue; `discarded` when nothing was kept; `saved` when its audio is kept,
+    /// stored or kept for a conversion that is tried again.
+    private static func stopCue(_ ending: RecordingEnding?, outcome: CaptureOutcome?, kept: Bool) -> Cue? {
+        guard ending == .stopped else { return nil }
+        if outcome == .discardedEmpty { return .discarded }
+        return kept ? .saved : nil
+    }
+
+    /// Marks a recording's stop as under way, so that a press then is ignored. True when it did.
+    private func markStopping(_ capture: CaptureID) -> Bool {
+        guard let entry = entries[capture], entry.kind == .voice, entry.outcome == .open, !entry.stopping else {
+            return false
+        }
+        entries[capture]?.stopping = true
+        return true
+    }
 
     public nonisolated func states() -> AsyncStream<CaptureState> { broadcast.subscribe() }
 
     public func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+        do throws(KnotError) {
+            return try await start(request, startedBy: nil)
+        } catch {
+            if let id = error.context.captureID { recorderRefused.remove(id) }
+            throw error
+        }
+    }
+
+    /// A begin, by `begin` or by a press that starts a recording, which `startedBy` names.
+    private func start(_ request: CaptureRequest, startedBy: Press?) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         switch request.kind {
         case .typed, .voice: break
@@ -210,6 +379,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             id: id, kind: request.kind, surface: request.surface, placement: request.placement,
             shownNote: request.shownNote, startedAt: startedAt)
         entry.follows = follows
+        entry.startedBy = startedBy
         // IDs only: what this capture follows, decided as it arrives (finding 54).
         if let follows { log.capture(id, "capture_follows", .segment(SegmentID(follows))) }
         if request.kind == .typed {
@@ -246,7 +416,10 @@ public actor StandardCaptureEngine: CaptureEngine {
             // A recording starts first: one whose microphone cannot open never starts, and ends
             // nothing. Its request names the capture it follows, so the recorder's first manifest
             // write carries the link that every later item carries too (finding 54).
-            if request.kind == .voice { try await startRecorder(id) }
+            if request.kind == .voice {
+                try await startRecorder(id)
+                await reach(.afterRecordingManifest, id)
+            }
             // A capture that follows one on the `Inbox/` path goes the same way, so that ingest
             // places it after that capture.
             var sameWay: ErrorCode?
@@ -347,6 +520,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
+        let stops = markStopping(capture)
+        defer { if stops { entries[capture]?.stopping = false } }
         let call = EngineCall()
         var firstWrite = false
         let state = try await withLine(capture, call) { () async throws(KnotError) -> CaptureState in
@@ -381,6 +556,8 @@ public actor StandardCaptureEngine: CaptureEngine {
     public func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
         defer { scheduleHousekeeping() }
         guard entries[capture] != nil else { throw KnotError.notFound.about(capture: capture) }
+        let stops = markStopping(capture)
+        defer { if stops { entries[capture]?.stopping = false } }
         return try await withLine(capture, EngineCall()) { () async throws(KnotError) -> CaptureState in
             guard let entry = entries[capture], entry.outcome == .open else { return state(of: capture) }
             switch entry.kind {
@@ -399,6 +576,7 @@ public actor StandardCaptureEngine: CaptureEngine {
                     entries[capture]?.revision += 1
                     throw error
                 }
+                await reach(.afterDiscard, capture)
             default:
                 try await discardRecording(capture)
             }
@@ -411,7 +589,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func beginTyped(_ id: CaptureID, sameWay: Bool) async throws(KnotError) -> CaptureState {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         if sameWay {
-            try writeTypedItem(id, endedAt: nil)
+            try await writeTypedItem(id, endedAt: nil)
             log.capture(id, "capture_began", .flag("store_path", false))
             return publish(id)
         }
@@ -430,7 +608,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             entries[id]?.path = .inbox(answer.fallbackCode ?? KnotError.storeNotOpen.code)
             watchLate(answer, of: id)
             do throws(KnotError) {
-                try writeTypedItem(id, endedAt: nil)
+                try await writeTypedItem(id, endedAt: nil)
             } catch {
                 // Nothing reached a disk. The capture stays, with nothing durable: the surface
                 // keeps the text, and its next begin on the same surface is this capture's
@@ -558,7 +736,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             }
         }
         // The `Inbox/` path.
-        try writeTypedItem(id, endedAt: ending)
+        try await writeTypedItem(id, endedAt: ending)
         if ending != nil {
             entries[id]?.outcome = CaptureText.isEmpty(entry.text) ? .discardedEmpty : .stored
             log.capture(id, "capture_ended", .flag("store_path", false))
@@ -576,14 +754,22 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// Writes a typed capture's item in `Inbox/`, with the time of this save, where ingest ends
     /// the draft if a death leaves it open. Throws when it did not reach the drive; the save is
     /// then not acknowledged.
-    private func writeTypedItem(_ id: CaptureID, endedAt: Date?) throws(KnotError) {
+    private func writeTypedItem(_ id: CaptureID, endedAt: Date?) async throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let manifest = CaptureManifest(
             captureID: id, kind: .typed, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, placement: entry.placement, shownNoteID: entry.shownNote,
             revision: entry.revision, followsCaptureID: entry.follows, lastSavedAt: clock.now())
         do throws(KnotError) {
-            try inbox.writeTyped(manifest, text: entry.text)
+            let whole = try inbox.writeTyped(manifest, text: entry.text) {
+                stopsInsideWrite(.betweenTypedManifestAndPayload, id)
+            }
+            if !whole {
+                // A kill test's seam: the manifest is placed and the payload is not. A test that
+                // lets the engine go on sees it place the whole item.
+                await reach(.betweenTypedManifestAndPayload, id)
+                try inbox.writeTyped(manifest, text: entry.text)
+            }
         } catch {
             log.failure(error.about(capture: id), "inbox_write_failed")
             throw error.about(capture: id)
@@ -599,6 +785,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
         let session: any RecordingSession
         do throws(KnotError) {
+            recorderRefused.insert(id)
             session = try await recorder.start(
                 RecordingRequest(
                     captureID: id, launchID: launchID, origin: origin(entry.surface), placement: entry.placement,
@@ -608,7 +795,11 @@ public actor StandardCaptureEngine: CaptureEngine {
             log.failure(error.about(capture: id), "recording_not_started")
             throw error.about(capture: id)
         }
+        recorderRefused.remove(id)
         entries[id]?.session = session
+        liveFeeds.withLock {
+            $0[id] = LiveFeed(capture: id, audio: session.liveAudio, transcriber: transcriber, log: log)
+        }
         let events = session.events
         Task.detached { [weak self] in
             for await event in events { await self?.recordingEvent(event, of: id) }
@@ -646,7 +837,9 @@ public actor StandardCaptureEngine: CaptureEngine {
             // The limit, a call or a failed write ended it: the capture ends as a stop would.
             log.capture(id, "recording_ended_by_itself")
             _ = try? await end(id)
-        case .ended, .level:
+        case .level(let peak, let average):
+            liveFeeds.withLock { $0[id] }?.level(peak: peak, average: average)
+        case .ended:
             break
         }
     }
@@ -656,6 +849,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             throw KnotError.notFound.about(capture: id)
         }
         let audio = await session.stop()
+        entries[id]?.stopEnding = audio.ending
         let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
         if audio.frames == 0 {
@@ -695,6 +889,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// failed, and is tried again (docs/architecture.md §8).
     private func storeRecording(_ id: CaptureID, audio: RecordedAudio, endedAt: Date) async throws(KnotError) {
         guard let entry = entries[id] else { throw KnotError.notFound.about(capture: id) }
+        await reach(.beforeConversion, id)
         let stored: StoredFile
         let duration: Duration
         do throws(KnotError) {
@@ -708,6 +903,7 @@ public actor StandardCaptureEngine: CaptureEngine {
             // The working file stays as the recording (docs/architecture.md §8), and the
             // conversion is tried again.
             pendingConversions[id] = PendingConversion(audio: audio, endedAt: endedAt, triedAt: clock.now())
+            await reach(.afterFailedConversion, id)
             try await failRecording(id, endedAt: endedAt, error.about(capture: id))
             return
         }
@@ -727,7 +923,11 @@ public actor StandardCaptureEngine: CaptureEngine {
                 entries[id]?.noteID = receipt.noteID
                 entries[id]?.session = nil
                 await reach(.afterRecordingEnded, id)
-                // The row points to the stored asset: the working file can go.
+                // The row points to the stored asset: its peaks are kept, and the working file can
+                // go with the peaks beside it.
+                if receipt.outcome == .stored {
+                    await peaks.keep(peaks.fromFile(id, frames: audio.frames), of: id, deadline: deadline)
+                }
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
                 log.capture(id, "recording_ended", .flag("store_path", true), .duration("length", duration))
@@ -741,7 +941,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             captureID: id, kind: .voice, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, duration: duration, placement: entry.placement,
             shownNoteID: entry.shownNote, revision: revision, payloadByteCount: stored.byteCount,
-            payloadSHA256: stored.sha256, followsCaptureID: entry.follows, lastSavedAt: clock.now())
+            payloadSHA256: stored.sha256, followsCaptureID: entry.follows, lastSavedAt: clock.now(),
+            peaks: peaks.fromFile(id, frames: audio.frames))
         do throws(KnotError) {
             try inbox.writeRecording(manifest)
         } catch {
@@ -753,6 +954,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
         entries[id]?.outcome = .stored
         entries[id]?.session = nil
+        await reach(.afterRecordingEnded, id)
         log.capture(id, "recording_ended", .flag("store_path", false), .duration("length", duration))
         runIngest(id)
     }
@@ -780,7 +982,10 @@ public actor StandardCaptureEngine: CaptureEngine {
     }
 
     private func discardRecording(_ id: CaptureID) async throws(KnotError) {
-        if let session = entries[id]?.session { await session.discard() }
+        if let session = entries[id]?.session {
+            await session.discard()
+            await reach(.afterDiscard, id)
+        }
         entries[id]?.session = nil
         entries[id]?.outcome = .discardedEmpty
         if case .store = entries[id]?.path {
@@ -936,6 +1141,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         Task.detached { [weak self] in
             let committed: Bool
             if case .success = await late.value { committed = true } else { committed = false }
+            if committed { await self?.reach(.beforeLateAnswer, id) }
             await self?.lateAnswer(of: id, committed: committed)
         }
     }
@@ -1030,13 +1236,18 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// A pending end the store refuses for good, with `capture_id_conflict`, settled by reading the
     /// row (finding 81). A row that has ended, failed or stored or discarded, needs no end: the
     /// pending one goes, with one log line that names the capture and the code. A row still open
-    /// is another fault, and is logged as one; recovery ends it at the next launch.
+    /// is another fault, and is logged as one; recovery ends it at the next launch. A row that
+    /// could not be read is not known to have ended: the line says so, with the read's code, and
+    /// recovery ends the row at the next launch if it is still open.
     private func settleRefused(_ id: CaptureID, _ error: KnotError, event: StaticString) async {
         let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.capture(id) }
-        if case .answered(let row?) = answer, row.outcome == .open {
+        switch answer {
+        case .answered(let row?) where row.outcome == .open:
             log.failure(error.about(capture: id), "pending_end_refused_while_open")
-        } else {
+        case .answered:
             log.capture(id, event, .code(error.code))
+        default:
+            log.capture(id, "pending_end_row_not_read", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
         }
     }
 
@@ -1064,6 +1275,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private func publish(_ id: CaptureID) -> CaptureState {
         let state = state(of: id)
         broadcast.send(state)
+        if state.outcome != .open { liveFeeds.withLock { $0.removeValue(forKey: id) }?.finish() }
         return state
     }
 

@@ -71,6 +71,10 @@ final class ManualDeadline: Sendable {
 final class KillSwitch: Sendable {
     private struct State {
         var armed: EngineKillPoint?
+        /// How many reaches of the armed point go on before one stops.
+        var skips = 0
+        /// The capture whose write the synchronous half stopped, which stops at the point next.
+        var stoppedInsideWrite: CaptureID?
         var reached: [(EngineKillPoint, CaptureID)] = []
         var killed: CaptureID?
         var released = false
@@ -79,8 +83,13 @@ final class KillSwitch: Sendable {
 
     private let state = Mutex(State())
 
-    /// Arms the switch: the next call to reach `point` stops there.
-    func arm(_ point: EngineKillPoint) { state.withLock { $0.armed = point } }
+    /// Arms the switch: the call that reaches `point` after `skipping` others stops there.
+    func arm(_ point: EngineKillPoint, skipping: Int = 0) {
+        state.withLock { state in
+            state.armed = point
+            state.skips = skipping
+        }
+    }
 
     /// Every kill point reached so far, in order.
     var reached: [(EngineKillPoint, CaptureID)] { state.withLock { $0.reached } }
@@ -92,10 +101,33 @@ final class KillSwitch: Sendable {
         { point, capture in await self.reach(point, capture) }
     }
 
+    /// The synchronous half, asked inside a write: true stops the write at the armed point, and
+    /// the engine then reaches it and stops there.
+    var stops: @Sendable (EngineKillPoint, CaptureID) -> Bool {
+        { point, capture in
+            self.state.withLock { state in
+                guard state.armed == point, state.killed == nil, state.stoppedInsideWrite == nil, !state.released
+                else { return false }
+                guard state.skips == 0 else {
+                    state.skips -= 1
+                    return false
+                }
+                state.stoppedInsideWrite = capture
+                return true
+            }
+        }
+    }
+
     private func reach(_ point: EngineKillPoint, _ capture: CaptureID) async {
         let stop = state.withLock { state -> Bool in
             state.reached.append((point, capture))
             guard state.armed == point, state.killed == nil, !state.released else { return false }
+            if let stopped = state.stoppedInsideWrite {
+                guard stopped == capture else { return false }
+            } else if state.skips > 0 {
+                state.skips -= 1
+                return false
+            }
             state.killed = capture
             return true
         }
@@ -132,12 +164,13 @@ extension Rig {
     /// An engine over this rig's parts, with a deadline and a kill-point hook of the test's.
     func engine(
         deadline: StoreDeadline = .patient, killPoint: (@Sendable (EngineKillPoint, CaptureID) async -> Void)? = nil,
-        ingests: Bool = true
+        stops: (@Sendable (EngineKillPoint, CaptureID) -> Bool)? = nil, ingests: Bool = true
     ) -> StandardCaptureEngine {
         StandardCaptureEngine(
             notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, ids: ids, deviceID: deviceID,
             launchID: launchID, locations: locations, layer: layer, deadline: deadline,
-            ingest: ingests ? ingest : nil, log: KnotLog(.capture, sink: logs), killPoint: killPoint ?? { _, _ in })
+            ingest: ingests ? ingest : nil, log: KnotLog(.capture, sink: logs), killPoint: killPoint ?? { _, _ in },
+            stopsInsideWrite: stops)
     }
 
     /// The live segments of the stream's notes, note by note, newest note first.

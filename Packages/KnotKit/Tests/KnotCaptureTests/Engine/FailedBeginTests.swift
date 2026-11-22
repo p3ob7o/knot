@@ -101,6 +101,14 @@ import Testing
         case .discard:
             let discarded = try await engine.discard(id)
             #expect(discarded.outcome == .discardedEmpty)
+            // The discard is the capture's first write here: it keeps nothing and ends nothing
+            // else, so the capture its begin followed is still open (pull request 81's comment on
+            // `begin`). A row that landed before the call did what the start would have done.
+            if test.late != .beforeTheCall {
+                #expect(
+                    try await r.notes.capture(open.captureID)?.outcome == .open,
+                    "A discard as the first write ends nothing else.")
+            }
             expected = ["panel"]
         }
         if test.call != .discard {

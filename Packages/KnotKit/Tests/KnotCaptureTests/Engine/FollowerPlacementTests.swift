@@ -5,11 +5,13 @@ import KnotFakes
 import KnotTestSupport
 import Testing
 
-/// Finding 85 of the re-check of pull request 58, case B: a capture that follows another is placed
-/// by its own placement when the store sees it before the capture it follows has a row. Its
-/// `NewCapture` does not carry the capture it follows, so neither the store nor ingest can put it
-/// in that capture's note. The cure is a port change: it goes to a contract pull request, then to
-/// the second pull request of WP-11. Until then both witnesses are known issues.
+/// A stated limit, finding 85 of the re-check of pull request 58: a capture that follows another
+/// can land in a note of its own when it reaches the store before the capture it follows has a
+/// row, by the store's path or by `Inbox/`'s. `NewCapture` does not carry the capture it follows,
+/// so the store places the follower by its own placement. The owner accepted it on 2026-11-21:
+/// "Notes started from separate devices should remain separate, there's no reason to merge
+/// them. (It can be done manually later)". No contract cures it; docs/architecture.md §20 keeps
+/// the case. These tests state what happens, so that a change to it is seen.
 @Suite struct FollowerPlacementTests {
     private static func noteOf(_ r: Rig, _ id: CaptureID) async throws -> NoteID? {
         try await r.notes.segment(SegmentID(id))?.segment.noteID
@@ -18,12 +20,17 @@ import Testing
     enum Placement: String, CaseIterable, CustomTestStringConvertible {
         case windowFirstNote, windowJoinsRecent, windowPassed, newNote, named, namedPassed
         var testDescription: String { rawValue }
+
+        /// Whether the follower, placed by the window, lands in another note than A's own
+        /// placement gives A: "New note", or a named note whose window has passed.
+        var landsApart: Bool { self == .newNote || self == .namedPassed }
     }
 
     /// A's start is held in the store; B, on another surface, follows A and goes to `Inbox/`; C, on
     /// a third surface, follows B and ends it before B has settled A; B is ingested before A has
-    /// a row or an item. A and B end in one note. On the head this fails for `newNote` and
-    /// `namedPassed` only, where B's own placement differs from A's.
+    /// a row or an item, and is placed by its own placement, the window. A and B land in one note
+    /// when A's placement puts A where the window put B, and apart when it does not: "New note",
+    /// or a named note whose window has passed.
     @Test(arguments: Placement.allCases)
     func followerIngestedFirst(_ placement: Placement) async throws {
         let r = Rig()
@@ -71,17 +78,18 @@ import Testing
             })
         let noteA = try await Self.noteOf(r, aState.captureID)
         let noteB = try await Self.noteOf(r, bID)
-        withKnownIssue(
-            "Finding 85: NewCapture does not carry the capture it follows; a port change, then PR 2.",
-            isIntermittent: true
-        ) {
-            #expect(noteA == noteB, "B follows A: B is the next segment of A's note.")
+        #expect(noteA != nil && noteB != nil)
+        if placement.landsApart {
+            #expect(noteA != noteB, "The stated limit: B, placed by the window, is in a note of its own.")
+        } else {
+            #expect(noteA == noteB, "A's placement puts A where the window put B.")
         }
     }
 
-    /// Case B on the store path. A's start is held in the store with "New note"; B, on another
+    /// The same on the store path. A's start is held in the store with "New note"; B, on another
     /// surface, follows A, and its record is answered while A has no row. The store places B by
-    /// B's own placement, and A's late row goes to a new note: A and B are in two notes.
+    /// B's own placement, the window, and A's late row goes to a new note: A and B are in two
+    /// notes.
     @Test func followerRecordedBeforeItsFollowedHasARow() async throws {
         let r = Rig()
         let manual = ManualDeadline()
@@ -104,8 +112,7 @@ import Testing
         _ = try await engine.end(bState.captureID)
         let noteA = try await Self.noteOf(r, aState.captureID)
         let noteB = try await Self.noteOf(r, bState.captureID)
-        withKnownIssue("Finding 85: NewCapture does not carry the capture it follows; a port change, then PR 2.") {
-            #expect(noteA == noteB, "B follows A: B is the next segment of A's note.")
-        }
+        #expect(noteA != nil && noteB != nil)
+        #expect(noteA != noteB, "The stated limit: B, placed by the window, is in a note of its own.")
     }
 }

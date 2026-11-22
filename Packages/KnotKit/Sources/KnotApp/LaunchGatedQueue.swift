@@ -78,4 +78,10 @@ struct TimedCaptureEngine: CaptureEngine {
     func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { try await inner.discard(capture) }
 
     func states() -> AsyncStream<CaptureState> { inner.states() }
+
+    func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> { inner.live(capture) }
+
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome {
+        try await inner.press(press, recording: request)
+    }
 }
