@@ -177,6 +177,7 @@ fixture_brief() { # fixture_brief <ID> <owns lines> <start table rows, one a lin
         while IFS= read -r row; do printf '| %s | before |\n' "$row"; done <<<"$3"
     } >"$fp/docs/plan/$1.md"
 }
+fixture_brief WP-00 '- `docs/architecture.md`' 'Notes'
 fixture_brief WP-01 '- `scripts/`, except `scripts/release.sh`' '1'
 fixture_brief WP-02 '- `Packages/KnotKit/Sources/KnotFakes/`, except its `Preview/` folder' $'1\n2\n3'
 fixture_brief WP-06 '- the soak step of `scripts/verify.sh`' '1'
@@ -286,6 +287,10 @@ assert named_missing("wp/11-engine-last", one * (planned - 1))[1] == ["selftest-
 assert named_missing("wp/14-note", [], "WP-14") == (0, []), named_missing("wp/14-note", [], "WP-14")
 assert named_missing("wp/14-cleaner", [("WP-14", True)], "WP-14") == (1, ["selftest-given-to-wp14-pr-one"])
 os.unlink(named.name)
+# The orchestrator's lines of scripts/ownership-extra.txt, which are the scripts' own: the
+# error catalog's document passes to the orchestrator once WP-02 has merged (item 89).
+owned, excluded, parts = k.owned_paths("WP-00")
+assert "docs/errors.md" in owned, owned
 # A path that no brief owns falls to WP-00 (blocker 2).
 assert k.owners_of("README.md") == [] and "WP-01" in k.owners_of("scripts/verify.sh")
 PY
