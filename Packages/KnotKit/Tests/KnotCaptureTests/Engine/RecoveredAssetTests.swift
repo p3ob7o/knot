@@ -323,4 +323,59 @@ import Testing
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(Set(try Self.leftOver(r)) == Self.named(r, [id]))
     }
+
+    /// The recheck after the remove, which no test reached at pull request 88 (the orchestrator's
+    /// second point after it), with pull request 90's fake asset store, which keeps a file that a
+    /// row of its notes names. The setup is `secondEndMeetsAFileARowNamesAndKeepsIt`'s, and the
+    /// engine's read of the asset's row answers none, as for a row that comes to name the file
+    /// between that read and the remove. The remove keeps the file, and the recheck finds it there:
+    /// the file stays, the end is made with it, and the second conversion's file goes. Without the
+    /// recheck the new file's move meets the kept file, and the end fails.
+    @Test func removeThatKeepsAFileARowNamesIsRecheckedBeforeTheMove() async throws {
+        let r = Rig()
+        let manual = ManualDeadline()
+        let recorder = DifferingConversions(r.recorder, layer: r.layer)
+        var store = ChaosStore(store: r.notes) {}
+        store.hidesAssets = true
+        let assets = FileAssetStore(locations: r.locations, layer: r.layer, notes: r.notes)
+        let engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: store, assets: assets, recorder: recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+                deadline: manual.deadline, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs)))
+        let states = engine.states()
+        let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let id = begun.captureID
+        _ = await SuiteWait.value("the recording's frames to be durable") {
+            for await state in states where state.captureID == id && state.durableRevision > 0 { return true }
+            return false
+        }
+        r.clock.advance(by: 3)
+        let hold = await r.notes.holdNextCaptureWrite()
+        recorder.fillsDiskAfterNext.withLock { $0 = true }
+        let first = Task { try await engine.end(id) }
+        await reached(hold)
+        await manual.expireNext()
+        guard case .failure(let error as KnotError) = await first.result else {
+            Issue.record("The first end did not throw.")
+            return
+        }
+        #expect(error.written == .contentKept)
+        let there = try #require(try await assets.find(AssetID(id), kind: .audio))
+        hold.release()
+        #expect(await eventually("the late commit to answer") { r.logs.logged("store_answered_late", id) })
+        #expect(try await r.notes.asset(AssetID(id))?.sha256 == there.sha256, "A row names the first file.")
+        let second = try await engine.end(id)
+        #expect(second.outcome == .stored)
+        #expect(r.logs.logged("recording_file_named_by_row", id))
+        #expect(!r.logs.logged("recording_file_replaced", id))
+        #expect(try await assets.find(AssetID(id), kind: .audio)?.sha256 == there.sha256, "The file stays.")
+        #expect(
+            await eventually("the end's item to be ingested") {
+                _ = await r.ingest.ingestAll()
+                return r.inboxFiles().isEmpty
+            })
+        #expect(try await r.notes.capture(id)?.outcome == .stored)
+        #expect(Set(try Self.leftOver(r)) == Self.named(r, [id]))
+    }
 }
