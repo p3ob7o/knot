@@ -116,13 +116,13 @@ final class PeaksWriter: Sendable {
             do {
                 if !file.made {
                     file.made = true
-                    guard
-                        FileManager.default.createFile(
-                            atPath: url.path, contents: RecordingPeaks.header(framesPerValue: framesPerValue))
-                    else { throw CocoaError(.fileWriteUnknown) }
-                    let handle = try FileHandle(forWritingTo: url)
-                    try handle.seekToEnd()
+                    // Made in place, never through a temporary beside it that a kill could leave
+                    // in `Recording/`: a kill can only cut this file short, which its reader takes.
+                    let descriptor = open(url.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
+                    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
                     file.handle = handle
+                    try handle.write(contentsOf: RecordingPeaks.header(framesPerValue: framesPerValue))
                 }
                 guard !values.isEmpty, let handle = file.handle else { return }
                 try handle.write(contentsOf: Data(values))
