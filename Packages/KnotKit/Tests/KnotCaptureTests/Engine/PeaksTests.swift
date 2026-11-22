@@ -202,6 +202,33 @@ import Testing
         _ = await SuiteWait.value("the dead launch's end") { try? await ending.value }
     }
 
+    /// The review of pull request 91, N4. An orphan whose followed capture can still arrive:
+    /// recovery hands it to `Inbox/` as an item, and removes its working file and the peaks beside
+    /// it right after. So the item carries the peaks, and ingest keeps them from it, with nothing
+    /// else to read. The setup is the re-check's D2 (`FollowedCaptureTests`).
+    @Test func recoveryHandsAnOrphanToInboxWithItsPeaks() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        _ = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let recording = try await r.beginRecording()
+        let id = recording.captureID
+        #expect(recording.path == .inbox(KnotError.storeBusy.code))
+        try Self.writePeaks(r, id)
+        // The process dies here, mid-recording.
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        await next.notes.failNextCaptureWrites(with: .writeFailed)
+        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        #expect(outcomes[id] == .movedToInbox(KnotError.writeFailed.code))
+        #expect(!r.layer.exists(r.locations.recordingPeaks(id)), "The peaks file went with the working file.")
+        _ = await next.ingest.ingestAll()
+        #expect(try await r.notes.capture(id)?.outcome == .stored)
+        let peaks = try #require(try await Self.peaks(r, id), "The item's peaks were not kept.")
+        #expect(peaks == (try await Self.kept(r, id)))
+    }
+
     /// No peaks file: nothing is set, and nothing is logged of peaks.
     @Test func noPeaksFileSetsNothing() async throws {
         let r = Rig()
