@@ -13,14 +13,8 @@ set -euo pipefail
 KNOT_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=fail.sh
 source "$KNOT_SCRIPTS/lib/fail.sh"
-KNOT_ROOT="$(cd "$KNOT_SCRIPTS/.." && pwd -P)"
-if [[ -n ${KNOT_TREE:-} ]]; then
-    KNOT_ROOT="$(cd "$KNOT_TREE" 2>/dev/null && pwd -P)" ||
-        knot_fail "knot-tree-missing" "KNOT_TREE names $KNOT_TREE, which is not a folder." \
-            "Name the tree to check, such as the gate worktree, or unset KNOT_TREE." "safe" "nothing"
-fi
-# Children, such as a step that runs in its own process, check the same tree.
-export KNOT_TREE="$KNOT_ROOT" KNOT_SCRIPTS
+# shellcheck source=tree.sh
+source "$KNOT_SCRIPTS/lib/tree.sh"
 
 # This worktree's own build products (docs/architecture.md §18). `.build/` is git-ignored.
 KNOT_WORKTREE="$(basename "$KNOT_ROOT")"
@@ -422,6 +416,19 @@ knot_fakes_in() {
     printf '%s\n' "$found"
 }
 
+# Prints the debug launch arguments of a list, one a line, that a file holds, and returns 0
+# when it holds any (item 99): the packaging step looks for them in every Release binary,
+# since a release build must ignore them. The names are matched whole, as strings of the file.
+# An optimised build can keep a string of 15 bytes or fewer inside the code, where this
+# cannot see it.
+#   knot_debug_arguments_in <file> <list, one name a line>
+knot_debug_arguments_in() {
+    local found
+    found="$(strings -a "$1" 2>/dev/null | grep -x -F -f <(printf '%s\n' "$2") | sort -u || true)"
+    [[ -n $found ]] || return 1
+    printf '%s\n' "$found"
+}
+
 # The limit on one xcodebuild build, in seconds: 40 minutes. A build here takes 13 s for the
 # Debug apps and about 70 s for the two Release apps when DerivedData is warm, and a fresh
 # clone ran every step in under 10 minutes; codesign asking for a keychain is what could
@@ -593,8 +600,14 @@ knot_start_app() {
     if ((exited)); then
         wait "$pid" || status=$?
     else
-        knot_end_process "$pid"
-        wait "$pid" 2>/dev/null || true
+        # bash reports the app that TERM ended, "<pid> Terminated: 15 "$app" …", with this
+        # file's path, on its own standard error as it reaps it: the start says it in its own
+        # words instead.
+        {
+            knot_end_process "$pid"
+            wait "$pid" || true
+        } 2>/dev/null
+        echo "$(basename "$app"): ended $(basename "$app"), which it started, $( [[ -n $found ]] && echo "once its window came" || echo "when its time ran out")."
     fi
     cat "$app_errors" >&2
     rm -f "$out" "$errors" "$app_errors"
@@ -672,13 +685,18 @@ knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
 # the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
 # of a command still writing to it, and a rewrite would give the file a new inode under the
-# writer, whose lines would then be lost.
+# writer, whose lines would then be lost. Each log keeps its time: the log of a step that an
+# earlier run started, and this one does not, keeps the earlier run's, so that it is not taken
+# for this run's (item 115). The logs are kept, since a thread that reruns one step still
+# reads the others.
 knot_scrub_logs() {
-    local folder=$1 log
+    local folder=$1 log stamp
     [[ -d $folder ]] || return 0
     for log in "$folder"/verify-* "$folder"/bootstrap-*; do
         [[ -f $log ]] || continue
+        stamp="$(date -r "$(stat -f %m "$log")" +%Y%m%d%H%M.%S)"
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
+        touch -t "$stamp" "$log" 2>/dev/null || true
     done
 }
 

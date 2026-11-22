@@ -40,7 +40,7 @@
 # before anything else, because every path of the run depends on it.
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
-    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}"; fi
+    if [[ ${args[i]} == --tree ]]; then export KNOT_TREE="${args[i + 1]:-}" KNOT_TREE_NAMED=1; fi
 done
 source "$(dirname "$0")/lib/common.sh"
 
@@ -49,7 +49,7 @@ package-test-strict contract-two-targets self-test apps packaging ios-hosted lau
 perf tsan model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke"
 # Steps that wait for a build slot, and the slot options each one needs.
 slot_options() {
     case $1 in
@@ -691,6 +691,29 @@ step_packaging() {
     check "Release iOS app, its extension and the Watch app free of KnotFakes" \
         scan_for_fakes "$(products Release-iphonesimulator)/Knot.app" none || failed=1
     check "the Debug iOS app does hold KnotFakes, so the check can see it" scan_for_fakes "$ios" some || failed=1
+    # The debug launch arguments, from the one list (knot_tool.py debug-arguments), in every
+    # Mach-O file of each Release app (item 99). An optimised build can keep a name of 15
+    # bytes or fewer inside the code, where the scan cannot see it, and the scan says which
+    # those are. The Debug iOS app, whose shells read them, is the control.
+    scan_for_debug_arguments() {
+        local app=$1 want=$2 f found=0 held list short
+        list="$(tool debug-arguments)"
+        short="$(awk 'length($0) <= 15' <<<"$list" | tr '\n' ' ')"
+        while IFS= read -r -d '' f; do
+            if held="$(knot_debug_arguments_in "$f" "$list")"; then
+                echo "      debug arguments in ${f#"$app"/}: $(tr '\n' ' ' <<<"$held")"
+                found=$((found + 1))
+            fi
+        done < <(macho_files "$app")
+        echo "      the names of 15 bytes or fewer, which an optimised build can keep inside the code, the scan may not see: ${short:-none}"
+        if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
+    }
+    check "Release Mac app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release)/Knot.app" none || failed=1
+    check "Release iOS app, its extension and the Watch app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release-iphonesimulator)/Knot.app" none || failed=1
+    check "the Debug iOS app does hold debug launch arguments, so the check can see them" \
+        scan_for_debug_arguments "$ios" some || failed=1
     ((failed == 0))
 }
 
@@ -822,11 +845,27 @@ step_launch() {
         echo "screenshot: $KNOT_LOGS/launch-$role.png"
     done
 
-    # The Mac app puts a window on screen within KNOT_APP_START_LIMIT seconds, 60: the first
-    # probe compiles its script, which a loaded Mac makes slow. The probe reads only what
-    # needs no Screen Recording permission; the Mac UI tests are the mac-ui step. Afterwards
-    # neither the app nor anything it started may be left running.
-    local mac status=0
+    # The Mac app (step_launch_mac). Its app has the bundle ID of every worktree's development
+    # build, so it would come to the front beside another worktree's Mac UI test: it holds the
+    # exclusive Mac UI slot for as long as the app is up, and no second build slot, since this
+    # step holds one already (item 105).
+    "$KNOT_SCRIPTS/build-slot.sh" run --mac-ui-only --label launch-mac -- "$KNOT_SCRIPTS/verify.sh" --in-step launch-mac
+}
+
+# The launch step's Mac part. It builds the Debug Mac app it starts, which after the apps step
+# has nothing to do, so that --only launch never starts an old one. The Mac app puts a window
+# on screen within KNOT_APP_START_LIMIT seconds, 60: the first probe compiles its script,
+# which a loaded Mac makes slow. The probe reads only what needs no Screen Recording
+# permission; the Mac UI tests are the mac-ui step. Afterwards neither the app nor anything
+# it started may be left running.
+step_launch_mac() {
+    local mac status=0 log="$KNOT_LOGS/verify-launch-mac-build.log"
+    : >"$log"
+    if ! knot_run_limited "The Debug build of Knot-macOS" "$KNOT_BUILD_LIMIT" \
+        xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build; then
+        echo "The Debug build of Knot-macOS for the launch failed. Its log is ${log#"$KNOT_ROOT"/}."
+        return 1
+    fi
     mac="$(products Debug)/Knot.app"
     knot_start_app "${KNOT_APP_START_LIMIT:-60}" "$mac/Contents/MacOS/Knot" \
         xcrun swift "$KNOT_SCRIPTS/lib/windows.swift" || status=$?
@@ -877,9 +916,16 @@ end_mac_test_hosts() {
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
 # scripts/gate-steps.txt until their packages build them. Should a line turn to required
 # before the step is filled in, the gate fails here rather than pass a check it did not run.
+# The live smoke tests (docs/architecture.md §17), item 80 of the orchestrator's list. They
+# run inside launch and mac-ui; this step, after both, reads their results and fails unless
+# each platform's smoke test, found by its named comment in the sources, ran and passed in
+# this run and was not skipped (knot_tool.py live-smoke). The Mac's is not asked for in a run
+# that does not start mac-ui, and a test whose pull request has not merged is not asked for.
 step_live_smoke() {
-    echo "live-smoke: not built yet. WP-22 builds the .live smoke tests (docs/architecture.md §17)."
-    return 1
+    local mac_ui=0
+    [[ " $STEPS " == *" mac-ui "* ]] && mac_ui=1
+    (cd "$KNOT_ROOT" && tool live-smoke --logs "$KNOT_LOGS" --since "$START" --mac-ui "$mac_ui" \
+        ${PACKAGE:+--package "$PACKAGE"} ${BRANCH:+--branch "$BRANCH"})
 }
 step_two_process() {
     echo "two-process: not built yet. WP-34 builds it after G1 and SP-3 (docs/architecture.md §18)."
@@ -1078,11 +1124,13 @@ else
                     # docs/architecture.md §18: everything adds the two-process test and the
                     # .live smoke tests. They are pending until their packages build them.
                     STEPS="$common package-test package-test-strict contract-two-targets self-test apps packaging ios-hosted launch"
-                    STEPS="$STEPS live-smoke two-process" ;;
+                    STEPS="$STEPS two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
             [[ $DEPTH != documents && $gate_recorder_sim == 1 ]] && STEPS="$STEPS recorder-sim"
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
+            # The live smoke step reads the results of launch and mac-ui, so it comes after both.
+            [[ $DEPTH == everything ]] && STEPS="$STEPS live-smoke"
             # A step that scripts/gate-steps.txt lists as pending does not run yet.
             kept=""
             for step in $STEPS; do
