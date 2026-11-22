@@ -29,13 +29,34 @@ struct StoredPeaks: Sendable {
 
     /// Keeps `peaks` with the capture's segment. Nothing to keep is not an error, and a refusal is
     /// logged and dropped.
-    func keep(_ peaks: Data?, of capture: CaptureID) async {
+    ///
+    /// With `deadline`, the call races it, as every store call of the engine does: the engine's end
+    /// holds the capture's line, and a store that held the peaks would hold the end, its cue and
+    /// the line with them (the review of pull request 91, N1). A miss is what a refusal is: logged
+    /// by its code, and the caller goes on at once. The call that lost the race may still land,
+    /// and the peaks are kept then. Ingest and recovery hold no caller's line, and wait for it.
+    func keep(_ peaks: Data?, of capture: CaptureID, deadline: StoreDeadline? = nil) async {
         guard let peaks else { return }
-        do throws(KnotError) {
-            try await notes.setPeaks(peaks, of: SegmentID(capture))
+        let segment = SegmentID(capture)
+        guard let deadline else {
+            do throws(KnotError) {
+                try await notes.setPeaks(peaks, of: segment)
+                log.capture(capture, "recording_peaks_kept")
+            } catch {
+                log.failure(error.about(capture: capture), "recording_peaks_not_kept")
+            }
+            return
+        }
+        let answer = await deadline.race { [notes] () async throws(KnotError) in
+            try await notes.setPeaks(peaks, of: segment)
+        }
+        switch answer {
+        case .answered:
             log.capture(capture, "recording_peaks_kept")
-        } catch {
+        case .refused(let error):
             log.failure(error.about(capture: capture), "recording_peaks_not_kept")
+        case .timedOut:
+            log.capture(capture, "recording_peaks_not_kept", .code(KnotError.storeNotOpen.code))
         }
     }
 }

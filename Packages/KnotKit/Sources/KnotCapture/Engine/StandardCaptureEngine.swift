@@ -925,7 +925,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 await reach(.afterRecordingEnded, id)
                 // The row points to the stored asset: its peaks are kept, and the working file can
                 // go with the peaks beside it.
-                if receipt.outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: audio.frames), of: id) }
+                if receipt.outcome == .stored {
+                    await peaks.keep(peaks.fromFile(id, frames: audio.frames), of: id, deadline: deadline)
+                }
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
                 log.capture(id, "recording_ended", .flag("store_path", true), .duration("length", duration))

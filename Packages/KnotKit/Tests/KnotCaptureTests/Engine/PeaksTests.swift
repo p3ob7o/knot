@@ -93,6 +93,61 @@ import Testing
         #expect(!r.layer.exists(r.locations.recordingAudio(recording.captureID, format: .caf)), "The file went.")
     }
 
+    /// The review of pull request 91, N1. A store that holds `setPeaks` and nothing else: the
+    /// engine's call of it races the engine's deadline, as its every other store call does, and a
+    /// miss is what a refusal is. So `end`, and a press that stops, return with the row stored, the
+    /// working file gone and, for the press, one `saved` cue. The held call lands once the store
+    /// lets it go, and the peaks are with the segment then. The test runs the deadline out by hand.
+    @Test(arguments: [false, true])
+    func aHeldSetOfThePeaksNeverHoldsTheEnd(byPress: Bool) async throws {
+        let r = Rig()
+        let gate = Gate()
+        gate.close()
+        var store = ChaosStore(store: r.notes) {}
+        store.holdPeaks = { await gate.pass() }
+        let manual = ManualDeadline()
+        let cues = RecordingCueEmitter()
+        let engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+                deadline: manual.deadline, ingest: r.ingest, recordingState: InMemoryRecordingStateStore(), cues: cues,
+                log: KnotLog(.capture, sink: r.logs)))
+        let id: CaptureID
+        if byPress {
+            let states = engine.states()
+            let started = try #require(try await engine.press(r.press(.tap)).started)
+            id = started.captureID
+            _ = await SuiteWait.value("the recording's frames to be durable") {
+                for await state in states where state.captureID == id && state.durableRevision > 0 { return true }
+                return false
+            }
+        } else {
+            id = try await r.beginRecording(on: engine).captureID
+        }
+        try Self.writePeaks(r, id)
+        r.clock.advance(by: 2)
+        let clock = r.clock
+        let ending = Task { () throws -> CaptureState? in
+            if byPress { return try await engine.press(Press(.tap, at: clock.now())).stopped }
+            return try await engine.end(id)
+        }
+        #expect(await eventually("setPeaks to be held") { gate.isHolding })
+        await manual.expireNext()
+        let ended = try #require(try await ending.value)
+        #expect(ended.outcome == .stored)
+        #expect(try await r.notes.capture(id)?.outcome == .stored)
+        #expect(!r.layer.exists(r.locations.recordingAudio(id, format: .caf)), "The working file went.")
+        #expect(cues.cues == (byPress ? [.saved] : []))
+        #expect(r.logs.lines.contains("recording_peaks_not_kept capture=\(id) code=store_not_open"))
+        gate.open()
+        #expect(
+            await eventually("the held call to land") {
+                guard let kept = try? await Self.kept(r, id) else { return false }
+                return (try? await Self.peaks(r, id)) == .some(kept)
+            })
+    }
+
     /// A death between the stored end and its peaks: recovery keeps them before the working file
     /// goes.
     @Test func aDeathBeforeThePeaksLeavesThemForRecovery() async throws {
