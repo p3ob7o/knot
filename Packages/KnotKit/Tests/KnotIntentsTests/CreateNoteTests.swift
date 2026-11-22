@@ -149,8 +149,9 @@ import Testing
         let note = try #require(try await rig.shownNotes().first)
         #expect(try await rig.liveTexts(of: note.note.id) == ["synthetic body"])
         #expect(entity.isPinned == false)
-        #expect(CreateNoteIntent.dialogText(pinned: true, foldered: false).contains("no pins"))
-        #expect(CreateNoteIntent.dialogText(pinned: false, foldered: false) == "Saved to Knot.")
+        let said = try await Self.dialog(
+            of: Self.intent(rig, name: "Synthetic title", content: "synthetic body", pinned: true), in: rig)
+        #expect(said.contains("Knot has no pins"))
     }
 
     /// A folder can come only from elsewhere, since Knot's folder query finds none. The note is
@@ -163,8 +164,36 @@ import Testing
             donate: false)
         #expect(try await rig.shownNotes().count == 1)
         #expect(entity.folder == nil)
-        #expect(CreateNoteIntent.dialogText(pinned: false, foldered: true).contains("no folders"))
-        #expect(CreateNoteIntent.dialogText(pinned: true, foldered: true).contains("no pins and no folders"))
+        let said = try await Self.dialog(
+            of: Self.intent(rig, name: "Synthetic title", content: "synthetic body", folder: folder), in: rig)
+        #expect(said.contains("Knot has no folders"))
+    }
+
+    /// The dialog that `perform()` returns, for each pin and folder asked for (finding N6).
+    @Test(arguments: [(false, false), (true, false), (false, true), (true, true)])
+    func performSaysWhatItIgnored(pinned: Bool, foldered: Bool) async throws {
+        let rig = IntentRig()
+        defer { rig.remove() }
+        let folder = foldered ? NoteFolderEntity(id: "synthetic-folder", name: "Synthetic folder") : nil
+        let said = try await Self.dialog(
+            of: Self.intent(rig, name: "Synthetic title", content: "synthetic body", pinned: pinned, folder: folder),
+            in: rig)
+        #expect(said.contains("Saved to Knot."))
+        #expect(said.contains("no pins") == pinned)
+        #expect(said.contains("no folders") == foldered)
+    }
+
+    /// The text of the dialog that `perform()` returns. `perform()` is called directly here,
+    /// outside App Intents' perform flow, so the intent's dependency is given its value first, as
+    /// App Intents lets a caller do; the flow's own tests are the others in this suite.
+    static func dialog(of intent: CreateNoteIntent, in rig: IntentRig) async throws -> String {
+        intent.knot = KnotIntentEnvironment(rig.environment)
+        let result = try await intent.perform()
+        let container = try #require(result as? IntentResultContainer<NoteEntity, Never, Never, IntentDialog>)
+        let dialog = try #require(container.dialog)
+        // IntentDialog keeps its text private; its reflection holds the text's key, which is the
+        // text itself for these English lines.
+        return String(reflecting: dialog)
     }
 
     /// The title is set only once the capture is stored: no capture is open then, and the note
