@@ -277,12 +277,17 @@ public enum RecorderContract {
     /// reading its events. A stop, a discard and recovery give none: the caller gives `saved`
     /// or `discarded`, and a recovered recording has no cue. A start that throws follows each
     /// step, so that a cue given late would show before its `couldNotStart`.
+    ///
+    /// Each wait is for the last cue that a step gives, which comes after every cue before it:
+    /// a recorder that leaves out an earlier cue is told at once, and no wait rests on a time.
     public static func theRecorderGivesItsThreeCues(_ make: @Sendable () async throws -> RecorderSubject)
         async throws
     {
         let subject = try await make()
         let recorder = subject.recorder
         var expected: [Cue] = []
+        /// How many times `cue` has been given so far.
+        @Sendable func given(_ cue: Cue) -> Int { subject.cues().filter { $0 == cue }.count }
         /// A start that throws, and every cue so far, in order, then that start's.
         func refusedStart(after step: String) async {
             subject.failNextStart(.noInputDevice)
@@ -290,9 +295,8 @@ public enum RecorderContract {
                 _ = try await recorder.start(request())
             }
             expected.append(.couldNotStart)
-            let count = expected.count
-            #expect(
-                await SuiteWait.until("the cue after \(step)", limit: .seconds(10)) { subject.cues().count >= count })
+            let refusals = expected.filter { $0 == .couldNotStart }.count
+            #expect(await SuiteWait.until("the cue after \(step)") { given(.couldNotStart) >= refusals })
             #expect(subject.cues() == expected, "The cues after \(step).")
         }
 
@@ -304,8 +308,7 @@ public enum RecorderContract {
         // At its limit, with nobody reading its events: the recording ends by itself.
         let limited = try await recorder.start(request(limit: .milliseconds(250)))
         expected += [.recordingLive, .stoppedEarly]
-        let count = expected.count
-        #expect(await SuiteWait.until("the stopped-early cue", limit: .seconds(10)) { subject.cues().count >= count })
+        #expect(await SuiteWait.until("the stopped-early cue") { given(.stoppedEarly) >= 1 })
         #expect(subject.cues() == expected, "A recording that ended at its limit stopped early.")
         let ended = try #require(await SuiteWait.value("the stop after the ending") { await limited.stop() })
         #expect(ended.ending == .limitReached)

@@ -1,6 +1,7 @@
 import AVFAudio
 import Foundation
 import KnotCore
+import KnotFakes
 import KnotTestSupport
 import Synchronization
 import Testing
@@ -76,10 +77,32 @@ func request(_ launch: LaunchID = LaunchID(uuid: UUID()), limit: Duration = .sec
         shownNote: NoteID(uuid: UUID()), limit: limit)
 }
 
-/// Every event of a session until its end, bounded by `SuiteWait`, or by `limit` for a test whose
-/// injected audio ends in milliseconds.
-func allEvents(of session: any RecordingSession, limit: Duration = SuiteWait.limit) async -> [RecordingEvent] {
-    await SuiteWait.value("the events to end", limit: limit) {
+/// The cues that `cues` was handed, once the recorder has handed over every cue it gave before
+/// this call. A start of `request`, a capture that is recording or whose files are there, is
+/// refused, and the recorder hands its could-not-start cue over on its one cue queue after every
+/// earlier cue: the wait for that cue rests on the queue's order, not on a time, and a recorder
+/// that never gave an earlier cue is told at once. The refused start's own cue is left out.
+func cuesHandedOver(
+    by recorder: any Recorder, to cues: RecordingCueEmitter, refusing request: RecordingRequest,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async -> [Cue] {
+    let refusals = cues.cues.filter { $0 == .couldNotStart }.count
+    await #expect(
+        throws: KnotError.self, "A start of a capture that is there is refused.", sourceLocation: sourceLocation
+    ) {
+        _ = try await recorder.start(request)
+    }
+    await SuiteWait.until("the refused start's cue", sourceLocation: sourceLocation) {
+        cues.cues.filter { $0 == .couldNotStart }.count > refusals
+    }
+    var handed = cues.cues
+    if let last = handed.lastIndex(of: .couldNotStart) { handed.remove(at: last) }
+    return handed
+}
+
+/// Every event of a session until its end, bounded by `SuiteWait`.
+func allEvents(of session: any RecordingSession) async -> [RecordingEvent] {
+    await SuiteWait.value("the events to end") {
         var events: [RecordingEvent] = []
         for await event in session.events { events.append(event) }
         return events
