@@ -127,6 +127,7 @@ public enum NoteStoreContract {
         Check(name: "kept-item-ingested", run: aKeptItemReadLaterIsStoredInItsNote),
         Check(name: "kept-item-refused", run: aKeptItemThatIsNotOneIsRefused),
         Check(name: "kept-item-window", run: aKeptItemCountsForNoWindow),
+        Check(name: "kept-item-purged", run: aPurgeNamesTheKeptFilesOfWhatItRemoved),
         Check(name: "small-ones", run: theSmallOnes),
         Check(name: "recognition", run: aRecognitionIsAppliedOnce),
         Check(name: "checkpoint-before-record", run: aCheckpointBeforeItsRecordIsRefused),
@@ -2457,6 +2458,34 @@ public enum NoteStoreContract {
         let alone = try await h.store.recordKeptItem(h.keptItem(h.ids.make(), reason: reason, at: 30))
         let after = try await h.store.record(h.typed("After", from: 30.2, to: 30.3))
         #expect(after.noteID != alone.noteID && !after.joinedExistingNote, "With nothing else near, a new note.")
+    }
+
+    /// A purge that removes a kept inbox item's failed segment, deleted with its note or on its
+    /// own, names that item's files in `Inbox/`, as `keptFiles(of:)` named them, once each, for
+    /// the caller to remove, and forgets them. A kept item still shown keeps its files.
+    public static func aPurgeNamesTheKeptFilesOfWhatItRemoved(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let reason = KnotError.inboxItemUnreadable.code
+        let withNote = h.keptItem(h.ids.make(), reason: reason, at: 0)
+        let alone = h.keptItem(h.ids.make(), reason: reason, at: 1)
+        let shown = h.keptItem(h.ids.make(), reason: reason, at: 2)
+        let note = try await h.store.recordKeptItem(withNote).noteID
+        _ = try await h.store.recordKeptItem(alone)
+        _ = try await h.store.recordKeptItem(shown)
+        let named = try await h.store.keptFiles(of: withNote.captureID) + h.store.keptFiles(of: alone.captureID)
+        #expect(named.count == withNote.fileNames.count + alone.fileNames.count)
+        _ = try await h.store.delete(.note(note))
+        _ = try await h.store.delete(.segment(SegmentID(alone.captureID)))
+        h.clock.advance(by: 31 * 86_400)
+        let purged = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        #expect(Set(purged.keptFiles) == Set(named), "The purge names the files of the kept items it removed.")
+        #expect(purged.keptFiles.count == named.count, "Each once.")
+        for item in [withNote, alone] {
+            #expect(try await h.store.keptFiles(of: item.captureID).isEmpty, "And the store forgets them.")
+        }
+        #expect(
+            try await h.store.keptFiles(of: shown.captureID).count == shown.fileNames.count,
+            "A kept item still shown keeps its files.")
     }
 
     /// Witness 67: `changes` reports a "Remove recording".

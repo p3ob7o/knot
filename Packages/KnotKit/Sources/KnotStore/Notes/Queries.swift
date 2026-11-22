@@ -183,7 +183,16 @@ extension StoreTransaction {
     struct PurgeBatch: Sendable {
         var removed: Int
         var assets: [Asset]
+        /// The names of the files `Inbox/` keeps for the kept items whose segments went.
+        var keptFileNames: [String] = []
         var more: Bool
+    }
+
+    /// What `drop` removed with a segment: the assets whose files the caller removes, and the
+    /// names of the files a kept inbox item keeps in `Inbox/`.
+    struct Dropped {
+        var assets: [Asset] = []
+        var keptFileNames: [String] = []
     }
 
     /// One batch of the purge, of at most `limit` rows: notes deleted before `date`, or left
@@ -196,6 +205,7 @@ extension StoreTransaction {
         var removed = 0
         var budget = max(limit, 1)
         var assets: [Asset] = []
+        var keptNames: [String] = []
         let purgedAt = now()
         let cutoff = date.stored
         // Two queries, each on its index: notes deleted before the date, then notes left empty
@@ -215,21 +225,24 @@ extension StoreTransaction {
             ).filter { !deleted.contains($0["id"] as String) }.prefix(budget - notes.count)
         }
         for row in notes {
-            guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
+            guard budget > 0 else {
+                return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
+            }
             let id: NoteID = try Stored.id(row["id"] as String)
             let segments = try Row.fetchAll(
                 db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE note_id = ? LIMIT ?",
                 arguments: [id.description, budget])
             for segment in segments {
                 guard let dropped = try drop(try SegmentRows.decode(segment), at: purgedAt, budget: &budget) else {
-                    return PurgeBatch(removed: removed, assets: assets, more: true)
+                    return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
                 }
-                assets += dropped
+                assets += dropped.assets
+                keptNames += dropped.keptFileNames
                 removed += 1
             }
             // The note goes once its last segment has, in this batch or the next.
             guard budget > 0, try !hasSegment(id) else {
-                return PurgeBatch(removed: removed, assets: assets, more: true)
+                return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
             }
             try db.execute(
                 sql: """
@@ -242,23 +255,28 @@ extension StoreTransaction {
             removed += 1
             budget -= 1
         }
-        guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
+        guard budget > 0 else {
+            return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
+        }
         let segments = try Row.fetchAll(
             db, sql: "SELECT \(SegmentRows.columns) FROM segment WHERE deleted_at < ? LIMIT ?",
             arguments: [cutoff, budget])
         for row in segments {
             guard let dropped = try drop(try SegmentRows.decode(row), at: purgedAt, budget: &budget) else {
-                return PurgeBatch(removed: removed, assets: assets, more: true)
+                return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
             }
-            assets += dropped
+            assets += dropped.assets
+            keptNames += dropped.keptFileNames
             removed += 1
         }
-        guard budget > 0 else { return PurgeBatch(removed: removed, assets: assets, more: true) }
+        guard budget > 0 else {
+            return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: true)
+        }
         try db.execute(
             sql: "DELETE FROM segment_history WHERE seq IN (SELECT seq FROM segment_history WHERE at < ? LIMIT ?)",
             arguments: [cutoff, budget])
         budget -= db.changesCount
-        return PurgeBatch(removed: removed, assets: assets, more: budget <= 0)
+        return PurgeBatch(removed: removed, assets: assets, keptFileNames: keptNames, more: budget <= 0)
     }
 
     private func hasSegment(_ note: NoteID) throws -> Bool {
@@ -267,12 +285,13 @@ extension StoreTransaction {
     }
 
     /// Removes a segment with its history, its jobs, its asset row and its peaks, which its row
-    /// holds, leaving a tombstone, within `budget` rows, which it spends: every row it deletes counts. When the segment's history
-    /// needs more than the budget holds, as much of it as fits goes and the segment waits for the
-    /// next batch, and so does a segment whose jobs and files do not fit: `nil`. A file that
-    /// another segment still names, or whose row another segment holds, is not returned for
-    /// removal: its row stays with, or passes to, that segment.
-    private func drop(_ segment: Segment, at purgedAt: Date, budget: inout Int) throws -> [Asset]? {
+    /// holds, and a kept inbox item's record of its files, leaving a tombstone, within `budget`
+    /// rows, which it spends: every row it deletes counts. When the segment's history needs more
+    /// than the budget holds, as much of it as fits goes and the segment waits for the next
+    /// batch, and so does a segment whose jobs and files do not fit: `nil`. A file that another
+    /// segment still names, or whose row another segment holds, is not returned for removal: its
+    /// row stays with, or passes to, that segment.
+    private func drop(_ segment: Segment, at purgedAt: Date, budget: inout Int) throws -> Dropped? {
         var assets: [Asset] = []
         let id = segment.id.description
         try db.execute(
@@ -289,8 +308,15 @@ extension StoreTransaction {
             named.append(asset)
         }
         let jobs = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM job WHERE segment_id = ?", arguments: [id]) ?? 0
+        // A kept inbox item's files go with its failed segment: the caller removes them.
+        let capture = try self.owner(of: segment.id)
+        let keptNames = try capture.map(keptFileNames(of:)) ?? []
         // What is left of the segment, its jobs, its files' rows and itself, goes in one batch.
-        guard !historyLeft, budget >= jobs + named.count + 1 else { return nil }
+        guard !historyLeft, budget >= jobs + named.count + keptNames.count + 1 else { return nil }
+        if let capture, !keptNames.isEmpty {
+            try clearKeptFiles(of: capture)
+            budget -= db.changesCount
+        }
         try db.execute(sql: "DELETE FROM job WHERE segment_id = ?", arguments: [id])
         budget -= db.changesCount
         for var asset in named {
@@ -317,6 +343,6 @@ extension StoreTransaction {
                 """, arguments: [id, segment.revision, segment.deletedAt?.stored, purgedAt.stored])
         try removeSegment(segment.id)
         budget -= 1
-        return assets
+        return Dropped(assets: assets, keptFileNames: keptNames)
     }
 }

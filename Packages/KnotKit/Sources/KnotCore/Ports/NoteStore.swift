@@ -320,7 +320,9 @@ public protocol NoteStore: Sendable {
     /// Removes notes and segments deleted before `date`, notes left empty and unchanged since
     /// then, and history older than it. A tombstone keeps each deletion reportable. The asset
     /// rows and the peaks of what it removed go too, and the result names the assets' files
-    /// for the caller to remove through the `AssetStore`.
+    /// for the caller to remove through the `AssetStore`. When it removes the failed segment of
+    /// a kept inbox item (`recordKeptItem(_:)`), the result names that item's files in `Inbox/`
+    /// too, as `keptFiles(of:)` named them, for the caller to remove, and the store forgets them.
     func purge(before date: Date) async throws(KnotError) -> PurgeResult
 }
 
@@ -575,10 +577,15 @@ public struct PurgeResult: Hashable, Sendable {
     public var removed: Int
     /// The assets whose rows it removed, whose files the caller removes.
     public var assets: [Asset]
+    /// The files that `Inbox/` keeps for the kept items whose failed segments it removed, as
+    /// `keptFiles(of:)` named them: the caller removes them. The store forgets them, so that
+    /// `keptFiles(of:)` answers none for those items afterwards.
+    public var keptFiles: [KeptFile]
 
-    public init(removed: Int, assets: [Asset]) {
+    public init(removed: Int, assets: [Asset], keptFiles: [KeptFile]) {
         self.removed = removed
         self.assets = assets
+        self.keptFiles = keptFiles
     }
 }
 

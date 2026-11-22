@@ -869,7 +869,13 @@
             var next = state
             var removed = 0
             var assets: [Asset] = []
+            var kept: [KeptFile] = []
             func drop(_ segment: Segment) {
+                // A kept inbox item's files go with its failed segment: the caller removes them.
+                if let capture = next.segmentCapture[segment.id], let names = next.keptFiles[capture] {
+                    kept += names.map { KeptFile(name: $0, in: inbox) }
+                    next.keptFiles[capture] = nil
+                }
                 next.segments[segment.id] = nil
                 next.segmentCapture[segment.id] = nil
                 next.moves[segment.id] = nil
@@ -895,7 +901,9 @@
             for (id, rows) in next.moves { next.moves[id] = rows.filter { $0.at >= date } }
             for (id, rows) in next.replaced { next.replaced[id] = rows.filter { $0.at >= date } }
             state = next
-            return PurgeResult(removed: removed, assets: assets.sorted { $0.id < $1.id })
+            return PurgeResult(
+                removed: removed, assets: assets.sorted { $0.id < $1.id },
+                keptFiles: kept.sorted { $0.url.path < $1.url.path })
         }
 
         // MARK: - Recording a capture

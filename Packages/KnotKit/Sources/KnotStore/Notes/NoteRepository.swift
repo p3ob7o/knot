@@ -747,6 +747,7 @@ public final class NoteRepository: NoteStore {
     public func purge(before date: Date) async throws(KnotError) -> PurgeResult {
         var removed = 0
         var assets: [Asset] = []
+        var keptNames: [String] = []
         while true {
             let batch: StoreTransaction.PurgeBatch
             do {
@@ -760,9 +761,13 @@ public final class NoteRepository: NoteStore {
             }
             removed += batch.removed
             assets += batch.assets
+            keptNames += batch.keptFileNames
             if !batch.more { break }
         }
-        return PurgeResult(removed: removed, assets: assets.sorted { $0.id < $1.id })
+        let inbox = database.locations.inbox
+        return PurgeResult(
+            removed: removed, assets: assets.sorted { $0.id < $1.id },
+            keptFiles: keptNames.map { KeptFile(name: $0, in: inbox) }.sorted { $0.url.path < $1.url.path })
     }
 
     static func isPast30Days(_ date: Date, now: Date) -> Bool {
