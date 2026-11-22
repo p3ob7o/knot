@@ -146,6 +146,7 @@ struct CompositionTests {
         #expect(report.storeProblem == code)
         #expect(report.outcome(of: .recovery) == .skipped(.storeNotOpen))
         #expect(report.outcome(of: .resumeJobs) == .skipped(.storeNotOpen))
+        #expect(report.outcome(of: .purge) == .skipped(.storeNotOpen))
         #expect(report.outcome(of: .startSync) == .skipped(.storeNotOpen))
         // The stream reads the same error, which it shows (docs/product-spec.md §4.4).
         await #expect(throws: KnotError.self) { try await composition.environment.notes.stream(after: nil, limit: 10) }
@@ -169,7 +170,7 @@ struct CompositionTests {
         #expect(!queue.isReleased)
         #expect(await composition.environment.queue.drain(using: StraightThroughRunner()) { _ in } == .yielded)
         let report = try #require(await launch(composition))
-        #expect(report.steps.map(\.step) == [.openStore, .recovery, .resumeJobs, .startSync])
+        #expect(report.steps.map(\.step) == [.openStore, .recovery, .resumeJobs, .purge, .startSync])
         #expect(report.outcome(of: .openStore) == .done)
         #expect(report.outcome(of: .recovery) == .done)
         #expect(report.outcome(of: .resumeJobs) == .done)
@@ -223,6 +224,7 @@ struct CompositionTests {
         #expect(report.outcome(of: .openStore) == .done)
         #expect(report.outcome(of: .recovery) == .skipped(.diedTwice))
         #expect(report.outcome(of: .resumeJobs) == .skipped(.recoveryDidNotEnd))
+        #expect(report.outcome(of: .purge) == .skipped(.recoveryDidNotEnd))
         #expect(report.outcome(of: .startSync) == .skipped(.recoveryDidNotEnd))
         #expect(composition.gatedQueue?.isReleased == false)
     }

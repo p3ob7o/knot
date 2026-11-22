@@ -15,6 +15,9 @@ public enum LaunchStep: String, Hashable, Sendable, Codable, CaseIterable {
     case openStore = "open_store"
     case recovery
     case resumeJobs = "resume_jobs"
+    /// The store's purge, as housekeeping (`StorePurge`): once the store is open and recovery
+    /// has run, never before.
+    case purge
     case startSync = "start_sync"
 
     var moment: MeasuredMoment {
@@ -22,6 +25,7 @@ public enum LaunchStep: String, Hashable, Sendable, Codable, CaseIterable {
         case .openStore: .launchOpenStore
         case .recovery: .launchRecovery
         case .resumeJobs: .launchResumeJobs
+        case .purge: .launchPurge
         case .startSync: .launchStartSync
         }
     }
@@ -89,6 +93,7 @@ public actor LaunchSequence {
     private var running: Task<LaunchReport, Never>?
     private var finished: LaunchReport?
     private var speechWatch: Task<Void, Never>?
+    private var lifecycleWatch: Task<Void, Never>?
 
     init(composition: LiveComposition) {
         self.composition = composition
@@ -109,6 +114,7 @@ public actor LaunchSequence {
     public func reportIfRun() -> LaunchReport? { finished }
 
     private func steps() async -> LaunchReport {
+        watchLifecycle()
         var report = LaunchReport(steps: [], storeProblem: nil, recovered: [:])
         let opened = await step(.openStore, into: &report) { () throws(KnotError) -> Void in
             try await self.openStore()
@@ -119,7 +125,7 @@ public actor LaunchSequence {
             report.storeProblem = KnotError.storeNotOpen.code
         }
         guard case .open(let ports) = composition.gate.phase else {
-            for step in [LaunchStep.recovery, .resumeJobs, .startSync] {
+            for step in [LaunchStep.recovery, .resumeJobs, .purge, .startSync] {
                 skip(step, .storeNotOpen, into: &report)
             }
             return report
@@ -133,6 +139,7 @@ public actor LaunchSequence {
         report.recovered = recovered
         guard recovery == .done else {
             skip(.resumeJobs, .recoveryDidNotEnd, into: &report)
+            skip(.purge, .recoveryDidNotEnd, into: &report)
             skip(.startSync, .recoveryDidNotEnd, into: &report)
             return report
         }
@@ -140,6 +147,9 @@ public actor LaunchSequence {
             try await self.resumeJobs()
         }
         if jobs == .done { watchSpeech() }
+        _ = await step(.purge, into: &report) { () throws(KnotError) -> Void in
+            try await self.purge(ports)
+        }
         await startSync(into: &report)
         return report
     }
@@ -183,7 +193,20 @@ public actor LaunchSequence {
 
     // MARK: The steps
 
+    /// Opens the store with background time held: on iOS a suspension in the middle of an open,
+    /// which may migrate, would be counted as a death inside the step.
     private func openStore() async throws(KnotError) {
+        let held = await composition.backgroundTime.hold("knot.launch.open-store")
+        do throws(KnotError) {
+            try await openStoreHeld()
+        } catch {
+            await held.release()
+            throw error
+        }
+        await held.release()
+    }
+
+    private func openStoreHeld() async throws(KnotError) {
         let composition = composition
         guard let locations = composition.locations else {
             let error = composition.locationsError ?? KnotError.storeNotOpen
@@ -251,6 +274,38 @@ public actor LaunchSequence {
         return counts
     }
 
+    /// The store's purge, and the removal of the files it names.
+    private func purge(_ ports: StoreGate.Ports) async throws(KnotError) {
+        guard let locations = composition.locations else { throw KnotError.storeNotOpen }
+        let report = try await StorePurge(
+            notes: ports.notes, assets: ports.assets, locations: locations, layer: composition.layer,
+            clock: composition.clock
+        ).run()
+        log.log(
+            .info, "launch_purged", .number("removed", report.removed), .number("files_removed", report.filesRemoved),
+            .number("files_left", report.filesLeft))
+    }
+
+    /// Wires the app's foreground events to the calls the modules expose for the app coming
+    /// forward (docs/architecture.md §5): the transcriber checks its readiness again, `Inbox/` is
+    /// ingested (docs/architecture.md §6, rule 2), and the queue is woken. Each of them holds its
+    /// own order: ingest holds the earlier launches' items until recovery has run, and the queue
+    /// runs nothing before the launch releases it.
+    private func watchLifecycle() {
+        guard lifecycleWatch == nil else { return }
+        let events = composition.environment.lifecycle.events()
+        // Weak: a composition that is dropped, as a test drops one to stand for a kill, must not
+        // be kept alive by its own watch, with a queue that could still run jobs.
+        lifecycleWatch = Task { [weak composition = self.composition] in
+            for await event in events where event == .cameForward {
+                guard let composition else { return }
+                await KnotSpeechLive.appCameForward(composition.environment)
+                if case .open = composition.gate.phase { _ = await composition.ingest?.ingestAll() }
+                await composition.gatedQueue?.wake()
+            }
+        }
+    }
+
     private func resumeJobs() async throws(KnotError) {
         guard let queue = composition.gatedQueue else { throw KnotError.portUnavailable }
         try await queue.resume()
@@ -307,6 +362,7 @@ public actor LaunchSequence {
         case .openStore: "launch_open_store_done"
         case .recovery: "launch_recovery_done"
         case .resumeJobs: "launch_resume_jobs_done"
+        case .purge: "launch_purge_done"
         case .startSync: "launch_start_sync_done"
         }
     }
@@ -316,6 +372,7 @@ public actor LaunchSequence {
         case .openStore: "launch_open_store_failed"
         case .recovery: "launch_recovery_failed"
         case .resumeJobs: "launch_resume_jobs_failed"
+        case .purge: "launch_purge_failed"
         case .startSync: "launch_start_sync_failed"
         }
     }
@@ -325,6 +382,7 @@ public actor LaunchSequence {
         case .openStore: "launch_open_store_skipped"
         case .recovery: "launch_recovery_skipped"
         case .resumeJobs: "launch_resume_jobs_skipped"
+        case .purge: "launch_purge_skipped"
         case .startSync: "launch_start_sync_skipped"
         }
     }

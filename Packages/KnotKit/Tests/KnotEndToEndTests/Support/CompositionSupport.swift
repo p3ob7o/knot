@@ -85,7 +85,7 @@ extension LiveComposition.Seams {
     static var forTests: Self {
         LiveComposition.Seams(
             transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false,
-            launchState: { MemoryLaunchState(suiteName: $0) })
+            launchState: { MemoryLaunchState(suiteName: $0) }, cleaner: ScriptedCleaner())
     }
 }
 

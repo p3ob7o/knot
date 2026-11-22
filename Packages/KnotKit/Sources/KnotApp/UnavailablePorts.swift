@@ -65,8 +65,7 @@ public enum UnavailablePorts {
             // WP-10's second pull request: the install ID and the notice between processes,
             // which the command line needs at M4.
             (.installIdentity, .m2), (.notifier, .m4),
-            // WP-22's second pull request.
-            (.lifecycle, .m2),
+            // `Lifecycle` is not here: the composition fills it in every build (WP-22, row 22b).
             // The shells' second pull requests: WP-30 on iOS for M2, WP-33 on the Mac for M4.
             (.surfaces, platform == .macOS ? .m4 : .m2), (.cues, platform == .macOS ? .m4 : .m2),
             // WP-16, at M4.

@@ -37,6 +37,8 @@ public final class LiveComposition: Sendable {
         public var input: (any AudioInput)?
         /// The transcriber instead of KnotSpeech's.
         public var transcriber: (any Transcriber)?
+        /// The cleaner instead of KnotCleanup's.
+        public var cleaner: (any Cleaner)?
         /// How long the engine waits for the store, 100 ms in the app.
         public var deadline: StoreDeadline
         /// The migrations the store applies, instead of the schema's own.
@@ -53,13 +55,18 @@ public final class LiveComposition: Sendable {
         /// Where the launch state of the suite it is given is kept, instead of that defaults
         /// suite, so that a test leaves nothing in the account's preferences.
         public var launchState: (@Sendable (String) -> any LaunchStateStorage)?
+        /// The app's foreground and background events, instead of the system's.
+        public var lifecycle: (any Lifecycle)?
+        /// The background time held around the store's opening, instead of the system's.
+        public var backgroundTime: (any BackgroundTimeHold)?
 
         public init(
             input: (any AudioInput)? = nil, transcriber: (any Transcriber)? = nil,
             deadline: StoreDeadline = .standard, migrations: [StoreSchema.Migration]? = nil,
             storeHooks: StoreHooks = StoreHooks(), installSpeechModel: Bool = true, recorder: (any Recorder)? = nil,
             wiring: (@Sendable (String, AppEnvironment) -> Void)? = nil,
-            launchState: (@Sendable (String) -> any LaunchStateStorage)? = nil
+            launchState: (@Sendable (String) -> any LaunchStateStorage)? = nil, lifecycle: (any Lifecycle)? = nil,
+            backgroundTime: (any BackgroundTimeHold)? = nil, cleaner: (any Cleaner)? = nil
         ) {
             self.input = input
             self.transcriber = transcriber
@@ -70,6 +77,9 @@ public final class LiveComposition: Sendable {
             self.recorder = recorder
             self.wiring = wiring
             self.launchState = launchState
+            self.lifecycle = lifecycle
+            self.backgroundTime = backgroundTime
+            self.cleaner = cleaner
         }
     }
 
@@ -89,6 +99,8 @@ public final class LiveComposition: Sendable {
     /// and keep their stores apart, as two worktrees' development builds on one Mac do, never
     /// share a breaker.
     public let launchStateSuite: String
+    /// The background time held around the store's opening.
+    let backgroundTime: any BackgroundTimeHold
     /// The launch state, kept in `launchStateSuite`.
     let launchState: any LaunchStateStorage
     let clock: any WallClock
@@ -118,12 +130,16 @@ public final class LiveComposition: Sendable {
         self.gate = gate
         self.timings = timings
         self.launchID = ids.make()
+        self.backgroundTime = seams.backgroundTime ?? SystemBackgroundTime()
 
         var environment = AppEnvironment.unavailable
         environment.clock = clock
         environment.ids = ids
         environment.gates = MilestoneGates(level: configuration.milestoneLevel)
         environment = shell.apply(to: environment)
+        // The app's foreground and background events (docs/architecture.md §5), which the launch
+        // sequence wires to the modules' calls for the app coming forward.
+        environment.lifecycle = seams.lifecycle ?? SystemLifecycle()
 
         let locations: StoreLocations
         do throws(KnotError) {
@@ -170,7 +186,8 @@ public final class LiveComposition: Sendable {
         self.launchStateSuite = launchStateSuite
         let launchState = seams.launchState?(launchStateSuite) ?? DefaultsLaunchState(suiteName: launchStateSuite)
         self.launchState = launchState
-        self.deviceID = DeviceIdentity(storage: launchState).current(ids: ids)
+        let deviceID = DeviceIdentity(storage: launchState).current(ids: ids)
+        self.deviceID = deviceID
 
         environment.notes = GatedNoteStore(gate: gate, timings: timings)
         environment.assets = GatedAssetStore(gate: gate)
@@ -188,10 +205,13 @@ public final class LiveComposition: Sendable {
         if let transcriber = seams.transcriber { environment.transcriber = transcriber }
         seams.wiring?("KnotCleanup", environment)
         environment = KnotCleanupLive.wire(environment)
+        if let cleaner = seams.cleaner { environment.cleaner = cleaner }
 
+        // The queue runs only the jobs of the segments this device processes (docs/architecture.md
+        // §11). The recogniser comes with WP-18, and stays unavailable until then.
         let queue = StandardProcessingQueue(
             notes: environment.notes, assets: environment.assets, transcriber: environment.transcriber,
-            cleaner: environment.cleaner, clock: clock, ids: ids, autoDrain: StraightThroughRunner())
+            cleaner: environment.cleaner, clock: clock, ids: ids, device: deviceID, autoDrain: StraightThroughRunner())
         let gatedQueue = LaunchGatedQueue(queue)
         environment.queue = gatedQueue
         let launch = launchID
