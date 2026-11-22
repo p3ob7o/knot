@@ -143,12 +143,9 @@
 
     /// The soak's rules that wait for a fix elsewhere.
     enum SoakRules {
-        /// Whether a temporary of a cut write left in `Inbox/` turns the soak red. Not yet: no part
-        /// of KnotCapture clears them, and nothing acknowledged is lost in one. The fix is WP-15's
-        /// first pull request (KnotCapture/Ingest/), which turns this to true. Until then each is
-        /// counted, and more of them than kills that could have cut them is red
-        /// (`inbox_partials_beyond_kills`).
-        static let inboxPartialsAreRed = false
+        /// Whether a temporary of a cut write left in `Inbox/` turns the soak red. It does since
+        /// WP-15's first pull request: launch recovery removes them (`LaunchRecovery.removeInboxPartials`).
+        static let inboxPartialsAreRed = true
 
         /// Whether a temporary of a cut peaks write left in `Recording/` turns the soak red. It
         /// does since WP-12's third pull request: the recorder makes its peaks file in place, with
