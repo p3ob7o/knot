@@ -266,8 +266,8 @@ extension StoreTransaction {
             db, sql: "SELECT EXISTS (SELECT 1 FROM segment WHERE note_id = ?)", arguments: [note.description]) ?? false
     }
 
-    /// Removes a segment with its history, its jobs and its asset row, leaving a tombstone, within
-    /// `budget` rows, which it spends: every row it deletes counts. When the segment's history
+    /// Removes a segment with its history, its jobs, its asset row and its peaks, which its row
+    /// holds, leaving a tombstone, within `budget` rows, which it spends: every row it deletes counts. When the segment's history
     /// needs more than the budget holds, as much of it as fits goes and the segment waits for the
     /// next batch, and so does a segment whose jobs and files do not fit: `nil`. A file that
     /// another segment still names, or whose row another segment holds, is not returned for

@@ -13,11 +13,12 @@ import KnotStore
 //   KnotStoreCrashHost move <root> <segment> <note> <point>
 //   KnotStoreCrashHost return <root> <segment> <note> <point>
 //   KnotStoreCrashHost record <root> <point>               records synthetic captures until killed
-//   KnotStoreCrashHost migrate <root> <point>              migrates to the test's version 2
+//   KnotStoreCrashHost migrate <root> <point>              migrates to the test's next version
 //   KnotStoreCrashHost seed <root>                         makes a seeded synthetic store
 
-/// The migration that the kill test of the pre-migration copy adds: version 2, one table.
-let testMigration = StoreSchema.Migration(version: 2) { db in
+/// The migration that the kill test of the pre-migration copy adds: the version after this
+/// build's newest, one table.
+let testMigration = StoreSchema.Migration(version: StoreSchema.currentVersion + 1) { db in
     try db.execute(sql: "CREATE TABLE crash_host_v2 (id INTEGER PRIMARY KEY)")
 }
 
