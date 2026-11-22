@@ -118,6 +118,7 @@ public enum NoteStoreContract {
         Check(name: "peaks-purged", run: aPurgeRemovesPeaksWithTheSegment),
         Check(name: "peaks-deleted", run: aDeletedSegmentKeepsItsPeaks),
         Check(name: "peaks-moved", run: peaksMoveWithTheirSegment),
+        Check(name: "peaks-kept", run: peaksOutliveTheSegmentsOtherChanges),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
@@ -2834,6 +2835,28 @@ public enum NoteStoreContract {
         }
         #expect(moved.to.note.id != first.noteID)
         #expect(try await h.store.peaks(of: segment) == peaks([4, 5, 6]), "The peaks go with the segment.")
+    }
+
+    /// A recording's peaks outlive the segment's other changes: a transcript, a cleanup that
+    /// replaces the text, and a person's edit of it each leave them as they were.
+    public static func peaksOutliveTheSegmentsOtherChanges(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        let given = peaks([3, 1, 4, 1, 5])
+        try await h.store.setPeaks(given, of: segment)
+        let job = try #require(try await h.store.jobs(for: segment).first)
+        _ = try await h.store.appendTranscript(
+            h.run("synthetic spoken words", from: .zero, resumeAt: nil), to: segment, job: job.id)
+        #expect(try await h.store.peaks(of: segment) == given, "A transcript leaves them.")
+        let cleaned = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .cleaned(body: "Synthetic spoken words."), title: nil, provenance: .init(osBuild: "b"),
+                modelName: "m"), to: segment)
+        #expect(cleaned.textReplaced, "The cleanup replaced the text.")
+        #expect(try await h.store.peaks(of: segment) == given, "A cleanup leaves them.")
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Synthetic words, edited", origin: .edited, writer: .app))
+        #expect(try await h.store.peaks(of: segment) == given, "An edit of the text leaves them.")
     }
 
     /// Witness 67: an `ingest` at a lower revision with the same text applies nothing and is
