@@ -35,6 +35,9 @@
         /// The engine discards one recording in two that the script ends, and answers it
         /// discarded: the frames it said were durable are lost.
         case recordingEndDiscarded = "recording-end-discarded"
+        /// The engine discards one typed capture in two that the script ends with text, and
+        /// answers it discarded: the text it said was saved is lost.
+        case typedEndDiscarded = "typed-end-discarded"
         /// One stored recording in two is stored a second time, under another capture ID, with a
         /// copy of its file.
         case recordingStoredTwice = "recording-stored-twice"

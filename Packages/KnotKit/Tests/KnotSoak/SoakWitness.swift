@@ -481,10 +481,12 @@ struct SoakWitness {
             problem("capture_failed", [code.rawValue])
             return (problems, false)
         case .discardedEmpty:
-            if latest?.state == .ended {
-                problem("acknowledged_text_discarded")
-            } else if latest?.state == .open, !discarding.contains(capture), !planned.blank {
-                problem("acknowledged_text_discarded")
+            // Only the script excuses a capture that ended empty: its discard, said before the
+            // call, or a blank plan. What the engine answered excuses nothing: an `end` it answered
+            // as discarded, of a capture with text, lost that text. The line says which state the
+            // child last reported.
+            if let latest, latest.state == .ended || (!discarding.contains(capture) && !planned.blank) {
+                problem("acknowledged_text_discarded", ["last=\(latest.state.rawValue)"])
             }
             return (problems, false)
         case .stored:

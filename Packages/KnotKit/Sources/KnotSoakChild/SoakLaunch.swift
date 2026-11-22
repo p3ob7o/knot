@@ -457,6 +457,9 @@
             // Said before the call: a discard that commits before a kill has kept nothing, and
             // rightly so.
             if discard { Say.line(SoakLine.discarding(index: index, capture: id).rendered) }
+            // The fault `typedEndDiscarded`: the script ends the capture, and the engine discards
+            // it, unsaid.
+            let lost = !discard && options.fault == .typedEndDiscarded && index % 2 == 1 && !capture.blank
             do throws(KnotError) {
                 let state = try await disturbed(capture, save: capture.texts.count) {
                     () async throws(KnotError) -> CaptureState in
@@ -466,7 +469,7 @@
                         return state
                     }
                     try await self.flushHeldBack(id)
-                    return discard ? try await self.engine.discard(id) : try await self.engine.end(id)
+                    return discard || lost ? try await self.engine.discard(id) : try await self.engine.end(id)
                 }
                 let discarded = state.outcome == .discardedEmpty
                 acknowledge(

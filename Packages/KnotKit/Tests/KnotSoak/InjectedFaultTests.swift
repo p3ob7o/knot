@@ -170,6 +170,14 @@
             #expect(codes.contains("acknowledged_audio_discarded"), "\(codes.sorted())")
         }
 
+        /// The script ends a typed capture with text and the engine discards it, answering it
+        /// discarded: only the script's own discard, or a blank plan, excuses a capture that
+        /// ended empty.
+        @Test func typedEndAnsweredDiscardedIsRed() async throws {
+            let codes = try await soak("typed-end-discarded", seed: 75)
+            #expect(codes.contains("acknowledged_text_discarded"), "\(codes.sorted())")
+        }
+
         /// A recording is stored a second time, under another capture ID.
         @Test func recordingStoredTwiceIsRed() async throws {
             let codes = try await soak("recording-stored-twice", seed: 72)
