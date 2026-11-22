@@ -269,4 +269,58 @@ import Testing
         #expect(try await r.notes.asset(AssetID(id))?.sha256 == there.sha256)
         #expect(try await r.stream().notes.flatMap(\.liveSegments).map(\.id) == [SegmentID(id)])
     }
+
+    /// The row guard of `OwnRecordingAsset`, reached in one launch: the first end's store call is
+    /// held and misses its deadline, and its fallback item's write finds the disk full, so the end
+    /// throws with the recording kept. The held call then commits late: the row names the first
+    /// file. A second end converts again, and its move meets that file, which a row names: the
+    /// file stays, the end is made with it, and the second conversion's file goes. Replacing it
+    /// would leave the row naming a digest that no file has.
+    @Test func secondEndMeetsAFileARowNamesAndKeepsIt() async throws {
+        let r = Rig()
+        let manual = ManualDeadline()
+        let recorder = DifferingConversions(r.recorder, layer: r.layer)
+        let engine = BoundedEngine(
+            StandardCaptureEngine(
+                notes: r.notes, assets: r.assets, recorder: recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+                deadline: manual.deadline, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs)))
+        let states = engine.states()
+        let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let id = begun.captureID
+        _ = await SuiteWait.value("the recording's frames to be durable") {
+            for await state in states where state.captureID == id && state.durableRevision > 0 { return true }
+            return false
+        }
+        r.clock.advance(by: 3)
+        // The first end: its store call is held, misses its deadline, and the item finds the disk full.
+        let hold = await r.notes.holdNextCaptureWrite()
+        recorder.fillsDiskAfterNext.withLock { $0 = true }
+        let first = Task { try await engine.end(id) }
+        await reached(hold)
+        await manual.expireNext()
+        guard case .failure(let error as KnotError) = await first.result else {
+            Issue.record("The first end did not throw.")
+            return
+        }
+        #expect(error.written == .contentKept)
+        let there = try #require(try await r.assets.find(AssetID(id), kind: .audio))
+        // The late commit: the row now names the first file.
+        hold.release()
+        #expect(await eventually("the late commit to answer") { r.logs.logged("store_answered_late", id) })
+        #expect(try await r.notes.asset(AssetID(id))?.sha256 == there.sha256)
+        // The second end meets the file the row names.
+        _ = try await engine.end(id)
+        #expect(r.logs.logged("recording_file_named_by_row", id))
+        #expect(!r.logs.logged("recording_file_replaced", id))
+        #expect(try await r.assets.find(AssetID(id), kind: .audio)?.sha256 == there.sha256, "The file stays.")
+        #expect(try await r.notes.asset(AssetID(id))?.sha256 == there.sha256, "The row names the file there.")
+        #expect(
+            await eventually("the end's item to be ingested") {
+                _ = await r.ingest.ingestAll()
+                return r.inboxFiles().isEmpty
+            })
+        #expect(try await r.notes.capture(id)?.outcome == .stored)
+        #expect(Set(try Self.leftOver(r)) == Self.named(r, [id]))
+    }
 }
