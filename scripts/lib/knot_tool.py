@@ -1263,7 +1263,13 @@ def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
         name = re.escape(owner_class or "") + r"[ .]" + re.escape(method)
         result = re.compile(r"^Test [Cc]ase '(?:-\[[\w.]*?\.)?" + name + r"(?:\(\))?\]?' (passed|failed|skipped)")
         with open(log_path, errors="replace") as f:
-            outcomes = [m.group(1) for line in f if (m := result.match(line))]
+            lines = f.read().splitlines()
+        outcomes = [m.group(1) for line in lines if (m := result.match(line))]
+        # A Mac UI log that the gate took from the hosted job (--mac-ui-hosted) says so on its
+        # first line, and so does this step, so that nobody reads the result as this Mac's.
+        if step == "mac-ui" and lines and lines[0].startswith(HOSTED_MAC_UI_HEADER):
+            where = lines[0][len(HOSTED_MAC_UI_HEADER):].split(", workflow run")[0].strip()
+            step = f"the hosted job mac-ui, {where}"
         test = f"{owner_class}.{method}"
         if "skipped" in outcomes:
             print(f"live-smoke: FAIL {slug}: {test} was skipped in {step}")

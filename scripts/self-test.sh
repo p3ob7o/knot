@@ -1524,6 +1524,13 @@ smoke_no_mac="$(smoke "$st/all" 0)"
 smoke_phone="$(smoke "$st/phone-missing" 1)"
 smoke_watch="$(smoke "$st/watch-skipped" 1)"
 smoke_old="$(smoke "$st/mac-old" 1)"
+# A Mac UI log that the gate took from the hosted job begins with the hosted header: the
+# step judges the Mac's test from it as from a local log, and says it passed in the hosted job.
+smoke_logs "$st/mac-hosted" "$phone_ok" "$watch_ok" "$mac_ok"
+python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import knot_tool as k
+open(sys.argv[2], "w").write(k.HOSTED_MAC_UI_HEADER + " check run 7, https://example.invalid/job/7, workflow run 99, commit abc.\n" + sys.argv[3] + "\n")' \
+    "$KNOT_SCRIPTS/lib" "$st/mac-hosted/verify-mac-ui-tests.log" "$mac_ok"
+smoke_hosted="$(smoke "$st/mac-hosted" 1)"
 smoke_two="$(smoke "$st/helper-ran" 1 "$st/tree-two-marks")"
 smoke_pad_failed="$(smoke "$st/pad-failed" 1)"
 smoke_pad_skipped="$(smoke "$st/pad-skipped" 1)"
@@ -1534,12 +1541,13 @@ if [[ ${smoke_all%%$'\n'*} == 0 &&
     ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
     ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
     ${smoke_old%%$'\n'*} == 1 && $smoke_old == *"live-smoke-a-mac"*"earlier run"* &&
+    ${smoke_hosted%%$'\n'*} == 0 && $smoke_hosted == *"live-smoke-a-mac: MacSmokeTests.testMacSmoke passed in the hosted job mac-ui, check run 7, https://example.invalid/job/7"* &&
     ${smoke_two%%$'\n'*} == 1 && $smoke_two == *"live-smoke-a-iphone"*"more than one"*"AppLaunchHelpers.swift"*"PhoneTests.swift"* &&
     ${smoke_pad_failed%%$'\n'*} == 1 && $smoke_pad_failed == *"live-smoke-a-iphone"*"did not pass"*"passed, failed"* &&
     ${smoke_pad_skipped%%$'\n'*} == 1 && $smoke_pad_skipped == *"live-smoke-a-iphone"*"skipped"* ]]; then
     pass "the live smoke step asks each platform's smoke test, found by its named comment, to have passed in this run, and no other"
 else
-    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; two marks '$smoke_two'; passed on one destination and failed on the other '$smoke_pad_failed', skipped on the other '$smoke_pad_skipped'"
+    fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'; the hosted job's Mac log '$smoke_hosted'; two marks '$smoke_two'; passed on one destination and failed on the other '$smoke_pad_failed', skipped on the other '$smoke_pad_skipped'"
 fi
 
 # The packaging step's scan for the debug launch arguments (item 99): a file that holds one of
