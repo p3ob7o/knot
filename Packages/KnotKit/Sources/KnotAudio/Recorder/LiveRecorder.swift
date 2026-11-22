@@ -90,6 +90,9 @@ public final class LiveRecorder: Recorder {
     private let sessions = Mutex<[CaptureID: Entry]>([:])
     /// Conversions and recovery, which read and write whole files, off the cooperative pool.
     private let work = DispatchQueue(label: "knot.audio.files", qos: .utility)
+    /// The starts' durable writes, off the cooperative pool and apart from `work`, so that no
+    /// start waits behind a conversion: someone is waiting for the recording to be live.
+    private let startQueue = DispatchQueue(label: "knot.audio.start", qos: .userInitiated)
 
     private enum Entry {
         case starting(LaunchID)
@@ -172,53 +175,90 @@ public final class LiveRecorder: Recorder {
             sessions.withLock { _ = $0.removeValue(forKey: id) }
             return failed(error, id)
         }
-        // With too little room for the start's minute of audio, nothing is written.
-        let needed = Int64(Double(settings.spaceToStart.components.seconds) * opened.sampleRate) * 2
-        if let free = freeSpace.availableBytes(forVolumeAt: locations.recording), free < needed {
+        // The start's durable writes, the free space they need among them, run on the start's
+        // own queue and never on a thread of the cooperative pool, as recovery's, conversion's
+        // and removal's run on theirs. Their order is the same.
+        let written = await onStart { [self] () -> StartFiles in
+            // With too little room for the start's minute of audio, nothing is written.
+            let needed = Int64(Double(settings.spaceToStart.components.seconds) * opened.sampleRate) * 2
+            if let free = freeSpace.availableBytes(forVolumeAt: locations.recording), free < needed {
+                return .tooLittleSpace
+            }
+            var wrote = false
+            do throws(KnotError) {
+                try store.makeFolder(locations.recording)
+                // The manifest first: the recording's first durable write, before any sample.
+                let manifest = request.manifest(startedAt: clock.now())
+                wrote = true
+                try store.place(try manifest.encoded(), at: files.manifest)
+                let file = try workingFiles(files.workingFile, opened.sampleRate, opened.commonFormat, layer)
+                // The working file's name is on the drive before the recording is live.
+                try layer.syncFolder(locations.recording)
+                return .written(manifest, file)
+            } catch {
+                return .failed(error, wrote: wrote)
+            }
+        }
+        let manifest: CaptureManifest
+        let file: any WorkingFileWriter
+        switch written {
+        case .tooLittleSpace:
             await opened.stop()
             sessions.withLock { _ = $0.removeValue(forKey: id) }
             return failed(KnotError.tooLittleSpace.with(ErrorContext(captureID: id)), id)
+        case .failed(let error, let wrote):
+            return await undoStart(error, id, opened: opened, files: wrote ? files : nil)
+        case .written(let written, let made):
+            manifest = written
+            file = made
         }
-        var wrote = false
+        let publisher = self.publisher
+        let session = LiveSession(
+            request: request, manifest: manifest, input: opened, file: file, files: files, clock: clock,
+            settings: settings, freeSpace: freeSpace, log: log, willEnd: { publisher.stopping(id) },
+            ended: { [weak self] audio in self?.ended(audio) })
+        sessions.withLock { $0[id] = .live(session) }
         do throws(KnotError) {
-            try store.makeFolder(locations.recording)
-            // The manifest first: the recording's first durable write, before any sample.
-            let manifest = request.manifest(startedAt: clock.now())
-            wrote = true
-            try store.place(try manifest.encoded(), at: files.manifest)
-            let file = try workingFiles(files.workingFile, opened.sampleRate, opened.commonFormat, layer)
-            // The working file's name is on the drive before the recording is live.
-            try layer.syncFolder(locations.recording)
-            let publisher = self.publisher
-            let session = LiveSession(
-                request: request, manifest: manifest, input: opened, file: file, files: files, clock: clock,
-                settings: settings, freeSpace: freeSpace, log: log, willEnd: { publisher.stopping(id) },
-                ended: { [weak self] audio in self?.ended(audio) })
-            sessions.withLock { $0[id] = .live(session) }
-            do {
-                try session.begin(format: file.processingFormat)
-            } catch {
-                sessions.withLock { $0[id] = .starting(request.launchID) }
-                file.close()
-                throw error
-            }
-            // Live, unless its ending has begun inside the start: then no live cue and no
-            // "recording", and its ending's cue and state are the only ones.
-            if session.goLive({ give(.recordingLive) }) {
-                log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
-                publisher.recording(id, since: manifest.startedAt)
-            } else {
-                log.capture(id, "recording_ended_while_starting")
-            }
-            return .success(session)
+            try session.begin(format: file.processingFormat)
         } catch {
-            // Nothing is left: no file, and no manifest that recovery would end as a recording
-            // with no audio, unless removing them fails too.
-            await opened.stop()
-            if wrote { files.removeAll(log: log, capture: id) }
-            sessions.withLock { _ = $0.removeValue(forKey: id) }
-            return failed(Self.startError(error), id)
+            sessions.withLock { $0[id] = .starting(request.launchID) }
+            await onStart { file.close() }
+            return await undoStart(error, id, opened: opened, files: files)
         }
+        // Live, unless its ending has begun inside the start: then no live cue and no
+        // "recording", and its ending's cue and state are the only ones.
+        if session.goLive({ give(.recordingLive) }) {
+            log.capture(id, "recording_live", .number("sample_rate", Int(opened.sampleRate)))
+            publisher.recording(id, since: manifest.startedAt)
+        } else {
+            log.capture(id, "recording_ended_while_starting")
+        }
+        return .success(session)
+    }
+
+    /// What the start's queue made of a start's files.
+    private enum StartFiles: Sendable {
+        /// Too little room: nothing was written.
+        case tooLittleSpace
+        /// A write failed; `wrote` once the manifest's placement had begun.
+        case failed(KnotError, wrote: Bool)
+        /// The manifest is in place and the working file made, its name on the drive.
+        case written(CaptureManifest, any WorkingFileWriter)
+    }
+
+    /// Undoes a start that failed after its input opened: nothing is left, no file and no
+    /// manifest that recovery would end as a recording with no audio, unless removing them fails
+    /// too. The input stops first, then `files`, when there are any, go, on the start's queue.
+    private func undoStart(_ error: KnotError, _ id: CaptureID, opened: any OpenAudioInput, files: SessionFiles?) async
+        -> Result<LiveSession, KnotError>
+    {
+        await opened.stop()
+        if let files {
+            let log = self.log
+            await onStart { files.removeAll(log: log, capture: id) }
+        }
+        sessions.withLock { _ = $0.removeValue(forKey: id) }
+        return failed(Self.startError(error), id)
     }
 
     /// A start that failed: logged, its published state idle again, and the could-not-start cue.
@@ -437,6 +477,13 @@ public final class LiveRecorder: Recorder {
             let error = error.about(capture: capture)
             log.failure(error, "recording_files_not_removed")
             throw error
+        }
+    }
+
+    /// Runs `body` on the starts' queue and returns its value.
+    private func onStart<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            startQueue.async { continuation.resume(returning: body()) }
         }
     }
 
