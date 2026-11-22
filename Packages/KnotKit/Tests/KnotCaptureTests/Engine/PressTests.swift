@@ -124,6 +124,40 @@ import Testing
         #expect(try await p.r.notes.openCaptures().isEmpty)
     }
 
+    /// The review of pull request 91, N2. Two presses in the same moment on an idle engine: the
+    /// rule's decision and its first step are taken with no suspension between, so one starts a
+    /// recording and the other finds it starting and is ignored. No error, no cue of the engine's,
+    /// one open capture.
+    @Test(arguments: 0..<20)
+    func twoPressesAtOnceStartOneRecording(round: Int) async throws {
+        let p = Self.parts()
+        let tap = p.r.press(.tap)
+        async let first = Self.outcome(of: tap, on: p.engine)
+        async let second = Self.outcome(of: tap, on: p.engine)
+        let outcomes = await [first, second]
+        let started = outcomes.filter { (try? $0.get())?.started != nil }.count
+        let ignored = outcomes.filter { (try? $0.get()) == .ignored }.count
+        let failed = outcomes.compactMap { outcome -> KnotError? in
+            if case .failure(let error) = outcome { return error }
+            return nil
+        }
+        #expect(started == 1)
+        #expect(ignored == 1)
+        #expect(failed.isEmpty, "\(failed.map(\.code))")
+        #expect(p.cues.cues.isEmpty)
+        #expect(try await p.r.notes.openCaptures().count == 1)
+    }
+
+    private static func outcome(of press: Press, on engine: BoundedEngine) async
+        -> Result<RecordingPressOutcome, KnotError>
+    {
+        do throws(KnotError) {
+            return .success(try await engine.press(press))
+        } catch {
+            return .failure(error)
+        }
+    }
+
     // MARK: Whose recording
 
     /// A recording that an intent started is stopped by a press from the app: the recorder in
