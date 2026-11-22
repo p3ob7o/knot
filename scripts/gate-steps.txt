@@ -35,6 +35,7 @@ packaging	required	WP-01	The packaging proofs of docs/plan/WP-01.md, with Releas
 ios-hosted	required	WP-01	The tests hosted in the iOS app in the iPhone simulator: the contract suites that run only there. At the leaf depth, where the diff reaches KnotAudio, KnotInk or the iOS app.
 launch	required	WP-01	The UI tests on the iPhone, iPad and Watch simulators, and the Mac app's window.
 mac-ui	required	WP-01 PR 3	Mac UI tests, on the exclusive slot, where the diff reaches the Mac app, KnotUI, scripts/ or .xcode-version.
+recorder-sim	required	WP-01	The recorder's kill test and its recording state shared by two processes, in the iOS Simulator, which the Mac drives, where the diff reaches the recorder, its crash host or the package manifest.
 soak	required	WP-06 PR 1 and WP-06a	The capture ledger soak, where docs/architecture.md §17 asks for it.
 live-smoke	pending	WP-22	One UI smoke test on each platform on .live with a temporary store.
 two-process	pending	WP-34	After G1 and SP-3: the sandboxed app and knot-dev share a store, the tool writes and the app shows it.

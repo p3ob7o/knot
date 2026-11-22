@@ -142,6 +142,9 @@ assert k.classify(["Something/New.txt"])[0] == "everything"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[2] is True       # the soak
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[2] is False
 assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True                  # Mac UI tests
+assert k.classify(["Packages/KnotKit/Sources/KnotAudio/Recorder.swift"])[5] is True   # the recorder in the iOS Simulator
+assert k.classify(["Packages/KnotKit/Sources/KnotAudioCrashHost/KillTest.swift"])[5] is True
+assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[5] is False
 # The Mac UI step itself and a new Xcode pin reach the Mac UI tests (review of PR 38).
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
@@ -1692,6 +1695,46 @@ if [[ "$ai_found $ai_missing $ai_shortcuts $ai_no_shortcuts $ai_broken $ai_absen
     pass "the packaging step finds an intent among an app's actions and its App Shortcuts not empty, and fails without them"
 else
     fail "an app's App Intents metadata: the intent there '$ai_found', missing '$ai_missing'; shortcuts '$ai_shortcuts', none '$ai_no_shortcuts'; unreadable '$ai_broken', absent '$ai_absent'"
+fi
+
+# The recorder's step in the iOS Simulator passes only when state-check says ok and the kill
+# test passes all seven trials, and fails, naming the seed, on any other verdict. The step's
+# function from verify.sh, with stand-in crash hosts that print a verdict chosen per run, a
+# stand-in sim.sh, and builds that do nothing.
+rs="$scratch/recorder-sim"
+mkdir -p "$rs/scripts" "$rs/swiftpm/out/Products/Debug" "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator"
+printf '#!/bin/bash\n[[ $1 == udid ]] && echo SIM-UDID\nexit 0\n' >"$rs/scripts/sim.sh"
+cat >"$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" <<'HOST'
+#!/bin/bash
+case $1 in
+    state-check) echo "state-check ${KNOT_SELF_TEST_STATE:-ok}"; [[ ${KNOT_SELF_TEST_STATE:-ok} == ok ]] ;;
+    kill-test) echo "summary trials 7 passed ${KNOT_SELF_TEST_PASSED:-7} maxLossMs 0.0 seed 5"; [[ ${KNOT_SELF_TEST_PASSED:-7} == 7 ]] ;;
+esac
+HOST
+cp "$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/"
+chmod +x "$rs/scripts/sim.sh" "$rs/swiftpm/out/Products/Debug/KnotAudioCrashHost" \
+    "$rs/build/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/KnotAudioCrashHost"
+recorder_sim() { # recorder_sim [env…]: the step's status and its last line
+    python3 -I - "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/lib/common.sh" "$rs" <<'PY' | env "$@" bash 2>&1 | tail -n 1 || true
+import sys
+text = open(sys.argv[1]).read()
+start = text.index("crash_host_for_simulator() {")
+body = text[start:text.index("\n}\n", text.index("step_recorder_sim() {")) + 3]
+rs = sys.argv[3]
+print(f'source "{sys.argv[2]}"')
+print(f'KNOT_SCRIPTS="{rs}/scripts" KNOT_SWIFTPM="{rs}/swiftpm" KNOT_BUILD="{rs}/build" KNOT_LOGS="{rs}" SEED=5')
+print(body)
+print('knot_run_limited() { :; }')
+print('step_recorder_sim & code=0; wait $! || code=$?; echo "status $code"')
+PY
+}
+rs_ok="$(recorder_sim)"
+rs_state="$(recorder_sim KNOT_SELF_TEST_STATE="FAIL the state read is not the state written")"
+rs_kill="$(recorder_sim KNOT_SELF_TEST_PASSED=6)"
+if [[ $rs_ok == "status 0" && $rs_state == "status 1" && $rs_kill == "status 1" ]]; then
+    pass "the recorder's step in the iOS Simulator passes on state-check ok and seven trials passed, and fails on any other verdict"
+else
+    fail "the recorder's step in the iOS Simulator: all well '$rs_ok'; state-check red '$rs_state'; a trial failed '$rs_kill'"
 fi
 
 if ((FAILED)); then

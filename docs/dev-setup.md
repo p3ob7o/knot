@@ -138,7 +138,13 @@ The tree then holds both changes, as the merge queue would. With `--base` at the
 
 **The Mac app's saved window state.** A launch of the Mac app by a script or a test passes `-ApplePersistenceIgnoreState YES` first, before any flag that takes no value, such as `-KnotPreview`, after which AppKit does not see the pair. Every development build has one bundle ID, and so one saved window state (docs/architecture.md §18).
 
-**The nightly run.** `scripts/nightly.sh`, on a checkout of `main`, runs `--full`, the package tests under Thread Sanitizer, the soak with a fresh seed, the launches on the iOS 27.0 runtime, and a report of models that changed with an update of the system. `.github/workflows/nightly.yml` runs the Thread Sanitizer part on a hosted runner too.
+**The recorder in the iOS Simulator.** `recorder-sim` runs the recorder's kill test and its recording state shared by two processes in this worktree's iPhone simulator. A test there cannot start or kill a process, so the Mac drives it (docs/notes/WP-12.md). The step builds `KnotAudioCrashHost` for the Mac and for the iOS Simulator. It boots the iPhone simulator, and runs the Mac's crash host with `--runner "xcrun simctl spawn <udid>"` and the simulator's build as the child.
+- **`state-check`** must print `state-check ok`.
+- **`kill-test`** runs the trials of the Mac's named test, recording-format-kill-test: four live and early kills and three staged ones. It must print `summary trials 7 passed 7`, with a fresh seed that a failure prints. `scripts/verify.sh --only recorder-sim --seed <n>` repeats it.
+
+The gate takes the step at every depth but documents where the diff reaches KnotAudio, its crash host, their tests or the package manifest (`RECORDER_SIM` in `scripts/lib/knot_tool.py`). The nightly run takes it with a fresh seed. On this Mac on 2026-11-22 it took 33 s once it had its slot: the two builds, a `state-check` of 3 s and a kill test of 13 s.
+
+**The nightly run.** `scripts/nightly.sh`, on a checkout of `main`, runs `--full`, the package tests under Thread Sanitizer, the soak with a fresh seed, the launches on the iOS 27.0 runtime, the recorder's step in the iOS Simulator, and a report of models that changed with an update of the system. `.github/workflows/nightly.yml` runs the Thread Sanitizer part on a hosted runner too.
 
 **What the lint catches, and what it does not.** A pass of the lint is not proof that Knot logs no note text and reaches no host. It reads the Swift sources line by line, joining a call that runs over several lines, and it catches:
 

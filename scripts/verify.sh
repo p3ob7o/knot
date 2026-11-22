@@ -23,7 +23,7 @@
 #
 # Steps: doctor, plan, links, fixtures, format, pins, lint, team-id, ownership, core-api,
 # named-tests, package-build, package-test, package-test-strict, contract-two-targets,
-# self-test, apps, packaging, launch, mac-ui, soak, perf, tsan, model-report.
+# self-test, apps, packaging, launch, mac-ui, recorder-sim, soak, perf, tsan, model-report.
 #
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
@@ -45,8 +45,8 @@ done
 source "$(dirname "$0")/lib/common.sh"
 
 ALL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
-package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui live-smoke two-process soak perf tsan
-model-report"
+package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui recorder-sim live-smoke two-process soak
+perf tsan model-report"
 QUICK_STEPS="doctor plan fixtures format pins package-build package-test contract-two-targets self-test"
 FULL_STEPS="doctor plan links fixtures format pins lint team-id ownership core-api named-tests package-build package-test
 package-test-strict contract-two-targets self-test apps packaging ios-hosted launch mac-ui"
@@ -54,7 +54,7 @@ package-test-strict contract-two-targets self-test apps packaging ios-hosted lau
 slot_options() {
     case $1 in
         package-build | package-test | package-test-strict | contract-two-targets | apps | packaging | core-api | soak | tsan) echo "" ;;
-        launch | ios-hosted) echo "--simulators" ;;
+        launch | ios-hosted | recorder-sim) echo "--simulators" ;;
         mac-ui) echo "--mac-ui" ;;
         perf) echo "--all" ;;
         *) echo "none" ;;
@@ -125,7 +125,7 @@ else
     fi
     [[ -n $TIER || -n $ONLY || -n $MODULE ]] || usage_fail "Name a tier, --only <step> or --module <name>."
     [[ -z $SKIP || $TIER == full ]] || usage_fail "--skip mac-ui belongs to --full. The gate refuses it."
-    [[ -z $SEED || $TIER == soak ]] || usage_fail "--seed belongs to --soak."
+    [[ -z $SEED || $TIER == soak || $ONLY == recorder-sim ]] || usage_fail "--seed belongs to --soak and --only recorder-sim."
     # The steps that read the package and the branch take them alone too, as the gate runs
     # them.
     [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || " ownership named-tests core-api " == *" $ONLY "* ]] ||
@@ -722,6 +722,57 @@ step_ios_hosted() {
     fi
 }
 
+# The recorder's kill test and its recording state shared by two processes, in the iOS
+# Simulator (docs/architecture.md §17, docs/notes/WP-12.md). A test there cannot start or kill a
+# process, so the Mac drives it: the Mac's crash host runs `kill-test` and `state-check` with
+# `--runner "xcrun simctl spawn <udid>"` and the crash host built for the simulator as the
+# child, in this worktree's iPhone simulator. The kill test's trials are those of the Mac's
+# named test, recording-format-kill-test, with a fresh seed that a failure prints. At the gate
+# where the diff reaches the recorder, nightly, and with --only.
+crash_host_for_simulator() {
+    local destination='generic/platform=iOS Simulator' derived="$KNOT_BUILD/DerivedData-crash-hosts"
+    (cd "$KNOT_PACKAGE" && xcodebuild -scheme KnotAudioCrashHost -destination "$destination" -derivedDataPath "$derived" build) >>"$1" 2>&1 # limit: crash_host_for_simulator
+}
+crash_host_for_mac() { swift build "${KNOT_SWIFTPM_FLAGS[@]}" --product KnotAudioCrashHost >>"$1" 2>&1; }
+step_recorder_sim() {
+    local log="$KNOT_LOGS/verify-recorder-sim-build.log" output="$KNOT_LOGS/verify-recorder-sim.out"
+    local seed=${SEED:-$((RANDOM * 32768 + RANDOM))} host child udid runner folder status=0
+    : >"$log"
+    knot_swiftpm_flags
+    echo "recorder-sim: the crash host for the Mac and for the iOS Simulator"
+    knot_run_limited "The Mac's crash host" "$KNOT_BUILD_LIMIT" crash_host_for_mac "$log"
+    knot_run_limited "The crash host for the iOS Simulator" "$KNOT_BUILD_LIMIT" crash_host_for_simulator "$log"
+    host="$KNOT_SWIFTPM/out/Products/Debug/KnotAudioCrashHost"
+    child="$KNOT_BUILD/DerivedData-crash-hosts/Build/Products/Debug-iphonesimulator/KnotAudioCrashHost"
+    [[ -x $host && -x $child ]] || {
+        echo "recorder-sim: a crash host is missing after its build: $host, $child. The build's log is $log."
+        return 1
+    }
+    "$KNOT_SCRIPTS/sim.sh" ensure >/dev/null
+    trap '"$KNOT_SCRIPTS/sim.sh" shutdown' EXIT
+    "$KNOT_SCRIPTS/sim.sh" boot iphone >/dev/null
+    udid="$("$KNOT_SCRIPTS/sim.sh" udid iphone)"
+    runner="xcrun simctl spawn $udid"
+    folder="$KNOT_BUILD/recorder-sim"
+    mkdir -p "$folder"
+    echo "recorder-sim: state-check in the iPhone simulator"
+    : >"$output"
+    knot_limit 300 "$host" state-check --runner "$runner" --child "$child" >>"$output" 2>&1 || status=$?
+    grep -E '^state-check (ok|FAIL)' "$output" || echo "recorder-sim: state-check printed no verdict"
+    if ((status != 0)) || ! grep -E '^state-check ok$' "$output" >/dev/null; then
+        echo "recorder-sim: the recording state was not shared across two processes in the simulator. Its output is $output."
+        return 1
+    fi
+    echo "recorder-sim: the kill test in the iPhone simulator, seed $seed"
+    knot_limit 900 "$host" kill-test --dir "$folder/kill-$seed" --trials 4 --seed "$seed" --min-ms 300 --max-ms 2500 \
+        --early-every 4 --stages --runner "$runner" --child "$child" >>"$output" 2>&1 || status=$?
+    grep -E '^(trial .* FAIL|step-limit |summary )' "$output" || echo "recorder-sim: the kill test printed no summary"
+    if ((status != 0)) || ! grep -E '^summary trials 7 passed 7 ' "$output" >/dev/null; then
+        echo "recorder-sim: the kill test failed in the simulator, with seed $seed. Repeat it with scripts/verify.sh --only recorder-sim --seed $seed. Its output is $output."
+        return 1
+    fi
+}
+
 # The three apps launch and show the placeholder: the UI tests on the iPhone, the iPad and
 # the Watch simulators, a screenshot of each, and the Mac app's window. It holds a
 # simulator slot, which limits how many sets are booted at once.
@@ -1011,6 +1062,7 @@ else
             gate_soak="$(printf '%s\n' "$depth_out" | sed -n 's/^soak=//p')"
             gate_mac_ui="$(printf '%s\n' "$depth_out" | sed -n 's/^mac_ui=//p')"
             gate_hosted="$(printf '%s\n' "$depth_out" | sed -n 's/^hosted=//p')"
+            gate_recorder_sim="$(printf '%s\n' "$depth_out" | sed -n 's/^recorder_sim=//p')"
             reason="$(printf '%s\n' "$depth_out" | sed -n 's/^reason=//p')"
             common="doctor plan format ownership core-api package-build named-tests pins lint team-id links fixtures"
             case $DEPTH in
@@ -1029,6 +1081,7 @@ else
                     STEPS="$STEPS live-smoke two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
+            [[ $DEPTH != documents && $gate_recorder_sim == 1 ]] && STEPS="$STEPS recorder-sim"
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
             # A step that scripts/gate-steps.txt lists as pending does not run yet.
             kept=""
