@@ -844,6 +844,40 @@ An append window outside its range.
 - Written: nothing
 - Exit code: 2
 
+## Usage
+
+A command line, or an MCP tool call, that does not fit its command. Nothing is written. `knot help` prints the commands, and `knot help <command>` the usage of one.
+
+### `usage_missing_text`
+
+A command that takes text got none, or got text that is empty. Nothing was written.
+
+- Class: failure
+- Next: see_usage
+- Retry: not safe
+- Written: nothing
+- Exit code: 2
+
+### `usage_unknown_command`
+
+The first word is not a command.
+
+- Class: failure
+- Next: see_usage
+- Retry: not safe
+- Written: nothing
+- Exit code: 2
+
+### `usage_invalid_argument`
+
+A flag or an argument the command does not take, one that lacks its value, a value it cannot read, or a required argument other than text that is missing. Nothing was written.
+
+- Class: failure
+- Next: see_usage
+- Retry: not safe
+- Written: nothing
+- Exit code: 2
+
 ## The process
 
 ### `access_off`
