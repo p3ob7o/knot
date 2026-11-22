@@ -362,6 +362,19 @@ extension KnotError {
     public static let appendWindowInvalid = KnotError(
         code: "append_window_invalid", next: .none, retry: .notSafe, written: .nothing, exitStatus: .usage)
 
+    // MARK: Usage: a command line or a tool call that does not fit its command
+
+    /// A command that takes text got none, or got text that is empty. Nothing was written.
+    public static let usageMissingText = KnotError(
+        code: "usage_missing_text", next: .seeUsage, retry: .notSafe, written: .nothing, exitStatus: .usage)
+    /// The first word is not a command.
+    public static let usageUnknownCommand = KnotError(
+        code: "usage_unknown_command", next: .seeUsage, retry: .notSafe, written: .nothing, exitStatus: .usage)
+    /// A flag or an argument the command does not take, one that lacks its value, a value it
+    /// cannot read, or a required argument other than text that is missing. Nothing was written.
+    public static let usageInvalidArgument = KnotError(
+        code: "usage_invalid_argument", next: .seeUsage, retry: .notSafe, written: .nothing, exitStatus: .usage)
+
     // MARK: The process
 
     /// Command-line access is off on this Mac.
@@ -397,6 +410,7 @@ extension KnotError {
         returnRefusedNoteChanged, returnRefusedNoteGone, returnRefusedNoMove,
         jobDiedTwice, illegalTransition,
         hotkeyInvalid, hotkeyTaken, appendWindowInvalid,
+        usageMissingText, usageUnknownCommand, usageInvalidArgument,
         accessOff, portUnavailable, unexpected,
     ]
 }
