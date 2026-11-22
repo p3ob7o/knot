@@ -240,6 +240,8 @@ assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[5] is Fals
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["scripts/gate-steps.txt"])[3] is True, "gate-steps.txt alone reaches the Mac UI tests"
+assert k.classify([".github/workflows/verify.yml"])[3] is True, "the workflow that runs the Mac UI tests on the hosted runner reaches them"
+assert k.classify([".github/workflows/nightly.yml"])[3] is False
 # The accessibility audit that every UI test calls, WP-21's (finding 35).
 assert k.classify(["Apps/UITestSupport/Audit.swift"])[3] is True, "Apps/UITestSupport/ reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
@@ -2020,6 +2022,155 @@ if [[ $rs_ok == "status 0" && $rs_state == "status 1" && $rs_kill == "status 1" 
     pass "the recorder's step in the iOS Simulator passes on state-check ok and seven trials passed, and fails on any other verdict"
 else
     fail "the recorder's step in the iOS Simulator: all well '$rs_ok'; state-check red '$rs_state'; a trial failed '$rs_kill'"
+fi
+# A red soak prints its verdict's lines in the step's own output, the line that says how to
+# replay the recovery over a copy of the kept store among them, and not only in its log (item
+# 120). The step's function, from verify.sh, with a stand-in run whose soak is red.
+sk="$scratch/soak-verdict"
+mkdir -p "$sk"
+soak_out="$(python3 -I - "$KNOT_SCRIPTS/verify.sh" <<'PY' | KNOT_LOGS="$sk" bash 2>&1 || true
+import sys
+text = open(sys.argv[1]).read()
+start = text.index("step_soak() {")
+body = text[start:text.index("\n}\n", start) + 3]
+print('knot_swiftpm_flags() { KNOT_SWIFTPM_FLAGS=(); }')
+print('knot_skipped_tests() { :; }')
+print('''knot_swift_test_limited() {
+    printf '%s\\n' "capture ledger soak: RED at kill 3" "the store is kept at /tmp/kept" \\
+        "replay the recovery over a copy of the kept store with: knot-dev replay /tmp/kept" >"$KNOT_LOGS/verify-soak.out"
+    return 1
+}''')
+print(body)
+print("SEED=7 step_soak")
+PY
+)"
+if [[ $soak_out == *"capture ledger soak: RED"* && $soak_out == *"replay the recovery over a copy of the kept store with:"* &&
+    $soak_out == *"Repeat it with scripts/verify.sh --soak --seed 7"* ]]; then
+    pass "a red soak prints its verdict's lines, the replay of the recovery among them"
+else
+    fail "a red soak's lines: '$soak_out'"
+fi
+
+# The gate's Mac UI step met by the hosted job (--mac-ui-hosted). With stand-ins for GitHub's
+# answers: the check runs on a commit, the job, and the artifact the job kept. It passes only
+# on the job mac-ui of GitHub Actions, completed with success on the very commit, with its
+# log kept; it refuses every other answer, saying why, and refuses outright while the screen
+# is not locked or when the diff changes the scripts or the workflow the job ran.
+hm="$scratch/hosted-mac-ui"
+mkdir -p "$hm"
+hosted_cases="$(python3 -I -B - "$KNOT_SCRIPTS/lib" "$hm" <<'PY' 2>&1 || true
+import contextlib, io, os, sys
+sys.path.insert(0, sys.argv[1])
+import knot_tool as k
+folder = sys.argv[2]
+SHA = "a" * 40
+LOG = "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).\n"
+
+def run(name, status="completed", conclusion="success", sha=SHA, app="github-actions", id=7):
+    return {"id": id, "name": name, "head_sha": sha, "status": status, "conclusion": conclusion,
+            "app": {"slug": app}, "html_url": f"https://example.invalid/job/{id}", "completed_at": "2026-11-22T10:00:00Z"}
+
+def case(label, runs, screen="locked", changed=(), kept=LOG, job_sha=SHA, ancestor=True):
+    k.changed_files = lambda base: list(changed)
+    k.is_ancestor = lambda base, sha: ancestor
+    def gh_json(path):
+        if "/check-runs" in path:
+            name = path.split("check_name=")[1].split("&")[0]
+            return {"check_runs": [r for r in runs if r["name"] == name]}
+        return {"run_id": 99, "head_sha": job_sha}
+    def download(run_id, name, dest):
+        assert (run_id, name) == (99, "mac-ui-logs"), (run_id, name)
+        if kept is not None:
+            open(os.path.join(dest, "verify-mac-ui-tests.log"), "w").write(kept)
+    k.gh_json, k.gh_download_artifact = gh_json, download
+    log = os.path.join(folder, label + ".log")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        status = k.cmd_hosted_mac_ui(SHA, "origin/main", screen, log)
+    text = open(log).read() if os.path.exists(log) else ""
+    print(f"{label}: {status} {out.getvalue().strip()} | {text.splitlines()[0] if text else ''}")
+
+case("pass", [run("mac-ui")])
+case("none", [])
+case("other-app", [run("mac-ui", app="someone-else")])
+case("running", [run("mac-ui", status="in_progress", conclusion=None)])
+case("failed", [run("mac-ui", conclusion="failure")])
+case("cancelled", [run("mac-ui", conclusion="cancelled")])
+case("skipped", [run("mac-ui", conclusion="skipped")])
+case("scope-said-no", [run("mac-ui", conclusion="skipped"), run("mac-ui-scope", id=6)])
+case("latest", [run("mac-ui", conclusion="success", id=7), run("mac-ui", conclusion="failure", id=8)])
+case("no-log", [run("mac-ui")], kept=None)
+case("job-elsewhere", [run("mac-ui")], job_sha="b" * 40)
+case("unlocked", [run("mac-ui")], screen="unlocked")
+case("unknown", [run("mac-ui")], screen="unknown")
+case("scripts", [run("mac-ui")], changed=["scripts/verify.sh"])
+case("workflow", [run("mac-ui")], changed=[".github/workflows/verify.yml"])
+case("behind", [run("mac-ui")], ancestor=False)
+case("ancestry-unknown", [run("mac-ui")], ancestor=None)
+PY
+)"
+hosted_line() { printf '%s\n' "$hosted_cases" | grep -e "^$1: " || echo "$1: missing"; }
+hosted_ok=1
+expect_hosted() { # expect_hosted <case> <status> <words the line must hold>
+    local line
+    line="$(hosted_line "$1")"
+    [[ $line == "$1: $2 "*"$3"* ]] || { hosted_ok=0; echo "  $line"; }
+}
+hosted_why="$(
+    expect_hosted pass 0 "passed on $(printf 'a%.0s' {1..40})"
+    [[ "$(hosted_line pass)" == *"| # The Mac UI tests' log of the hosted job mac-ui, not of this Mac: check run 7"* ]] || echo "  pass: no header"
+    expect_hosted none 1 "no check run mac-ui"
+    expect_hosted other-app 1 "no check run mac-ui"
+    expect_hosted running 1 "still in_progress"
+    expect_hosted failed 1 "ended failure"
+    expect_hosted cancelled 1 "ended cancelled"
+    expect_hosted skipped 1 "was skipped"
+    expect_hosted scope-said-no 1 "the scope job mac-ui-scope said the diff does not reach"
+    expect_hosted latest 1 "ended failure"
+    expect_hosted no-log 1 "keeps no verify-mac-ui-tests.log"
+    expect_hosted job-elsewhere 1 "not on"
+    expect_hosted unlocked 1 "screen reads unlocked"
+    expect_hosted unknown 1 "screen reads unknown"
+    expect_hosted scripts 1 "the diff changes scripts/verify.sh"
+    expect_hosted workflow 1 "the diff changes .github/workflows/verify.yml"
+    expect_hosted behind 1 "origin/main is not an ancestor of"
+    expect_hosted ancestry-unknown 1 "origin/main is not known to be an ancestor of"
+    ((hosted_ok)) || true
+)"
+# The step reads the kept log as the local step reads its own: a log with no test, or with
+# a failed or skipped case, fails even when the job's run says success. The step's function
+# from verify.sh, with a stand-in tool that writes the kept log it is given.
+hosted_step() { # hosted_step <kept log's lines>: the step's status and its last line
+    printf '%s\n' "$1" >"$hm/kept"
+    python3 -I - "$KNOT_SCRIPTS/verify.sh" "$KNOT_SCRIPTS/lib/common.sh" "$hm" "$KNOT_SELF" <<'PY' | bash 2>&1 | tail -n 1 || true
+import sys
+text = open(sys.argv[1]).read()
+def function(name):
+    start = text.index(name + "() {")
+    return text[start:text.index("\n}\n", start) + 3]
+print(f'source "{sys.argv[2]}"')
+# The step reads the commit under test from a tree's head: this checkout's, whatever folder
+# an earlier case left the self-test in.
+print(f'KNOT_LOGS="{sys.argv[3]}" KNOT_ROOT="{sys.argv[4]}" BASE=origin/main TIER=gate')
+print('tool() { local log=""; while (($#)); do [[ $1 == --log ]] && log=$2; shift; done; cp "' + sys.argv[3] + '/kept" "$log"; }')
+print(function("report_skips"))
+print(function("step_mac_ui_hosted"))
+# In the background, as verify.sh runs a light step, so that set -e holds inside it.
+print('step_mac_ui_hosted & code=0; wait $! || code=$?; echo "status $code"')
+PY
+}
+step_pass="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).")"
+step_none="$(hosted_step "# a log with no test")"
+step_failed="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' failed (1.0 seconds).")"
+step_skipped="$(hosted_step "Test Case '-[Knot_macOS_UITests.T testA]' passed (1.0 seconds).
+Test Case '-[Knot_macOS_UITests.T testB]' skipped (0.0 seconds).")"
+# The option belongs to the gate alone.
+full_hosted="$(env -u KNOT_TREE "$KNOT_SCRIPTS/verify.sh" --full --mac-ui-hosted 2>&1 || true)"
+if [[ -z $hosted_why && $step_pass == "status 0" && $step_none == "status 1" && $step_failed == "status 1" &&
+    $step_skipped == "status 1" && $full_hosted == *"FAIL verify-usage"*"--mac-ui-hosted belongs to --gate"* ]]; then
+    pass "the gate takes the hosted job's Mac UI result only when it passed on the commit under test, kept its log, and that log holds passed tests and no skip"
+else
+    fail "the hosted Mac UI job: wrong answers$hosted_why; the step on a passing log '$step_pass', with no test '$step_none', a failed case '$step_failed', a skip '$step_skipped'; --full with the option '$full_hosted'"
 fi
 
 if ((FAILED)); then

@@ -8,6 +8,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
     python3 scripts/lib/knot_tool.py app-intents --metadata <extract.actionsdata> [--action <name>] [--shortcuts]
+    python3 scripts/lib/knot_tool.py hosted-mac-ui --sha <commit> --base <ref> --screen <state> --log <path>
     python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
     python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/] [--manifest <privacy manifest>]
@@ -23,8 +24,10 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 BRIEFS = "docs/plan"
 NAMED_TESTS = os.path.join(BRIEFS, "named-tests.txt")
@@ -382,11 +385,12 @@ HOSTED = [
     "Apps/iOS/", "Packages/KnotKit/Package.swift", "project.yml",
 ]
 # Mac UI tests run where the diff reaches the Mac app or KnotUI, the scripts that run them,
-# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38).
+# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38), and the
+# workflow whose mac-ui job runs them on the hosted runner.
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
     "Packages/KnotKit/Sources/KnotUI/", "Packages/KnotKit/Sources/KnotApp/",
-    "scripts/", ".xcode-version", "Apps/UITestSupport/",
+    "scripts/", ".xcode-version", "Apps/UITestSupport/", ".github/workflows/verify.yml",
 ]
 
 
@@ -464,6 +468,125 @@ def cmd_app_intents(metadata, action=None, shortcuts=False):
         if not names:
             status = 1
     return status
+
+
+# ---------------------------------------------------------------- the hosted Mac UI job
+
+
+# The hosted workflow's Mac UI job, its scope job, and what it keeps (.github/workflows/verify.yml).
+HOSTED_MAC_UI_JOB = "mac-ui"
+HOSTED_MAC_UI_SCOPE = "mac-ui-scope"
+HOSTED_MAC_UI_ARTIFACT = "mac-ui-logs"
+HOSTED_MAC_UI_LOG = "verify-mac-ui-tests.log"
+# The hosted job runs the candidate's own scripts and workflow. Where the diff changes them,
+# main's have not checked what the job ran, so only the Mac UI step on this Mac counts.
+HOSTED_MAC_UI_UNTRUSTED = ("scripts/", ".github/")
+# The first line of a Mac UI log that the gate took from the hosted job.
+HOSTED_MAC_UI_HEADER = "# The Mac UI tests' log of the hosted job mac-ui, not of this Mac:"
+
+
+def gh_json(path):
+    """GitHub's answer for an API path of this repository, through gh, which reads no secret of
+    the scripts' own: the check runs and the artifacts of a public repository."""
+    out = subprocess.run(["gh", "api", path], check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+def gh_download_artifact(run_id, name, folder):
+    subprocess.run(["gh", "run", "download", str(run_id), "--name", name, "--dir", folder],
+                   check=True, capture_output=True, text=True)
+
+
+def hosted_check_run(sha, name):
+    """The latest check run of that name that GitHub Actions made on the commit, or None. A check
+    run of that name from another app is not the job's."""
+    answer = gh_json(f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?check_name={name}&filter=latest")
+    runs = [run for run in answer.get("check_runs", [])
+            if run.get("name") == name and run.get("head_sha") == sha
+            and (run.get("app") or {}).get("slug") == "github-actions"]
+    return max(runs, key=lambda run: run["id"]) if runs else None
+
+
+def is_ancestor(base, sha):
+    """Whether <base> is an ancestor of <sha>: True, False, or None when git cannot tell."""
+    code = subprocess.run(["git", "merge-base", "--is-ancestor", base, sha], capture_output=True).returncode
+    return {0: True, 1: False}.get(code)
+
+
+def cmd_hosted_mac_ui(sha, base, screen, log):
+    """The gate's Mac UI step, met by the hosted job: the check run mac-ui on the commit under
+    test, completed with success, and its kept log, written to <log> under a first line that
+    says whose it is. Every other answer fails, saying why. The caller reads the log's results
+    with the reader of the local step, which this does not replace."""
+    def refuse(message):
+        print(f"hosted mac-ui: FAIL {message}")
+        return 1
+
+    if screen != "locked":
+        return refuse(f"this Mac's screen reads {screen}. The gate takes the hosted job's result only while "
+                      "it is locked, by the owner's word; run the gate without --mac-ui-hosted.")
+    # On a pull request the job tests GitHub's merge of the head into the base as it then was,
+    # and the check run is recorded on the head. With the base an ancestor of the head, every
+    # earlier state of the base is too, so that merge has the head's own tree, and its scripts
+    # are main's wherever the diff changes none. A branch behind the base would show no change
+    # of the scripts, while the job ran the branch's older ones merged with the base's.
+    ancestor = is_ancestor(base, sha)
+    if ancestor is not True:
+        return refuse(f"{base} is {'not' if ancestor is False else 'not known to be'} an ancestor of {sha}, so the "
+                      "job tested a merge whose tree is not the one under test. Merge the base into the branch, "
+                      "push, and let the job run on the new head.")
+    untrusted = [path for path in changed_files(base) if path.startswith(HOSTED_MAC_UI_UNTRUSTED)]
+    if untrusted:
+        return refuse(f"the diff changes {', '.join(untrusted[:3])}{' and more' if len(untrusted) > 3 else ''}. "
+                      "The hosted job ran the candidate's own scripts and workflow, which main's have not "
+                      "checked, so only the Mac UI step on this Mac counts.")
+    try:
+        run = hosted_check_run(sha, HOSTED_MAC_UI_JOB)
+        if run is None:
+            return refuse(f"GitHub has no check run {HOSTED_MAC_UI_JOB} of GitHub Actions on {sha}. "
+                          "The commit under test must be pushed, and the verify workflow run on it.")
+        where = f"check run {run['id']}, {run.get('html_url', '')}"
+        if run.get("status") != "completed":
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} is still {run.get('status')} ({where}). Wait for it.")
+        conclusion = run.get("conclusion")
+        if conclusion == "skipped":
+            scope = hosted_check_run(sha, HOSTED_MAC_UI_SCOPE)
+            if scope and scope.get("status") == "completed" and scope.get("conclusion") == "success":
+                return refuse(f"the scope job {HOSTED_MAC_UI_SCOPE} said the diff does not reach the Mac UI paths, "
+                              f"and the gate's own depth, against {base}, says it does ({where}). The job ran on "
+                              "another base: run the Mac UI step on this Mac, or the workflow again on a commit "
+                              "with main merged in.")
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} was skipped ({where}).")
+        if conclusion != "success":
+            return refuse(f"the job {HOSTED_MAC_UI_JOB} on {sha} ended {conclusion} ({where}).")
+        job = gh_json(f"repos/{{owner}}/{{repo}}/actions/jobs/{run['id']}")
+        if job.get("head_sha") != sha:
+            return refuse(f"the job of {where} ran on {job.get('head_sha')}, not on {sha}.")
+        # The kept log is the job's output: data, read in a folder of its own.
+        folder = tempfile.mkdtemp(prefix="hosted-mac-ui-", dir=os.path.dirname(os.path.abspath(log)))
+        try:
+            try:
+                gh_download_artifact(job["run_id"], HOSTED_MAC_UI_ARTIFACT, folder)
+            except subprocess.CalledProcessError:
+                pass
+            kept = os.path.join(folder, HOSTED_MAC_UI_LOG)
+            if not os.path.isfile(kept):
+                return refuse(f"the workflow run {job['run_id']} keeps no {HOSTED_MAC_UI_LOG} in its artifact "
+                              f"{HOSTED_MAC_UI_ARTIFACT}, which lasts seven days ({where}). Run the job again.")
+            with open(kept, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        return refuse(f"GitHub's answer about {sha} could not be read ({type(error).__name__}). "
+                      "gh must be installed and signed in.")
+    with open(log, "w", encoding="utf-8") as f:
+        f.write(f"{HOSTED_MAC_UI_HEADER} {where}, workflow run {job['run_id']}, commit {sha}, "
+                f"completed {run.get('completed_at', '?')}.\n")
+        f.write(text)
+    print(f"hosted mac-ui: the job {HOSTED_MAC_UI_JOB} passed on {sha}: {where}, completed "
+          f"{run.get('completed_at', '?')}. Its kept log is {log}.")
+    return 0
 
 
 # ---------------------------------------------------------------- KnotCore's API
@@ -1954,6 +2077,9 @@ def main(argv):
         return cmd_depth(option(args, "--base", "origin/main"))
     if command == "app-intents":
         return cmd_app_intents(option(args, "--metadata"), option(args, "--action"), "--shortcuts" in args)
+    if command == "hosted-mac-ui":
+        return cmd_hosted_mac_ui(option(args, "--sha"), option(args, "--base", "origin/main"),
+                                 option(args, "--screen", "unknown"), option(args, "--log"))
     if command == "core-api-rule":
         return cmd_core_api_rule(option(args, "--package"), option(args, "--merged-from", "github"))
     if command == "named-tests":
