@@ -151,14 +151,96 @@ step_six() {
         xcodebuild) limit=$KNOT_BUILD_LIMIT ;;
         # expect: nothing
         swift) limit=$KNOT_SWIFT_TEST_LIMIT ;;
+        # expect: nothing
+        xcodebuild|swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        xcodebuild | swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        (xcodebuild | swift) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        swift | xcodebuild) limit=$KNOT_BUILD_LIMIT ;;
+        # expect: nothing
+        xcodebuild | \
+        xcrun) limit=1 ;;
+        # expect: unbounded
+        xcb) xcodebuild -list ;;
+        # expect: unbounded
+        xcodebuild | xcb) xcodebuild -version ;;
     esac
+    # expect: nothing
+    case $tool in xcodebuild|swift) limit=1 ;; esac
+    # expect: unbounded
+    case $tool in xcodebuild) xcodebuild -list ;; esac
     cat <<EOT
 Run xcodebuild -version to see it.
 EOT
     # expect: nothing
     printf '%s\n' "xcodebuild"
 }
-for step in five six; do "step_${step}"; done
+# The forms of the re-check of pull request 51 at 904821a4 (finding 44), and what is near them.
+step_seven() {
+    # expect: unbounded
+    trap 'xcrun simctl shutdown all' EXIT
+    # expect: unbounded
+    trap -- "xcrun simctl shutdown all" INT TERM
+    # expect: nothing
+    trap 'rm -f "$scratch"' EXIT
+    # expect: unbounded
+    time -p xcodebuild -version
+    # expect: nothing
+    SIMCTL="xcrun simctl"
+    # expect: unbounded
+    $SIMCTL list
+    # expect: nothing
+    export XCRUN_SIMCTL="xcrun simctl"
+    # expect: unbounded
+    $XCRUN_SIMCTL list
+    # expect: unbounded
+    "${XCODEBUILD:-xcodebuild}" -version
+    # expect: unbounded
+    ${XCODEBUILD-xcodebuild} -list
+    # expect: nothing
+    : "${XC:=xcodebuild}"
+    # expect: unbounded
+    "$XC" -version
+    # expect: nothing
+    knot_limit 10 "${XCODEBUILD:-xcodebuild}" -version
+    # expect: unbounded
+    find . -name '*.xcodeproj' -exec xcodebuild -list -project {} \;
+    # expect: unbounded
+    find . -name '*.xcodeproj' -execdir xcodebuild -list +
+    # expect: nothing
+    find . -name '*.log' -exec rm {} \;
+    # expect: unbounded
+    coproc xcodebuild -version
+    # expect: unbounded
+    coproc XB { xcodebuild -version; }
+    # expect: unbounded
+    exec -a xb xcodebuild -version
+    # expect: unbounded
+    env -S 'xcodebuild -version'
+}
+# The forms of the review of pull request 63 at d9e4ffa3 (finding 54), and what is near them.
+step_eight() {
+    # expect: unbounded
+    for builder in xcodebuild; do "$builder" -version; done
+    # expect: nothing
+    for runner in swift xcodebuild; do
+        # expect: unbounded
+        "$runner" -list
+    done
+    # expect: nothing
+    for name in alpha beta; do echo "$name"; done
+    # expect: unbounded
+    args=(); args+=(xcrun simctl list); "${args[@]}"
+    # expect: nothing
+    flags=(); flags+=(-quiet); echo "${flags[@]}"
+    # expect: nothing
+    knot_limit 10 "${args[@]}"
+    # expect: unbounded
+    stdbuf -o0 xcodebuild -list
+}
+for step in five six seven eight; do "step_${step}"; done
 xcb() {
     # expect: nothing
     xcodebuild -project x "$@" 2>&1 | cat >>"$log" # limit: xcb

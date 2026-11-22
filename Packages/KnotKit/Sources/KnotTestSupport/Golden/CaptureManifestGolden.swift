@@ -25,4 +25,10 @@ public enum CaptureManifestGolden {
     public static let formatOneWithTheLastSave = #"""
         {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","format":1,"kind":"typed","last_saved_at":"2026-11-18T11:07:11.125Z","launch_id":"019a9b3c-7e00-7000-8000-000000000002","placement":"window","revision":7,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"app"}
         """#
+
+    /// Format 1 with `peaks`: the watch recording of `formatOne`, finished, with its level peaks
+    /// in the format of `RecordingPeaks`, four values of 2,400 frames each, as base64.
+    public static let formatOneWithPeaks = #"""
+        {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","duration_seconds":42.5,"ended_at":"2026-11-18T11:07:22.500Z","format":1,"kind":"voice","launch_id":"019a9b3c-7e00-7000-8000-000000000002","payload_bytes":21000,"payload_sha256":"abababababababababababababababababababababababababababababababab","peaks":"S05QSwEAAABgCQAAAAz/KA==","placement":"window","revision":3,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"watch"}
+        """#
 }

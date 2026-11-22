@@ -51,6 +51,11 @@ public struct CaptureManifest: Hashable, Sendable {
     /// that a crash left open at this time, as recovery ends a row at the time the store last
     /// wrote on it. Absent from the bytes when nil.
     public var lastSavedAt: Date?
+    /// The recording's level peaks, in the format of `RecordingPeaks`, written only in the
+    /// manifest of a finished recording, as base64 in the JSON member `peaks`: ingest gives them
+    /// to `NoteStore.setPeaks(_:of:)`. A reader that does not know the member keeps it as a field
+    /// it does not know. Absent from the bytes when nil.
+    public var peaks: Data?
     /// The fields this build does not know, by key, each as its original JSON text.
     public private(set) var unknownFields: [String: String]
 
@@ -58,7 +63,7 @@ public struct CaptureManifest: Hashable, Sendable {
         captureID: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, startedAt: Date,
         endedAt: Date? = nil, duration: Duration? = nil, placement: CapturePlacement, shownNoteID: NoteID? = nil,
         revision: Int64 = 0, payloadByteCount: Int64? = nil, payloadSHA256: String? = nil,
-        followsCaptureID: CaptureID? = nil, lastSavedAt: Date? = nil
+        followsCaptureID: CaptureID? = nil, lastSavedAt: Date? = nil, peaks: Data? = nil
     ) {
         self.format = Self.currentFormat
         self.captureID = captureID
@@ -75,6 +80,7 @@ public struct CaptureManifest: Hashable, Sendable {
         self.payloadSHA256 = payloadSHA256
         self.followsCaptureID = followsCaptureID
         self.lastSavedAt = lastSavedAt
+        self.peaks = peaks
         self.unknownFields = [:]
     }
 
@@ -228,6 +234,7 @@ extension CaptureManifest {
         case payloadSHA256 = "payload_sha256"
         case followsCaptureID = "follows_capture_id"
         case lastSavedAt = "last_saved_at"
+        case peaks
     }
 
     private struct AnyKey: CodingKey {
@@ -297,6 +304,7 @@ extension CaptureManifest {
         lastSavedAt = try container.decodeIfPresent(String.self, forKey: AnyKey(.lastSavedAt)).map {
             try Self.date($0, key: .lastSavedAt)
         }
+        peaks = try container.decodeIfPresent(Data.self, forKey: AnyKey(.peaks))
     }
 
     fileprivate func encodeFields(to encoder: any Encoder) throws {
@@ -317,6 +325,7 @@ extension CaptureManifest {
         try container.encodeIfPresent(payloadSHA256, forKey: AnyKey(.payloadSHA256))
         try container.encodeIfPresent(followsCaptureID, forKey: AnyKey(.followsCaptureID))
         try container.encodeIfPresent(lastSavedAt.map(Self.text), forKey: AnyKey(.lastSavedAt))
+        try container.encodeIfPresent(peaks, forKey: AnyKey(.peaks))
     }
 
     /// The longest duration a manifest may carry: far beyond any recording, and well inside

@@ -111,6 +111,13 @@ public enum NoteStoreContract {
         Check(name: "run-not-last", run: aRunThatIsNotTheLastLeavesTheTranscriptGoing),
         Check(name: "digest-63", run: aDigestOf63DigitsIsRefused),
         Check(name: "remove-recording-change", run: removingARecordingIsAChange),
+        Check(name: "peaks", run: aRecordingKeepsItsPeaks),
+        Check(name: "peaks-change", run: settingPeaksIsAChangeOfTheSegment),
+        Check(name: "peaks-refused", run: peaksThatCannotBeKeptAreRefused),
+        Check(name: "peaks-removed", run: removingARecordingRemovesItsPeaks),
+        Check(name: "peaks-purged", run: aPurgeRemovesPeaksWithTheSegment),
+        Check(name: "peaks-deleted", run: aDeletedSegmentKeepsItsPeaks),
+        Check(name: "peaks-moved", run: peaksMoveWithTheirSegment),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
@@ -2464,6 +2471,181 @@ public enum NoteStoreContract {
         let changes = try await h.store.changes(after: cursor, limit: 10).changes
         #expect(changes.map(\.noteID) == [receipt.noteID], "The note is reported changed.")
         #expect(changes.first?.record?.segments.first?.assetID == nil, "As it is now, without its recording.")
+    }
+
+    // MARK: Peaks (docs/architecture.md §8)
+
+    /// Synthetic peaks: values of 2,400 frames each, in the format of `RecordingPeaks`.
+    static func peaks(_ values: [UInt8]) -> Data {
+        RecordingPeaks(framesPerValue: 2_400, values: values).encoded()
+    }
+
+    /// A recording that ended stored, in a note of its own.
+    static func storedRecording(_ h: Harness, at minute: Double) async throws -> CaptureReceipt {
+        try await h.store.record(h.watchRecording(from: minute, to: minute + 1, arrival: .live))
+    }
+
+    /// A stored recording keeps the peaks given to it: they read back as given, and a second set
+    /// replaces them. Peaks with no value yet, and thirty minutes of them, are kept. A segment
+    /// that holds none answers none, whatever its kind, and no segment is `not_found`.
+    public static func aRecordingKeepsItsPeaks(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        #expect(try await h.store.peaks(of: segment) == nil, "A recording holds none until they are set.")
+        let first = peaks([0, 12, 255, 40])
+        try await h.store.setPeaks(first, of: segment)
+        #expect(try await h.store.peaks(of: segment) == first, "They read back as given.")
+        let second = peaks([7, 7, 7])
+        try await h.store.setPeaks(second, of: segment)
+        #expect(try await h.store.peaks(of: segment) == second, "A second set replaces them.")
+        let none = peaks([])
+        try await h.store.setPeaks(none, of: segment)
+        #expect(try await h.store.peaks(of: segment) == none, "Peaks with no value yet are kept.")
+        let longest = peaks(Array(repeating: 9, count: Int(Limits.longestRecording) * 20))
+        try await h.store.setPeaks(longest, of: segment)
+        #expect(try await h.store.peaks(of: segment) == longest, "Thirty minutes of peaks are kept.")
+        let typed = try await h.store.record(h.typed("Synthetic words", from: 200, to: 201, placement: .newNote))
+        #expect(try await h.store.peaks(of: typed.segmentIDs[0]) == nil, "A typed segment holds none.")
+        await refuses(.notFound, "No segment.") { try await h.store.peaks(of: h.ids.make()) }
+    }
+
+    /// Peaks that differ from those a segment holds are a change of the segment: the cursor
+    /// moves, `changes` reports its note, and the segment's own revision does not rise, since
+    /// peaks are not its text. The same peaks again change nothing.
+    public static func settingPeaksIsAChangeOfTheSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await storedRecording(h, at: 0)
+        let segment = receipt.segmentIDs[0]
+        let read = try #require(try await h.store.segment(segment))
+        let cursor = try await h.store.cursor()
+        let given = peaks([1, 2, 3])
+        try await h.store.setPeaks(given, of: segment)
+        let moved = try await h.store.cursor()
+        #expect(moved.counter > cursor.counter, "Peaks that differ move the cursor.")
+        let changes = try await h.store.changes(after: cursor, limit: 10).changes
+        #expect(changes.map(\.noteID) == [receipt.noteID], "The segment's note is reported changed.")
+        #expect(try await h.store.segment(segment)?.revision == read.revision, "The segment's revision stays.")
+        try await h.store.setPeaks(given, of: segment)
+        #expect(try await h.store.cursor() == moved, "The same peaks again change nothing.")
+        #expect(try await h.store.changes(after: moved, limit: 10).changes.isEmpty, "Nothing is reported.")
+    }
+
+    /// What cannot hold peaks refuses them, and nothing is written: no segment is `not_found`;
+    /// a segment that is not a voice segment, or has no recording, none yet or one removed, is
+    /// `illegal_transition`; bytes that are not peaks, or hold more values than thirty minutes
+    /// have, are `capture_invalid`. The peaks held stay, and the cursor does not move.
+    public static func peaksThatCannotBeKeptAreRefused(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        let kept = peaks([5, 6])
+        try await h.store.setPeaks(kept, of: segment)
+        let typed = try await h.store.record(h.typed("Synthetic words", from: 200, to: 201, placement: .newNote))
+        var cursor = try await h.store.cursor()
+        let good = peaks([9])
+        await refuses(.notFound, "No segment.") { try await h.store.setPeaks(good, of: h.ids.make()) }
+        await refuses(.illegalTransition, "A typed segment.") {
+            try await h.store.setPeaks(good, of: typed.segmentIDs[0])
+        }
+        await refuses(.captureInvalid, "Bytes that are not peaks.") {
+            try await h.store.setPeaks(Data("synthetic".utf8), of: segment)
+        }
+        var newer = good
+        newer[4] = RecordingPeaks.currentFormat + 1
+        await refuses(.captureInvalid, "A format this build does not know.") {
+            try await h.store.setPeaks(newer, of: segment)
+        }
+        let tooLong = peaks(Array(repeating: 9, count: Int(Limits.longestRecording) * 20 + 1))
+        await refuses(.captureInvalid, "More than thirty minutes of peaks.") {
+            try await h.store.setPeaks(tooLong, of: segment)
+        }
+        #expect(try await h.store.peaks(of: segment) == kept, "Nothing was written.")
+        #expect(try await h.store.peaks(of: typed.segmentIDs[0]) == nil)
+        #expect(try await h.store.cursor() == cursor, "The cursor did not move.")
+
+        // A recording removed.
+        _ = try await h.store.appendTranscript(
+            h.run("kept words", from: .zero, resumeAt: nil), to: segment, job: .transcribe(of: segment))
+        _ = try await h.store.removeRecording(of: segment)
+        cursor = try await h.store.cursor()
+        await refuses(.illegalTransition, "A recording removed.") { try await h.store.setPeaks(good, of: segment) }
+        #expect(try await h.store.peaks(of: segment) == nil)
+        #expect(try await h.store.cursor() == cursor, "The cursor did not move.")
+
+        // A recording still being made has none yet.
+        let open = h.recordingStart(at: 400, surface: .app)
+        _ = try await h.store.record(open)
+        cursor = try await h.store.cursor()
+        await refuses(.illegalTransition, "A recording in progress.") {
+            try await h.store.setPeaks(good, of: SegmentID(open.id))
+        }
+        #expect(try await h.store.peaks(of: SegmentID(open.id)) == nil)
+        #expect(try await h.store.cursor() == cursor, "The cursor did not move.")
+    }
+
+    /// "Remove recording" removes the recording's peaks with it.
+    public static func removingARecordingRemovesItsPeaks(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        _ = try await h.store.appendTranscript(
+            h.run("kept words", from: .zero, resumeAt: nil), to: segment, job: .transcribe(of: segment))
+        try await h.store.setPeaks(peaks([3, 4]), of: segment)
+        _ = try await h.store.removeRecording(of: segment)
+        #expect(try await h.store.peaks(of: segment) == nil, "The peaks go with the recording.")
+    }
+
+    /// A purge removes the peaks with the segment: of a note deleted, and of a segment deleted.
+    public static func aPurgeRemovesPeaksWithTheSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let inNote = try await storedRecording(h, at: 0)
+        let alone = try await storedRecording(h, at: 600)
+        for segment in [inNote.segmentIDs[0], alone.segmentIDs[0]] {
+            try await h.store.setPeaks(peaks([8, 9]), of: segment)
+        }
+        _ = try await h.store.delete(.note(inNote.noteID))
+        _ = try await h.store.delete(.segment(alone.segmentIDs[0]))
+        h.clock.advance(by: 31 * 86_400)
+        _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        for segment in [inNote.segmentIDs[0], alone.segmentIDs[0]] {
+            await refuses(.notFound, "The segment and its peaks are gone.") { try await h.store.peaks(of: segment) }
+        }
+    }
+
+    /// A deleted segment, in its 30 days, keeps its peaks and takes new ones, deleted with its
+    /// note or on its own, and a restore shows them.
+    public static func aDeletedSegmentKeepsItsPeaks(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let inNote = try await storedRecording(h, at: 0)
+        let alone = try await storedRecording(h, at: 600)
+        let deleted = [
+            (inNote.segmentIDs[0], RestoreTarget.note(inNote.noteID)),
+            (alone.segmentIDs[0], RestoreTarget.segment(alone.segmentIDs[0])),
+        ]
+        for (segment, _) in deleted { try await h.store.setPeaks(peaks([1, 1]), of: segment) }
+        _ = try await h.store.delete(.note(inNote.noteID))
+        _ = try await h.store.delete(.segment(alone.segmentIDs[0]))
+        for (segment, target) in deleted {
+            #expect(try await h.store.peaks(of: segment) == peaks([1, 1]), "A deleted segment keeps its peaks.")
+            try await h.store.setPeaks(peaks([2, 2]), of: segment)
+            _ = try await h.store.restore(target)
+            #expect(
+                try await h.store.peaks(of: segment) == peaks([2, 2]), "And takes new ones, which a restore shows.")
+        }
+    }
+
+    /// The peaks are the segment's: a move to a note of its own takes them with it.
+    public static func peaksMoveWithTheirSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let first = try await h.store.record(h.typed("Synthetic words", from: 0, to: 0.2))
+        let voice = try await h.store.record(h.watchRecording(from: 1, to: 1.5, arrival: .live))
+        #expect(voice.noteID == first.noteID, "The recording joins the note.")
+        let segment = voice.segmentIDs[0]
+        try await h.store.setPeaks(peaks([4, 5, 6]), of: segment)
+        guard case .moved(let moved) = try await h.store.move(segment, from: first.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        #expect(moved.to.note.id != first.noteID)
+        #expect(try await h.store.peaks(of: segment) == peaks([4, 5, 6]), "The peaks go with the segment.")
     }
 
     /// Witness 67: an `ingest` at a lower revision with the same text applies nothing and is

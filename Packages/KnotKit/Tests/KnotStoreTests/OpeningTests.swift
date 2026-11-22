@@ -110,7 +110,9 @@ import Testing
         await expectFailure(.storeOlderThanTool) {
             try openStore(in: root, migrations: StoreSchema.migrations + [extraMigration], role: .tool)
         }
-        #expect(try version(of: .testing(root: root)) == 1, "The tool left the store at its version.")
+        #expect(
+            try version(of: .testing(root: root)) == StoreSchema.currentVersion,
+            "The tool left the store at its version.")
         try openStore(in: root, role: .tool).close()
     }
 
@@ -128,22 +130,25 @@ import Testing
             Captures(clock: clock, ids: ids, device: database.deviceID).typed("A synthetic line", from: 0, to: 1))
         try database.close()
 
+        let current = StoreSchema.currentVersion
         database = try openStore(in: root, migrations: StoreSchema.migrations + [extraMigration])
-        let first = StoreCopies.preMigrationCopy(locations, from: 1)
+        let first = StoreCopies.preMigrationCopy(locations, from: current)
         #expect(FileManager.default.fileExists(atPath: first.path))
         #expect(try await NoteRepository(database: database).note(receipt.noteID) != nil)
         try database.close()
 
-        let third = StoreSchema.Migration(version: 3) { db in try db.execute(sql: "CREATE TABLE test_v3 (id INTEGER)") }
+        let third = StoreSchema.Migration(version: current + 2) { db in
+            try db.execute(sql: "CREATE TABLE test_v3 (id INTEGER)")
+        }
         database = try openStore(in: root, migrations: StoreSchema.migrations + [extraMigration, third])
-        #expect(try version(of: locations) == 3)
+        #expect(try version(of: locations) == current + 2)
         #expect(!FileManager.default.fileExists(atPath: first.path), "The older copy goes at the following migration.")
-        #expect(FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: 2).path))
+        #expect(FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: current + 1).path))
         // The copy is the store as it was: it opens, and it holds the note.
         let copy = try DatabaseQueue(
-            path: StoreCopies.preMigrationCopy(locations, from: 2).path,
+            path: StoreCopies.preMigrationCopy(locations, from: current + 1).path,
             configuration: StoreDatabase.configuration(readonly: true))
-        #expect(try await copy.read { db in try StoreDatabase.userVersion(db) } == 2)
+        #expect(try await copy.read { db in try StoreDatabase.userVersion(db) } == current + 1)
         #expect(
             try await copy.read { db in
                 try Int.fetchOne(
@@ -170,7 +175,8 @@ import Testing
         try database.close()
 
         // A migration that meets a full disk: the database may not grow past a few pages.
-        let filling = StoreSchema.Migration(version: 2) { db in
+        let current = StoreSchema.currentVersion
+        let filling = StoreSchema.Migration(version: current + 1) { db in
             let pages = try Int.fetchOne(db, sql: "PRAGMA page_count") ?? 0
             try db.execute(sql: "PRAGMA max_page_count = \(pages + 2)")
             try db.execute(sql: "CREATE TABLE test_filling (blob BLOB)")
@@ -179,14 +185,14 @@ import Testing
             }
         }
         await expectFailure(.diskFull) { try openStore(in: root, migrations: StoreSchema.migrations + [filling]) }
-        #expect(try version(of: locations) == 1, "The store keeps its version.")
+        #expect(try version(of: locations) == current, "The store keeps its version.")
         #expect(
-            FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: 1).path),
+            FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: current).path),
             "The checked copy stays.")
 
         database = try openStore(
             in: root, clock: clock, ids: ids, migrations: StoreSchema.migrations + [extraMigration])
-        #expect(try version(of: locations) == 2, "A later launch migrates.")
+        #expect(try version(of: locations) == current + 1, "A later launch migrates.")
         #expect(try await NoteRepository(database: database).note(receipt.noteID) != nil, "Every note is there.")
         expectConsistent(database)
     }
@@ -353,20 +359,27 @@ import Testing
         defer { folders.removeAll() }
         let root = folders.make()
         try openStore(in: root).close()
-        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
-        let failing = StoreSchema.Migration(version: 3) { _ in throw KnotError.diskFull }
-        await expectFailure(.diskFull) { try openStore(in: root, migrations: StoreSchema.migrations + [v2, failing]) }
+        let current = StoreSchema.currentVersion
+        let next = StoreSchema.Migration(version: current + 1) {
+            try $0.execute(sql: "CREATE TABLE synthetic_next (id INTEGER)")
+        }
+        let failing = StoreSchema.Migration(version: current + 2) { _ in throw KnotError.diskFull }
+        await expectFailure(.diskFull) {
+            try openStore(in: root, migrations: StoreSchema.migrations + [next, failing])
+        }
         let locations = StoreLocations.testing(root: root)
-        #expect(try version(of: locations) == 2, "The store keeps the migration it finished.")
-        #expect(FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: 2).path))
-        let v3 = StoreSchema.Migration(version: 3) { try $0.execute(sql: "CREATE TABLE synthetic_v3 (id INTEGER)") }
+        #expect(try version(of: locations) == current + 1, "The store keeps the migration it finished.")
+        #expect(FileManager.default.fileExists(atPath: StoreCopies.preMigrationCopy(locations, from: current + 1).path))
+        let after = StoreSchema.Migration(version: current + 2) {
+            try $0.execute(sql: "CREATE TABLE synthetic_after (id INTEGER)")
+        }
         let other = folders.make()
         try openStore(in: other).close()
-        let migrated = try openStore(in: other, migrations: StoreSchema.migrations + [v2, v3])
-        #expect(try version(of: migrated.locations) == 3)
+        let migrated = try openStore(in: other, migrations: StoreSchema.migrations + [next, after])
+        #expect(try version(of: migrated.locations) == current + 2)
         #expect(
             StoreCopies.copies(migrated.locations, prefix: "pre-migration-").map(\.lastPathComponent) == [
-                "pre-migration-v2.sqlite"
+                "pre-migration-v\(current + 1).sqlite"
             ])
     }
 
@@ -385,18 +398,18 @@ import Testing
         _ = try await NoteRepository(database: database).record(
             captures.typed("A synthetic first line", from: 0, to: 1))
         try database.close()
-        let failing = StoreSchema.Migration(version: 2) { _ in throw KnotError.diskFull }
+        let current = StoreSchema.currentVersion
+        let failing = StoreSchema.Migration(version: current + 1) { _ in throw KnotError.diskFull }
         await expectFailure(.diskFull) { try openStore(in: root, migrations: StoreSchema.migrations + [failing]) }
-        let copy = StoreCopies.preMigrationCopy(locations, from: 1)
+        let copy = StoreCopies.preMigrationCopy(locations, from: current)
         #expect(FileManager.default.fileExists(atPath: copy.path), "The attempt left its copy.")
         // An older build, at the same version, records more.
         database = try openStore(in: root, clock: clock, ids: ids)
         let later = try await NoteRepository(database: database).record(
             captures.typed("A synthetic later line", from: 2, to: 3, placement: .newNote))
         try database.close()
-        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
-        try openStore(in: root, migrations: StoreSchema.migrations + [v2]).close()
-        #expect(try version(of: locations) == 2)
+        try openStore(in: root, migrations: StoreSchema.migrations + [extraMigration]).close()
+        #expect(try version(of: locations) == current + 1)
         let kept = try DatabaseQueue(path: copy.path, configuration: StoreDatabase.configuration(readonly: true))
         defer { try? kept.close() }
         let held = try await kept.read { db in
@@ -622,8 +635,8 @@ import Testing
         let root = folders.make()
         let locations = StoreLocations.testing(root: root)
         try openStore(in: root).close()
-        let v2 = StoreSchema.Migration(version: 2) { try $0.execute(sql: "CREATE TABLE synthetic_v2 (id INTEGER)") }
-        let migrations = StoreSchema.migrations + [v2]
+        let current = StoreSchema.currentVersion
+        let migrations = StoreSchema.migrations + [extraMigration]
         let gate = Gate()
         let hooks = StoreHooks(statements: { sql in
             if sql.uppercased().hasPrefix("BEGIN EXCLUSIVE") { gate.stop() }
@@ -643,16 +656,18 @@ import Testing
             Issue.record("The slower open failed instead of opening the migrated store: \(error)")
         }
         try first.close()
-        #expect(try version(of: locations) == 2)
-        let copy = StoreCopies.preMigrationCopy(locations, from: 1)
+        #expect(try version(of: locations) == current + 1)
+        let copy = StoreCopies.preMigrationCopy(locations, from: current)
         let queue = try DatabaseQueue(path: copy.path, configuration: StoreDatabase.configuration(readonly: true))
         let copied = try await queue.read { db in try StoreDatabase.userVersion(db) }
         try queue.close()
-        #expect(copied == 1, "The copy kept from before the migration from version 1 is of version \(copied)")
+        #expect(
+            copied == current, "The copy kept from before the migration from version \(current) is of version \(copied)"
+        )
     }
 }
 
-/// A later schema version that adds one table, for the tests of migrating.
-let extraMigration = StoreSchema.Migration(version: 2) { db in
+/// A schema version after this build's newest that adds one table, for the tests of migrating.
+let extraMigration = StoreSchema.Migration(version: StoreSchema.currentVersion + 1) { db in
     try db.execute(sql: "CREATE TABLE test_v2 (id INTEGER PRIMARY KEY)")
 }
