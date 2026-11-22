@@ -1437,6 +1437,10 @@ printf 'final class MacSmokeTests: XCTestCase {\n    // live-smoke-a-mac\n    fu
 # of any name, and no comment.
 printf 'import Testing\n\n@Test("live-smoke-a-composition", .tags(.named)) func theCompositionTypesKillsAndReads() async throws {}\n' \
     >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"
+# A package test whose comment only mentions the iPhone's slug marks nothing: the UI test is
+# looked for first, so a run in which the iPhone's test did not run still fails.
+printf 'import Testing\n\n// As live-smoke-a-iphone does on the phone, this reads a line back.\n@Test func readsALineBack() async throws {}\n' \
+    >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/MentionsTheIPhone.swift"
 smoke_logs() { # smoke_logs <folder> <iPhone line> <Watch line> <Mac line>: fresh logs of a run
     mkdir -p "$1"
     printf '%s\n' "$2" >"$1/verify-launch-tests.log"

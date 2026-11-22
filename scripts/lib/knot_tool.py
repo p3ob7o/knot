@@ -980,22 +980,22 @@ SMOKE_STEPS = (
 
 
 def package_test_naming(slug):
-    """The file under Packages/KnotKit/Tests/ that names a smoke test, or None. The package
-    writes a named test as Swift Testing's, `@Test("<slug>", .tags(.named))` over a function of
-    any name, with no comment; a comment that names the slug counts too. The file's place
-    decides, before any method is looked for."""
+    """The file under Packages/KnotKit/Tests/ whose Swift Testing test is named by the slug,
+    `@Test("<slug>", .tags(.named))` over a function of any name, as the package writes a named
+    test, or None. A comment marks nothing here: a package test that only mentions a UI smoke
+    test's slug must not turn that test's check off."""
     for path in swift_files(SWIFT_TESTS):
         with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if f'@Test("{slug}"' in line or (slug in line and "//" in line):
-                    return path
+            if f'@Test("{slug}"' in f.read():
+                return path
     return None
 
 
 def smoke_test_of(slug):
-    """The source, class and test method that a UI smoke test's named comment marks: the first
-    test method after the comment, in the class that holds it. None when no source names it."""
-    for path in swift_files(SWIFT_SOURCES):
+    """The source, class and test method that a UI smoke test's named comment marks, in the
+    three UI-test folders: the first test method after the comment, in the class that holds
+    it. None when no UI test names it."""
+    for path in swift_files(tuple(prefix for prefix, _, _ in SMOKE_STEPS)):
         with open(path, encoding="utf-8", errors="replace") as f:
             source = f.read().splitlines()
         marks = [n for n, line in enumerate(source) if slug in line and "//" in line]
@@ -1016,9 +1016,10 @@ def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
     tests are. Each is found by its named comment in the sources, and must have passed in the
     log of the step that runs it, launch or mac-ui, written in this run (since <since>), with
     no failure and no skip. The Mac's is not asked for in a run that does not start mac-ui.
-    One that a file under Packages/KnotKit/Tests/ names, by Swift Testing's `@Test("<slug>"`
-    or in a comment, is package-test's and named-tests', and this step says so, naming the
-    file; one marked anywhere else that no step runs fails."""
+    The UI test is looked for first; only when none carries the slug does a package test
+    named by it, Swift Testing's `@Test("<slug>"` under Packages/KnotKit/Tests/, make it
+    package-test's and named-tests', which this step says, naming the file. A comment in a
+    package test marks nothing. A slug that neither names fails."""
     merged = merged_prs("git")
     if package and package != "contract":
         merged.append((package, is_note_branch(branch)))
@@ -1031,16 +1032,17 @@ def cmd_live_smoke(logs, since, mac_ui, package=None, branch=None):
         if not named_test_required(owner, named_test_pr(owner, description), merged):
             print(f"live-smoke: {slug}: not asked for: its pull request, {owner}, has not merged")
             continue
-        package_file = package_test_naming(slug)
-        if package_file:
-            # A package's test, such as the end-to-end suite's: package-test runs it and the
-            # named-tests step requires it, so this step does not ask for it.
-            print(f"live-smoke: {slug}: not asked for here: {package_file} names it, a package test, "
-                  f"which package-test runs and named-tests requires")
-            continue
+        # The UI test first, by its named comment, and judged when it is found. Only when no UI
+        # test carries the slug does a package's Swift Testing test of that name make it the
+        # package's: package-test runs it and the named-tests step requires it.
         found = smoke_test_of(slug)
         if not found:
-            print(f"live-smoke: FAIL {slug}: no test in the sources carries its named comment")
+            package_file = package_test_naming(slug)
+            if package_file:
+                print(f"live-smoke: {slug}: not asked for here: {package_file} names it, a package test, "
+                      f"which package-test runs and named-tests requires")
+                continue
+            print(f"live-smoke: FAIL {slug}: no UI test carries its named comment, and no package test is named by it")
             problems += 1
             continue
         path, owner_class, method = found
