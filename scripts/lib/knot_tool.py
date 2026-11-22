@@ -559,6 +559,13 @@ def cmd_named_tests(source, package=None, branch=None):
 
 
 SWIFT_SOURCES = ("Packages/KnotKit/Sources/", "Apps/")
+# The package's tests, which the lint reads for one rule alone: no test cancels itself.
+SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
+# A test that cancels itself, or one of its cases. Swift Testing prints a cancelled case of a
+# test with arguments as passed, so the gate could not tell it from a run (finding 51); a
+# test that cannot run here says so by a trait, which is printed as skipped.
+STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
+TEST_CANCEL = re.compile(r"\bTest\s*(?:\.\s*Case\s*)?\.\s*cancel\s*\(")
 LIBRARY_EXEMPT = ("Packages/KnotKit/Sources/knot/", "Packages/KnotKit/Sources/knot-eval/",
                   "Packages/KnotKit/Sources/KnotStoreCrashHost/", "Packages/KnotKit/Sources/KnotAudioCrashHost/",
                   "Packages/KnotKit/Sources/KnotLinkCrashHost/", "Packages/KnotKit/Sources/KnotInkCrashHost/",
@@ -593,7 +600,23 @@ MANIFESTS = {
 def code_lines(path):
     """The statements of a Swift file, as (first line number, code, raw text). The code has its
     comments blanked; the raw text keeps them, for the `knot-lint: allow` marker. A call that
-    runs over several lines is joined into one statement, by its parentheses."""
+    runs over several lines is joined into one statement, by its parentheses; and a line that
+    begins with a member access, as `.cancel(…)` after `try Test`, joins the statement before
+    it."""
+    held = None
+    for statement in _code_statements(path):
+        if held is not None and statement[1].startswith("."):
+            held = (held[0], held[1] + " " + statement[1], held[2] + " " + statement[2])
+            continue
+        if held is not None:
+            yield held
+        held = statement
+    if held is not None:
+        yield held
+
+
+def _code_statements(path):
+    """code_lines's statements, before a line that begins with a member access is joined."""
     with open(path, encoding="utf-8") as f:
         raw_text = f.read()
     text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), raw_text, flags=re.S)
@@ -677,10 +700,10 @@ def copy_problem(path):
     return any(re.search(r" 2(\.[^/.]+)?$", part) for part in path.split("/"))
 
 
-def swift_files():
+def swift_files(prefixes=SWIFT_SOURCES):
     found = []
     for path in lines(git("ls-files")) + lines(git("ls-files", "--others", "--exclude-standard")):
-        if path.endswith(".swift") and path.startswith(SWIFT_SOURCES) and os.path.isfile(path):
+        if path.endswith(".swift") and path.startswith(prefixes) and os.path.isfile(path):
             found.append(path)
     return sorted(set(found))
 
@@ -721,9 +744,20 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
         problems.append(f"lint: {path}:{number}: [{rule}] {message}")
 
     files = only if only else swift_files()
+    tests = [] if only else swift_files(SWIFT_TESTS)
     escapes = {}
     used = {}
-    for path in files:
+    for path in files + tests:
+        if TEST_CANCEL.search("".join(line for _, line, _ in code_lines(path))):
+            for number, line, _ in code_lines(path):
+                # A string that names the call is no call: the literals are blanked, as
+                # code_lines blanks the comments.
+                if TEST_CANCEL.search(STRING_LITERAL.sub('""', line)):
+                    problem(path, number, "test-cancel",
+                            "a test that cannot run here says so by a trait, which is printed as skipped; a "
+                            "cancelled case of a test with arguments is printed as passed")
+        if path in tests:
+            continue
         place = (as_prefix + os.path.basename(path)) if as_prefix else path
         # A fake outside KnotFakes is named Fake… and compiles only under
         # `#if DEBUG || KNOT_FAKES`; the release scan finds such a type by its name.
@@ -809,8 +843,205 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
 
     for line in problems:
         print(line)
-    print(f"lint: {len(files)} Swift files, {len(problems)} problems")
+    print(f"lint: {len(files)} Swift files{f' and {len(tests)} test files' if tests else ''}, {len(problems)} problems")
     return 1 if problems else 0
+
+
+# ---------------------------------------------------------------- tests that started
+
+
+# Swift Testing's event lines: the glyph, two spaces, "Test ", the name, and the event. A test
+# with arguments ends as "Test f(x:) with 3 test cases passed after …".
+TEST_EVENT = re.compile(r"^[^\x00-\x7f]+  Test (.+?)(?: with \d+ test cases?)? "
+                        r"(started\.|passed after .*|failed after .*|skipped(?:\.|: .*)?|was cancelled after .*)$")
+
+
+def cmd_unended_tests(log):
+    """The tests of a Swift Testing log that started and did not end, one a line, for a run
+    that reached its limit; and the ones that failed. The names are counted, since a suite's
+    targets run one after another and a name can recur."""
+    from collections import Counter
+    open_tests, failed = Counter(), []
+    with open(log, errors="replace") as f:
+        for line in f:
+            match = TEST_EVENT.match(line.rstrip("\n"))
+            if not match:
+                continue
+            name, event = match.groups()
+            if name == "run" or name.startswith("run with ") or name.startswith("case passing "):
+                # The run's own lines, "Test run started." and "Test run with N tests …"; and
+                # the cases of a test with arguments, whose start is printed and whose end is
+                # not: the test's own lines say whether it ended.
+                continue
+            if event == "started.":
+                open_tests[name] += 1
+            else:
+                open_tests[name] -= 1
+                if event.startswith("failed"):
+                    failed.append(name)
+    for name, count in open_tests.items():
+        for _ in range(max(count, 0)):
+            print(f"started, not ended: {name}")
+    for name in failed:
+        print(f"failed: {name}")
+    return 0
+
+
+# ---------------------------------------------------------------- the event stream
+
+
+def cmd_test_events(path, gate=False):
+    """What a run's Swift Testing event stream says ran: the stream that
+    `swift test --event-stream-output-path <file> --event-stream-version 0` writes, one JSON
+    object a line, every target's run appended to the one file. It prints each test skipped,
+    test cancelled and case cancelled, which the console can print as passed or over two
+    lines, and a summary line that the run's summary reads. It fails when the stream is
+    missing, or holds no run, or a run that did not end; and, with --gate, when any test or
+    case did not run. Names are printed with a newline written as \\n, and no path."""
+    if not os.path.exists(path):
+        print(f"events: the run wrote no event stream at {os.path.basename(path)}")
+        return 2
+    names, notes, runs_started, runs_ended, tests, malformed = {}, [], 0, 0, 0, 0
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                kind, payload = record["kind"], record["payload"]
+            except (ValueError, KeyError, TypeError):
+                malformed += 1
+                continue
+            if kind == "test":
+                names[payload.get("id")] = payload.get("displayName") or payload.get("name") or "?"
+                tests += payload.get("kind") == "function"
+                continue
+            if kind != "event":
+                continue
+            event = payload.get("kind")
+            name = names.get(payload.get("testID"), payload.get("testID") or "?").replace("\n", "\\n")
+            if event == "runStarted":
+                runs_started += 1
+            elif event == "runEnded":
+                runs_ended += 1
+            elif event == "testSkipped":
+                notes.append(f"skipped: {name}")
+            elif event == "testCancelled":
+                notes.append(f"cancelled: {name}")
+            elif event == "testCaseCancelled":
+                case = (payload.get("_testCase") or {}).get("displayName", "?").replace("\n", "\\n")
+                notes.append(f"cancelled case: {name} ({case})")
+    for note in notes:
+        print(f"events: {note}")
+    print(f"events: {runs_ended} of {runs_started} runs ended, {tests} tests, {len(notes)} skipped or cancelled"
+          f"{f', {malformed} lines unread' if malformed else ''}")
+    if runs_started == 0 or runs_ended < runs_started:
+        print("events: the stream holds no run, or a run that did not end, so it cannot say that every test ran")
+        return 2
+    if gate and notes:
+        print("events: the gate requires every test and every case to run")
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------- workflows
+
+
+NIGHTLY = ".github/workflows/nightly.yml"
+
+
+JOB_KEYS = {}
+
+
+def workflow_jobs(text):
+    """The jobs of a workflow, as {job: [step]}, each step a dict of its keys, with a block
+    value such as `run: |` joined into one string. A job's own keys, such as `if:` and
+    `continue-on-error:`, are in JOB_KEYS of the returned dict, by job. It reads the plain layout of this
+    repository's workflows (two spaces a level, a step as `- name:` or `- uses:`), not every
+    form YAML allows, and comment lines count for nothing."""
+    JOB_KEYS.clear()
+    jobs, job, steps, step, block, in_jobs = {}, None, None, None, None, False
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if block is not None:
+            if indent > block[1]:
+                step[block[0]] = (step[block[0]] + "\n" + line.strip()).strip()
+                continue
+            block = None
+        if indent == 0:
+            in_jobs = line.startswith("jobs:")
+            continue
+        if not in_jobs:
+            continue
+        if indent == 2 and line.rstrip().endswith(":"):
+            job = line.strip()[:-1]
+            jobs[job], steps, step = [], None, None
+            JOB_KEYS[job] = {}
+            continue
+        if job and indent == 4 and line.strip() == "steps:":
+            steps = jobs[job]
+            continue
+        if job and indent == 4 and ":" in line:
+            key, value = line.strip().split(":", 1)
+            JOB_KEYS[job][key] = value.strip()
+            steps, step = None, None
+            continue
+        if steps is not None and line.lstrip().startswith("- "):
+            step = {}
+            steps.append(step)
+            line = line.replace("- ", "  ", 1)
+            indent += 2
+        if step is not None and steps is not None and ":" in line:
+            key, value = line.strip().split(":", 1)
+            value = value.strip()
+            step[key] = "" if value in ("|", ">") else value
+            if value in ("|", ">"):
+                block = (key, indent)
+    return jobs
+
+
+def cmd_workflows(path=NIGHTLY):
+    """The tree's nightly workflow makes the tree's audio before the package tests under
+    Thread Sanitizer: in the job that runs `scripts/verify.sh --only tsan`, a step whose run
+    is `scripts/verify.sh --only fixtures` comes first, and neither the two steps nor the job
+    has a condition or continue-on-error.
+    `--only tsan` has no fixtures step, and the tests that read the audio need it. The gate's
+    lint step runs this on the tree; the self-test, on wrong workflows of its own."""
+    problems = []
+    if not os.path.exists(path):
+        print(f"workflows: {path} is missing")
+        return 1
+    jobs = workflow_jobs(open(path).read())
+    found = False
+    for job, steps in jobs.items():
+        runs = [step.get("run", "").strip() for step in steps]
+        if "scripts/verify.sh --only tsan" not in runs:
+            continue
+        found = True
+        tsan = runs.index("scripts/verify.sh --only tsan")
+        fixtures = runs.index("scripts/verify.sh --only fixtures") if "scripts/verify.sh --only fixtures" in runs else None
+        if fixtures is None:
+            problems.append(f"the job {job} runs the tsan step with no fixtures step in it")
+        elif fixtures > tsan:
+            problems.append(f"the job {job} runs the tsan step before the fixtures step")
+        for name, at in (("fixtures", fixtures), ("tsan", tsan)):
+            if at is not None and "if" in steps[at]:
+                problems.append(f"the {name} step of the job {job} has a condition, if: {steps[at]['if']}")
+            if at is not None and "continue-on-error" in steps[at]:
+                problems.append(f"the {name} step of the job {job} has continue-on-error: {steps[at]['continue-on-error']}")
+        # A condition or continue-on-error on the job itself would leave the run green with
+        # no sanitizer run, or with one that failed (finding 62).
+        for key in ("if", "continue-on-error"):
+            if key in JOB_KEYS.get(job, {}):
+                problems.append(f"the job {job} has {key}: {JOB_KEYS[job][key]}")
+    if not found:
+        problems.append("no job runs scripts/verify.sh --only tsan")
+    for problem in problems:
+        print(f"workflows: {path}: {problem}")
+    if problems:
+        return 1
+    print(f"workflows: {path} makes the audio before the package tests under Thread Sanitizer")
+    return 0
 
 
 # ---------------------------------------------------------------- links
@@ -931,7 +1162,15 @@ OTHER_PARTS = ("soak",)
 # Words that may stand before the command word of a simple command.
 RESERVED_WORDS = {"if", "then", "elif", "else", "fi", "while", "until", "do", "done", "!", "{", "}",
                   "time", "case", "esac", "in", "function", "select", "for"}
-PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs"}
+PREFIX_WORDS = {"command", "builtin", "exec", "nohup", "env", "sudo", "nice", "caffeinate", "time", "arch", "xargs",
+                "coproc", "stdbuf"}
+# The options of a prefix that take the next word as their value.
+PREFIX_VALUE_OPTIONS = ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-a")
+# A parameter expansion with a default, as in "${XCODEBUILD:-xcodebuild}": the default is the
+# word when the variable is unset, so the check reads it.
+DEFAULT_EXPANSION = re.compile(r"^\$\{([A-Za-z_]\w*):?[-=]([^}]*)\}(.*)$")
+# An assignment by a default, as in : "${XC:=xcodebuild}".
+DEFAULT_ASSIGNMENT = re.compile(r"\$\{([A-Za-z_]\w*):?=([\w./ -]+)\}")
 # Words whose command only looks a name up, and starts nothing.
 LOOKUP_WORDS = {"type", "hash", "which", "whence"}
 FUNCTION_DEF = re.compile(r"^(\s*)(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\))?|([A-Za-z_][\w-]*)\s*\(\))\s*\{(.*)$")
@@ -945,20 +1184,51 @@ def shell_segments(text, first_line=1):
     """The simple commands of a piece of shell, as (first line, last line, text), split outside
     quotes at newlines, ;, &&, ||, | and &, with a backslash-newline read as a space. What a
     command substitution, $(…) or backticks, holds is read as commands of its own, at the line
-    where it starts; arithmetic, $((…)) and ((…)), holds none."""
+    where it starts; arithmetic, $((…)) and ((…)), holds none. A case pattern, which stands
+    after `case … in` and after `;;`, names values, so it is no command, whatever its
+    alternatives and however it is spelled."""
     segments = []
     current, start, line = [], first_line, first_line
     i, n = 0, len(text)
     quote = None
     parens = 0
+    pattern_next = False
+    CASE_HEAD = re.compile(r"^\s*case\s+.+\s+in$")
 
     def close(end_line):
-        nonlocal current, start
+        nonlocal current, start, pattern_next
         body = "".join(current).strip()
         if body:
             segments.append((start, end_line, body))
+            if CASE_HEAD.match(body):
+                pattern_next = True
         current = []
         start = end_line
+
+    def pattern_end(at):
+        """The index of the ) that ends a case pattern starting at text[at], and the newlines
+        it crosses."""
+        k, depth, crossed = at + (text[at] == "("), 0, 0
+        while k < n:
+            ch = text[k]
+            if ch == "\\" and k + 1 < n:
+                crossed += text[k + 1] == "\n"
+                k += 2
+                continue
+            if ch in "'\"":
+                close_at = text.find(ch, k + 1)
+                k = n if close_at < 0 else close_at + 1
+                continue
+            if ch == "\n":
+                crossed += 1
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == 0:
+                    return k, crossed
+                depth -= 1
+            k += 1
+        return n, crossed
 
     def matching(at, opener, closer):
         """The index just past the closer that matches an opener at text[at]."""
@@ -986,6 +1256,19 @@ def shell_segments(text, first_line=1):
 
     while i < n:
         c = text[i]
+        if pattern_next and not quote and c not in " \t\n#":
+            pattern_next = False
+            if not re.match(r"esac\b", text[i:i + 5]):
+                end, crossed = pattern_end(i)
+                line += crossed
+                current, start = [], line
+                i = end + 1
+                continue
+        if not quote and c in " \t" and CASE_HEAD.match("".join(current)):
+            # `case x in` followed on the same line by its first pattern.
+            close(line)
+            i += 1
+            continue
         if c == "\\" and i + 1 < n and text[i + 1] == "\n" and quote != "'":
             current.append(" ")
             line += 1
@@ -1074,6 +1357,12 @@ def shell_segments(text, first_line=1):
             close(line)
             i += 1
             continue
+        if text.startswith(";;", i) or text.startswith(";&", i):
+            # The end of a case item: a pattern or esac comes next.
+            close(line)
+            pattern_next = True
+            i += 3 if text.startswith(";;&", i) else 2
+            continue
         if c in ";|&":
             close(line)
             i += 1
@@ -1117,13 +1406,24 @@ def command_words(words, scalars, arrays):
             return []
         if re.match(r"^[A-Za-z_]\w*(\[[^]]*\])?\+?=", word) or word in RESERVED_WORDS:
             k += 1
+            if word == "time":
+                # time's own options, as in `time -p`.
+                while k < len(words) and words[k].startswith("-"):
+                    k += 1
             continue
         if os.path.basename(word) in PREFIX_WORDS:
             if word == "command" and k + 1 < len(words) and words[k + 1] in ("-v", "-V"):
                 return []
             k += 1
+            if word == "coproc" and k + 1 < len(words) and re.match(r"^[A-Za-z_]\w*$", words[k]) and words[k + 1] == "{":
+                # `coproc NAME { …; }`: the name is the coprocess's, not a command.
+                k += 1
+                continue
             while k < len(words) and (words[k].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[k])):
-                k += 1 + (words[k] in ("-u", "-n", "-g", "-C", "-arch", "-I", "-J", "-L", "-P", "-s", "-E", "-R", "-S"))
+                if os.path.basename(word) == "env" and words[k] in ("-S", "--split-string") and k + 1 < len(words):
+                    # env -S splits its next word into the command and its arguments.
+                    return command_words(shell_words(words[k + 1]) + words[k + 2:], scalars, arrays)
+                k += 1 + (words[k] in PREFIX_VALUE_OPTIONS)
             continue
         if word in LOOKUP_WORDS:
             return []
@@ -1131,10 +1431,14 @@ def command_words(words, scalars, arrays):
     rest = words[k:]
     if rest:
         variable = re.match(r"^\$\{?([A-Za-z_]\w*)(\[[@*]\])?\}?$", rest[0])
+        default = DEFAULT_EXPANSION.match(rest[0])
         if variable and variable.group(1) in arrays:
             rest = arrays[variable.group(1)] + rest[1:]
         elif variable and variable.group(1) in scalars:
             rest = scalars[variable.group(1)].split() + rest[1:]
+        elif default:
+            held = scalars.get(default.group(1))
+            rest = (held.split() if held else (default.group(2) + default.group(3)).split()) + rest[1:]
     return rest
 
 
@@ -1170,10 +1474,12 @@ def cmd_unbounded_calls(files):
     such as xcb's own xcodebuild, carries `# limit: <wrapper>`, where <wrapper> is the function
     that holds the line; then every call of the wrapper must be bounded in its turn. The file
     is read as shell: its simple commands, split outside quotes; what command substitutions,
-    eval and bash -c hold; and a command word held in a variable or array of the same file.
+    eval, bash -c, env -S, a trap's action and find's -exec hold; and a command word held in a
+    variable or array of the same file, or given as a default, as in ${XCODEBUILD:-xcodebuild}.
     What it cannot see: a command word built at run time, such as one read from a file or put
-    together from pieces; an alias; a script that a call runs; and a function named in a
-    variable that is assigned in another file. The steps other packages own (OTHER_PARTS) are
+    together from pieces; an alias; a command that another runs from its arguments, such as
+    script; a script that a call runs; and a function named in a variable that is assigned in
+    another file. The steps other packages own (OTHER_PARTS) are
     listed and left to them."""
     findings, wrappers, calls = set(), {}, []
     for path in files:
@@ -1214,30 +1520,59 @@ def cmd_unbounded_calls(files):
         markers = {n: m.group(1) for n, line in enumerate(raw, 1) if (m := LIMIT_MARKER.search(line))}
         others = [part_markers(text, name) for name in OTHER_PARTS]
         segments = shell_segments("\n".join(lines))
-        # Simple assignments of a word or an array, for a command word held in a variable.
+        # Simple assignments of a word or an array, for a command word held in a variable. An
+        # array may be built by `+=`. A `for` loop's variable is held as the value of its list
+        # that is a start, if one is, so that `for tool in xcodebuild; do "$tool" …` is read.
         scalars, arrays = {}, {}
         for _, _, segment in segments:
-            assign = re.match(r"^(?:(?:local|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=\((.*)\)$", segment)
+            assign = re.match(r"^(?:(?:local|readonly|declare|typeset)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)(\+?)=\((.*)\)$", segment)
             if assign:
-                arrays[assign.group(1)] = shell_words(assign.group(2))
+                held = arrays.get(assign.group(1), []) if assign.group(2) else []
+                arrays[assign.group(1)] = held + shell_words(assign.group(3))
+                continue
+            loop = re.match(r"^for\s+([A-Za-z_]\w*)\s+in\s+(.*)$", segment)
+            if loop:
+                values = shell_words(loop.group(2))
+                if values:
+                    scalars[loop.group(1)] = next((v for v in values if limited_call(v.split())), values[0])
                 continue
             for word in shell_words(segment):
-                assign = re.match(r"^([A-Za-z_]\w*)=([\w./-]+)$", word)
+                assign = re.match(r"^([A-Za-z_]\w*)=([\w./ -]+)$", word)
                 if assign:
                     scalars[assign.group(1)] = assign.group(2)
+                for assign in DEFAULT_ASSIGNMENT.finditer(word):
+                    scalars.setdefault(assign.group(1), assign.group(2))
 
-        def commands(segment):
-            """The commands a simple command runs: itself, and what eval or bash -c holds."""
-            words = command_words(shell_words(segment), scalars, arrays)
+        def commands(segment, words=None):
+            """The commands a simple command runs: itself, and what eval, bash -c, a trap's
+            action and find's -exec hold."""
+            if words is None:
+                words = shell_words(segment)
+            words = command_words(words, scalars, arrays)
             yield words
-            if words[:1] == ["eval"]:
-                for inner in shell_segments(" ".join(words[1:])):
-                    yield from commands(inner[2])
-            if words and os.path.basename(words[0]) in ("bash", "sh", "zsh") and "-c" in words:
+            name = os.path.basename(words[0]) if words else ""
+            held = []
+            if name == "eval":
+                held.append(" ".join(words[1:]))
+            if name in ("bash", "sh", "zsh") and "-c" in words:
                 at = words.index("-c")
                 if at + 1 < len(words):
-                    for inner in shell_segments(words[at + 1]):
-                        yield from commands(inner[2])
+                    held.append(words[at + 1])
+            if name == "trap":
+                action = [w for w in words[1:] if w != "--"]
+                if action and not action[0].startswith("-"):
+                    held.append(action[0])
+            for text in held:
+                for inner in shell_segments(text):
+                    yield from commands(inner[2])
+            if name == "find":
+                at = 1
+                while at < len(words):
+                    if words[at] in ("-exec", "-execdir", "-ok", "-okdir"):
+                        end = next((e for e in range(at + 1, len(words)) if words[e] in (";", "+")), len(words))
+                        yield from commands("", words[at + 1:end])
+                        at = end
+                    at += 1
 
         for first, last, segment in segments:
             part = next((name for name, span in zip(OTHER_PARTS, others) if span and span[0] <= first <= span[1]), None)
@@ -1410,6 +1745,12 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "test-events":
+        return cmd_test_events(args[0], "--gate" in args[1:])
+    if command == "unended-tests":
+        return cmd_unended_tests(args[0])
+    if command == "workflows":
+        return cmd_workflows(option(args, "--file", NIGHTLY))
     if command == "lint":
         only = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "--files"]
         return cmd_lint(only or None, option(args, "--as"), option(args, "--manifest"))
