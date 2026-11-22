@@ -298,8 +298,13 @@ knot_limit() {
     kill "$timer" 2>/dev/null || true
     wait "$timer" 2>/dev/null || true
     if kill -0 "$pid" 2>/dev/null; then
-        knot_end_process "$pid"
-        wait "$pid" 2>/dev/null || true
+        # bash reports a job that a signal ended, "<pid> Terminated: 15", with this file's
+        # path, on its own standard error as it reaps the job: during the ending and the wait.
+        # The step's log and the console carry the limit's own message instead.
+        {
+            knot_end_process "$pid"
+            wait "$pid" || true
+        } 2>/dev/null
         KNOT_LIMIT_HIT=1
         return 124
     fi
@@ -466,9 +471,59 @@ knot_make_audio() {
 # Prints the lines of a test log that report a test that did not run its body: skipped by a
 # trait ("Test x() skipped: …") or cancelled at run time ("Test x() was cancelled after …"),
 # each line once. The summary counts them as skipped, and the gate fails on any.
+# Only an event line counts, by its two ends: at its start Swift Testing's glyph, which is
+# no ASCII character, two spaces and "Test "; at its end "skipped", "skipped." or
+# `skipped: "…"`, or "was cancelled after <n> seconds" with the same endings. Whatever lies
+# between is the name, quotes and all, as in `Test "He said "hi"" skipped`. A line a test
+# prints, one that starts with a tab among them, and a passing test whose name holds
+# "skipped" are not one. XCTest's own form, "Test Case '…' skipped", counts too.
 #   knot_skipped_tests <log>
 knot_skipped_tests() {
-    grep -E 'Test .* (skipped|was cancelled after)' "$1" || true
+    LC_ALL=C grep -E \
+        -e '^[^[:cntrl:][:print:]]+  Test .+ (skipped|was cancelled after [0-9.]+ seconds)(\.|: ".*")?$' \
+        -e "^Test [Cc]ase '[^']+' skipped" "$1" || true
+}
+
+# Prints a path for a line that may end in the journal, with no home folder in it: a path
+# under the home folder, as given or resolved, as "the home folder's <the rest>", and any
+# other path as it is.
+#   knot_home_path <path>
+knot_home_path() {
+    local path=$1 home
+    for home in "$HOME" "$(cd "$HOME" 2>/dev/null && pwd -P)"; do
+        [[ -n $home ]] || continue
+        if [[ $path == "$home" ]]; then
+            printf 'the home folder\n'
+            return
+        elif [[ $path == "$home"/* ]]; then
+            printf "the home folder's %s\n" "${path#"$home"/}"
+            return
+        fi
+    done
+    printf '%s\n' "$path"
+}
+
+# Prints a piece of text, such as a tool's own error message, with every path under the
+# home folder in it, as given or resolved, written as knot_home_path writes one.
+#   knot_home_text <text>
+knot_home_text() {
+    local text=$1 home under="the home folder's " itself="the home folder"
+    # The resolved form first: it can be the longer, as /private/var is beside /var. The
+    # replacements are variables, since bash 3.2 keeps a backslash in a quoted one.
+    for home in "$(cd "$HOME" 2>/dev/null && pwd -P)" "$HOME"; do
+        [[ -n $home ]] || continue
+        text="${text//"$home"\//$under}"
+        text="${text//"$home"/$itself}"
+    done
+    printf '%s\n' "$text"
+}
+
+# Prints the lines of a Swift Testing log that report a failed test, each once: an event line
+# of a test, "Test x() failed after …", and not the run's own "Test run with … failed after".
+#   knot_failed_tests <log>
+knot_failed_tests() {
+    LC_ALL=C grep -E '^[^[:cntrl:][:print:]]+  Test .+ failed after [0-9.]+ seconds' "$1" |
+        LC_ALL=C grep -v -E '^[^[:cntrl:][:print:]]+  Test run with ' || true
 }
 
 # Runs one simctl call on a simulator with a time limit, and fails, naming the simulator,
@@ -627,19 +682,40 @@ knot_scrub_logs() {
     done
 }
 
+# Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error
+# lines, "<file>:<line>: error: …", by file and line with the folder taken off, each once and
+# at most twenty, and then the longer log they come from, by its path in the tree.
+#   knot_xctest_failures <log>
+knot_xctest_failures() {
+    local log=$1 errors total
+    errors="$(grep -a -E '^.+:[0-9]+: error: ' "$log" | sed -E 's|^.*/([^/]+:[0-9]+: error: )|\1|' |
+        awk '!seen[$0]++' || true)"
+    total=$(grep -c . <<<"$errors" || true)
+    if [[ -n $errors ]]; then
+        echo "The failed cases' errors:"
+        printf '%s\n' "$errors" | head -n 20 | cut -c1-400 | sed 's/^/    /'
+        ((total <= 20)) || echo "    … $((total - 20)) more error lines are in the long log."
+    else
+        echo "The run wrote no error line for its failed cases."
+    fi
+    echo "The whole run is in ${log#"$KNOT_ROOT"/}."
+}
+
 # Judges the log of an xcodebuild test run of XCTest cases, such as UI tests. Prints one line,
-# "xctest: N passed, M failed", and returns 1 when no case passed, when a case failed, or
+# "xctest: N passed, M failed, K skipped", and returns 1 when no case passed, when a case failed, or
 # when a destination named after the log has no passed case: a run that executed 0 tests is
 # a failure, not a pass. A run on several destinations writes "passed on '<name> - …'".
 #   knot_xctest_result <log> [destination name…]
 knot_xctest_result() {
-    local log=$1 passed failed destination missing=""
+    local log=$1 passed failed skipped destination missing=""
     shift
     passed=$(grep -a -c -E "Test [Cc]ase '[^']+' passed" "$log" || true)
     failed=$(grep -a -c -E "Test [Cc]ase '[^']+' failed" "$log" || true)
+    # A skipped case is no pass and no failure; the step reports it (report_skips in verify.sh).
+    skipped=$(grep -a -c -E "^Test [Cc]ase '[^']+' skipped" "$log" || true)
     for destination in "$@"; do
         grep -a -F -e "passed on '$destination" "$log" >/dev/null || missing="$missing $destination"
     done
-    echo "xctest: $passed passed, $failed failed${missing:+, none passed on:$missing}"
+    echo "xctest: $passed passed, $failed failed, $skipped skipped${missing:+, none passed on:$missing}"
     ((passed > 0 && failed == 0)) && [[ -z $missing ]]
 }

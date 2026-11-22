@@ -6,15 +6,18 @@ import Synchronization
 import Testing
 
 /// A scripted recorder writing through the power-cut layer, with its layer.
-func scriptedRecorder(script: ScriptedRecorder.Script = .init(), writeDelay: Duration? = nil) throws -> (
-    ScriptedRecorder, PowerCutFileLayer
-) {
+func scriptedRecorder(
+    script: ScriptedRecorder.Script = .init(), writeDelay: Duration? = nil,
+    cues: any CueEmitter = UnavailableCueEmitter()
+) throws -> (ScriptedRecorder, PowerCutFileLayer) {
     let layer = PowerCutFileLayer()
     try layer.createFolder(URL(fileURLWithPath: "/work", isDirectory: true))
     try layer.syncFolder(URL(fileURLWithPath: "/", isDirectory: true))
     let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/work", isDirectory: true))
     let used: any FileLayer = writeDelay.map { SlowFileLayer(layer, delay: $0) } ?? layer
-    return (ScriptedRecorder(locations: locations, layer: used, clock: FakeClock(), script: script), layer)
+    return (
+        ScriptedRecorder(locations: locations, layer: used, clock: FakeClock(), script: script, cues: cues), layer
+    )
 }
 
 /// A drive whose writes of content take a while, so that a race between two callers shows.
@@ -41,11 +44,13 @@ final class SlowFileLayer: FileLayer {
 }
 
 func recorderSubject(writeDelay: Duration? = nil) throws -> RecorderSubject {
-    let (recorder, layer) = try scriptedRecorder(writeDelay: writeDelay)
+    let cues = RecordingCueEmitter()
+    let (recorder, layer) = try scriptedRecorder(writeDelay: writeDelay, cues: cues)
     return RecorderSubject(
         recorder: recorder, locations: recorder.locations, exists: { layer.exists($0) },
         size: { (try? layer.read($0))?.count }, read: { try? layer.read($0) },
-        setReadable: { layer.setReadable($0, $1) }, remove: { try? layer.remove($0) })
+        setReadable: { layer.setReadable($0, $1) }, remove: { try? layer.remove($0) }, cues: { cues.cues },
+        failNextStart: { recorder.failNextStarts(with: $0) })
 }
 
 func recordingRequest(_ launch: LaunchID = Identifier(uuid: UUID())) -> RecordingRequest {

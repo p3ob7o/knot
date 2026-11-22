@@ -237,6 +237,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
+| WP-22 | 22a | The ordering test keeps one live composition per store: a test of the composition's that failed under the strict cooperative pool, made right | WP-22 PR 1 |
 | WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13; WP-14 |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
