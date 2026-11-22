@@ -4,7 +4,12 @@ import Synchronization
 
 /// The one capture engine (docs/architecture.md §5 and §6): typed captures and recordings,
 /// through the one `NoteStore` operation for each save, with `Inbox/` behind every one of them.
-/// Drawings come with WP-11 PR 3: a drawing's `begin` throws `port_unavailable`.
+/// Drawings come with WP-11 PR 4: a drawing's `begin` throws `port_unavailable`.
+///
+/// The press and the live view. Where there is an engine, it is the one applier of a press of a
+/// record control (`press`): the press rule against its own recordings and the saved state, with
+/// the cues that are the recorder's caller's. Each open recording has a live view (`live`), its
+/// levels and its words so far, for the screen only.
 ///
 /// The paths. A capture begins on the store path, where the capture row is its first durable
 /// write. A recording writes its manifest first, through the `Recorder`, and its row after.
