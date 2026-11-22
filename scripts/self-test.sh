@@ -1143,6 +1143,9 @@ two"
 􁁛  Test run with 2 tests in 1 suite passed after 0.005 seconds.
 LOG
 cp "$sl/logs/lookalike.log" "$sl/logs/no-stream.log"
+# A run whose console says tests ran while its stream holds a run with no test in it, as a
+# filter that matched nothing writes it (item 108, its second half).
+cp "$sl/logs/lookalike.log" "$sl/logs/no-test-in-stream.log"
 cp "$sl/logs/lookalike.log" "$sl/logs/no-run-end.log"
 python3 -I - "$sl/logs" <<'PY'
 import json, os, sys
@@ -1152,6 +1155,10 @@ def stream(name, tests, events, ended=True):
     lines = [{"kind": "test", "payload": {"id": i, "name": n, "displayName": d, "kind": "function"}, "version": 0}
              for i, n, d in tests]
     lines.append({"kind": "event", "payload": {"kind": "runStarted"}, "version": 0})
+    skipped = {i for kind, i, _ in events if kind == "testSkipped"}
+    for i, _, _ in tests:
+        if i not in skipped:
+            lines.append({"kind": "event", "payload": {"kind": "testStarted", "testID": i}, "version": 0})
     for kind, i, case in events:
         payload = {"kind": kind, "testID": i}
         if case:
@@ -1175,6 +1182,7 @@ stream("reason-two-lines", [plain, ("r", "multiLineReason()", None)], [("testSki
 stream("name-two-lines", [plain, ("n", "multiLineName()", "two\nlines")], [("testSkipped", "n", None)])
 stream("cancel-two-lines", [plain, ("m", "cancelMultiLine()", None)], [("testCancelled", "m", None)])
 stream("no-run-end", [plain], [], ended=False)
+stream("no-test-in-stream", [], [])
 PY
 skip_loop() { # skip_loop <log> <tier>: the step's line and the summary's tests
     local status=0 run="$sl/run-$1-$2"
@@ -1209,14 +1217,16 @@ for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name
 done
 no_stream="$(skip_loop no-stream quick)"
 no_run_end="$(skip_loop no-run-end quick)"
+no_test_in_stream="$(skip_loop no-test-in-stream quick)"
 expected_verdicts=""
 for run in case-cancel-split alias-cancel case-task-cancel reason-two-lines name-two-lines cancel-two-lines; do
     expected_verdicts="$expected_verdicts $run: 1 FAIL · tests 2 passed, 0 failed, 1 skipped / 0 ok · tests 2 passed, 0 failed, 1 skipped;"
 done
-if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* ]]; then
+if [[ $stream_verdicts == "$expected_verdicts" && $no_stream == "1 FAIL"* && $no_run_end == "1 FAIL"* &&
+    $no_test_in_stream == "1 FAIL"* ]]; then
     pass "the event stream fails the gate on a cancelled case printed as passed and on events over two lines, and a run with no complete stream fails"
 else
-    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end'"
+    fail "the event stream through verify's loop:$stream_verdicts no stream '$no_stream', no end of run '$no_run_end', no test in the stream '$no_test_in_stream'"
 fi
 
 # worktree-remove.sh prints no path with the home folder in it, since its lines end in the
@@ -1321,7 +1331,8 @@ printf '%s\n' "􁁛  Test aWaitThatBlocks() passed after 0.002 seconds."
 printf '%s\n' "􁁛  Test run with 2 tests in 1 suite passed after 0.003 seconds."
 if [ -n "$stream" ]; then
     printf '%s\n' '{"kind":"test","payload":{"id":"w","name":"aWaitThatBlocks()","kind":"function"},"version":0}' \
-        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' >"$stream"
+        '{"kind":"event","payload":{"kind":"runStarted"},"version":0}' \
+        '{"kind":"event","payload":{"kind":"testStarted","testID":"w"},"version":0}' >"$stream"
     [ "$mode" = cancel-stream ] &&
         printf '%s\n' '{"kind":"event","payload":{"kind":"testCaseCancelled","testID":"w","_testCase":{"displayName":"2"}},"version":0}' >>"$stream"
     printf '%s\n' '{"kind":"event","payload":{"kind":"runEnded"},"version":0}' >>"$stream"

@@ -896,12 +896,13 @@ def cmd_test_events(path, gate=False):
     object a line, every target's run appended to the one file. It prints each test skipped,
     test cancelled and case cancelled, which the console can print as passed or over two
     lines, and a summary line that the run's summary reads. It fails when the stream is
-    missing, or holds no run, or a run that did not end; and, with --gate, when any test or
+    missing, or holds no run, or a run that did not end, or no test started or skipped, as when
+    a filter matches nothing; and, with --gate, when any test or
     case did not run. Names are printed with a newline written as \\n, and no path."""
     if not os.path.exists(path):
         print(f"events: the run wrote no event stream at {os.path.basename(path)}")
         return 2
-    names, notes, runs_started, runs_ended, tests, malformed = {}, [], 0, 0, 0, 0
+    names, notes, runs_started, runs_ended, tests, malformed, reached = {}, [], 0, 0, 0, 0, 0
     with open(path, errors="replace") as f:
         for line in f:
             try:
@@ -922,7 +923,10 @@ def cmd_test_events(path, gate=False):
                 runs_started += 1
             elif event == "runEnded":
                 runs_ended += 1
+            elif event == "testStarted":
+                reached += 1
             elif event == "testSkipped":
+                reached += 1
                 notes.append(f"skipped: {name}")
             elif event == "testCancelled":
                 notes.append(f"cancelled: {name}")
@@ -935,6 +939,11 @@ def cmd_test_events(path, gate=False):
           f"{f', {malformed} lines unread' if malformed else ''}")
     if runs_started == 0 or runs_ended < runs_started:
         print("events: the stream holds no run, or a run that did not end, so it cannot say that every test ran")
+        return 2
+    if reached == 0:
+        # A filter that matches nothing ends with status 0 and "No matching test cases were
+        # run": the run is complete and holds no test.
+        print("events: no test ran: the run's stream holds no test started or skipped, as when a filter matches nothing")
         return 2
     if gate and notes:
         print("events: the gate requires every test and every case to run")
