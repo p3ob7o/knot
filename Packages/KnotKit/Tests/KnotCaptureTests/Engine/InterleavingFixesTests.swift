@@ -142,7 +142,12 @@ import Testing
         reads.withLock { $0 = true }
         _ = try await engine.discard(id)
         await engine.retryConversions()
-        #expect(r.logs.lines.contains("pending_end_row_not_read capture=\(id) code=store_busy"))
+        // The discard schedules the engine's old work, which runs detached and may take the pending
+        // end before the call above: wait for the line it logs, whichever of the two settles it.
+        #expect(
+            await eventually("the row's read to be refused and logged") {
+                r.logs.lines.contains("pending_end_row_not_read capture=\(id) code=store_busy")
+            })
         #expect(r.logs.lines.filter { $0.hasPrefix("discard_end_settled capture=\(id)") }.isEmpty)
     }
 }
