@@ -9,7 +9,7 @@
     /// know, at any size of run, and every point of the soak's lists is one it knows.
     @Suite struct SoakKillPointTests {
         @Test func everyListedPointIsOneTheChildKnows() {
-            for point in SoakKillPoint.typedCaptures {
+            for point in SoakKillPoint.captures {
                 guard case .child(let name) = point.trigger else { continue }
                 #expect(KillPointNames.isKnown(name), "The child does not know \(name).")
             }

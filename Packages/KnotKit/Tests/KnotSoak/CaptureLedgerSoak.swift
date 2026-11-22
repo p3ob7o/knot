@@ -92,7 +92,8 @@
             + "store refuses or holds past the engine's deadline; it does not fix the order of the engine's work in "
             + "the background beside the script, which can move a pass of a store or log point, and so a launch's "
             + "end and the launches after it; nor where an anywhere kill lands, a seeded delay after its "
-            + "acknowledgement, in whatever the child is doing then"
+            + "acknowledgement, in whatever the child is doing then. So the seed alone may not repeat a finding: "
+            + "what repeats one is the kept store, with a launch of the child that only recovers, over a copy of it"
 
         /// One launch of the child and how it ended.
         struct Launch: Sendable, CustomStringConvertible {
@@ -139,6 +140,8 @@
             /// The temporaries of writes a kill cut that recovery left in `Inbox/`, counted over
             /// the run's launches (`SoakWitness.partialsLeft`).
             var partialsLeft = 0
+            /// The temporaries of cut peaks writes that recovery left in `Recording/`.
+            var peaksLeft = 0
 
             var isGreen: Bool { problems.isEmpty }
 
@@ -147,7 +150,23 @@
                 Verdict(
                     seed: seed, problems: problems, launches: launches, captures: captures,
                     acknowledgements: acknowledgements, configuration: configuration, duration: duration,
-                    stoppedByTimeBox: stoppedByTimeBox, keptStore: folder.path, partialsLeft: partialsLeft)
+                    stoppedByTimeBox: stoppedByTimeBox, keptStore: folder.path, partialsLeft: partialsLeft,
+                    peaksLeft: peaksLeft)
+            }
+
+            /// The command that runs, over a copy of the kept store, the launch after the run's last,
+            /// which runs no capture and only recovers: what repeats a finding whose kill landed by
+            /// time. A copy, for recovery changes the store it runs over.
+            var recoveryReplay: String? {
+                guard let keptStore, let child = CrashHost.executableURL(named: "KnotSoakChild") else { return nil }
+                let end = String(configuration.captures)
+                var arguments = [
+                    "run", "--root", "\"$copy\"", "--seed", String(seed), "--launch", String(launches.count + 1),
+                    "--from", end, "--to", end, "--count", end,
+                ]
+                if let fault = configuration.fault { arguments += ["--fault", fault] }
+                return "copy=\"$(mktemp -d)/store\"; cp -R '\(keptStore)' \"$copy\"; '\(child.path)' "
+                    + arguments.joined(separator: " ")
             }
 
             /// How many launches a kill ended.
@@ -185,6 +204,12 @@
                 ]
                 if let keptStore { lines.append("the store is kept at \(keptStore)") }
                 lines.append("kills by point: " + killTally)
+                if peaksLeft > 0 {
+                    lines.append(
+                        "peaks_temporaries_left \(peaksLeft): temporaries of peaks writes a kill cut, left in Recording/; "
+                            + "\(SoakRules.peaksTemporariesAreRed ? "red" : "counted, not red until WP-12 PR 3 clears them")"
+                    )
+                }
                 if partialsLeft > 0 {
                     lines.append(
                         "inbox_partials_left \(partialsLeft): temporaries of writes a kill cut, left in Inbox/; "
@@ -194,6 +219,9 @@
                     lines.append("configuration: \(configuration.line)")
                     lines.append("repeat it with: \(configuration.replay)")
                     lines.append(CaptureLedgerSoak.whatASeedFixes)
+                    if let recovery = recoveryReplay {
+                        lines.append("replay the recovery over a copy of the kept store with: \(recovery)")
+                    }
                     if problems.contains(where: { $0.code == CaptureLedgerSoak.timeBoxCode }) {
                         lines.append(
                             "the time box cut the run short: that is not a failure of the ledger, and the run may be "
@@ -300,7 +328,8 @@
                 captures: witness.highestIntent + 1, acknowledgements: witness.acknowledged,
                 configuration: configuration, duration: ContinuousClock.now - started,
                 stoppedByTimeBox: stoppedByTimeBox,
-                keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft)
+                keptStore: problems.isEmpty ? nil : folder.path, partialsLeft: witness.partialsLeft,
+                peaksLeft: witness.peaksTemporaries.count)
         }
 
         /// The code of a run that its time box cut short: not a failure of the ledger, and one
@@ -341,6 +370,10 @@
                 case (.quit, _): .quit
                 default: .failed
                 }
+            // `KNOT_SOAK_TRACE=1` prints every line the child printed: IDs, numbers, codes and hashes.
+            if ProcessInfo.processInfo.environment["KNOT_SOAK_TRACE"] == "1" {
+                for line in child.lines { print("child \(number): \(line)") }
+            }
             let problems = witness.absorb(
                 child.lines, launch: number, range: range, end: end, afterKill: previousWasKilled,
                 capturesDuringRecovery: SoakLaunch.recoversWhileCapturing(seed: configuration.seed, launch: number))
