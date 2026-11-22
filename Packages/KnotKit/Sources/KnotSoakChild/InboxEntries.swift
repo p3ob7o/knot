@@ -147,12 +147,9 @@
         /// WP-15's first pull request: launch recovery removes them (`LaunchRecovery.removeInboxPartials`).
         static let inboxPartialsAreRed = true
 
-        /// Whether a temporary of a cut peaks write left in `Recording/` turns the soak red. Not
-        /// yet: the recorder makes its peaks file atomically, through a temporary that a kill can
-        /// leave, and its recovery looks only at working files, manifests and its own partials.
-        /// Nothing acknowledged is lost in one. The fix is the recorder's, in WP-12's third pull
-        /// request, which turns this to true. Until then each is counted, and more of them than kills that could have
-        /// cut them is red (`peaks_temporaries_beyond_kills`).
-        static let peaksTemporariesAreRed = false
+        /// Whether a temporary of a cut peaks write left in `Recording/` turns the soak red. It
+        /// does since WP-12's third pull request: the recorder makes its peaks file in place, with
+        /// no temporary, so a kill can only cut the file short, and one left is a fault.
+        static let peaksTemporariesAreRed = true
     }
 #endif

@@ -36,8 +36,11 @@
                 killPoints: [.step("after_checkpoint", passes: 1...6), .anywhere(passes: 2...9)],
                 launchBudget: 3...7, timeBox: .seconds(90))
             configuration.fault = "acknowledgement-before-write"
+            configuration.covering = .init(
+                point: .anywhere(passes: 1...1), enabler: .step("after_begin", passes: 1...1))
             let read = try #require(CaptureLedgerSoak.Configuration.parse(configuration.line))
             #expect(read.line == configuration.line)
+            #expect(read.covering?.point == configuration.covering?.point)
             #expect(read.killPoints == configuration.killPoints)
             #expect(CaptureLedgerSoak.Configuration.parse("seed=1;captures=x") == nil)
         }

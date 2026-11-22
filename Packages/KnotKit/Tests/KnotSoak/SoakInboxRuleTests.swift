@@ -86,7 +86,7 @@
             #expect(
                 SoakWitness.peaksProblems(entries.peaksTemporaries, known: [temporary], allowance: 0, red: false)
                     .isEmpty)
-            #expect(SoakRules.peaksTemporariesAreRed == false, "WP-12 turns it, with the fix.")
+            #expect(SoakRules.peaksTemporariesAreRed, "WP-12 PR 3 turned it: the peaks file is made in place.")
             #expect(
                 SoakWitness.peaksProblems(entries.peaksTemporaries, known: [temporary], allowance: 0, red: true).map(
                     \.code)

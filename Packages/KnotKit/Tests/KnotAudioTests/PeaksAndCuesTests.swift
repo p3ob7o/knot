@@ -33,6 +33,30 @@ import Testing
         #expect(!exists(url))
     }
 
+    /// The peaks file is made in place, never through a temporary beside it, which a kill could
+    /// leave in `Recording/`: a file already at its name keeps its inode and holds the new peaks,
+    /// where a write through a temporary would put a new file in its place. Nothing else is left
+    /// in the folder but the recording's own files.
+    @Test func thePeaksFileIsMadeInPlace() async throws {
+        let folder = try ScratchFolder()
+        let request = request()
+        let url = folder.locations.recordingPeaks(request.captureID)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("stale".utf8).write(to: url)
+        let before = try #require(try FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int)
+        let live = recorder(folder.locations, input: injected(frames: 16_000))
+        let session = try await live.start(request)
+        await durable(atLeast: 16_000, of: session)
+        _ = await session.stop()
+        let after = try #require(try FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int)
+        #expect(after == before, "The peaks file was put in place of the one at its name.")
+        let peaks = try #require(RecordingPeaks(reading: try Data(contentsOf: url)))
+        #expect(peaks.values == Self.expectedPeaks(synthetic(16_000), framesPerValue: 800))
+        let capture = folder.locations.recordingManifest(request.captureID).deletingPathExtension().lastPathComponent
+        let names = recordingFolder(folder.locations)
+        #expect(names.allSatisfy { $0.hasPrefix(capture + ".") }, "Only the recording's files: \(names)")
+    }
+
     /// The peaks go first, before the working file and the manifest, whether the working file is
     /// removed or the recording discarded: a removal that fails on the working file has taken the
     /// peaks already, and a peaks file never outlives its recording.

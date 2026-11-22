@@ -69,12 +69,32 @@ public struct InjectedAudio: AudioInput {
     }
 }
 
-/// Injected audio opened for one recording: a task that delivers its buffers.
+/// Injected audio opened for one recording. Its buffers are delivered from a queue of its own,
+/// as the hardware's tap delivers from the audio's thread, never from a thread of the
+/// cooperative pool: the recorder writes and measures each buffer in the delivery, so an
+/// injected recording does that where a real one does. Each buffer waits on the queue for its
+/// pace, and a stop returns once no delivery is under way and none will follow.
 final class OpenInjectedAudio: OpenAudioInput {
     let source: InjectedAudio
     let commonFormat = AVAudioCommonFormat.pcmFormatInt16
-    private let feeder = Mutex<Task<Void, Never>?>(nil)
-    private let stopped = Mutex(false)
+    private let queue = DispatchQueue(label: "knot.audio.injected", qos: .userInitiated)
+    private let state = Mutex(Feed())
+
+    private struct Feed {
+        var started = false
+        var stopped = false
+        /// True once the feeder delivers nothing more: its source ran out or ended, or it stopped.
+        var finished = false
+        /// Stops waiting for the feeder to finish.
+        var waiting: [CheckedContinuation<Void, Never>] = []
+    }
+
+    /// What one recording's feeder hands over, and since when.
+    private struct Feeder: Sendable {
+        let format: AVAudioFormat
+        let deliver: @Sendable (AudioDelivery) -> Void
+        let began: DispatchTime
+    }
 
     var sampleRate: Double { source.sampleRate }
 
@@ -84,56 +104,81 @@ final class OpenInjectedAudio: OpenAudioInput {
 
     func start(format: AVAudioFormat, deliver: @escaping @Sendable (AudioDelivery) -> Void) throws(KnotError) {
         if let failure = source.startFailure { throw failure }
-        let source = self.source
-        let task = Task.detached {
-            await Self.feed(source, format: format, deliver: deliver)
+        // A stop that came first leaves nothing to start.
+        let begins = state.withLock { state in
+            guard !state.stopped, !state.started else { return false }
+            state.started = true
+            return true
         }
-        let late = feeder.withLock { feeder in
-            feeder = task
-            return stopped.withLock { $0 }
-        }
-        if late { task.cancel() }
+        guard begins else { return }
+        let feeder = Feeder(format: format, deliver: deliver, began: .now())
+        queue.async { [self] in next(feeder, index: 0, position: 0) }
     }
 
     func stop() async {
-        stopped.withLock { $0 = true }
-        let task = feeder.withLock { $0 }
-        task?.cancel()
-        await task?.value
+        let started = state.withLock { state in
+            state.stopped = true
+            return state.started
+        }
+        guard started else { return }
+        // After the delivery under way, if any: the feeder's queue is serial.
+        queue.async { [self] in finish() }
+        await withCheckedContinuation { (stop: CheckedContinuation<Void, Never>) in
+            let finished = state.withLock { state in
+                if !state.finished { state.waiting.append(stop) }
+                return state.finished
+            }
+            if finished { stop.resume() }
+        }
     }
 
-    /// Delivers the buffers, paced, until the end of the source or a stop.
-    private static func feed(
-        _ source: InjectedAudio, format: AVAudioFormat, deliver: @Sendable (AudioDelivery) -> Void
-    ) async {
-        let clock = ContinuousClock()
-        let began = clock.now
-        let bufferLength = Duration.seconds(Double(source.framesPerBuffer) / source.sampleRate)
-        var position: Int64 = 0
-        var index = 0
-        while !Task.isCancelled {
-            if let total = source.frames, position >= total {
-                if case .ends(let why) = source.ending { deliver(.ended(why)) }
-                return
-            }
-            switch source.pace {
-            case .realTime:
-                // Buffer n arrives once n + 1 buffers' worth of audio has passed, as from a tap.
-                try? await Task.sleep(until: began + bufferLength * (index + 1), clock: clock)
-            case .every(let interval):
-                if index > 0 { try? await Task.sleep(for: interval) }
-            case .unpaced:
-                if index > 0, index % 64 == 0 { await Task.yield() }
-            }
-            if Task.isCancelled { return }
-            let count = Int(min(Int64(source.framesPerBuffer), (source.frames ?? .max) - position))
-            guard let buffer = SyntheticAudio.buffer(format: format, from: position, count: count, source.samples)
-            else { return }
-            deliver(.audio(buffer))
-            position += Int64(count)
-            index += 1
-            source.delivered?(position)
+    /// Ends the source or waits for the next buffer's pace, on the queue. Buffer n arrives once
+    /// n + 1 buffers' worth of audio has passed, as from a tap, in real time; one interval after
+    /// the last, at a set interval; and as soon as the queue comes to it, unpaced.
+    private func next(_ feeder: Feeder, index: Int, position: Int64) {
+        guard !state.withLock({ $0.stopped }) else { return finish() }
+        if let total = source.frames, position >= total {
+            if case .ends(let why) = source.ending { feeder.deliver(.ended(why)) }
+            return finish()
         }
+        let deliver: @Sendable () -> Void = { [self] in hand(feeder, index: index, position: position) }
+        switch source.pace {
+        case .realTime:
+            let length = Double(source.framesPerBuffer) / source.sampleRate
+            let due = feeder.began.uptimeNanoseconds + UInt64(length * Double(index + 1) * 1e9)
+            queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: due), execute: deliver)
+        case .every(let interval) where index > 0:
+            queue.asyncAfter(deadline: .now() + Self.dispatch(interval), execute: deliver)
+        case .every, .unpaced:
+            queue.async(execute: deliver)
+        }
+    }
+
+    /// Hands the buffer at `position` over, unless the input stopped meanwhile, on the queue.
+    private func hand(_ feeder: Feeder, index: Int, position: Int64) {
+        guard !state.withLock({ $0.stopped }) else { return finish() }
+        let count = Int(min(Int64(source.framesPerBuffer), (source.frames ?? .max) - position))
+        guard let buffer = SyntheticAudio.buffer(format: feeder.format, from: position, count: count, source.samples)
+        else { return finish() }
+        feeder.deliver(.audio(buffer))
+        let reached = position + Int64(count)
+        source.delivered?(reached)
+        next(feeder, index: index + 1, position: reached)
+    }
+
+    /// The feeder delivers nothing more; the stops waiting for it go on. Once or more.
+    private func finish() {
+        let waiting = state.withLock { state in
+            state.finished = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for stop in waiting { stop.resume() }
+    }
+
+    private static func dispatch(_ duration: Duration) -> DispatchTimeInterval {
+        let (seconds, attoseconds) = duration.components
+        return .nanoseconds(Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000))
     }
 }
 

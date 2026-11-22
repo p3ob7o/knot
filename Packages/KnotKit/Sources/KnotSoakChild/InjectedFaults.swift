@@ -47,6 +47,9 @@
         /// A file is left in `Recording/` by the last launch, which runs no capture, after its
         /// report of what recovery left: only the count at the end can see it.
         case recordingFileLeftAtEnd = "recording-file-left-at-end"
+        /// The child never passes the step `after_end`: a point a list names that the child never
+        /// reaches, which `KillPointCoverage` must find.
+        case afterEndNeverPassed = "after-end-never-passed"
     }
 
     /// The store's writes that the faults make behind the engine's back, on a connection of
