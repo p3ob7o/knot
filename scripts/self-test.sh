@@ -1673,6 +1673,27 @@ else
     fail "XcodeGen that changed after the doctor: $doctor_out / $generate_out"
 fi
 
+# The packaging step's reading of an app's App Intents metadata: an action among its actions,
+# and App Shortcuts that are not empty, naming their intents. On fixture metadata, in the form
+# the build writes: a key of actions, and autoShortcuts with each shortcut's actionIdentifier.
+ai="$scratch/app-intents"
+mkdir -p "$ai"
+printf '{"actions": {"CreateNoteIntent": {}, "FindNotesIntent": {}}, "autoShortcuts": [{"actionIdentifier": "CreateNoteIntent"}]}\n' >"$ai/full.json"
+printf '{"actions": {"KnotPlaceholderIntent": {}}, "autoShortcuts": []}\n' >"$ai/empty.json"
+printf 'not json\n' >"$ai/broken.json"
+app_intents() { python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" app-intents --metadata "$@" >/dev/null 2>&1 && echo pass || echo fail; }
+ai_found="$(app_intents "$ai/full.json" --action CreateNoteIntent)"
+ai_missing="$(app_intents "$ai/empty.json" --action CreateNoteIntent)"
+ai_shortcuts="$(app_intents "$ai/full.json" --shortcuts)"
+ai_no_shortcuts="$(app_intents "$ai/empty.json" --shortcuts)"
+ai_broken="$(app_intents "$ai/broken.json" --shortcuts)"
+ai_absent="$(app_intents "$ai/none.json" --action CreateNoteIntent)"
+if [[ "$ai_found $ai_missing $ai_shortcuts $ai_no_shortcuts $ai_broken $ai_absent" == "pass fail pass fail fail fail" ]]; then
+    pass "the packaging step finds an intent among an app's actions and its App Shortcuts not empty, and fails without them"
+else
+    fail "an app's App Intents metadata: the intent there '$ai_found', missing '$ai_missing'; shortcuts '$ai_shortcuts', none '$ai_no_shortcuts'; unreadable '$ai_broken', absent '$ai_absent'"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

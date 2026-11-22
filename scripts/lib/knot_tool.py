@@ -7,6 +7,7 @@ nothing outside the standard library, so the /usr/bin/python3 that ships with ma
     python3 scripts/lib/knot_tool.py owns <ID>
     python3 scripts/lib/knot_tool.py ownership --package <ID> --base <ref> [--allow <path>]…
     python3 scripts/lib/knot_tool.py depth --base <ref>
+    python3 scripts/lib/knot_tool.py app-intents --metadata <extract.actionsdata> [--action <name>] [--shortcuts]
     python3 scripts/lib/knot_tool.py core-api-rule --package <ID>
     python3 scripts/lib/knot_tool.py named-tests [--merged-from github|git] [--package <ID>] [--branch <name>]
     python3 scripts/lib/knot_tool.py lint [--files <path>]… [--as <folder>/] [--manifest <privacy manifest>]
@@ -425,6 +426,34 @@ def cmd_depth(base):
     print(f"changed={len(files)}")
     print("reason=" + ", ".join(reasons))
     return 0
+
+
+# ---------------------------------------------------------------- an app's App Intents metadata
+
+
+def cmd_app_intents(metadata, action=None, shortcuts=False):
+    """What a bundle's Metadata.appintents/extract.actionsdata declares, which the packaging
+    step checks: with --action, that the action is among its actions; with --shortcuts, that
+    its App Shortcuts are not empty, naming their intents. It prints what it read."""
+    try:
+        with open(metadata) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as error:
+        print(f"app-intents: {metadata} cannot be read: {type(error).__name__}")
+        return 1
+    actions = sorted((data.get("actions") or {}).keys())
+    status = 0
+    if action is not None:
+        print(f"app-intents: actions {', '.join(actions) or 'none'}")
+        if action not in actions:
+            print(f"app-intents: {action} is not among them")
+            status = 1
+    if shortcuts:
+        names = [entry.get("actionIdentifier", "?") for entry in data.get("autoShortcuts") or []]
+        print(f"app-intents: App Shortcuts {', '.join(names) or 'none'}")
+        if not names:
+            status = 1
+    return status
 
 
 # ---------------------------------------------------------------- KnotCore's API
@@ -1740,6 +1769,8 @@ def main(argv):
         return cmd_ownership(option(args, "--package"), option(args, "--base", "origin/main"), allowed)
     if command == "depth":
         return cmd_depth(option(args, "--base", "origin/main"))
+    if command == "app-intents":
+        return cmd_app_intents(option(args, "--metadata"), option(args, "--action"), "--shortcuts" in args)
     if command == "core-api-rule":
         return cmd_core_api_rule(option(args, "--package"), option(args, "--merged-from", "github"))
     if command == "named-tests":

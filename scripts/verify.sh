@@ -624,9 +624,15 @@ step_packaging() {
     ios="$(products Debug-iphonesimulator)/Knot.app"
     mac="$(products Debug)/Knot.app"
 
-    intent_in() { grep -q KnotPlaceholderIntent "$1/Metadata.appintents/extract.actionsdata"; }
-    check "App Intent declared in KnotIntents, in the iOS app's metadata" intent_in "$ios" || failed=1
+    # WP-19's text intents, declared in KnotIntents, reach the metadata of the iOS app and of
+    # its widget extension. The App Shortcuts, which Apps/Shared/KnotShortcuts.swift provides,
+    # reach the iOS app's and the Mac app's: a provider in the package reaches neither.
+    intent_in() { tool app-intents --metadata "$1/Metadata.appintents/extract.actionsdata" --action CreateNoteIntent; }
+    shortcuts_in() { tool app-intents --metadata "$1/Metadata.appintents/extract.actionsdata" --shortcuts; }
+    check "CreateNoteIntent, declared in KnotIntents, in the iOS app's metadata" intent_in "$ios" || failed=1
     check "the same intent in the widget extension's metadata" intent_in "$ios/PlugIns/Widgets-iOS.appex" || failed=1
+    check "the iOS app's App Shortcuts are not empty" shortcuts_in "$ios" || failed=1
+    check "the Mac app's App Shortcuts are not empty" shortcuts_in "$mac/Contents/Resources" || failed=1
 
     activity_in() {
         local f
