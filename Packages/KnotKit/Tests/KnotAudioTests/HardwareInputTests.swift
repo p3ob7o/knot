@@ -243,6 +243,7 @@ import Testing
     func aStopDuringTheStartLeavesNothingRunning(inside: Inside) async throws {
         let (opened, engine, hardware) = try await Self.openStandIn()
         let stopping = StopTask()
+        let hooks = HookWaits()
         let wrongRate = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))
         engine.whenAt(inside == .startByStop ? .starting : .installingTheTap) { engine in
@@ -252,7 +253,7 @@ import Testing
             } else {
                 stopping.start { await opened.stop() }
             }
-            Self.waitUntil { opened.stopRequested }
+            hooks.wait("the stop to be asked for") { opened.stopRequested }
         }
         let format = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
@@ -262,6 +263,7 @@ import Testing
             if case .ended = delivery { stopping.start { await opened.stop() } }
         }
         await stopping.wait()
+        hooks.check()
         let expected =
             inside == .startByStop ? ["installTap", "start", "stop", "removeTap"] : ["installTap", "removeTap"]
         #expect(engine.calls == expected, "\(engine.calls)")
@@ -335,13 +337,14 @@ import Testing
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let first = StopTask()
         let second = StopTask()
+        let hooks = HookWaits()
         let returned = Flag()
         let seen = Mutex<(calls: [String], released: Int)>(([], 0))
         let deliveries = Mutex(0)
         if duringTheStart {
             engine.whenAt(.starting) { _ in
                 first.start { await opened.stop() }
-                Self.waitUntil { opened.stopRequested }
+                hooks.wait("the first stop to be asked for") { opened.stopRequested }
             }
         }
         engine.whenAt(.stopping) { engine in
@@ -353,12 +356,13 @@ import Testing
             }
             // The first stop waits for the start too when it came inside it: the second is one more.
             let waiting = duringTheStart ? 2 : 1
-            Self.waitUntil { returned.value || opened.suspendedStops >= waiting }
+            hooks.wait("the second stop to wait") { returned.value || opened.suspendedStops >= waiting }
         }
         try await Self.startOffThePool(opened, format: format) { _ in deliveries.withLock { $0 += 1 } }
         if !duringTheStart { first.start(offThePool: true) { await opened.stop() } }
         await first.wait()
         await second.wait()
+        hooks.check()
         #expect(deliveries.withLock { $0 } == 0, "A buffer came through after a stop returned.")
         #expect(seen.withLock { $0.calls } == ["installTap", "start", "stop", "removeTap"], "\(seen.withLock { $0 })")
         #expect(seen.withLock { $0.released } == 1, "The second stop returned before the session was given back.")
@@ -390,28 +394,36 @@ import Testing
     /// returns. After finding 23.
     ///
     /// The delivery holds on the input's own queue for an event of the session, and the stop runs
-    /// on a queue of its own: neither wait holds a thread of the cooperative pool.
+    /// on a queue of its own: neither wait holds a thread of the cooperative pool. A reset of the
+    /// media services follows the interruption, which a right input never reaches: one that
+    /// ignored the interruption ends on the reset, and the test fails at once, with no time to
+    /// wait out.
     @Test func aStopWaitsForTheDeliveryUnderWay() async throws {
         let (opened, engine, hardware) = try await Self.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let stopped = StopTask()
+        let hooks = HookWaits()
         let delivering = Mutex(false)
         let deliveringAtReturn = Mutex<Bool?>(nil)
+        let endedBy = Mutex<InputEnding?>(nil)
         let returned = Flag()
         try await Self.startOffThePool(opened, format: format) { delivery in
-            guard case .ended = delivery else { return }
+            guard case .ended(let why) = delivery else { return }
+            endedBy.withLock { $0 = $0 ?? why }
             delivering.withLock { $0 = true }
             stopped.start(offThePool: true) {
                 await opened.stop()
                 deliveringAtReturn.withLock { $0 = delivering.withLock { $0 } }
                 returned.set()
             }
-            Self.waitUntil { returned.value || opened.suspendedStops >= 1 }
+            hooks.wait("the stop to wait for the delivery") { returned.value || opened.suspendedStops >= 1 }
             delivering.withLock { $0 = false }
         }
         hardware.interrupt()
-        #expect(await SuiteWait.until("the stop", limit: .seconds(10)) { returned.value })
+        hardware.resetServices()
         await stopped.wait()
+        hooks.check()
+        #expect(endedBy.withLock { $0 } == .interrupted)
         #expect(deliveringAtReturn.withLock { $0 } == false, "The stop returned while the delivery ran.")
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
         #expect(hardware.uses.filter { $0 == "deactivate" }.count == 1)
@@ -450,17 +462,18 @@ import Testing
         try started.get()
     }
 
-    /// Blocks the calling thread until `condition` holds, for at most `limit`. Only on a thread
-    /// outside the cooperative pool.
-    static func waitUntil(limit: Duration = SuiteWait.limit, _ condition: () -> Bool) {
-        let deadline = ContinuousClock.now + limit
+    /// Blocks the calling thread until `condition` holds, and says whether it did: false only
+    /// after `SuiteWait.limit`, an end that no load reaches, there to stop a hang. Only on a
+    /// thread outside the cooperative pool. It records nothing: it runs in a hook, on a thread
+    /// that belongs to no test, where an issue would be counted against none. `HookWaits` keeps
+    /// the answer for the test to record.
+    static func waitUntil(_ condition: () -> Bool) -> Bool {
+        let deadline = ContinuousClock.now + SuiteWait.limit
         while !condition() {
-            guard ContinuousClock.now < deadline else {
-                Issue.record("Waited \(limit) inside the start.")
-                return
-            }
+            guard ContinuousClock.now < deadline else { return false }
             usleep(500)
         }
+        return true
     }
 
     /// The signs of a process, for the policy's table.
@@ -496,12 +509,42 @@ final class StopTask: Sendable {
         }
     }
 
-    func wait() async {
+    /// Waits for the stop to be asked for, which a hook may do after the test reaches here, and
+    /// then for it to return. `instead` is what a wrong version does in its place, such as an
+    /// ending delivered where a restart should have asked for the stop: the wait then ends at
+    /// once and the test fails, with no time to wait out. Bounded by `SuiteWait` alone.
+    func wait(instead: @escaping @Sendable () -> Bool = { false }, sourceLocation: SourceLocation = #_sourceLocation)
+        async
+    {
+        await SuiteWait.until("the stop to be asked for", sourceLocation: sourceLocation) {
+            self.task.withLock { $0 != nil } || instead()
+        }
         let task = task.withLock { $0 }
         if let task {
-            _ = await SuiteWait.value("the stop") { await task.value }
+            _ = await SuiteWait.value("the stop", sourceLocation: sourceLocation) { await task.value }
         } else {
-            Issue.record("No stop was asked for.")
+            Issue.record("No stop was asked for.", sourceLocation: sourceLocation)
+        }
+    }
+}
+
+/// The waits of a test's hooks, which block a thread outside the cooperative pool until the
+/// code under test reaches a point: a hook runs on a thread that belongs to no test, so each
+/// wait that ended unmet is kept here, and the test records it as its own issue (`check()`),
+/// never one counted against no test.
+final class HookWaits: Sendable {
+    private let unmet = Mutex<[String]>([])
+
+    /// Blocks until `condition` holds, as `HardwareInputTests.waitUntil`, and keeps `what` if it
+    /// never did.
+    func wait(_ what: String, _ condition: () -> Bool) {
+        if !HardwareInputTests.waitUntil(condition) { unmet.withLock { $0.append(what) } }
+    }
+
+    /// Records, against the calling test, each wait of its hooks that ended unmet.
+    func check(sourceLocation: SourceLocation = #_sourceLocation) {
+        for what in unmet.withLock({ $0 }) {
+            Issue.record("A hook waited \(SuiteWait.limit) for \(what).", sourceLocation: sourceLocation)
         }
     }
 }
@@ -591,6 +634,9 @@ final class StandInEngine: InputEngine {
     var hardware: InputShape { shapes.withLock { $0.hardware } }
 
     var calls: [String] { state.withLock { $0.calls } }
+
+    /// How many times the engine's start has been called, counted as the call begins.
+    var starts: Int { calls.filter { $0 == "start" }.count }
 
     /// The hardware changes to `shape`, for the tap and the hardware alike, as when headphones
     /// connect. The system then changes the engine's configuration.
