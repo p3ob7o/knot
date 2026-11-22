@@ -138,7 +138,8 @@ public enum TextIntentActions {
 
     /// Begins and ends a typed capture through the engine, on the intent's surface. A begin
     /// that throws after it made the capture hands the capture to its caller, and its end does
-    /// what the start would have done (`CaptureEngine.begin`).
+    /// what the start would have done (`CaptureEngine.begin`). Any other failed begin is thrown
+    /// on as it is: nothing is ended and nothing is written (`callersCapture(after:kind:)`).
     static func captureTyped(
         _ text: String, placement: CapturePlacement, shownNote: NoteID?, engine: any CaptureEngine, log: KnotLog
     ) async throws(KnotError) -> CaptureState {
@@ -148,11 +149,34 @@ public enum TextIntentActions {
         do {
             begun = try await engine.begin(request)
         } catch {
-            guard let captureID = error.context.captureID else { throw error }
+            guard let captureID = callersCapture(after: error, kind: request.kind) else { throw error }
             log.failure(error, "intent_capture_begin_failed", level: .notice)
             return try await engine.end(captureID)
         }
         return try await engine.end(begun.captureID)
+    }
+
+    /// The capture that a failed `begin` handed to its caller, or `nil` when it made none of the
+    /// caller's: the one place that reads the port's three exceptions (`CaptureEngine.begin`).
+    ///
+    /// - A start that rule 15 refuses, `segment_capture_open` or `capture_blocked_by_recording`
+    ///   while a recording runs, names the capture open on the device, which is not the caller's.
+    ///   Ending it would end that capture, and the intent's own text would be nowhere (the
+    ///   orchestrator's ruling on pull request 89, finding N1).
+    /// - A kind the engine does not take yet throws `port_unavailable`, and names none.
+    /// - A recording whose recorder did not start leaves nothing, though its error may name its
+    ///   ID. No intent begins a recording through `begin`: the recording intents call `press`
+    ///   (docs/plan/WP-19.md). So a recording's failed begin hands back nothing here.
+    ///
+    /// Every other failed begin that names a capture made it, and the capture is the caller's.
+    static func callersCapture(after error: KnotError, kind: SegmentKind) -> CaptureID? {
+        switch error.code {
+        case KnotError.segmentCaptureOpen.code, KnotError.captureBlockedByRecording.code,
+            KnotError.portUnavailable.code:
+            return nil
+        default:
+            return kind == .voice ? nil : error.context.captureID
+        }
     }
 
     private static func noteID(of reference: NoteReference, in environment: AppEnvironment) async throws(KnotError)

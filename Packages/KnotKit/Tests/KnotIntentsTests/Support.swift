@@ -22,13 +22,18 @@ struct IntentRig {
     let witness = WitnessStore.WitnessLog()
     let logs = RecordingLog()
 
-    /// A rig whose witness refuses every title with `refuseTitle`, when one is given.
-    init(refuseTitle: KnotError? = nil) {
+    /// A rig whose witness refuses every title with `refuseTitle`, when one is given, and whose
+    /// intents see `engine(preview's engine, store)` as their engine, when one is given.
+    init(
+        refuseTitle: KnotError? = nil,
+        engine: ((any CaptureEngine, InMemoryNoteStore) -> any CaptureEngine)? = nil
+    ) {
         root = FileManager.default.temporaryDirectory.appending(
             path: "KnotIntentsTests-\(UUID().uuidString.lowercased())", directoryHint: .isDirectory)
         var environment = AppEnvironment.makePreview(root: root)
         store = environment.notes as! InMemoryNoteStore  // The preview's store is the in-memory one.
         environment.notes = WitnessStore(store: store, witnessLog: witness, refuseTitle: refuseTitle)
+        if let engine { environment.engine = engine(environment.engine, store) }
         self.environment = environment
         KnotIntentEnvironment.register(environment, in: manager)
     }
@@ -53,6 +58,26 @@ struct IntentRig {
         try await store.note(note)?.segments.filter(\.isLiveCapture).map(\.text) ?? []
     }
 
+    /// The files waiting in the store's `Inbox/`, where a capture that the store path did not
+    /// take is kept until ingest stores it.
+    func inboxItems() throws -> [String] {
+        let inbox = StoreLocations.testing(root: root).inbox
+        guard FileManager.default.fileExists(atPath: inbox.path) else { return [] }
+        return try FileManager.default.subpathsOfDirectory(atPath: inbox.path)
+    }
+
+    /// Checks that nothing was written since `cursor`: no item waits in `Inbox/`, where a write
+    /// the store refused would wait for ingest, and then, in that order, the store's change
+    /// counter has not moved, which it would once ingest had stored such an item. Reading
+    /// `Inbox/` first leaves no moment in which a write can pass both checks.
+    func expectNothingWritten(since cursor: StoreCursor, sourceLocation: SourceLocation = #_sourceLocation)
+        async throws
+    {
+        #expect(try inboxItems().isEmpty, "a write waits in Inbox/", sourceLocation: sourceLocation)
+        #expect(try await store.cursor() == cursor, "the store changed", sourceLocation: sourceLocation)
+        #expect(titles.isEmpty, "a title was set", sourceLocation: sourceLocation)
+    }
+
     /// Types `text` into a new note through the engine, as the app's capture surface does.
     func typeNote(_ text: String) async throws -> NoteID {
         let engine = environment.engine
@@ -60,6 +85,19 @@ struct IntentRig {
             CaptureRequest(kind: .typed, surface: .app, placement: .newNote, text: text))
         let ended = try await engine.end(state.captureID)
         return try #require(ended.noteID)
+    }
+}
+
+/// The catalog's code of the refusal an intent threw, or `nil` when it threw none or another
+/// error.
+func refusalCode(_ body: () async throws -> Void) async -> ErrorCode? {
+    do {
+        try await body()
+        return nil
+    } catch let failure as IntentFailure {
+        return failure.reason.code
+    } catch {
+        return nil
     }
 }
 

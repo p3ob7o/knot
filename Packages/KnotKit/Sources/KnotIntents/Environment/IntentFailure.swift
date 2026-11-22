@@ -21,6 +21,7 @@ public struct IntentFailure: Error, Hashable, Sendable, CustomLocalizedStringRes
             case KnotError.notFound.code: "That note is not in Knot."
             case KnotError.noteDeleted.code: "That note was deleted."
             case KnotError.captureBlockedByRecording.code: "Stop the recording first."
+            case KnotError.segmentCaptureOpen.code: "Finish what you are writing in Knot first."
             default: "Knot could not do that. (\(error.code.rawValue))"
             }
         }
