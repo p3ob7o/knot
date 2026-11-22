@@ -859,7 +859,7 @@ step_soak() {
     fi
     if ((status != 0)); then
         # The verdict's own lines: the seed, the kill points, the kept store and the codes.
-        grep -E '^ *(capture ledger soak: RED|the store is kept at|kills by point|configuration:|repeat it with|replay the recovery)' "$output" || true
+        grep -E '^ *(capture ledger soak: RED|the store is kept at|kills by point|configuration:|repeat it with)' "$output" || true
         echo "soak: failed with seed $seed. Repeat it with scripts/verify.sh --soak --seed $seed"
         return 1
     fi
