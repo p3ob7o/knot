@@ -993,21 +993,35 @@ def package_test_naming(slug):
     return None
 
 
+def swift_code_lines(text):
+    """The lines of a Swift source with its comments blanked, line for line, so that a word in
+    a comment is never read as code."""
+    text = re.sub(r"/\*.*?\*/", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.S)
+    return [re.sub(r"//.*", "", line) for line in text.splitlines()]
+
+
+# A class's declaration: its name before a colon or a brace, as in `final class Tests:
+# XCTestCase {`. `override class func setUp()` and `class var …: Bool` declare no class.
+CLASS_DECLARATION = re.compile(r"\bclass\s+(\w+)\s*(?:<[^>]*>\s*)?[:{]")
+TEST_METHOD = re.compile(r"\bfunc\s+(test\w*)\s*\(")
+
+
 def smoke_test_of(slug):
     """The source, class and test method that a UI smoke test's named comment marks, in the
-    three UI-test folders: the first test method after the comment, in the class that holds
-    it. None when no UI test names it."""
+    three UI-test folders: the first test method after the comment, in the class declared
+    before it, both read outside comments. None when no UI test names it."""
     for path in swift_files(tuple(prefix for prefix, _, _ in SMOKE_STEPS)):
         with open(path, encoding="utf-8", errors="replace") as f:
-            source = f.read().splitlines()
+            text = f.read()
+        source = text.splitlines()
+        code = swift_code_lines(text)
         marks = [n for n, line in enumerate(source) if slug in line and "//" in line]
         if not marks:
             continue
-        for n in range(marks[0], len(source)):
-            method = re.search(r"\bfunc\s+(test\w*)\s*\(", source[n])
+        for n in range(marks[0], len(code)):
+            method = TEST_METHOD.search(code[n])
             if method:
-                owner = next((m.group(1) for line in reversed(source[:n])
-                              if (m := re.search(r"\bclass\s+(\w+)", line))), None)
+                owner = next((m.group(1) for line in reversed(code[:n]) if (m := CLASS_DECLARATION.search(line))), None)
                 return path, owner, method.group(1)
     return None
 

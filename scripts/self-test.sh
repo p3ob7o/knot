@@ -1455,11 +1455,14 @@ mkdir -p "$st/tree/docs/plan" "$st/tree/Apps/iOS/UITests" "$st/tree/Apps/watchOS
 git -C "$st/tree" init -q -b main
 printf 'WP-30 PR 1\tlive-smoke-a-iphone\tThe iPhone.\nWP-32 PR 1\tlive-smoke-a-watch\tThe Watch.\nWP-33 PR 1\tlive-smoke-a-mac\tThe Mac.\nWP-22 PR 2\tlive-smoke-a-composition\tA package test.\nWP-23 PR 1\tlive-smoke-a-later\tNot merged.\n' \
     >"$st/tree/docs/plan/named-tests.txt"
-printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: type, kill, relaunch, read.\n    @MainActor\n    func testPhoneSmoke() throws {}\n}\n' \
+# Between each class and its test stands a line with the word class that declares no class: a
+# comment, a class method, and Xcode's own class property. The test's class is the one
+# declared, with its name before a colon or a brace, outside comments.
+printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: type, kill, relaunch, read.\n    // This class launches the app once.\n    @MainActor\n    func testPhoneSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/iOS/UITests/PhoneTests.swift"
-printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class WatchSmokeTests: XCTestCase {\n    func testWatchSmoke() throws {}\n}\n' \
+printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class WatchSmokeTests: XCTestCase {\n    override class func setUp() { super.setUp() }\n    func testWatchSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
-printf 'final class MacSmokeTests: XCTestCase {\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
+printf 'final class MacSmokeTests: XCTestCase {\n    override class var runsForEachTargetApplicationUIConfiguration: Bool { false }\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
 # The package's form of a named test: Swift Testing's, the slug in the test's name, a function
 # of any name, and no comment.
