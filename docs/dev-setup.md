@@ -247,6 +247,7 @@ For a pull request whose diff reaches those same paths, `MAC_UI`, the workflow's
 - **It passes only** when the latest such run is completed with success on that very commit, its workflow run kept `verify-mac-ui-tests.log` in the artifact `mac-ui-logs`, and that log, read as the local step reads its own, holds passed tests, no failed case and no skip. The log becomes this run's Mac UI log, under a first line that names the job, the check run and the commit.
 - **It fails, and says why:**
   - while the screen reads anything but locked;
+  - when the gate's base is not an ancestor of the commit under test. On a pull request the job tests GitHub's merge of the head into the base as it then was, and the check run is recorded on the head. Only with the base an ancestor of the head does that merge have the head's own tree. A branch behind main merges main in and lets the job run on the new head;
   - when the diff changes `scripts/` or `.github/`, since the hosted job ran the candidate's own scripts and workflow, which main's have not checked;
   - when GitHub has no such run on the commit, as for a commit not pushed;
   - when the run is still going, or ended failed, cancelled or otherwise;

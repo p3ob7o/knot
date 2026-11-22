@@ -1722,8 +1722,9 @@ def run(name, status="completed", conclusion="success", sha=SHA, app="github-act
     return {"id": id, "name": name, "head_sha": sha, "status": status, "conclusion": conclusion,
             "app": {"slug": app}, "html_url": f"https://example.invalid/job/{id}", "completed_at": "2026-11-22T10:00:00Z"}
 
-def case(label, runs, screen="locked", changed=(), kept=LOG, job_sha=SHA):
+def case(label, runs, screen="locked", changed=(), kept=LOG, job_sha=SHA, ancestor=True):
     k.changed_files = lambda base: list(changed)
+    k.is_ancestor = lambda base, sha: ancestor
     def gh_json(path):
         if "/check-runs" in path:
             name = path.split("check_name=")[1].split("&")[0]
@@ -1756,6 +1757,8 @@ case("unlocked", [run("mac-ui")], screen="unlocked")
 case("unknown", [run("mac-ui")], screen="unknown")
 case("scripts", [run("mac-ui")], changed=["scripts/verify.sh"])
 case("workflow", [run("mac-ui")], changed=[".github/workflows/verify.yml"])
+case("behind", [run("mac-ui")], ancestor=False)
+case("ancestry-unknown", [run("mac-ui")], ancestor=None)
 PY
 )"
 hosted_line() { printf '%s\n' "$hosted_cases" | grep -e "^$1: " || echo "$1: missing"; }
@@ -1782,6 +1785,8 @@ hosted_why="$(
     expect_hosted unknown 1 "screen reads unknown"
     expect_hosted scripts 1 "the diff changes scripts/verify.sh"
     expect_hosted workflow 1 "the diff changes .github/workflows/verify.yml"
+    expect_hosted behind 1 "origin/main is not an ancestor of"
+    expect_hosted ancestry-unknown 1 "origin/main is not known to be an ancestor of"
     ((hosted_ok)) || true
 )"
 # The step reads the kept log as the local step reads its own: a log with no test, or with

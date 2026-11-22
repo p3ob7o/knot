@@ -468,6 +468,12 @@ def hosted_check_run(sha, name):
     return max(runs, key=lambda run: run["id"]) if runs else None
 
 
+def is_ancestor(base, sha):
+    """Whether <base> is an ancestor of <sha>: True, False, or None when git cannot tell."""
+    code = subprocess.run(["git", "merge-base", "--is-ancestor", base, sha], capture_output=True).returncode
+    return {0: True, 1: False}.get(code)
+
+
 def cmd_hosted_mac_ui(sha, base, screen, log):
     """The gate's Mac UI step, met by the hosted job: the check run mac-ui on the commit under
     test, completed with success, and its kept log, written to <log> under a first line that
@@ -480,6 +486,16 @@ def cmd_hosted_mac_ui(sha, base, screen, log):
     if screen != "locked":
         return refuse(f"this Mac's screen reads {screen}. The gate takes the hosted job's result only while "
                       "it is locked, by the owner's word; run the gate without --mac-ui-hosted.")
+    # On a pull request the job tests GitHub's merge of the head into the base as it then was,
+    # and the check run is recorded on the head. With the base an ancestor of the head, every
+    # earlier state of the base is too, so that merge has the head's own tree, and its scripts
+    # are main's wherever the diff changes none. A branch behind the base would show no change
+    # of the scripts, while the job ran the branch's older ones merged with the base's.
+    ancestor = is_ancestor(base, sha)
+    if ancestor is not True:
+        return refuse(f"{base} is {'not' if ancestor is False else 'not known to be'} an ancestor of {sha}, so the "
+                      "job tested a merge whose tree is not the one under test. Merge the base into the branch, "
+                      "push, and let the job run on the new head.")
     untrusted = [path for path in changed_files(base) if path.startswith(HOSTED_MAC_UI_UNTRUSTED)]
     if untrusted:
         return refuse(f"the diff changes {', '.join(untrusted[:3])}{' and more' if len(untrusted) > 3 else ''}. "
