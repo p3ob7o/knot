@@ -65,25 +65,137 @@ import Testing
         #expect(FindNotesIntent.supportedModes == .background)
     }
 
-    /// Every intent and query that the module's sources declare has a row above.
+    /// Every intent and query that the module's sources declare has a row above, whichever way
+    /// the type comes to be one (finding N4).
     @Test func everyDeclaredIntentAndQueryHasARow() throws {
         let sources = URL(filePath: #filePath).deletingLastPathComponent()
             .appending(path: "../../Sources/KnotIntents").standardizedFileURL
         let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
         #expect(!files.isEmpty)
-        var intents: Set<String> = []
-        var queries: Set<String> = []
-        let intentDeclaration = /@AppIntent\([^)]*\)\s*public\s+struct\s+(\w+)|struct\s+(\w+)\s*:[^{]*\bAppIntent\b/
-        let queryDeclaration = /struct\s+(\w+)\s*:[^{]*\b\w*Query\b/
-        for file in files {
-            let text = try String(contentsOf: file, encoding: .utf8)
-            for match in text.matches(of: intentDeclaration) {
-                if let name = match.output.1 ?? match.output.2 { intents.insert(String(name)) }
+        let scan = DeclarationScan(try files.map { try String(contentsOf: $0, encoding: .utf8) })
+        #expect(scan.intents == Set(Self.intents.map(\.name)))
+        #expect(scan.queries == Set(Self.queries.map(\.name)))
+    }
+
+    /// The scan finds an intent or a query by each way a type comes to be one, and nothing in a
+    /// comment or a string.
+    @Test func theScanFindsEveryForm() {
+        let source = #"""
+            @AppIntent(schema: .notes.createNote)
+            public struct ByMacro: KnotEnvironmentReading {
+                @Dependency(default: KnotIntentEnvironment.unavailable) public var knot: KnotIntentEnvironment
             }
-            for match in text.matches(of: queryDeclaration) { queries.insert(String(match.output.1)) }
+            struct ByConformance: AppIntent {}
+            struct ByExtension {}
+            extension ByExtension: AppIntent, KnotEnvironmentReading {}
+            final class ByClass: NSObject, AppIntents.AppIntent {}
+            protocol Reading: Sendable, AppIntent {}
+            struct ByRefiningProtocol: Reading {}
+            class BySubclass: ByClass {}
+            @available(iOS 27, *)
+            struct BySystemProtocol<T>:
+                LiveActivityIntent where T: Sendable {}
+            public enum ByEnum: OpenIntent {}
+            struct AQuery: EntityStringQuery {}
+            struct QueryByExtension {}
+            extension QueryByExtension: EntityQuery {}
+            protocol Finding: EntityQuery {}
+            actor QueryByProtocol: Finding {}
+            struct NotAnIntent: Sendable {}
+            // struct InAComment: AppIntent {}
+            /* struct InABlock: AppIntent {} */
+            let text = "struct InAString: AppIntent {"
+            """#
+        let scan = DeclarationScan([source])
+        #expect(
+            scan.intents == [
+                "ByMacro", "ByConformance", "ByExtension", "ByClass", "ByRefiningProtocol", "BySubclass",
+                "BySystemProtocol", "ByEnum",
+            ])
+        #expect(scan.queries == ["AQuery", "QueryByExtension", "QueryByProtocol"])
+    }
+}
+
+/// The types that a module's sources declare as intents and as queries, read from the text:
+/// a type is an intent when it carries `@AppIntent(…)` or `@AssistantIntent(…)`, or when its
+/// declaration or any extension of it names a protocol of App Intents whose name ends in
+/// `Intent`, a protocol of the module that refines one, or a class of the module that is one. A
+/// query is the same with the protocols whose names end in `Query` or `OptionsProvider`.
+/// Comments and string literals are read as nothing.
+struct DeclarationScan {
+    private(set) var intents: Set<String> = []
+    private(set) var queries: Set<String> = []
+
+    private struct Declared {
+        var isProtocol = false
+        var attributes: Set<String> = []
+        var conformances: Set<String> = []
+    }
+
+    init(_ sources: [String]) {
+        var declared: [String: Declared] = [:]
+        let declaration =
+            /((?:@\w+(?:\([^()]*(?:\([^()]*\)[^()]*)*\))?\s+)*)(?:(?:public|internal|fileprivate|private|package|final|open|indirect|nonisolated)\s+)*\b(struct|class|enum|actor|protocol|extension)\s+([\w.]+)\s*(?:<[^>{]*>)?\s*(?::\s*([^{]*))?\{/
+        for source in sources {
+            for match in Self.stripped(source).matches(of: declaration) {
+                let name = Self.lastComponent(String(match.output.3))
+                var entry = declared[name] ?? Declared()
+                if match.output.2 == "protocol" { entry.isProtocol = true }
+                for attribute in String(match.output.1).matches(of: /@(\w+)/) {
+                    entry.attributes.insert(String(attribute.output.1))
+                }
+                if let list = match.output.4 {
+                    let inherited = String(list).split(separator: /\bwhere\b/).first.map(String.init) ?? ""
+                    for item in inherited.split(whereSeparator: { $0 == "," || $0 == "&" }) {
+                        let item = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !item.isEmpty else { continue }
+                        entry.conformances.insert(Self.lastComponent(item))
+                    }
+                }
+                declared[name] = entry
+            }
         }
-        #expect(intents == Set(Self.intents.map(\.name)))
-        #expect(queries == Set(Self.queries.map(\.name)))
+        intents = Self.closure(
+            of: declared, isSystem: { $0.hasSuffix("Intent") }, macros: ["AppIntent", "AssistantIntent"])
+        queries = Self.closure(
+            of: declared, isSystem: { $0.hasSuffix("Query") || $0.hasSuffix("OptionsProvider") }, macros: [])
+    }
+
+    /// The types of the module that are one kind, by a fixed point over the protocols and the
+    /// classes of the module that are of that kind.
+    private static func closure(of declared: [String: Declared], isSystem: (String) -> Bool, macros: Set<String>)
+        -> Set<String>
+    {
+        var kinds: Set<String> = []
+        var changed = true
+        while changed {
+            changed = false
+            for (name, entry) in declared where !kinds.contains(name) {
+                let byMacro = !entry.attributes.isDisjoint(with: macros)
+                let byConformance = entry.conformances.contains { conformance in
+                    kinds.contains(conformance) || (declared[conformance] == nil && isSystem(conformance))
+                }
+                if byMacro || byConformance {
+                    kinds.insert(name)
+                    changed = true
+                }
+            }
+        }
+        return Set(kinds.filter { declared[$0]?.isProtocol == false })
+    }
+
+    private static func lastComponent(_ name: String) -> String {
+        let base = name.split(separator: "<").first.map(String.init) ?? name
+        return base.split(separator: ".").last.map(String.init) ?? base
+    }
+
+    /// The source with its comments and string literals emptied.
+    private static func stripped(_ source: String) -> String {
+        source
+            .replacing(/"""[\s\S]*?"""/, with: "\"\"")
+            .replacing(/\/\*[\s\S]*?\*\//, with: " ")
+            .replacing(/\/\/[^\n]*/, with: "")
+            .replacing(/"(?:\\.|[^"\\\n])*"/, with: "\"\"")
     }
 }
