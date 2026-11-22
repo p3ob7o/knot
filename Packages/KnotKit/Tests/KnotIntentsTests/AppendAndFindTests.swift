@@ -36,6 +36,7 @@ import Testing
     @Test func aNoteThatIsNotThereIsRefusedAndNothingWritten() async throws {
         let rig = IntentRig()
         defer { rig.remove() }
+        let before = try await rig.store.cursor()
         await #expect(throws: IntentFailure(.knot(KnotError.notFound))) {
             _ = try await Self.intent(rig, "synthetic addition", to: NoteID(uuid: UUID()).description)(donate: false)
         }
@@ -43,7 +44,7 @@ import Testing
             _ = try await Self.intent(rig, "synthetic addition", to: "not an ID")(donate: false)
         }
         #expect(try await rig.shownNotes().isEmpty)
-        #expect(try await rig.store.changes(after: nil, limit: 10).changes.isEmpty)
+        try await rig.expectNothingWritten(since: before)
     }
 
     /// A deleted note is refused, so that the text does not land in a note of its own through
@@ -58,7 +59,9 @@ import Testing
         await #expect(throws: IntentFailure(.knot(KnotError.noteDeleted.with(ErrorContext(noteID: note))))) {
             _ = try await Self.intent(rig, "synthetic addition", to: note.description)(donate: false)
         }
-        #expect(try await rig.store.cursor() == before)
+        // A write that the store refused for the deleted note would wait in `Inbox/`, and ingest
+        // would store it as a note of its own later: the check reads `Inbox/` first.
+        try await rig.expectNothingWritten(since: before)
         #expect(try await rig.store.note(note)?.segments.count == 1)
     }
 
@@ -70,7 +73,7 @@ import Testing
         await #expect(throws: IntentFailure(.noText)) {
             _ = try await Self.intent(rig, " \n", to: note.description)(donate: false)
         }
-        #expect(try await rig.store.cursor() == before)
+        try await rig.expectNothingWritten(since: before)
     }
 
     /// A note CreateNote made on the `Inbox/` path is named by its capture, and resolves once

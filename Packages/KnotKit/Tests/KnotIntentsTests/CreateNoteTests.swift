@@ -117,11 +117,12 @@ import Testing
     @Test func nothingToWriteIsRefusedAndWritesNothing() async throws {
         let rig = IntentRig()
         defer { rig.remove() }
+        let before = try await rig.store.cursor()
         await #expect(throws: IntentFailure(.noText)) {
             _ = try await Self.intent(rig, name: " \n", content: "\t")(donate: false)
         }
-        #expect(try await rig.shownNotes().isEmpty)
         #expect(try await rig.store.openCaptures().isEmpty)
+        try await rig.expectNothingWritten(since: before)
     }
 
     /// A file is content, and Knot does not take custody of what it would drop: the intent
@@ -130,12 +131,13 @@ import Testing
         let rig = IntentRig()
         defer { rig.remove() }
         let file = IntentFile(data: Data("synthetic".utf8), filename: "synthetic.txt")
+        let before = try await rig.store.cursor()
         await #expect(throws: IntentFailure(.knot(KnotError.captureInvalid))) {
             _ = try await Self.intent(
                 rig, name: "Synthetic title", content: "synthetic body", attachments: [file])(donate: false)
         }
-        #expect(try await rig.shownNotes().isEmpty)
-        #expect(try await rig.store.changes(after: nil, limit: 10).changes.isEmpty)
+        #expect(try await rig.store.openCaptures().isEmpty)
+        try await rig.expectNothingWritten(since: before)
     }
 
     /// A pin costs nothing: the note is saved, unpinned, and the dialog says that Knot has none.
