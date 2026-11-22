@@ -185,6 +185,36 @@ import Testing
         #expect(stopped.outcome == .stored)
     }
 
+    // MARK: One cue starts, one ends
+
+    /// The recorder and the engine share the app's emitter, as the composition gives it to both:
+    /// exactly one cue starts a recording and exactly one ends it. The recorder gives the live
+    /// cue and a refused start's; the engine gives the end's.
+    @Test(arguments: [false, true])
+    func oneCueStartsARecordingAndOneEndsIt(accidental: Bool) async throws {
+        let r = Rig()
+        let cues = RecordingCueEmitter()
+        let recorder = ScriptedRecorder(locations: r.locations, layer: r.layer, clock: r.clock, cues: cues)
+        let engine = r.engine(recorder: recorder, recordingState: InMemoryRecordingStateStore(), cues: cues)
+        let states = engine.states()
+        let state = try #require(try await engine.press(r.press(.tap)).started)
+        #expect(cues.cues == [.recordingLive])
+        await Self.durable(state.captureID, engine, states: states)
+        r.clock.advance(by: accidental ? 0.5 : 2)
+        _ = try #require(try await engine.press(r.press(.tap)).stopped)
+        #expect(cues.cues == [.recordingLive, accidental ? .discarded : .saved])
+    }
+
+    @Test func aRefusedStartGivesOneCue() async throws {
+        let r = Rig()
+        let cues = RecordingCueEmitter()
+        let recorder = ScriptedRecorder(locations: r.locations, layer: r.layer, clock: r.clock, cues: cues)
+        recorder.failNextStarts(with: .audioSessionBusy)
+        let engine = r.engine(recorder: recorder, recordingState: InMemoryRecordingStateStore(), cues: cues)
+        await expectError(.audioSessionBusy) { try await engine.press(r.press(.tap)) }
+        #expect(cues.cues == [.couldNotStart])
+    }
+
     // MARK: Could not start
 
     /// A start the engine could not hand to the recorder: the engine gives `couldNotStart`.
