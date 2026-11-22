@@ -1417,12 +1417,15 @@ fi
 # unless each platform's smoke test, found by its named comment in the sources, ran and
 # passed in this run, and was not skipped. On a fixture tree of its own, so that it pins none
 # of the real sources: three smoke tests named in its named-tests.txt, two in launch's logs
-# and the Mac's in mac-ui's, and a fourth whose pull request has not merged, which is not
-# asked for. The results are logs written for each run, in both of XCTest's forms.
+# and the Mac's in mac-ui's; a fourth, merged, marked in a package's test, which package-test
+# runs and named-tests requires, so that this step says so and does not ask for it; and a
+# fifth whose pull request has not merged, which is not asked for. The results are logs
+# written for each run, in both of XCTest's forms.
 st="$scratch/live-smoke"
-mkdir -p "$st/tree/docs/plan" "$st/tree/Apps/iOS/UITests" "$st/tree/Apps/watchOS/UITests" "$st/tree/Apps/macOS/UITests"
+mkdir -p "$st/tree/docs/plan" "$st/tree/Apps/iOS/UITests" "$st/tree/Apps/watchOS/UITests" "$st/tree/Apps/macOS/UITests" \
+    "$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests"
 git -C "$st/tree" init -q -b main
-printf 'WP-30 PR 1\tlive-smoke-a-iphone\tThe iPhone.\nWP-32 PR 1\tlive-smoke-a-watch\tThe Watch.\nWP-33 PR 1\tlive-smoke-a-mac\tThe Mac.\nWP-22 PR 2\tlive-smoke-a-composition\tNot merged.\n' \
+printf 'WP-30 PR 1\tlive-smoke-a-iphone\tThe iPhone.\nWP-32 PR 1\tlive-smoke-a-watch\tThe Watch.\nWP-33 PR 1\tlive-smoke-a-mac\tThe Mac.\nWP-22 PR 2\tlive-smoke-a-composition\tA package test.\nWP-23 PR 1\tlive-smoke-a-later\tNot merged.\n' \
     >"$st/tree/docs/plan/named-tests.txt"
 printf 'final class PhoneTests: XCTestCase {\n    /// `live-smoke-a-iphone`: type, kill, relaunch, read.\n    @MainActor\n    func testPhoneSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/iOS/UITests/PhoneTests.swift"
@@ -1430,6 +1433,8 @@ printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class Watch
     >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
 printf 'final class MacSmokeTests: XCTestCase {\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
+printf 'import Testing\n\nfinal class CompositionSmokeTests {\n    // live-smoke-a-composition\n    func testCompositionSmoke() async throws {}\n}\n' \
+    >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"
 smoke_logs() { # smoke_logs <folder> <iPhone line> <Watch line> <Mac line>: fresh logs of a run
     mkdir -p "$1"
     printf '%s\n' "$2" >"$1/verify-launch-tests.log"
@@ -1451,7 +1456,7 @@ import contextlib, io, os, sys
 sys.path.insert(0, sys.argv[1])
 import knot_tool as k
 os.chdir(sys.argv[2])
-k.merged_prs = lambda source: [("WP-30", False), ("WP-32", False), ("WP-33", False)]
+k.merged_prs = lambda source: [("WP-30", False), ("WP-32", False), ("WP-33", False), ("WP-22", False), ("WP-22", False)]
 # The fixture's packages plan two pull requests each, of which the first has merged.
 k.plan_rows = lambda package: ["1", "2"]
 out = io.StringIO()
@@ -1466,7 +1471,8 @@ smoke_no_mac="$(smoke "$st/all" 0)"
 smoke_phone="$(smoke "$st/phone-missing" 1)"
 smoke_watch="$(smoke "$st/watch-skipped" 1)"
 smoke_old="$(smoke "$st/mac-old" 1)"
-if [[ ${smoke_all%%$'\n'*} == 0 && $smoke_all == *"live-smoke-a-composition"*"not asked for"* &&
+if [[ ${smoke_all%%$'\n'*} == 0 && $smoke_all == *"live-smoke-a-composition"*"a package test, which package-test runs"* &&
+    $smoke_all == *"live-smoke-a-later"*"has not merged"* &&
     ${smoke_no_mac%%$'\n'*} == 0 && $smoke_no_mac == *"live-smoke-a-mac"*"not asked for"*"mac-ui"* &&
     ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
     ${smoke_watch%%$'\n'*} == 1 && $smoke_watch == *"live-smoke-a-watch"*"skipped"* &&
