@@ -118,7 +118,7 @@ import Testing
         let peaks = try #require(
             RecordingPeaks(reading: try Data(contentsOf: folder.locations.recordingPeaks(request.captureID))))
         #expect(peaks.values == Self.expectedPeaks(kept, framesPerValue: 800), "The peaks start after the gap.")
-        #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
+        #expect(await cuesHandedOver(by: live, to: cues, refusing: request) == [.recordingLive])
     }
 
     /// The gap is held between nothing and half a second, so that a wrong setting never eats
@@ -142,7 +142,8 @@ import Testing
     /// The cues are handed to the emitter on the recorder's own queue, never on the audio's
     /// thread or the caller's, and nothing waits for them: with an emitter that holds its first
     /// cue, the start returns live, the audio is written and the stop returns. The cues then
-    /// come in order.
+    /// come in order. The stopped-early cue is the last one given, so the wait is for it: a
+    /// recorder that gave no live cue is told at once.
     @Test func noRecordingWaitsForItsCues() async throws {
         let folder = try ScratchFolder()
         let cues = HeldCues()
@@ -157,7 +158,8 @@ import Testing
         #expect(audio.ending == .interrupted && audio.frames == 16_000, "\(audio)")
         #expect(cues.played.isEmpty, "The first cue is still held.")
         cues.release()
-        #expect(await SuiteWait.until("the cues", limit: .seconds(10)) { cues.played.count == 2 })
+        #expect(await SuiteWait.until("the stopped-early cue") { cues.played.contains { $0.cue == .stoppedEarly } })
+        cues.hooks.check()
         #expect(cues.played.map(\.cue) == [.recordingLive, .stoppedEarly])
         #expect(cues.played.allSatisfy { $0.queue == "knot.audio.cues" }, "\(cues.played)")
     }
@@ -172,7 +174,8 @@ import Testing
             locations: folder.locations, input: injected(startFailure: .audioSessionBusy),
             settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)), cues: cues)
         await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
-        #expect(await SuiteWait.until("a cue", limit: .seconds(10)) { !cues.cues.isEmpty })
+        // Handed to the cue queue before the start threw, after any live cue it gave.
+        #expect(await SuiteWait.until("the could-not-start cue") { cues.cues.contains(.couldNotStart) })
         #expect(cues.cues == [.couldNotStart])
     }
 
@@ -196,14 +199,16 @@ import Testing
             locations: folder.locations, input: input, settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)),
             cues: cues, state: store)
         let session = try await live.start(request())
-        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
+        guard case .ended(let audio)? = await allEvents(of: session).last else {
             Issue.record("The recording did not end by itself.")
             return
         }
         #expect(audio.ending == .inputLost, "\(audio)")
-        #expect(await SuiteWait.until("the recording's cue", limit: .seconds(10)) { !cues.cues.isEmpty })
+        // The recorder writes the idle state and then gives the stopped-early cue: once the cue
+        // is here, the state is idle, with no time to wait out.
+        #expect(await SuiteWait.until("the stopped-early cue") { cues.cues.contains(.stoppedEarly) })
         #expect(cues.cues == [.stoppedEarly])
-        #expect(await SuiteWait.until("the idle state", limit: .seconds(10)) { store.read() == .idle })
+        #expect(store.read() == .idle)
         #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
     }
 
@@ -218,7 +223,8 @@ import Testing
         let session = try await live.start(request())
         let audio = await session.stop()
         #expect(audio.ending == .writeFailed, "\(audio)")
-        #expect(await SuiteWait.until("the cues", limit: .seconds(10)) { cues.cues.count == 2 })
+        // The stopped-early cue is the last one given, before the stop returned.
+        #expect(await SuiteWait.until("the stopped-early cue") { cues.cues.contains(.stoppedEarly) })
         #expect(cues.cues == [.recordingLive, .stoppedEarly])
     }
 
@@ -256,7 +262,7 @@ import Testing
 
 /// An emitter that holds its first cue until the test releases it, and records each cue with
 /// the label of the queue it was handed over on. It holds the recorder's cue queue, never a
-/// thread of the cooperative pool.
+/// thread of the cooperative pool. Its wait is kept in `hooks`, for the test to check.
 final class HeldCues: CueEmitter {
     struct Played: Sendable, CustomStringConvertible {
         let cue: Cue
@@ -265,6 +271,7 @@ final class HeldCues: CueEmitter {
     }
 
     private let state = Mutex<(released: Bool, played: [Played])>((false, []))
+    let hooks = HookWaits()
 
     var played: [Played] { state.withLock { $0.played } }
 
@@ -272,7 +279,7 @@ final class HeldCues: CueEmitter {
 
     func emit(_ cue: Cue) {
         let queue = String(cString: __dispatch_queue_get_label(nil))
-        HardwareInputTests.waitUntil { state.withLock { $0.released } }
+        hooks.wait("the test to release the cues") { state.withLock { $0.released } }
         state.withLock { $0.played.append(Played(cue: cue, queue: queue)) }
     }
 }

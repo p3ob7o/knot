@@ -82,6 +82,8 @@
             /// The names of the files `Inbox/` keeps for each kept item, as its latest
             /// `recordKeptItem` named them.
             var keptFiles: [CaptureID: [String]] = [:]
+            /// The level peaks kept with each voice segment's recording, as `setPeaks` gave them.
+            var peaks: [SegmentID: Data] = [:]
         }
 
         /// What a save brings: new content, an end with nothing to keep, a failed save, or
@@ -577,10 +579,43 @@
             segment.assetID = nil
             next.segments[segmentID] = segment
             next.assets[assetID] = nil
+            // The recording's peaks go with it.
+            next.peaks[segmentID] = nil
             next.counter += 1
             touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
             commit(next)
             return asset
+        }
+
+        // MARK: Peaks
+
+        public func setPeaks(_ peaks: Data, of segmentID: SegmentID) throws(KnotError) {
+            guard let segment = state.segments[segmentID] else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            // A voice segment with its recording: none yet, or one removed, has nothing to keep
+            // them with.
+            guard segment.kind == .voice, let assetID = segment.assetID, state.assets[assetID] != nil else {
+                throw KnotError.illegalTransition.with(.init(segmentID: segmentID))
+            }
+            guard RecordingPeaks.isStorable(peaks) else {
+                throw KnotError.captureInvalid.with(.init(segmentID: segmentID))
+            }
+            // The same bytes again change nothing. Others are a change of the segment, which
+            // moves the cursor and leaves the segment's own revision as it is.
+            guard state.peaks[segmentID] != peaks else { return }
+            var next = state
+            next.peaks[segmentID] = peaks
+            next.counter += 1
+            touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
+            commit(next)
+        }
+
+        public func peaks(of segmentID: SegmentID) throws(KnotError) -> Data? {
+            guard state.segments[segmentID] != nil else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            return state.peaks[segmentID]
         }
 
         // MARK: Moving
@@ -839,6 +874,8 @@
                 next.segmentCapture[segment.id] = nil
                 next.moves[segment.id] = nil
                 next.replaced[segment.id] = nil
+                // The peaks go with the segment.
+                next.peaks[segment.id] = nil
                 for (id, job) in next.jobs where job.segmentID == segment.id { next.jobs[id] = nil }
                 if let assetID = segment.assetID, let asset = next.assets.removeValue(forKey: assetID) {
                     assets.append(asset)
@@ -1643,6 +1680,7 @@
                 if let note = next.segments[id]?.noteID { touched.insert(note) }
                 next.segments[id] = nil
                 next.segmentCapture[id] = nil
+                next.peaks[id] = nil
             }
             next.savedRevisions[capture] = nil
         }

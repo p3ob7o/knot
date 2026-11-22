@@ -64,7 +64,7 @@ import Testing
             settings: LiveRecorder.Settings(syncInterval: .milliseconds(20), spaceToStart: .zero), freeSpace: volume,
             workingFiles: volume.maker)
         let session = try await recorder.start(request())
-        guard case .ended(let audio)? = await allEvents(of: session, limit: .seconds(10)).last else {
+        guard case .ended(let audio)? = await allEvents(of: session).last else {
             Issue.record("The recording did not end by itself.")
             return
         }
