@@ -41,6 +41,10 @@ struct RefusingChangesStore: NoteStore {
     { try await inner.predictPlacement(request, kind: kind, surface: surface) }
     func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt { try await inner.record(capture) }
     func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult { try await inner.ingest(capture) }
+    /// As before the requirement changed: this wrapper does not record kept items.
+    func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult {
+        throw KnotError.portUnavailable.about(capture: item.captureID)
+    }
     func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
         try await inner.checkpoint(checkpoint)
     }

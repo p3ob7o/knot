@@ -94,3 +94,12 @@ func cancelsItself() throws {
     // expect: nothing
     _ = "a string with \(note) and Test.cancel("
 }
+// A launch argument that a shell reads is in the one list of debug arguments, which the
+// packaging step looks for in every Release binary (item 99).
+func readsArguments(_ arguments: [String]) -> Bool {
+    // expect: nothing
+    let preview = arguments.contains("-KnotPreview")
+    // expect: debug-argument
+    let hidden = arguments.contains("-KnotHiddenSwitch")
+    return preview || hidden
+}

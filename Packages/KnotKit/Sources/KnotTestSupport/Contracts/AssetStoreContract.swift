@@ -12,15 +12,18 @@ public struct AssetStoreSubject: Sendable {
     public let writeScratch: @Sendable (Data) throws -> URL
     /// Whether a file exists, read without the store.
     public let exists: @Sendable (URL) -> Bool
+    /// Makes a row of the store's notes name a placed file, as a recorded capture's does.
+    public let nameInRow: @Sendable (StoredFile) async throws -> Void
 
     public init(
         store: any AssetStore, locations: StoreLocations, writeScratch: @escaping @Sendable (Data) throws -> URL,
-        exists: @escaping @Sendable (URL) -> Bool
+        exists: @escaping @Sendable (URL) -> Bool, nameInRow: @escaping @Sendable (StoredFile) async throws -> Void
     ) {
         self.store = store
         self.locations = locations
         self.writeScratch = writeScratch
         self.exists = exists
+        self.nameInRow = nameInRow
     }
 }
 
@@ -62,6 +65,15 @@ public enum AssetStoreContract {
         #expect(try await store.move(moved.url, as: drawing, kind: .ink) == moved)
         #expect(try await store.move(source, as: drawing, kind: .ink) == moved)
         #expect(try await store.find(drawing, kind: .ink) == moved, "The stored file is still there.")
+
+        // A file that a row of the notes names is kept, and removing it is no error: a caller
+        // that must know asks `find`.
+        let named: AssetID = Identifier(uuid: UUID())
+        let held = try await store.place(Data("synthetic named audio".utf8), as: named, kind: .audio)
+        try await subject.nameInRow(held)
+        try await store.remove(named, kind: .audio)
+        #expect(try await store.find(named, kind: .audio) == held, "A file a row names is kept.")
+        #expect(subject.exists(held.url))
 
         // Removing is final, and removing what is not there is not an error.
         try await store.remove(audio, kind: .audio)
