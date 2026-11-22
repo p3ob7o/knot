@@ -68,8 +68,7 @@
             let verdicts = try await KillPointCoverage.run(
                 [.step("after_end", passes: 1...12)], fault: "after-end-never-passed")
             let verdict = try #require(verdicts.first)
-            #expect(
-                verdict.problems.map(\.code) == ["kill_point_never_killed"], "\(verdict.problems.map(\.code))")
+            #expect(verdict.problems.map(\.code) == ["kill_point_never_killed"], "\(verdict.report)")
             if let kept = verdict.keptStore { SoakFolders.remove(URL(filePath: kept)) }
         }
     }
