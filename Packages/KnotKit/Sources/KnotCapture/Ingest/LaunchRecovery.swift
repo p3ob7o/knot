@@ -39,6 +39,7 @@ public struct LaunchRecovery: Sendable {
     private let layer: any FileLayer
     private let items: InboxItems
     private let peaks: StoredPeaks
+    private let ownAsset: OwnRecordingAsset
     private let log: KnotLog
 
     public init(
@@ -54,6 +55,7 @@ public struct LaunchRecovery: Sendable {
         self.layer = layer
         self.items = InboxItems(locations: locations, layer: layer)
         self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
+        self.ownAsset = OwnRecordingAsset(notes: notes, assets: assets, locations: locations, layer: layer, log: log)
         self.log = log
     }
 
@@ -170,7 +172,16 @@ public struct LaunchRecovery: Sendable {
                 guard let row else { return nil }
                 return try await failConversion(row, recording, error.about(capture: id))
             }
-            let stored = try await assets.move(converted.file, as: .ofCapture(id), kind: .audio)
+            // The file of an earlier conversion may be there already: a death between the move and
+            // the end leaves it, and this conversion's bytes differ from it (WP-11b).
+            let placed = try await ownAsset.place(converted)
+            if case .namedByItem = placed {
+                // An item in `Inbox/` names that file: it stores the recording, at this launch's
+                // ingest or the next, and the working file stays until then.
+                log.capture(id, "recording_waits_for_its_item")
+                return .kept(KnotError.assetConflict.code)
+            }
+            let stored = placed.file
             let asset = Asset(
                 id: .ofCapture(id), segmentID: SegmentID(id), kind: .audio, byteCount: stored.byteCount,
                 sha256: stored.sha256)
