@@ -280,6 +280,6 @@ For a pull request whose diff reaches those same paths, `MAC_UI`, the workflow's
   - when the artifact is gone, after its seven days;
   - when GitHub's answer cannot be read.
 - **The summary and the status line say it.** The step shows as `mac-ui (hosted job)` with the run's address. Its tests are counted apart, as the hosted job's, and never in this Mac's totals. The summary adds "mac-ui met by the hosted job, its N tests not counted here", and the status line adds "mac-ui by hosted job".
-- **The live smoke step** reads the Mac's smoke test from that log, as it reads a local run's.
+- **The live smoke step** reads the Mac's smoke test from that log, as it reads a local run's, and says that it passed in the hosted job, naming the check run.
 
 The repository gets no self-hosted runner, because it is public. Its workflows hold no secrets, never use `pull_request_target`, have read-only permissions and pin their actions by revision. The merge gate itself, `scripts/verify.sh --gate`, runs on the orchestrator's Mac.
