@@ -1433,7 +1433,9 @@ printf '/// The smoke test (named test `live-smoke-a-watch`).\nfinal class Watch
     >"$st/tree/Apps/watchOS/UITests/WatchSmokeTests.swift"
 printf 'final class MacSmokeTests: XCTestCase {\n    // live-smoke-a-mac\n    func testMacSmoke() throws {}\n}\n' \
     >"$st/tree/Apps/macOS/UITests/MacSmokeTests.swift"
-printf 'import Testing\n\nfinal class CompositionSmokeTests {\n    // live-smoke-a-composition\n    func testCompositionSmoke() async throws {}\n}\n' \
+# The package's form of a named test: Swift Testing's, the slug in the test's name, a function
+# of any name, and no comment.
+printf 'import Testing\n\n@Test("live-smoke-a-composition", .tags(.named)) func theCompositionTypesKillsAndReads() async throws {}\n' \
     >"$st/tree/Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"
 smoke_logs() { # smoke_logs <folder> <iPhone line> <Watch line> <Mac line>: fresh logs of a run
     mkdir -p "$1"
@@ -1471,7 +1473,8 @@ smoke_no_mac="$(smoke "$st/all" 0)"
 smoke_phone="$(smoke "$st/phone-missing" 1)"
 smoke_watch="$(smoke "$st/watch-skipped" 1)"
 smoke_old="$(smoke "$st/mac-old" 1)"
-if [[ ${smoke_all%%$'\n'*} == 0 && $smoke_all == *"live-smoke-a-composition"*"a package test, which package-test runs"* &&
+if [[ ${smoke_all%%$'\n'*} == 0 &&
+    $smoke_all == *"live-smoke-a-composition"*"Packages/KnotKit/Tests/KnotEndToEndTests/CompositionSmokeTests.swift"*"a package test, which package-test runs"* &&
     $smoke_all == *"live-smoke-a-later"*"has not merged"* &&
     ${smoke_no_mac%%$'\n'*} == 0 && $smoke_no_mac == *"live-smoke-a-mac"*"not asked for"*"mac-ui"* &&
     ${smoke_phone%%$'\n'*} == 1 && $smoke_phone == *"live-smoke-a-iphone"*"did not pass"* &&
