@@ -33,7 +33,9 @@
 
     @Suite struct SoakKillPointsProcessingAndIngestTests {
         /// The soak on WP-15's kill points, at the tier's size, from the tier's seed. At the soak
-        /// tier's size they run alone, and every one must kill at least once. A run of the package
+        /// tier's size they run alone. A soak at a fresh seed is not red for a point that did not
+        /// kill: that every point can kill is held on a fixed seed, by
+        /// `everyPointOfProcessingAndIngestCanKill` (`KillPointCoverage`). A run of the package
         /// tests' size, 40 captures in a few launches, rarely reaches them, so it draws among WP-06's
         /// points too, which kill in a run that short.
         @Test("soak-kill-points-processing-and-ingest", .tags(.named))
@@ -54,6 +56,14 @@
             #expect(verdict.isGreen, "\(verdict.report)")
             #expect(verdict.captures == configuration.captures, "Every capture of the script began.")
             #expect(verdict.launches.contains { $0.ending != .quit }, "The run killed its child at least once.")
+        }
+
+        /// Every point of the list kills, each armed at its first pass over the fixed script of
+        /// `KillPointCoverage`, whose captures fall back to `Inbox/` and are ingested.
+        @Test func everyPointOfProcessingAndIngestCanKill() async throws {
+            for verdict in try await KillPointCoverage.run(SoakKillPoint.processingAndIngest) {
+                #expect(verdict.isGreen, "\(verdict.report)")
+            }
         }
 
         @Test func everyPointIsOneTheChildKnows() {
