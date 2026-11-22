@@ -26,7 +26,6 @@ func realPath(_ url: URL) -> String { "/" + PathForm.real(url).joined(separator:
 /// temporary folder it made).
 final class TemporaryFolders: Sendable {
     private let made = Mutex<[URL]>([])
-    private let suites = Mutex<[String]>([])
     private let opened = Mutex<[StoreDatabase]>([])
 
     /// Keeps a store a factory opened, so that the test can check every one at its end.
@@ -55,18 +54,20 @@ final class TemporaryFolders: Sendable {
         return url
     }
 
-    /// A named defaults suite for one test, removed with the folders.
+    /// A defaults suite for one test, whose file is in a folder of the test's own and goes with
+    /// its folders. A suite named by an absolute path keeps its file at that path, never in the
+    /// account's Preferences folder. There no removal holds: the defaults daemon writes a suite's
+    /// file lazily, seconds after a test removed it or at the end of the test's process, empty
+    /// for a domain that was removed and whole for one that was not.
     func settingsSuite() -> String {
-        let name = "knot.tests.\(UUID().uuidString.lowercased())"
-        suites.withLock { $0.append(name) }
-        return name
+        make("defaults").appending(path: "knot.tests.\(UUID().uuidString.lowercased())", directoryHint: .notDirectory)
+            .path
     }
 
+    /// Removes the folders the test made, its defaults suites' files with them. Every test calls
+    /// it in a `defer`, so it runs after a failed expectation or a thrown error too.
     func removeAll() {
         for url in made.withLock({ $0 }) { try? FileManager.default.removeItem(at: url) }
-        for suite in suites.withLock({ $0 }) {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
-        }
     }
 }
 
