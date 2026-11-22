@@ -117,6 +117,34 @@ if [[ $inherited == "FAIL knot-tree-inherited" && $own_a == "tree $tree_a" && $o
 else
     fail "the inherited tree: another checkout's '$inherited', its own '$own_a' and '$own_b', named '$named_b', the gate's '$gate_b'"
 fi
+# The plan check takes the tree as the other scripts do, though it sources no common.sh:
+# started from inside b through a's build-slot.sh, with b's plan broken and a's whole, it
+# checked a's plan and passed, and with --write would have written into it (the review of
+# 30ec9092). Now it refuses that tree, and b's own build-slot.sh checks b's plan.
+for checkout in a b; do
+    mkdir -p "$tc/$checkout/docs"
+    cp "$KNOT_SELF/PLAN.md" "$tc/$checkout/"
+    cp -R "$KNOT_SELF/docs/plan" "$tc/$checkout/docs/"
+done
+sed -i '' '1,/^## /s/^## \(.*\)$/## \1, renamed/' "$tc/b/docs/plan/$(cd "$tc/b/docs/plan" && ls WP-*.md | head -n 1)"
+plan_of() { # plan_of <build-slot.sh's checkout>: b's plan check's status and its FAIL code
+    local status=0
+    env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED KNOT_SLOT_DIR="$tc/slots" \
+        "$tc/$1/scripts/build-slot.sh" run -- "$tc/b/scripts/check-plan.sh" >"$tc/plan-$1.out" 2>&1 || status=$?
+    echo "$status $(sed -n -E 's/^FAIL ([a-z-]+)$/\1/p' "$tc/plan-$1.out" | head -n 1)"
+}
+plan_through_a="$(plan_of a)"
+plan_own="$(plan_of b)"
+# And knot_tool.py, which reads the lists only the orchestrator edits from its scripts' folder,
+# takes that folder from where it is, not from a KNOT_SCRIPTS that a's build-slot.sh exported.
+lists_through_a="$(env -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED KNOT_SLOT_DIR="$tc/slots" \
+    "$tc/a/scripts/build-slot.sh" run -- python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import knot_tool; print(knot_tool.SCRIPTS)' \
+    "$tc/b/scripts/lib" 2>/dev/null | tail -n 1 || true)"
+if [[ $plan_through_a == "1 knot-tree-inherited" && $plan_own == "1 plan-check" && $lists_through_a == "$tree_b/scripts" ]]; then
+    pass "the plan check refuses the tree that another checkout's scripts exported, and checks its own; knot_tool.py reads its own lists"
+else
+    fail "the plan check's tree: through another checkout's build-slot.sh '$plan_through_a'; through its own '$plan_own'; knot_tool.py's lists, through another checkout's build-slot.sh, '$lists_through_a'"
+fi
 
 # 2. A failure prints the agreed fields: a code, what failed, the fix, whether a retry is
 #    safe, and what was changed, and exits 1.
@@ -145,7 +173,7 @@ mkdir -p "$plan/docs" "$plan/scripts/lib"
 cp "$KNOT_SELF/PLAN.md" "$plan/"
 cp -R "$KNOT_SELF/docs/plan" "$plan/docs/"
 cp "$KNOT_SCRIPTS/check-plan.sh" "$plan/scripts/"
-cp "$KNOT_SCRIPTS/lib/fail.sh" "$plan/scripts/lib/"
+cp "$KNOT_SCRIPTS/lib/fail.sh" "$KNOT_SCRIPTS/lib/tree.sh" "$plan/scripts/lib/"
 if KNOT_TREE="$plan" "$plan/scripts/check-plan.sh" >"$scratch/plan-ok.log" 2>&1; then
     pass "the plan check passes on the plan as it is"
 else

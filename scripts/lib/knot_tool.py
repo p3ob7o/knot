@@ -27,10 +27,12 @@ import sys
 
 BRIEFS = "docs/plan"
 NAMED_TESTS = os.path.join(BRIEFS, "named-tests.txt")
-# The scripts' own folder. The gate may run main's scripts against another tree: then the
-# plan and the sources come from the current folder, the tree under test, and the lists that
-# only the orchestrator edits come from the scripts' checkout.
-SCRIPTS = os.environ.get("KNOT_SCRIPTS", "scripts")
+# The scripts' own folder, the one this file is in. The gate may run main's scripts against
+# another tree: then the plan and the sources come from the current folder, the tree under
+# test, and the lists that only the orchestrator edits come from the scripts' checkout. It is
+# never read from KNOT_SCRIPTS, which a command started through another checkout's
+# build-slot.sh inherits from that checkout.
+SCRIPTS = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 CONCURRENCY_ESCAPES = os.path.join(SCRIPTS, "concurrency-escapes.txt")
 
 
