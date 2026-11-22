@@ -1675,6 +1675,34 @@ else
     fail "XcodeGen that changed after the doctor: $doctor_out / $generate_out"
 fi
 
+# A red soak prints its verdict's lines in the step's own output, the line that says how to
+# replay the recovery over a copy of the kept store among them, and not only in its log (item
+# 120). The step's function, from verify.sh, with a stand-in run whose soak is red.
+sk="$scratch/soak-verdict"
+mkdir -p "$sk"
+soak_out="$(python3 -I - "$KNOT_SCRIPTS/verify.sh" <<'PY' | KNOT_LOGS="$sk" bash 2>&1 || true
+import sys
+text = open(sys.argv[1]).read()
+start = text.index("step_soak() {")
+body = text[start:text.index("\n}\n", start) + 3]
+print('knot_swiftpm_flags() { KNOT_SWIFTPM_FLAGS=(); }')
+print('knot_skipped_tests() { :; }')
+print('''knot_swift_test_limited() {
+    printf '%s\\n' "capture ledger soak: RED at kill 3" "the store is kept at /tmp/kept" \\
+        "replay the recovery over a copy of the kept store with: knot-dev replay /tmp/kept" >"$KNOT_LOGS/verify-soak.out"
+    return 1
+}''')
+print(body)
+print("SEED=7 step_soak")
+PY
+)"
+if [[ $soak_out == *"capture ledger soak: RED"* && $soak_out == *"replay the recovery over a copy of the kept store with:"* &&
+    $soak_out == *"Repeat it with scripts/verify.sh --soak --seed 7"* ]]; then
+    pass "a red soak prints its verdict's lines, the replay of the recovery among them"
+else
+    fail "a red soak's lines: '$soak_out'"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"
