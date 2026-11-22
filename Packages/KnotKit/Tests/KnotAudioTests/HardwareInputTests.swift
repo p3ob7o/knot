@@ -385,9 +385,12 @@ import Testing
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
     }
 
-    /// A stop returns only once a delivery under way has ended: here the configuration
-    /// change's, which asks for the stop and runs on after it. The delivery holds until the stop
-    /// waits for it, or returns. After finding 23.
+    /// A stop returns only once a delivery under way has ended: here the interruption's, which
+    /// asks for the stop and runs on after it. The delivery holds until the stop waits for it, or
+    /// returns. After finding 23.
+    ///
+    /// The delivery holds on the input's own queue for an event of the session, and the stop runs
+    /// on a queue of its own: neither wait holds a thread of the cooperative pool.
     @Test func aStopWaitsForTheDeliveryUnderWay() async throws {
         let (opened, engine, hardware) = try await Self.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
@@ -406,8 +409,8 @@ import Testing
             Self.waitUntil { returned.value || opened.suspendedStops >= 1 }
             delivering.withLock { $0 = false }
         }
-        engine.changeConfiguration()
-        #expect(await SuiteWait.until("the stop") { returned.value })
+        hardware.interrupt()
+        #expect(await SuiteWait.until("the stop", limit: .seconds(10)) { returned.value })
         await stopped.wait()
         #expect(deliveringAtReturn.withLock { $0 } == false, "The stop returned while the delivery ran.")
         #expect(engine.calls == ["installTap", "start", "stop", "removeTap"])
@@ -447,13 +450,13 @@ import Testing
         try started.get()
     }
 
-    /// Blocks the calling thread until `condition` holds, for at most `SuiteWait.limit`. Only on a
-    /// thread outside the cooperative pool.
-    static func waitUntil(_ condition: () -> Bool) {
-        let deadline = ContinuousClock.now + SuiteWait.limit
+    /// Blocks the calling thread until `condition` holds, for at most `limit`. Only on a thread
+    /// outside the cooperative pool.
+    static func waitUntil(limit: Duration = SuiteWait.limit, _ condition: () -> Bool) {
+        let deadline = ContinuousClock.now + limit
         while !condition() {
             guard ContinuousClock.now < deadline else {
-                Issue.record("Waited \(SuiteWait.limit) inside the start.")
+                Issue.record("Waited \(limit) inside the start.")
                 return
             }
             usleep(500)
@@ -504,12 +507,14 @@ final class StopTask: Sendable {
 }
 
 /// Hardware that opens nothing: it records each use and answers as it was told, and it never
-/// makes a real engine.
+/// makes a real engine. A test tells its session's events, as the system would.
 final class StandInHardware: HardwareAudio {
     private let permission: Bool
     private let session: KnotError?
     private let engine: StandInEngine?
     private let used = Mutex<[String]>([])
+    private let events = AsyncStream<SessionEvent>.makeStream()
+    private let eventsEnded = Flag()
 
     var uses: [String] { used.withLock { $0 } }
 
@@ -518,7 +523,11 @@ final class StandInHardware: HardwareAudio {
         self.permission = permission
         self.session = session
         self.engine = engine
+        events.continuation.onTermination = { [eventsEnded] _ in eventsEnded.set() }
     }
+
+    /// True once whoever watched the session's events has stopped watching them.
+    var sessionUnwatched: Bool { eventsEnded.value }
 
     func recordPermission() async -> Bool {
         used.withLock { $0.append("permission") }
@@ -539,6 +548,17 @@ final class StandInHardware: HardwareAudio {
         guard let engine else { throw KnotError.noInputDevice }
         return engine
     }
+
+    func sessionEvents() -> AsyncStream<SessionEvent> { events.stream }
+
+    /// The system takes the session, as a call does.
+    func interrupt() { events.continuation.yield(.interrupted) }
+
+    /// The media services are reset.
+    func resetServices() { events.continuation.yield(.servicesReset) }
+
+    /// The route changes, here as headphones that connect: `newDeviceAvailable`, 1.
+    func changeRoute() { events.continuation.yield(.routeChanged(reason: 1)) }
 }
 
 /// An engine that opens nothing. It records each call, and runs a hook inside the tap's
@@ -550,20 +570,34 @@ final class StandInEngine: InputEngine {
         case stopping
     }
 
-    let tap: InputShape
-    let hardware: InputShape
+    private let shapes: Mutex<(tap: InputShape, hardware: InputShape)>
+    private let startFailure = Mutex<KnotError?>(nil)
     private let state = Mutex<(calls: [String], tap: (@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?)>(([], nil))
     private let hooks = Mutex<[Point: @Sendable (StandInEngine) -> Void]>([:])
     private let changes = AsyncStream<Void>.makeStream()
+    private let changesEnded = Flag()
     /// The last tap installed, kept after its removal.
     private let lastTap = Mutex<(@Sendable (AVReadOnlyAudioPCMBuffer) -> Void)?>(nil)
 
     init(tap: InputShape, hardware: InputShape? = nil) {
-        self.tap = tap
-        self.hardware = hardware ?? tap
+        shapes = Mutex((tap, hardware ?? tap))
+        changes.continuation.onTermination = { [changesEnded] _ in changesEnded.set() }
     }
 
+    /// True once whoever watched the configuration changes has stopped watching them.
+    var configurationUnwatched: Bool { changesEnded.value }
+
+    var tap: InputShape { shapes.withLock { $0.tap } }
+    var hardware: InputShape { shapes.withLock { $0.hardware } }
+
     var calls: [String] { state.withLock { $0.calls } }
+
+    /// The hardware changes to `shape`, for the tap and the hardware alike, as when headphones
+    /// connect. The system then changes the engine's configuration.
+    func setShape(_ shape: InputShape) { shapes.withLock { $0 = (shape, shape) } }
+
+    /// The next start throws `error`.
+    func failNextStart(with error: KnotError) { startFailure.withLock { $0 = error } }
 
     /// Runs `body` inside the call at `point`, before that call returns.
     func whenAt(_ point: Point, _ body: @escaping @Sendable (StandInEngine) -> Void) {
@@ -607,6 +641,11 @@ final class StandInEngine: InputEngine {
     func start() throws(KnotError) {
         state.withLock { $0.calls.append("start") }
         run(at: .starting)
+        let failure = startFailure.withLock { failure in
+            defer { failure = nil }
+            return failure
+        }
+        if let failure { throw failure }
     }
 
     func stop() {

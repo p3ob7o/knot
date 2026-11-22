@@ -29,7 +29,10 @@ import Testing
         #expect(exists(try #require(audio.workingFile)), "The working file stays until it is removed.")
         let names = recordingFolder(folder.locations)
         #expect(
-            names == ["\(request.captureID).caf", "\(request.captureID).json", "\(request.captureID).m4a"], "\(names)")
+            names == [
+                "\(request.captureID).caf", "\(request.captureID).json", "\(request.captureID).m4a",
+                "\(request.captureID).peaks",
+            ], "\(names)")
     }
 
     /// A working file closed and then cut short converts what it holds: the copy holds the
