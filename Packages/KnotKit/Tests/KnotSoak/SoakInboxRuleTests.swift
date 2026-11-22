@@ -27,7 +27,7 @@
                 + DurableFile.partialSuffix
         }
 
-        @Test func onePartialIsCountedAndPassesWhileTheSwitchIsOff() throws {
+        @Test func onePartialIsCountedAndIsRedOnceTheSwitchIsOn() throws {
             let (empty, emptyFolder) = try inbox([])
             SoakFolders.remove(emptyFolder)
             let name = partial(empty)
@@ -38,7 +38,7 @@
             #expect(entries.others == 0)
             // Seen after a kill, as the launch's report saw it.
             #expect(SoakWitness.inboxProblems(entries, known: [name], red: false).isEmpty)
-            #expect(SoakRules.inboxPartialsAreRed == false, "WP-15 turns it, with the fix.")
+            #expect(SoakRules.inboxPartialsAreRed, "WP-15 turned it, with the fix.")
             // The same store is red once the switch is on.
             #expect(SoakWitness.inboxProblems(entries, known: [name], red: true).map(\.code) == ["inbox_partials_left"])
             // And a partial no kill accounts for is red either way.

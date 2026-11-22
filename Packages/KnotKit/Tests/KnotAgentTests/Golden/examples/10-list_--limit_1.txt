@@ -1,0 +1,30 @@
+$ knot list --limit 1 --json
+{
+  "schema": 1,
+  "note_text": "data",
+  "notes": [
+    {
+      "note_id": "01a1ee5a-0780-7009-a729-89cf21af74a0",
+      "title": null,
+      "created_at": "2026-11-18T11:10:40Z",
+      "last_capture_ended_at": "2026-11-18T11:10:40Z",
+      "settled": false,
+      "settles_at": "2026-11-18T11:15:40Z",
+      "revision": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.4",
+      "segments": [
+        {
+          "segment_id": "01a1ee5a-0780-7008-9c57-1b850491c0a3",
+          "kind": "typed",
+          "state": "ready",
+          "origin": "cli",
+          "text_origin": "typed",
+          "revision": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1",
+          "text": "Book the dentist for March"
+        }
+      ]
+    }
+  ],
+  "more": true,
+  "cursor": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.4",
+  "sync": "off"
+}

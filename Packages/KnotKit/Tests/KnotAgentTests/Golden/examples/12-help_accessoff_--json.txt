@@ -1,0 +1,17 @@
+$ knot help access_off --json
+{
+  "schema": 1,
+  "entry": {
+    "code": "access_off",
+    "message": "Command-line access is off on this Mac.",
+    "class": "failure",
+    "next": "turn_on_command_line_access",
+    "fix": "The owner turns on command-line access in Knot's Settings on this Mac. The tool cannot turn it on.",
+    "retry": {
+      "safe": true,
+      "limit": null
+    },
+    "written": "nothing",
+    "exit_code": 4
+  }
+}
