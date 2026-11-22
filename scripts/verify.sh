@@ -7,9 +7,11 @@
 #   scripts/verify.sh --full [--skip mac-ui]   all of it: the lint, ownership, KnotCore's API,
 #                                              the named tests, every app, the packaging
 #                                              proofs, the launches and the Mac UI tests
-#   scripts/verify.sh --gate --branch <name> [--package <ID>] [--base <ref>]
+#   scripts/verify.sh --gate --branch <name> [--package <ID>] [--base <ref>] [--mac-ui-hosted]
 #                                              the merge gate: its depth comes from the diff;
-#                                              --branch is required on a detached head
+#                                              --branch is required on a detached head;
+#                                              --mac-ui-hosted takes the hosted job's Mac UI
+#                                              result while this Mac's screen is locked
 #   scripts/verify.sh --soak [--seed <n>]      the capture ledger soak (its step is WP-06's)
 #   scripts/verify.sh --perf                   the timed targets, on an optimised build with
 #                                              the fakes, holding every build slot
@@ -61,7 +63,7 @@ slot_options() {
     esac
 }
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "verify-usage" "$1" "Run scripts/verify.sh --help." "safe" "nothing"; }
 
 STATUS_FILE="$KNOT_LOGS/verify-status.txt"
@@ -90,6 +92,7 @@ else
     BASE=""
     SEED=""
     SKIP=""
+    MAC_UI_HOSTED=0
     ALLOW=()
     set_tier() {
         [[ -z $TIER ]] || usage_fail "One run takes one tier; got --$TIER and $1."
@@ -107,6 +110,7 @@ else
             --allow) [[ -n ${2:-} ]] || usage_fail "--allow needs a path."; ALLOW+=("$2"); shift 2 ;;
             --tree) [[ -n ${2:-} ]] || usage_fail "--tree needs the folder of the tree to check."; shift 2 ;;
             --base) BASE=${2:-}; [[ -n $BASE ]] || usage_fail "--base needs a ref."; shift 2 ;;
+            --mac-ui-hosted) MAC_UI_HOSTED=1; shift ;;
             --status-line)
                 [[ -f $STATUS_FILE ]] || knot_fail "verify-no-status" "No run has written $STATUS_FILE yet." \
                     "Run a tier first." "safe" "nothing"
@@ -126,6 +130,8 @@ else
     [[ -n $TIER || -n $ONLY || -n $MODULE ]] || usage_fail "Name a tier, --only <step> or --module <name>."
     [[ -z $SKIP || $TIER == full ]] || usage_fail "--skip mac-ui belongs to --full. The gate refuses it."
     [[ -z $SEED || $TIER == soak ]] || usage_fail "--seed belongs to --soak."
+    ((MAC_UI_HOSTED == 0)) || [[ $TIER == gate ]] ||
+        usage_fail "--mac-ui-hosted belongs to --gate: only the gate takes the hosted job's Mac UI result, while this Mac's screen is locked."
     # The steps that read the package and the branch take them alone too, as the gate runs
     # them.
     [[ -z $PACKAGE$BRANCH || $TIER == gate || $TIER == full || " ownership named-tests core-api " == *" $ONLY "* ]] ||
@@ -274,7 +280,8 @@ gate_state() { awk -F'\t' -v s="$1" '$1 == s { print $2 " " $3; exit }' "$KNOT_S
 
 step_doctor() {
     local options=(--tier "${TIER:-quick}")
-    [[ ${RUN_MAC_UI:-0} == 1 ]] && options+=(--mac-ui)
+    # A gate whose Mac UI step the hosted job meets needs no Automation Mode here.
+    [[ ${RUN_MAC_UI:-0} == 1 && ${MAC_UI_HOSTED:-0} != 1 ]] && options+=(--mac-ui)
     [[ $TIER == gate ]] && options+=(--models)
     "$KNOT_SCRIPTS/doctor.sh" "${options[@]}"
 }
@@ -817,6 +824,27 @@ end_mac_test_hosts() {
     kill -KILL $pids 2>/dev/null || true
 }
 
+# The gate's Mac UI step, met by the hosted job (--mac-ui-hosted), while this Mac's screen is
+# locked: the check run mac-ui on the commit under test, completed with success, and its kept
+# log, which becomes this run's Mac UI log under a first line that names the job
+# (knot_tool.py hosted-mac-ui). That log's results are then read as the local step's are: a
+# run with no test, a failed case or a skip fails. Its tests are counted apart, as the hosted
+# job's, and never in this Mac's totals.
+step_mac_ui_hosted() {
+    local log="$KNOT_LOGS/verify-mac-ui-tests.log" sha result status=0
+    : >"$log"
+    sha="$(git -C "$KNOT_ROOT" rev-parse HEAD)"
+    (cd "$KNOT_ROOT" && tool hosted-mac-ui --sha "$sha" --base "$BASE" --screen "$(knot_console_state)" --log "$log") ||
+        return 1
+    result="$(knot_xctest_result "$log")" || status=$?
+    echo "hosted $result"
+    if ((status != 0)); then
+        knot_xctest_failures "$log"
+        return 1
+    fi
+    report_skips "The hosted Mac UI tests" "$log"
+}
+
 # The .live smoke tests (WP-22) and the two-process test (WP-34) are pending in
 # scripts/gate-steps.txt until their packages build them. Should a line turn to required
 # before the step is filled in, the gate fails here rather than pass a check it did not run.
@@ -1024,6 +1052,10 @@ else
                     STEPS="$STEPS live-smoke two-process" ;;
             esac
             if [[ $DEPTH != documents && $gate_mac_ui == 1 ]]; then STEPS="$STEPS mac-ui"; RUN_MAC_UI=1; fi
+            if ((MAC_UI_HOSTED)) && [[ $STEPS != *" mac-ui"* ]]; then
+                echo "verify: --mac-ui-hosted: this gate takes no Mac UI step, so there is nothing for the hosted job to meet."
+                MAC_UI_HOSTED=0
+            fi
             [[ $DEPTH != documents && $gate_soak == 1 ]] && STEPS="$STEPS soak"
             # A step that scripts/gate-steps.txt lists as pending does not run yet.
             kept=""
@@ -1043,7 +1075,9 @@ else
             if [[ "$(cd "$KNOT_SCRIPTS/.." && pwd -P)" == "$KNOT_ROOT" ]]; then
                 echo "verify: the scripts are the tree's own. The gate runs main's scripts, except for a pull request that changes scripts/."
             fi
-            [[ -n $PENDING ]] && echo "verify: pending, not run:$PENDING" ;;
+            [[ -n $PENDING ]] && echo "verify: pending, not run:$PENDING"
+            ((MAC_UI_HOSTED && RUN_MAC_UI)) &&
+                echo "verify: the Mac UI step is met by the hosted job mac-ui on $(git -C "$KNOT_ROOT" rev-parse --short HEAD), if it passed there; this Mac runs no Mac UI test." ;;
     esac
     LABEL="--$TIER"
     [[ -n $DEPTH ]] && LABEL="--gate $DEPTH"
@@ -1064,6 +1098,8 @@ FAILED_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
+# The hosted job's Mac UI tests, which a gate with --mac-ui-hosted took: counted apart.
+HOSTED_TESTS=""
 
 count_tests() {
     local log=$1 n
@@ -1104,7 +1140,11 @@ for step in $STEPS; do
     # locked screen fails the step at once, before it takes its slot, and runs no test. A
     # read that says nothing never passes the step: the step runs, and fails by itself if the
     # screen is locked.
-    if [[ $step == mac-ui ]]; then
+    if [[ $step == mac-ui && $MAC_UI_HOSTED == 1 ]]; then
+        # The hosted job meets the step: nothing runs on this Mac, and the screen is read in it.
+        options=none
+        runner=step_mac_ui_hosted
+    elif [[ $step == mac-ui ]]; then
         case "$(knot_console_state)" in
             locked)
                 options=none
@@ -1139,20 +1179,27 @@ for step in $STEPS; do
         printf 'verify: skip  %-22s %s\n' "$step" "$(tail -n 1 "$log")"
     elif ((code == 0)); then
         PASSED=$((PASSED + 1))
-        printf 'verify: ok    %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
+        shown=$step
+        [[ $runner == step_mac_ui_hosted ]] && shown="mac-ui (hosted job)"
+        printf 'verify: ok    %-22s %s\n' "$shown" "$(knot_duration $(($(knot_now) - step_start)))"
+        if [[ $runner == step_mac_ui_hosted ]]; then
+            grep -E '^hosted mac-ui: ' "$log" | sed 's/^/        /' || true
+            HOSTED_TESTS=$(sed -n -E 's/^hosted xctest: ([0-9]+) passed.*/\1/p' "$log" | tail -n 1)
+        fi
         if [[ $step == ownership ]]; then
             ALLOWED=$(sed -n -E 's/.* ([0-9]+) allowed by hand$/\1/p' "$log" | tail -n 1)
             # The paths the orchestrator allowed by hand show on the console, not only in the log.
             grep -E '^ownership: allowed by hand: ' "$log" | sed 's/^ownership: /        /' || true
         fi
-        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
-        # A failed step's tests count too, so the summary shows its failed cases.
-        [[ " $COUNTED_STEPS " == *" $step "* ]] && count_tests "$log"
+        # A failed step's tests count too, so the summary shows its failed cases: not the
+        # hosted job's, which are not this Mac's.
+        [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         [[ $step == package-test-strict ]] && TESTS_FAILED=$((TESTS_FAILED + $(knot_failed_tests "$log" | grep -c . || true)))
         tail -n 25 "$log" | sed 's/^/        /'
         rerun="scripts/verify.sh --only $step"
@@ -1184,6 +1231,7 @@ xcode="$( [[ -n ${KNOT_XCODE_VERSION:-} ]] && knot_xcode_label || echo 'Xcode no
 duration="$(knot_duration $(($(knot_now) - START)))"
 allowed_text=""
 ((ALLOWED)) && allowed_text=" · $ALLOWED paths allowed by hand"
+[[ -n $HOSTED_TESTS ]] && allowed_text="$allowed_text · mac-ui met by the hosted job, its $HOSTED_TESTS tests not counted here"
 printf 'verify %s: %s · steps %d passed, %d failed, %d skipped, %d not run, %d pending · tests %d passed, %d failed, %d skipped%s · %s · %s · %s\n' \
     "$LABEL" "$status" "$PASSED" "$failed" "$SKIPPED_STEPS" "$not_run" "$pending" \
     "$TESTS_PASSED" "$TESTS_FAILED" "$TESTS_SKIPPED" "$allowed_text" "$duration" "$xcode" "$(knot_macos_label)"
@@ -1196,6 +1244,7 @@ short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}: $PASSED/$total steps
 ((SKIPPED_STEPS)) && short="$short, $SKIPPED_STEPS steps skipped"
 ((pending)) && short="$short, $pending pending"
 ((ALLOWED)) && short="$short, $ALLOWED allowed by hand"
+[[ -n $HOSTED_TESTS ]] && short="$short, mac-ui by hosted job"
 short="$short · $duration · Xcode ${KNOT_XCODE_VERSION:-?} ${KNOT_XCODE_BUILD:-}"
 [[ -n ${KNOT_XCODE_NOTE:-} ]] && short="$short*"
 candidate="$short · macOS $(sw_vers -buildVersion)"

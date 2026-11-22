@@ -241,4 +241,19 @@ GitHub offers a hosted runner with Xcode 27: the `xcode-27` image, a preview on 
 
 For a pull request whose diff reaches those same paths, `MAC_UI`, the workflow's `mac-ui` job runs `scripts/verify.sh --only mac-ui` there too: the doctor, then the gate's Mac UI step, as the scripts run it on the build Mac. A small job on a Linux runner, `mac-ui-scope`, reads the diff with `knot_tool.py depth` first, so a pull request that does not reach the Mac app starts no Mac runner for it. No merge requires the job: it is there to learn whether the hosted runner can bring the app to the front and read its accessibility tree. It fails as the step does, on a locked screen, a failed or skipped test, or a run in which no test ran, and it keeps its logs as an artifact for seven days, after a pass too. Its first run, on 2026-11-22 on the `xcode-27-arm64` image, passed the 24 Mac UI tests: the doctor found Automation Mode turning on without authentication, developer mode on and the screen unlocked, and the job took 3m26s, 3m00s of it the step.
 
+**The gate with the hosted job's Mac UI result.** `scripts/verify.sh --gate … --mac-ui-hosted` lets the hosted `mac-ui` job meet the gate's Mac UI step. The orchestrator uses it only when this Mac's screen is locked, and only by the owner's word. No agent unlocks the screen, and without the option a locked screen fails the gate at `mac-ui`. The option belongs to the gate alone, and `--full` and `--quick` refuse it. With it:
+
+- **Nothing runs on this Mac for the step.** The doctor does not ask for Automation Mode. The step asks GitHub, through `gh`, for the check run `mac-ui` that GitHub Actions made on the tree's head, the commit under test (`knot_tool.py hosted-mac-ui`). It reads no secret of its own: the check runs and the artifacts of a public repository, which `gh` reads signed in.
+- **It passes only** when the latest such run is completed with success on that very commit, its workflow run kept `verify-mac-ui-tests.log` in the artifact `mac-ui-logs`, and that log, read as the local step reads its own, holds passed tests, no failed case and no skip. The log becomes this run's Mac UI log, under a first line that names the job, the check run and the commit.
+- **It fails, and says why:**
+  - while the screen reads anything but locked;
+  - when the diff changes `scripts/` or `.github/`, since the hosted job ran the candidate's own scripts and workflow, which main's have not checked;
+  - when GitHub has no such run on the commit, as for a commit not pushed;
+  - when the run is still going, or ended failed, cancelled or otherwise;
+  - when the job was skipped. If the scope job passed, the scope said the diff does not reach the Mac UI paths, which the gate's own depth says it does: the job ran on another base;
+  - when the artifact is gone, after its seven days;
+  - when GitHub's answer cannot be read.
+- **The summary and the status line say it.** The step shows as `mac-ui (hosted job)` with the run's address. Its tests are counted apart, as the hosted job's, and never in this Mac's totals. The summary adds "mac-ui met by the hosted job, its N tests not counted here", and the status line adds "mac-ui by hosted job".
+- **The live smoke step** reads the Mac's smoke test from that log, as it reads a local run's.
+
 The repository gets no self-hosted runner, because it is public. Its workflows hold no secrets, never use `pull_request_target`, have read-only permissions and pin their actions by revision. The merge gate itself, `scripts/verify.sh --gate`, runs on the orchestrator's Mac.
