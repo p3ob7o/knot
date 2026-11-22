@@ -39,9 +39,11 @@ import Testing
         let wired = KnotAudioLive.wire(
             environment, locations: folder.locations, input: injected(), recordingState: suite.defaults)
         #expect(wired.recordingState is DefaultsRecordingStateStore)
-        let session = try await wired.recorder.start(request())
+        let started = request()
+        let session = try await wired.recorder.start(started)
         #expect(wired.recordingState.read().phase == .recording)
-        #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
+        #expect(await cuesHandedOver(by: wired.recorder, to: cues, refusing: started) == [.recordingLive])
+        #expect(wired.recordingState.read().phase == .recording, "A refused start leaves the state alone.")
         _ = await session.stop()
         #expect(wired.recordingState.read() == .idle)
     }

@@ -393,7 +393,10 @@ final class RemovalLayer: FileLayer {
     func contents(of folder: URL) throws(KnotError) -> [String] { try disk.contents(of: folder) }
 }
 
-/// Injected audio whose open waits until a test opens its gate, and says that it has begun.
+/// Injected audio whose open waits until a test opens its gate, and says that it has begun. The
+/// open runs in the recorder's own start, a task that belongs to no test, so its wait records
+/// nothing: the test opens the gate whatever it found, and its wait ends at `SuiteWait.limit` at
+/// the latest.
 struct GatedInput: AudioInput {
     let inner: InjectedAudio
     let opening: Flag
@@ -403,7 +406,8 @@ struct GatedInput: AudioInput {
 
     func open() async throws(KnotError) -> any OpenAudioInput {
         opening.set()
-        await SuiteWait.until("the gate") { gate.value }
+        let deadline = ContinuousClock.now + SuiteWait.limit
+        while !gate.value, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(2)) }
         return try await inner.open()
     }
 }

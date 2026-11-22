@@ -84,22 +84,26 @@ import Testing
         #expect(LiveRecorder.Settings().heartbeatInterval == .seconds(1))
     }
 
-    /// A start that fails, and a recording that ends by itself, leave the state idle.
+    /// A start that fails, and a recording that ends by itself, leave the state idle. The
+    /// recorder writes the idle state and then gives the stopped-early cue, so the test reads the
+    /// state once that cue is here, with no time to wait out.
     @Test func aRecordingThatEndsHoweverItEndsLeavesIdle() async throws {
         let suite = try TestSuite()
         defer { suite.remove() }
         let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
+        let cues = RecordingCueEmitter()
         let folder = try ScratchFolder()
         let input = FailableInput(injected(frames: 1_600, ending: .ends(.interrupted)))
         let live = LiveRecorder(
             locations: folder.locations, input: input, settings: LiveRecorder.Settings(syncInterval: .milliseconds(20)),
-            state: store)
+            cues: cues, state: store)
         input.failNextOpen(with: .noInputDevice)
         await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
         #expect(store.read() == .idle && store.phases == [.starting, .idle], "\(store.phases)")
         let session = try await live.start(request())
         _ = await allEvents(of: session)
-        #expect(await SuiteWait.until("the idle state", limit: .seconds(10)) { store.read() == .idle })
+        #expect(await SuiteWait.until("the stopped-early cue") { cues.cues.contains(.stoppedEarly) })
+        #expect(store.read() == .idle)
         #expect(store.phases.suffix(4) == [.starting, .recording, .stopping, .idle], "\(store.phases)")
     }
 

@@ -110,7 +110,6 @@ import Testing
             let now = store.read()
             #expect(now.phase == .recording && now.captureID == started.captureID && now.ownerLaunch == thisLaunch)
             #expect(SavedRecordingState(now).map { !$0.isStale(at: Date()) } == true, "A fresh heartbeat: \(now)")
-            #expect(await SuiteWait.until("the live cue", limit: .seconds(10)) { cues.cues == [.recordingLive] })
             _ = await session.stop()
             try await live.removeWorkingFile(of: started.captureID)
             try await live.removeWorkingFile(of: dead.capture)
@@ -133,7 +132,8 @@ import Testing
             let audio = await running.stop()
             #expect(audio.ending == .stopped && audio.frames >= 1_600, "The live recording was not touched: \(audio)")
             #expect(store.read() == .idle)
-            #expect(cues.cues == [.recordingLive, .recordingLive])
+            // Each start gave the live cue once: read once the recorder has handed over every cue.
+            #expect(await cuesHandedOver(by: live, to: cues, refusing: next) == [.recordingLive, .recordingLive])
         }
 
         /// What a killed recording left: its capture, its process and its last durable count.
