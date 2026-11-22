@@ -6,7 +6,8 @@ import KnotCore
 ///
 /// 1. `recoverRecordings()`: the recorder reads the orphaned recordings of earlier launches
 ///    to their last complete frame.
-/// 2. `InboxIngest.ingestAll()`: the items in `Inbox/` are reconciled with their rows.
+/// 2. `removeInboxPartials()`, then `InboxIngest.ingestAll()`: the temporaries that cut writes
+///    left in `Inbox/` go, and the items there are reconciled with their rows.
 /// 3. `finishOpenCaptures(recovered:)`: every open row of an earlier launch ends. A typed
 ///    capture ends at the last durable save the store wrote on its row, with the text it
 ///    holds. A recording ends at the end of the audio its file holds, as its stored asset.
@@ -38,6 +39,7 @@ public struct LaunchRecovery: Sendable {
     private let locations: StoreLocations
     private let layer: any FileLayer
     private let items: InboxItems
+    private let peaks: StoredPeaks
     private let ownAsset: OwnRecordingAsset
     private let log: KnotLog
 
@@ -53,6 +55,7 @@ public struct LaunchRecovery: Sendable {
         self.locations = locations
         self.layer = layer
         self.items = InboxItems(locations: locations, layer: layer)
+        self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
         self.ownAsset = OwnRecordingAsset(notes: notes, assets: assets, locations: locations, layer: layer, log: log)
         self.log = log
     }
@@ -108,8 +111,37 @@ public struct LaunchRecovery: Sendable {
     /// after it was asked has finished, whoever else started a run (finding 47).
     public func run(ingest: InboxIngest) async throws(KnotError) -> [CaptureID: Outcome] {
         let recovered = try await recoverRecordings()
+        removeInboxPartials()
         let ingested = await ingest.ingestAllInLaunchOrder()
         return try await finishOpenCaptures(recovered: recovered, ingested: ingested)
+    }
+
+    // MARK: Inbox/
+
+    /// Removes every temporary that a cut write left in `Inbox/`, which is no item
+    /// (docs/architecture.md §6, rule 2), once a launch, in the app only: `run(ingest:)` calls it.
+    ///
+    /// It goes by no age, no launch in the name and no lock that processes share (the ruling of
+    /// 2026-11-22). A writer in another process whose partial it removes loses nothing:
+    /// `DurableFile.place` runs its whole operation once more when its partial has gone, under a
+    /// new name, and a second removal inside one place fails that write to its caller, which then
+    /// has acknowledged nothing, and leaves nothing half written (`PartialRemovalTests`).
+    ///
+    /// A failure is logged with its code and stops nothing: the partials wait for the next launch.
+    public func removeInboxPartials() {
+        do throws(KnotError) {
+            guard layer.entryKind(locations.inbox) == .folder else { return }
+            let count = try layer.contents(of: locations.inbox).count(where: Self.isPartial)
+            guard count > 0 else { return }
+            try locations.durableFiles(layer: layer).removePartials(in: locations.inbox)
+            log.log(.notice, "inbox_partials_removed", .number("count", count))
+        } catch {
+            log.failure(error, "inbox_partials_not_removed")
+        }
+    }
+
+    private static func isPartial(_ name: String) -> Bool {
+        name.hasPrefix(".") && name.hasSuffix(DurableFile.partialSuffix)
     }
 
     // MARK: Recordings
@@ -134,7 +166,9 @@ public struct LaunchRecovery: Sendable {
             case .stored? where row?.awaitsItsFile != true, .discardedEmpty?:
                 // Ingest, or the end before the death, stored it: only the working file is left.
                 // A row recorded as ended before its file is not stored: it holds nothing yet,
-                // and it is finished as an open one is.
+                // and it is finished as an open one is. A death between a stored end and its
+                // peaks left them beside the working file: they are kept now.
+                if row?.outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id) }
                 try await recorder.removeWorkingFile(of: id)
                 return .workingFileRemoved
             default:
@@ -196,7 +230,8 @@ public struct LaunchRecovery: Sendable {
                     return .kept(KnotError.inboxItemUnreadable.code)
                 }
                 let placement: CapturePlacement
-                switch try await items.placement(of: manifest, notes: notes, cyclic: cyclic, kept: kept) {
+                switch try await items.placementBesideKeptItems(of: manifest, notes: notes, cyclic: cyclic, kept: kept)
+                {
                 case .place(let asked):
                     placement = asked
                 case .wait(let code):
@@ -208,6 +243,7 @@ public struct LaunchRecovery: Sendable {
                     item.revision = recording.frames
                     item.payloadByteCount = stored.byteCount
                     item.payloadSHA256 = stored.sha256
+                    item.peaks = peaks.fromFile(id, frames: recording.frames)
                     try items.writeRecording(item)
                     try await recorder.removeWorkingFile(of: id)
                     log.capture(id, "recording_handed_to_inbox", .code(code))
@@ -221,8 +257,8 @@ public struct LaunchRecovery: Sendable {
                         revision: recording.frames, shownNote: manifest.shownNoteID))
                 outcome = result.receipt.outcome
             }
-            // The row points to the asset. The peaks, once a store keeps them, are set here, before
-            // the working file and its peaks go.
+            // The row points to the asset: its peaks are kept before the working file goes.
+            if outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id) }
             try await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
             log.capture(id, "recording_recovered", .duration("length", converted.duration))
@@ -258,7 +294,7 @@ public struct LaunchRecovery: Sendable {
         do throws(KnotError) {
             guard let manifest = try recordingManifest(id) else { return .kept(KnotError.inboxItemUnreadable.code) }
             let placement: CapturePlacement
-            switch try await items.placement(of: manifest, notes: notes, cyclic: cyclic, kept: kept) {
+            switch try await items.placementBesideKeptItems(of: manifest, notes: notes, cyclic: cyclic, kept: kept) {
             case .place(let asked):
                 placement = asked
             case .wait(let code):

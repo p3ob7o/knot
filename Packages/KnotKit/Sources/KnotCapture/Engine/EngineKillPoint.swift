@@ -22,17 +22,50 @@ public enum EngineKillPoint: String, CaseIterable, Sendable {
     /// A stopped recording's file is converted and moved into the `AssetStore`, and its
     /// capture has not been ended with it.
     case afterRecordingMoved = "after_recording_moved"
-    /// A recording's capture ended with its asset, and its working file is not removed yet.
+    /// A recording's capture ended with its asset, and its working file is not removed yet: on
+    /// the store path its row points to the asset, on the `Inbox/` path its item names it.
     case afterRecordingEnded = "after_recording_ended"
+    /// A typed item's manifest is placed in `Inbox/` and its payload is not: the one point that
+    /// falls inside the item lock, where nothing waits. The engine asks the hook's synchronous
+    /// half there, and stops after the manifest when told; it then awaits this point, outside the
+    /// lock. A test that releases the engine sees it place the whole item again.
+    case betweenTypedManifestAndPayload = "between_typed_manifest_and_payload"
+    /// A recording's first manifest and working file are on the drive, as the recorder's start
+    /// returned, and its row is not written yet.
+    case afterRecordingManifest = "after_recording_manifest"
+    /// A recording is stopped, its working file synced, and it is not converted or moved yet.
+    case beforeConversion = "before_conversion"
+    /// A recording's conversion failed: its working file stays, and its row is not ended failed
+    /// yet.
+    case afterFailedConversion = "after_failed_conversion"
+    /// A discard's first step is done and the discard has not answered: a recording's audio and
+    /// manifest are removed and its row is not ended yet; a typed capture's end as empty is
+    /// durable.
+    case afterDiscard = "after_discard"
+    /// A store call that the engine stopped waiting for has committed, and the engine has not
+    /// taken its late answer yet.
+    case beforeLateAnswer = "before_late_answer"
 }
 
 #if DEBUG || KNOT_FAKES
-    /// Holds an engine's kill-point hook, set once by the initialiser that takes it.
+    /// Holds an engine's kill-point hook, set once by the initialiser that takes it, and its
+    /// synchronous half, which is asked inside a write that cannot wait.
     final class KillPointHook: Sendable {
         private let hook = Mutex<(@Sendable (EngineKillPoint, CaptureID) async -> Void)?>(nil)
+        private let stopsHook = Mutex<(@Sendable (EngineKillPoint, CaptureID) -> Bool)?>(nil)
 
-        func set(_ hook: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void) {
+        func set(
+            _ hook: @escaping @Sendable (EngineKillPoint, CaptureID) async -> Void,
+            stops: (@Sendable (EngineKillPoint, CaptureID) -> Bool)?
+        ) {
             self.hook.withLock { $0 = hook }
+            stopsHook.withLock { $0 = stops }
+        }
+
+        /// Whether the engine stops at `point` inside a write: the soak's child kills its process
+        /// here, and a test answers true for the point it armed.
+        func stops(_ point: EngineKillPoint, _ capture: CaptureID) -> Bool {
+            stopsHook.withLock { $0 }?(point, capture) ?? false
         }
 
         func reach(_ point: EngineKillPoint, _ capture: CaptureID) async {

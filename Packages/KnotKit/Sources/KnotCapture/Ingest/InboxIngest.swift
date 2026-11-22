@@ -11,8 +11,16 @@ import KnotCore
 /// open by an earlier launch is a draft a crash cut short, and it is stored as finished
 /// (docs/product-spec.md §3, rule 12). Items found together go in the order their captures
 /// started, except that a capture comes after the capture it follows, and waits, kept, while
-/// that capture can still arrive (`InboxItems.placement`). When the store does not answer,
-/// ingest stops, and the items wait for the next run.
+/// that capture can still arrive (`InboxItems.placement`). When the store does not answer, or
+/// the disk is full, ingest stops, and the items wait for the next run.
+///
+/// An item this build cannot read, or that a newer Knot wrote, is recorded through the store's
+/// `recordKeptItem`, named by the capture ID its file names tell: a failed segment in a note of
+/// its own, which names the files `Inbox/` keeps for it. The files stay. Once a later build can
+/// read the item, ingest stores it through that failed row, and removes the files.
+///
+/// A large `Inbox/` is a bulk writer: each item is a transaction of its own, and the run yields
+/// between items, so that a capture never waits behind it (docs/architecture.md §7).
 public actor InboxIngest {
     /// What ingest did with one item.
     public enum ItemOutcome: Hashable, Sendable {
@@ -28,6 +36,11 @@ public actor InboxIngest {
         /// The item named nothing that had reached the drive: a first save that a death cut
         /// between its two files, or a removal cut the same way. Its manifest is gone.
         case removedEmpty
+        /// The store answered that the capture is gone: it was kept as unreadable, and its
+        /// failed segment was deleted and purged. Nothing is stored, and the item's files and
+        /// the payload ingest moved into `Assets/` are removed, so that a deleted entry never
+        /// comes back (docs/architecture.md §6, rule 2).
+        case purged
     }
 
     private let notes: any NoteStore
@@ -37,6 +50,7 @@ public actor InboxIngest {
     private let clock: any WallClock
     private let launchID: LaunchID
     private let items: InboxItems
+    private let peaks: StoredPeaks
     private let log: KnotLog
     private let holds: @Sendable (CaptureManifest) -> ErrorCode?
     private var running: Set<CaptureID> = []
@@ -57,6 +71,7 @@ public actor InboxIngest {
         self.clock = clock
         self.launchID = launchID
         self.items = InboxItems(locations: locations, layer: layer)
+        self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
         self.log = log
         self.holds = holds
     }
@@ -148,13 +163,15 @@ public actor InboxIngest {
             outcomes[id] = outcome
             switch outcome {
             case .kept(let code):
-                if Self.storeDidNotAnswer(code) { return (outcomes, true) }
+                if Self.stopsTheRun(code) { return (outcomes, true) }
                 kept[id] = code
             case .leftOpen, .alreadyRunning:
                 kept[id] = KnotError.segmentCaptureOpen.code
-            case .stored, .removedEmpty:
+            case .stored, .removedEmpty, .purged:
                 break
             }
+            // Each item is a transaction of its own: the run lets other work in between.
+            await Task.yield()
         }
         return (outcomes, false)
     }
@@ -170,11 +187,12 @@ public actor InboxIngest {
             guard let read = try items.readManifest(capture) else { return .removedEmpty }
             manifest = read
         } catch {
-            // Unreadable, or written by a newer Knot: kept for a person or an update. A manifest
-            // that cannot be read names no capture to hand to the store, so nothing is written
-            // for it; what becomes of its files is an open point of the documents.
             log.failure(error.about(capture: capture), "inbox_item_kept")
-            return .kept(error.code)
+            // Unreadable, or written by a newer Knot: a failed segment that keeps its files, for
+            // a person or an update. Any other error, such as a file that cannot be read now,
+            // says nothing of the item, which waits for the next run.
+            guard let reason = Self.keptReason(error) else { return .kept(error.code) }
+            return await keep(capture, reason: reason)
         }
         if manifest.endedAt == nil, manifest.launchID == launchID { return .leftOpen }
         if let code = holds(manifest) {
@@ -183,12 +201,15 @@ public actor InboxIngest {
         }
         do throws(KnotError) {
             let place = { () async throws(KnotError) -> FollowerPlacement in
-                try await self.items.placement(of: manifest, notes: self.notes, cyclic: cyclic, kept: kept)
+                try await self.items.placementBesideKeptItems(
+                    of: manifest, notes: self.notes, cyclic: cyclic, kept: kept)
             }
             switch manifest.kind {
             case .typed: return try await ingestTyped(manifest, place)
             case .voice: return try await ingestRecording(manifest, place)
-            default: return .kept(KnotError.inboxItemNewerVersion.code)
+            default:
+                // A kind this build does not know: a newer Knot wrote it.
+                return await keep(capture, reason: KnotError.inboxItemNewerVersion.code)
             }
         } catch {
             log.failure(error.about(capture: capture), "inbox_item_kept")
@@ -228,7 +249,8 @@ public actor InboxIngest {
             case .place(let asked): placement = asked
             case .wait(let code): return waits(manifest, code)
             }
-            _ = try await notes.ingest(try await newCapture(manifest, placement: placement, body: .none))
+            let result = try await notes.ingest(try await newCapture(manifest, placement: placement, body: .none))
+            if result.purged { return try removePurged(manifest.captureID) }
             return .kept(KnotError.inboxItemUnreadable.code)
         }
         if whole == false {
@@ -282,9 +304,19 @@ public actor InboxIngest {
         }
         let result = try await notes.ingest(
             try await newCapture(manifest, placement: placement, body: .file(asset, duration: manifest.duration)))
+        if result.purged {
+            // The item's files first, then the file in `Assets/`, which no row names any more: a
+            // death between the two leaves a file that nothing names, never an item whose audio
+            // is gone. `AssetStore.remove` keeps a file that a row names.
+            let outcome = try removePurged(id)
+            try await assets.remove(assetID, kind: .audio)
+            return outcome
+        }
         let outcome = try finish(manifest, result)
         if case .stored = outcome {
-            // The row points to the stored asset: the working file and its manifest can go.
+            // The row points to the stored asset: its peaks are kept, those of the item or else
+            // those beside the working file, and the working file and its manifest can go.
+            await peaks.keep(manifest.peaks ?? peaks.fromFile(id, frames: manifest.revision), of: id)
             try? await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
         }
@@ -316,9 +348,10 @@ public actor InboxIngest {
         return .kept(code)
     }
 
-    /// Removes the item once the store holds its revision.
+    /// Removes the item once the store holds its revision, or once the store says it is gone.
     private func finish(_ manifest: CaptureManifest, _ result: IngestResult) throws(KnotError) -> ItemOutcome {
         let id = manifest.captureID
+        if result.purged { return try removePurged(id) }
         guard result.storedRevision >= manifest.revision else {
             log.capture(id, "inbox_item_kept", .number("revision", Int(manifest.revision)))
             return .kept(KnotError.captureIDConflict.code)
@@ -328,7 +361,83 @@ public actor InboxIngest {
         return .stored(revision: result.storedRevision)
     }
 
-    private static func storeDidNotAnswer(_ code: ErrorCode) -> Bool {
-        code == KnotError.storeNotOpen.code || code == KnotError.storeBusy.code
+    // MARK: Kept items
+
+    /// Records an item this build cannot read as a kept item: a failed segment that names the
+    /// item's files, which stay. A store that answers that the capture is gone has the files
+    /// removed instead.
+    private func keep(_ capture: CaptureID, reason: ErrorCode) async -> ItemOutcome {
+        do throws(KnotError) {
+            let names = try items.fileNames(of: capture)
+            // No file left of it: nothing to keep, and nothing to name.
+            guard !names.isEmpty else { return .removedEmpty }
+            let result = try await notes.recordKeptItem(
+                KeptInboxItem(captureID: capture, reason: reason, foundAt: clock.now(), fileNames: names))
+            if result.purged { return try removePurged(capture) }
+            if result.applied { log.capture(capture, "inbox_item_recorded_as_kept", .code(reason), level: .notice) }
+            return .kept(reason)
+        } catch {
+            log.failure(error.about(capture: capture), "inbox_item_not_recorded")
+            return .kept(error.code)
+        }
+    }
+
+    /// Removes every file of an item whose capture the store says is gone: its payloads first and
+    /// its manifest last, as an item is removed.
+    private func removePurged(_ capture: CaptureID) throws(KnotError) -> ItemOutcome {
+        try items.removeAll(of: capture)
+        log.capture(capture, "inbox_item_purged", level: .notice)
+        return .purged
+    }
+
+    /// The reason an item is kept for a failure to read its manifest, or `nil` for a failure that
+    /// says nothing of the item. A manifest too large to read is unreadable.
+    private static func keptReason(_ error: KnotError) -> ErrorCode? {
+        switch error.code {
+        case KnotError.inboxItemUnreadable.code, KnotError.manifestTooLarge.code:
+            KnotError.inboxItemUnreadable.code
+        case KnotError.inboxItemNewerVersion.code:
+            KnotError.inboxItemNewerVersion.code
+        default:
+            nil
+        }
+    }
+
+    /// The codes that stop a run: the store does not answer, or the disk is full, so the items
+    /// after it would fail as this one did. They wait for the next run.
+    private static func stopsTheRun(_ code: ErrorCode) -> Bool {
+        code == KnotError.storeNotOpen.code || code == KnotError.storeBusy.code || code == KnotError.diskFull.code
+    }
+}
+
+extension InboxItems {
+    /// The names of a capture's files in `Inbox/`, as `KeptInboxItem.isFileName(_:of:)` names
+    /// them: never a partial, which starts with a dot.
+    func fileNames(of capture: CaptureID) throws(KnotError) -> [String] {
+        guard layer.entryKind(locations.inbox) == .folder else { return [] }
+        return try layer.contents(of: locations.inbox).filter { KeptInboxItem.isFileName($0, of: capture) }.sorted()
+    }
+
+    /// Removes every file of a capture in `Inbox/`: the others first, its manifest last.
+    func removeAll(of capture: CaptureID) throws(KnotError) {
+        let manifest = locations.inboxManifest(capture)
+        for name in try fileNames(of: capture) where name != manifest.lastPathComponent {
+            try files.remove(locations.inbox.appending(path: name, directoryHint: .notDirectory))
+        }
+        if layer.entryKind(manifest) != nil { try files.remove(manifest) }
+    }
+
+    /// Where a capture goes, as `placement(of:notes:cyclic:kept:)` says, except that a capture
+    /// that follows a kept item is placed as it asked: the kept item's failed segment stands in a
+    /// note of its own, which no capture joins (docs/architecture.md §6, rule 2).
+    func placementBesideKeptItems(
+        of manifest: CaptureManifest, notes: any NoteStore, cyclic: Bool = false, kept: [CaptureID: ErrorCode] = [:]
+    ) async throws(KnotError) -> FollowerPlacement {
+        if let follows = manifest.followsCaptureID, follows != manifest.captureID,
+            let segment = try await notes.segment(SegmentID(follows)), segment.kind == .keptInboxItem
+        {
+            return .place(manifest.placement)
+        }
+        return try await placement(of: manifest, notes: notes, cyclic: cyclic, kept: kept)
     }
 }

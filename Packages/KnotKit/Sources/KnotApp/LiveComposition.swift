@@ -204,7 +204,8 @@ public final class LiveComposition: Sendable {
         let engine = StandardCaptureEngine(
             notes: environment.notes, assets: environment.assets, recorder: environment.recorder, queue: gatedQueue,
             clock: clock, ids: ids, deviceID: deviceID, launchID: launchID, locations: locations, layer: layer,
-            deadline: seams.deadline, ingest: ingest)
+            deadline: seams.deadline, ingest: ingest, transcriber: environment.transcriber,
+            recordingState: environment.recordingState, cues: environment.cues)
         environment.engine = TimedCaptureEngine(inner: engine, timings: timings)
         self.gatedQueue = gatedQueue
         self.ingest = ingest
@@ -288,6 +289,12 @@ struct RefusingCaptureEngine: CaptureEngine {
     func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw error }
 
     func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+
+    func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> { AsyncStream { $0.finish() } }
+
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome {
+        throw error
+    }
 }
 
 /// Holds the items of earlier launches in `Inbox/` until this launch's recovery runs, and for
