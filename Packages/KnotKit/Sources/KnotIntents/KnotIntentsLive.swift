@@ -1,12 +1,13 @@
+import AppIntents
 import KnotCore
 
-/// The live entry point of KnotIntents. It registers the environment with the App Intents dependency manager.
-///
-/// Until the package that owns KnotIntents fills it in, it returns the environment it is given,
-/// whose ports from this module are still the unavailable ones. KnotApp calls it when it
-/// builds `.live`, so that package wires itself in without editing `Sources/KnotApp/`.
+/// The live entry point of KnotIntents. KnotApp calls it when it builds `.live`, and it
+/// registers that environment with the App Intents dependency manager, so that the intents the
+/// system runs in the app's process reach it (docs/architecture.md §14). It returns the
+/// environment unchanged: KnotIntents fills no port.
 public enum KnotIntentsLive {
     public static func wire(_ environment: AppEnvironment) -> AppEnvironment {
-        environment
+        KnotIntentEnvironment.register(environment, in: .shared)
+        return environment
     }
 }
