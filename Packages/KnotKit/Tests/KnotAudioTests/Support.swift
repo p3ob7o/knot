@@ -76,9 +76,10 @@ func request(_ launch: LaunchID = LaunchID(uuid: UUID()), limit: Duration = .sec
         shownNote: NoteID(uuid: UUID()), limit: limit)
 }
 
-/// Every event of a session until its end, bounded by `SuiteWait`.
-func allEvents(of session: any RecordingSession) async -> [RecordingEvent] {
-    await SuiteWait.value("the events to end") {
+/// Every event of a session until its end, bounded by `SuiteWait`, or by `limit` for a test whose
+/// injected audio ends in milliseconds.
+func allEvents(of session: any RecordingSession, limit: Duration = SuiteWait.limit) async -> [RecordingEvent] {
+    await SuiteWait.value("the events to end", limit: limit) {
         var events: [RecordingEvent] = []
         for await event in session.events { events.append(event) }
         return events
