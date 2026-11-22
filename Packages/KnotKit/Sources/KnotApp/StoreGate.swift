@@ -224,6 +224,12 @@ struct GatedNoteStore: NoteStore {
         try await notes().removeRecording(of: segment)
     }
 
+    func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError) {
+        try await notes().setPeaks(peaks, of: segment)
+    }
+
+    func peaks(of segment: SegmentID) async throws(KnotError) -> Data? { try await notes().peaks(of: segment) }
+
     func clearArrivalMarks(in note: NoteID) async throws(KnotError) { try await notes().clearArrivalMarks(in: note) }
 
     func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult {

@@ -38,6 +38,7 @@ public struct LaunchRecovery: Sendable {
     private let locations: StoreLocations
     private let layer: any FileLayer
     private let items: InboxItems
+    private let peaks: StoredPeaks
     private let log: KnotLog
 
     public init(
@@ -52,6 +53,7 @@ public struct LaunchRecovery: Sendable {
         self.locations = locations
         self.layer = layer
         self.items = InboxItems(locations: locations, layer: layer)
+        self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
         self.log = log
     }
 
@@ -132,7 +134,9 @@ public struct LaunchRecovery: Sendable {
             case .stored? where row?.awaitsItsFile != true, .discardedEmpty?:
                 // Ingest, or the end before the death, stored it: only the working file is left.
                 // A row recorded as ended before its file is not stored: it holds nothing yet,
-                // and it is finished as an open one is.
+                // and it is finished as an open one is. A death between a stored end and its
+                // peaks left them beside the working file: they are kept now.
+                if row?.outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id) }
                 try await recorder.removeWorkingFile(of: id)
                 return .workingFileRemoved
             default:
@@ -197,6 +201,7 @@ public struct LaunchRecovery: Sendable {
                     item.revision = recording.frames
                     item.payloadByteCount = stored.byteCount
                     item.payloadSHA256 = stored.sha256
+                    item.peaks = peaks.fromFile(id, frames: recording.frames)
                     try items.writeRecording(item)
                     try await recorder.removeWorkingFile(of: id)
                     log.capture(id, "recording_handed_to_inbox", .code(code))
@@ -210,6 +215,8 @@ public struct LaunchRecovery: Sendable {
                         revision: recording.frames, shownNote: manifest.shownNoteID))
                 outcome = result.receipt.outcome
             }
+            // The row points to the asset: its peaks are kept before the working file goes.
+            if outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id) }
             try await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
             log.capture(id, "recording_recovered", .duration("length", converted.duration))

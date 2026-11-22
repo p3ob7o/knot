@@ -13,6 +13,15 @@ struct ChaosStore: NoteStore {
     var beforeEnd: (@Sendable (CaptureEnd) throws(KnotError) -> Void)? = nil
     /// Run before each read of a capture's row: it may refuse it.
     var refuseCaptureRead: (@Sendable (CaptureID) throws(KnotError) -> Void)? = nil
+    /// Run before each set of a segment's peaks: it may refuse it.
+    var refusePeaks: (@Sendable (SegmentID) throws(KnotError) -> Void)? = nil
+
+    func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError) {
+        try refusePeaks?(segment)
+        try await store.setPeaks(peaks, of: segment)
+    }
+
+    func peaks(of segment: SegmentID) async throws(KnotError) -> Data? { try await store.peaks(of: segment) }
 
     func cursor() async throws(KnotError) -> StoreCursor {
         return try await store.cursor()

@@ -59,4 +59,66 @@ struct EngineForwardingTests {
         var live = engine.live(CaptureID(uuid: UUID())).makeAsyncIterator()
         #expect(await live.next() == nil)
     }
+
+    /// The live environment's store, `GatedNoteStore`, forwards each operation of the store by
+    /// hand: the peaks of a stored recording reach the real store, which answers `not_found` for
+    /// a segment it does not have, where the port's default answers `port_unavailable`. And a
+    /// recording made through the live engine keeps the peaks its recorder left beside it.
+    @Test("The live environment's store keeps a recording's peaks")
+    func liveStoreKeepsARecordingsPeaks() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var seams = LiveComposition.Seams.forTests
+        let layer = PosixFileLayer()
+        seams.recorder = ScriptedRecorder(locations: folder.locations, layer: layer, clock: SystemWallClock())
+        let composition = folder.compose(seams: seams)
+        _ = try #require(await launch(composition))
+        let notes = composition.environment.notes
+        let unknown = SegmentID(uuid: UUID())
+        for call in ["peaks", "setPeaks"] {
+            do {
+                if call == "peaks" {
+                    _ = try await notes.peaks(of: unknown)
+                } else {
+                    try await notes.setPeaks(RecordingPeaks(framesPerValue: 800).encoded(), of: unknown)
+                }
+                Issue.record("\(call) answered for a segment the store does not have.")
+            } catch {
+                #expect(error.code == KnotError.notFound.code, "\(call) answered \(error.code).")
+            }
+        }
+
+        let engine = composition.environment.engine
+        let states = engine.states()
+        let pressed = await SuiteWait.value("a press") { () async -> Result<RecordingPressOutcome, KnotError> in
+            do throws(KnotError) {
+                return .success(
+                    try await engine.press(
+                        Press(.holdStart, at: Date()), recording: CaptureRequest(kind: .voice, surface: .app)))
+            } catch {
+                return .failure(error)
+            }
+        }
+        guard case .success(.started(let state)) = pressed else {
+            Issue.record("The press did not start a recording: \(String(describing: pressed)).")
+            return
+        }
+        let id = state.captureID
+        _ = await SuiteWait.value("the recording's frames to be durable") {
+            for await state in states where state.captureID == id && state.durableRevision > 0 { return true }
+            return false
+        }
+        let written = RecordingPeaks(framesPerValue: 800, values: [10, 20, 30]).encoded()
+        try layer.write(written, to: folder.locations.recordingPeaks(id))
+        let stopped = await SuiteWait.value("the release") { () async -> RecordingPressOutcome? in
+            try? await engine.press(
+                Press(.holdRelease, at: Date()), recording: CaptureRequest(kind: .voice, surface: .app))
+        }
+        guard case .stopped(let ended)?? = stopped, ended.outcome == .stored else {
+            Issue.record("The release did not store the recording: \(String(describing: stopped)).")
+            return
+        }
+        let kept = try await notes.peaks(of: SegmentID(id))
+        #expect(kept != nil, "The recording's peaks were not kept.")
+    }
 }

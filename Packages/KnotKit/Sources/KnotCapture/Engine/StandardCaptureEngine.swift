@@ -108,6 +108,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let deviceID: DeviceID
     private let launchID: LaunchID
     private let inbox: InboxItems
+    private let peaks: StoredPeaks
     private let deadline: StoreDeadline
     private let ingest: InboxIngest?
     private let transcriber: (any Transcriber)?
@@ -171,6 +172,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         self.deviceID = deviceID
         self.launchID = launchID
         self.inbox = InboxItems(locations: locations, layer: layer)
+        self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
         self.deadline = deadline
         self.ingest = ingest
         self.transcriber = transcriber
@@ -916,7 +918,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 entries[id]?.noteID = receipt.noteID
                 entries[id]?.session = nil
                 await reach(.afterRecordingEnded, id)
-                // The row points to the stored asset: the working file can go.
+                // The row points to the stored asset: its peaks are kept, and the working file can
+                // go with the peaks beside it.
+                if receipt.outcome == .stored { await peaks.keep(peaks.fromFile(id, frames: audio.frames), of: id) }
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
                 log.capture(id, "recording_ended", .flag("store_path", true), .duration("length", duration))
@@ -930,7 +934,8 @@ public actor StandardCaptureEngine: CaptureEngine {
             captureID: id, kind: .voice, origin: origin(entry.surface), launchID: launchID,
             startedAt: entry.startedAt, endedAt: endedAt, duration: duration, placement: entry.placement,
             shownNoteID: entry.shownNote, revision: revision, payloadByteCount: stored.byteCount,
-            payloadSHA256: stored.sha256, followsCaptureID: entry.follows, lastSavedAt: clock.now())
+            payloadSHA256: stored.sha256, followsCaptureID: entry.follows, lastSavedAt: clock.now(),
+            peaks: peaks.fromFile(id, frames: audio.frames))
         do throws(KnotError) {
             try inbox.writeRecording(manifest)
         } catch {
