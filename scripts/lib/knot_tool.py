@@ -373,11 +373,12 @@ HOSTED = [
     "Apps/iOS/", "Packages/KnotKit/Package.swift", "project.yml",
 ]
 # Mac UI tests run where the diff reaches the Mac app or KnotUI, the scripts that run them,
-# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38).
+# or the Xcode that builds them (the orchestrator's ruling on the review of PR 38), and the
+# workflow whose mac-ui job runs them on the hosted runner.
 MAC_UI = [
     "Apps/macOS/", "Apps/Shared/", "Apps/Config/", "project.yml", "Packages/KnotKit/Package.swift",
     "Packages/KnotKit/Sources/KnotUI/", "Packages/KnotKit/Sources/KnotApp/",
-    "scripts/", ".xcode-version", "Apps/UITestSupport/",
+    "scripts/", ".xcode-version", "Apps/UITestSupport/", ".github/workflows/verify.yml",
 ]
 
 

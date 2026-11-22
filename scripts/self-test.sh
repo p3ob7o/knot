@@ -146,6 +146,8 @@ assert k.classify(["Apps/macOS/Sources/KnotMacApp.swift"])[3] is True           
 assert k.classify(["scripts/verify.sh"])[3] is True, "scripts/ reaches the Mac UI tests"
 assert k.classify([".xcode-version"])[3] is True, ".xcode-version reaches the Mac UI tests"
 assert k.classify(["scripts/gate-steps.txt"])[3] is True, "gate-steps.txt alone reaches the Mac UI tests"
+assert k.classify([".github/workflows/verify.yml"])[3] is True, "the workflow that runs the Mac UI tests on the hosted runner reaches them"
+assert k.classify([".github/workflows/nightly.yml"])[3] is False
 # The accessibility audit that every UI test calls, WP-21's (finding 35).
 assert k.classify(["Apps/UITestSupport/Audit.swift"])[3] is True, "Apps/UITestSupport/ reaches the Mac UI tests"
 assert k.classify(["Packages/KnotKit/Sources/KnotInk/Recogniser.swift"])[4] is True     # the hosted suites
