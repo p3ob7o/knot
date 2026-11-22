@@ -42,10 +42,11 @@
     /// The capture ledger soak on the recorder's kill points: every recording acknowledged is
     /// stored with at least the frames acknowledged, nothing is left in `Recording/` once recovery
     /// has run, a temporary of the peaks file among it, and the run is green. Under
-    /// `scripts/verify.sh --soak` it runs 200 captures from the tier's seed, and each point must
-    /// kill at least once; in the other runs of the package tests, 40 from a fixed seed. A launch
-    /// runs 8 to 40 captures, so that one armed at `during_recording` most often holds a
-    /// recording that passes it: the soak redraws a point that has not killed yet.
+    /// `scripts/verify.sh --soak` it runs 200 captures from the tier's seed; in the other runs of
+    /// the package tests, 40 from a fixed seed. A launch runs 8 to 40 captures, so that one armed
+    /// at `during_recording` most often holds a recording that passes it: the soak redraws a point
+    /// that has not killed yet. That each point can kill is held on no fresh seed, by
+    /// `everyRecorderPointCanKill` (`KillPointCoverage`).
     ///
     /// The soak proves what survives a process's death, and a death keeps every byte written: a
     /// stop that left out its last sync would pass it. The stop's last sync is held by
@@ -56,6 +57,15 @@
             for point in SoakKillPoint.recorder {
                 guard case .child(let name) = point.trigger else { continue }
                 #expect(KillPointNames.isKnown(name), "The child does not know \(name).")
+            }
+        }
+
+        /// Every point of the recorder's list kills, each armed at its first pass over the fixed
+        /// script of `KillPointCoverage`, whose recordings, one capture in five and capture 3
+        /// always, each go live, stop and, unless discarded, are converted.
+        @Test func everyRecorderPointCanKill() async throws {
+            for verdict in try await KillPointCoverage.run(SoakKillPoint.recorder) {
+                #expect(verdict.isGreen, "\(verdict.report)")
             }
         }
 

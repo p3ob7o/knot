@@ -108,6 +108,8 @@ public enum NextAction: String, Hashable, Sendable, Codable {
     case reinstallKnot = "reinstall_knot"
     /// Report the problem with its request ID.
     case reportProblem = "report_problem"
+    /// Read the command's usage, which `knot help` prints, and run it again as it says.
+    case seeUsage = "see_usage"
 }
 
 /// Whether a retry is safe and how often (docs/architecture.md §19).

@@ -31,9 +31,23 @@
             var timeBox: Duration = .seconds(180)
             /// A fault the child injects, for the tests that prove the soak catches it.
             var fault: String?
-            /// Whether every point of `killPoints` must kill at least once, as at the soak tier's size:
-            /// one launch in two then draws among the points that have not killed yet.
+            /// Whether the draws favour the points of `killPoints` that have not killed yet, as at
+            /// the soak tier's size: one launch in two then draws among them. A point that never
+            /// kills at a seed is never red here, for a seed whose script does not bring a point
+            /// about is no fault of the code under test. That each point can kill is held by
+            /// `KillPointCoverage`, which rests on no fresh seed.
             var everyPointKills = false
+            /// The one point this run is to show can kill (`KillPointCoverage`): odd launches are
+            /// armed with it at its first pass and even ones with `enabler` at its first, and the run
+            /// stops drawing once it has killed. A run in which it never killed is red.
+            var covering: Covering?
+
+            struct Covering: Sendable {
+                let point: SoakKillPoint
+                /// The point of the launches between, which leaves what some points need: a kill
+                /// just after a capture began leaves its row open for the next recovery to finish.
+                let enabler: SoakKillPoint
+            }
 
             /// The configuration as one line, which `parse` reads back: what a replay needs.
             var line: String {
@@ -47,6 +61,7 @@
                 ]
                 if let fault { fields.append("fault=\(fault)") }
                 if everyPointKills { fields.append("every=1") }
+                if let covering { fields.append("cover=\(covering.point)~\(covering.enabler)") }
                 return fields.joined(separator: ";")
             }
 
@@ -74,9 +89,19 @@
                     killPoints.append(
                         SoakKillPoint(trigger: parts[0] == "anywhere" ? .anywhere : .child(parts[0]), passes: passes))
                 }
+                func point(_ name: Substring) -> SoakKillPoint {
+                    SoakKillPoint(trigger: name == "anywhere" ? .anywhere : .child(String(name)), passes: 1...1)
+                }
+                var covering: Covering?
+                if let cover = values["cover"] {
+                    let names = cover.split(separator: "~")
+                    guard names.count == 2 else { return nil }
+                    covering = Covering(point: point(names[0]), enabler: point(names[1]))
+                }
                 return Configuration(
                     seed: seed, captures: captures, killPoints: killPoints, launchBudget: budget,
-                    timeBox: .seconds(box), fault: values["fault"], everyPointKills: values["every"] == "1")
+                    timeBox: .seconds(box), fault: values["fault"], everyPointKills: values["every"] == "1",
+                    covering: covering)
             }
 
             /// The command that runs this configuration again, whatever test ran it first.
@@ -281,8 +306,12 @@
                 let pool =
                     configuration.everyPointKills && number % 2 == 1 && !unkilled.isEmpty
                     ? unkilled : configuration.killPoints
-                let point = pool.randomElement(using: &random)
-                let passes = point.map { Int.random(in: $0.passes, using: &random) } ?? 0
+                var point = pool.randomElement(using: &random)
+                var passes = point.map { Int.random(in: $0.passes, using: &random) } ?? 0
+                if let covering = configuration.covering {
+                    point = number % 2 == 1 ? covering.point : covering.enabler
+                    passes = 1
+                }
                 // An `anywhere` kill lands this long after its acknowledgement, so that moments with
                 // no named stop are reached by chance.
                 let delay = point?.trigger == .anywhere ? Int.random(in: 0...40, using: &random) : 0
@@ -301,6 +330,8 @@
                 // The next launch begins after the last capture a launch began: the intents have
                 // no gap, and a launch that quit began every capture of its range.
                 next = witness.highestIntent + 1
+                // A run that shows a point can kill has shown it.
+                if let covering = configuration.covering, killedPoints.contains(covering.point) { break }
             }
             // The last launch recovers what the one before it left, and runs no capture.
             if problems.allSatisfy({ $0.code == Self.timeBoxCode }) {
@@ -316,11 +347,11 @@
                     problems += try await witness.check(
                         locations, script: SoakScript(seed: configuration.seed, count: configuration.captures))
                 }
-                // A point that never killed proves nothing: at the soak tier's size each must.
-                if configuration.everyPointKills, !stoppedByTimeBox {
-                    for point in configuration.killPoints where !killedPoints.contains(point) {
-                        problems.append(SoakWitness.Problem(code: "kill_point_never_killed", ids: ["\(point)"]))
-                    }
+                // The point a covering run is for, armed at its first pass in one launch in two over
+                // a whole script, and never brought about: the child does not reach it.
+                if let covering = configuration.covering, !stoppedByTimeBox, !killedPoints.contains(covering.point) {
+                    problems.append(
+                        SoakWitness.Problem(code: "kill_point_never_killed", ids: ["\(covering.point)"]))
                 }
             }
             return Verdict(

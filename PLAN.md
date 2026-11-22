@@ -194,6 +194,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-06 | 1 | The soak harness, covering typed captures first | WP-05; WP-10 PR 1 |
 | WP-06 | 06a | The soak's step in `scripts/verify.sh`, split out of the first PR | WP-06 PR 1 |
 | WP-06 | 2 | The child runs a recording on the live recorder with injected audio | WP-06 PR 1; WP-12 PR 2 |
+| WP-06 | 06b | A kill point that never kills is held by a test of its own, on no fresh seed: the soak at a fresh seed was red by chance for a point its script did not bring about | WP-06 PR 2 |
 | SP-1 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | SP-1 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 | SP-2 | Notes | The code half on `spike/watch-delivery`, and its short note | WP-01 PR 1; WP-04 |

@@ -393,7 +393,9 @@
             audio.begin(id, index: index, frames: begun.durableRevision)
             await arming.step("after_begin")
             // It records until the script's frames are durable, each new durable stretch a pass of
-            // the step `during_recording`, or for at most half a minute.
+            // the step `during_recording`, or for at most half a minute. A stretch that ends the
+            // wait is a pass too, while the recording is still open: so every recording with a
+            // durable frame passes the step at least once, however the recorder's syncs fall.
             var seen: Int64 = 0
             let until = ContinuousClock.now + .seconds(30)
             while audio.durable(id) < capture.frames, ContinuousClock.now < until {
@@ -404,6 +406,7 @@
                 }
                 try? await Task.sleep(for: .milliseconds(5))
             }
+            if audio.durable(id) > seen { await arming.step("during_recording") }
             clock.advance(by: capture.pauses.last ?? 0)
             let discard = capture.ending == .discard
             if discard { Say.line(SoakLine.discarding(index: index, capture: id).rendered) }
@@ -419,7 +422,8 @@
             } catch {
                 Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
             }
-            await arming.step("after_end")
+            // The fault `afterEndNeverPassed`: a point of the list that the child never reaches.
+            if options.fault != .afterEndNeverPassed { await arming.step("after_end") }
         }
 
         private func injectAfterRecording(_ capture: SoakScript.Capture, _ id: CaptureID) async {
@@ -479,7 +483,8 @@
             } catch {
                 Say.line(SoakLine.refused(index: index, code: error.code.rawValue).rendered)
             }
-            await arming.step("after_end")
+            // The fault `afterEndNeverPassed`: a point of the list that the child never reaches.
+            if options.fault != .afterEndNeverPassed { await arming.step("after_end") }
         }
 
         // MARK: The engine, and the faults the soak's tests inject
