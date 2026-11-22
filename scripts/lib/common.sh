@@ -435,6 +435,19 @@ knot_fakes_in() {
     printf '%s\n' "$found"
 }
 
+# Prints the debug launch arguments of a list, one a line, that a file holds, and returns 0
+# when it holds any (item 99): the packaging step looks for them in every Release binary,
+# since a release build must ignore them. The names are matched whole, as strings of the file.
+# An optimised build can keep a string of 15 bytes or fewer inside the code, where this
+# cannot see it.
+#   knot_debug_arguments_in <file> <list, one name a line>
+knot_debug_arguments_in() {
+    local found
+    found="$(strings -a "$1" 2>/dev/null | grep -x -F -f <(printf '%s\n' "$2") | sort -u || true)"
+    [[ -n $found ]] || return 1
+    printf '%s\n' "$found"
+}
+
 # The limit on one xcodebuild build, in seconds: 40 minutes. A build here takes 13 s for the
 # Debug apps and about 70 s for the two Release apps when DerivedData is warm, and a fresh
 # clone ran every step in under 10 minutes; codesign asking for a keychain is what could

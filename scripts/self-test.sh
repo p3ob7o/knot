@@ -1445,6 +1445,23 @@ else
     fail "the live smoke step: all '$smoke_all'; without mac-ui '$smoke_no_mac'; the iPhone's missing '$smoke_phone'; the Watch's skipped '$smoke_watch'; an earlier run's Mac log '$smoke_old'"
 fi
 
+# The packaging step's scan for the debug launch arguments (item 99): a file that holds one of
+# the list's names is found, by name; one that holds none, or holds a name that is not on the
+# list, is clean. The list is the tool's own.
+da="$scratch/debug-arguments"
+mkdir -p "$da"
+printf 'some code\0-KnotTemporaryStore\0more code\n' >"$da/holds"
+printf 'some code\0-KnotSomethingElse\0more code\n' >"$da/clean"
+debug_list="$(python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments 2>&1 || true)"
+debug_holds="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3"' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/holds" "$debug_list" 2>&1 || true)"
+debug_clean="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3" && echo found' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/clean" "$debug_list" 2>&1 || true)"
+if [[ $(grep -c . <<<"$debug_list") == 8 && $debug_list == *"-KnotPreview"*"-KnotEnterLine"* &&
+    $debug_holds == "-KnotTemporaryStore" && -z $debug_clean ]]; then
+    pass "the scan for debug launch arguments finds one of the list's names in a file, by name, and nothing in a clean one"
+else
+    fail "the scan for debug launch arguments: the list '$debug_list'; a file that holds one '$debug_holds'; a clean one '$debug_clean'"
+fi
+
 # The step's place in each tier: after package-test in --full and in the gate's leaf and
 # everything depths, and in neither --quick nor the gate of documents alone. And the live
 # smoke step's: last in --full and the everything depth, after launch and mac-ui, whose

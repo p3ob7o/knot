@@ -564,6 +564,16 @@ SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
 # A test that cancels itself, or one of its cases. Swift Testing prints a cancelled case of a
 # test with arguments as passed, so the gate could not tell it from a run (finding 51); a
 # test that cannot run here says so by a trait, which is printed as skipped.
+# The debug launch arguments, the one list of them (item 99). A release build ignores them;
+# the packaging step looks for each in every Release binary, and the lint holds the sources
+# to the list: an argument that a shell reads and the list lacks fails it. An optimised build
+# can keep a string of 15 bytes or fewer inside the code, where the scan cannot see it.
+DEBUG_ARGUMENTS = (
+    "-KnotPreview", "-KnotTemporaryStore", "-KnotEnterLine", "-KnotInjectedAudio",
+    "-KnotPreviewEndsAtLimit", "-KnotPreviewHoldsFirstConversion", "-KnotPreviewPressGap",
+    "-KnotPreviewStartFails",
+)
+DEBUG_ARGUMENT = re.compile(r'"(-Knot[A-Za-z]+)"')
 STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
 TEST_CANCEL = re.compile(r"\bTest\s*(?:\.\s*Case\s*)?\.\s*cancel\s*\(")
 LIBRARY_EXEMPT = ("Packages/KnotKit/Sources/knot/", "Packages/KnotKit/Sources/knot-eval/",
@@ -790,6 +800,12 @@ def cmd_lint(only=None, as_prefix=None, manifest=None):
             for name in re.findall(r"(?:[Aa]utosaveName|FrameAutosaveName)\s*[:=(]\s*\"([^\"]*)\"", line):
                 if not name.startswith("v1."):
                     problem(path, number, "autosave-name", f'the autosave name "{name}" needs the v1. prefix')
+            for argument in DEBUG_ARGUMENT.findall(line):
+                if argument not in DEBUG_ARGUMENTS:
+                    problem(path, number, "debug-argument",
+                            f"{argument} is a launch argument that is not in the list of debug arguments "
+                            "(DEBUG_ARGUMENTS in scripts/lib/knot_tool.py), which the packaging step looks for "
+                            "in every Release binary")
             if "eraseDatabaseOnSchemaChange" in line:
                 problem(path, number, "erase-database", "eraseDatabaseOnSchemaChange erases the store")
             if re.search(r"\bURLSession\b|\bURLRequest\b|\bNW(?:Connection|Listener|Browser|Endpoint)\b|\bnw_(?:connection|listener)_"
@@ -1840,6 +1856,9 @@ def main(argv):
     if command == "named-tests":
         return cmd_named_tests(option(args, "--merged-from", "github"), option(args, "--package"),
                                option(args, "--branch"))
+    if command == "debug-arguments":
+        print("\n".join(DEBUG_ARGUMENTS))
+        return 0
     if command == "live-smoke":
         return cmd_live_smoke(option(args, "--logs"), int(option(args, "--since", "0")), option(args, "--mac-ui") == "1",
                               option(args, "--package"), option(args, "--branch"))

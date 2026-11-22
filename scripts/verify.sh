@@ -685,6 +685,29 @@ step_packaging() {
     check "Release iOS app, its extension and the Watch app free of KnotFakes" \
         scan_for_fakes "$(products Release-iphonesimulator)/Knot.app" none || failed=1
     check "the Debug iOS app does hold KnotFakes, so the check can see it" scan_for_fakes "$ios" some || failed=1
+    # The debug launch arguments, from the one list (knot_tool.py debug-arguments), in every
+    # Mach-O file of each Release app (item 99). An optimised build can keep a name of 15
+    # bytes or fewer inside the code, where the scan cannot see it, and the scan says which
+    # those are. The Debug iOS app, whose shells read them, is the control.
+    scan_for_debug_arguments() {
+        local app=$1 want=$2 f found=0 held list short
+        list="$(tool debug-arguments)"
+        short="$(awk 'length($0) <= 15' <<<"$list" | tr '\n' ' ')"
+        while IFS= read -r -d '' f; do
+            if held="$(knot_debug_arguments_in "$f" "$list")"; then
+                echo "      debug arguments in ${f#"$app"/}: $(tr '\n' ' ' <<<"$held")"
+                found=$((found + 1))
+            fi
+        done < <(macho_files "$app")
+        echo "      the names of 15 bytes or fewer, which an optimised build can keep inside the code, the scan may not see: ${short:-none}"
+        if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
+    }
+    check "Release Mac app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release)/Knot.app" none || failed=1
+    check "Release iOS app, its extension and the Watch app free of the debug launch arguments" \
+        scan_for_debug_arguments "$(products Release-iphonesimulator)/Knot.app" none || failed=1
+    check "the Debug iOS app does hold debug launch arguments, so the check can see them" \
+        scan_for_debug_arguments "$ios" some || failed=1
     ((failed == 0))
 }
 
