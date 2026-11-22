@@ -97,6 +97,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     private let deviceID: DeviceID
     private let launchID: LaunchID
     private let inbox: InboxItems
+    private let ownAsset: OwnRecordingAsset
     private let deadline: StoreDeadline
     private let ingest: InboxIngest?
     private let log: KnotLog
@@ -145,6 +146,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         self.deviceID = deviceID
         self.launchID = launchID
         self.inbox = InboxItems(locations: locations, layer: layer)
+        self.ownAsset = OwnRecordingAsset(notes: notes, assets: assets, locations: locations, layer: layer, log: log)
         self.deadline = deadline
         self.ingest = ingest
         self.log = log
@@ -697,7 +699,10 @@ public actor StandardCaptureEngine: CaptureEngine {
         let duration: Duration
         do throws(KnotError) {
             let converted = try await recorder.convert(audio)
-            stored = try await assets.move(converted.file, as: .ofCapture(id), kind: .audio)
+            // The file of this capture's earlier conversion may be there already, from an end whose
+            // store call or item did not take it: the capture never fails for a file of its own
+            // (WP-11b). A row or an item that names that file keeps it, and the end is made with it.
+            stored = try await ownAsset.place(converted).file
             duration = converted.duration
         } catch {
             // The working file stays as the recording (docs/architecture.md §8), and the

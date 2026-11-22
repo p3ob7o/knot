@@ -209,6 +209,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
 | WP-11 | 11a | The engine's tests made steady: tests that failed now and then on loaded runs wait for what they read, and one outcome of the random interleavings is a stated limit | WP-11 PR 1 |
+| WP-11 | 11b | A recording whose file reached `Assets/` before its capture ended reaches the stream: one that recovery could never finish, found by the soak, cured | WP-11 PR 1 |
 | WP-11 | 2 | The engine as the one applier of a press, live words and levels, a stored recording's peaks, KnotCapture's copy of the real-path code replaced by KnotCore's, the moments with no kill seam, and the two tests of `FollowerPlacementTests` restated as limits | WP-11 PR 1; the contract pull request that gives `CaptureEngine` its `live` and `press` |
 | WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
