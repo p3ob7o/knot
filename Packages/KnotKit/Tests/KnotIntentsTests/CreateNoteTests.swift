@@ -212,6 +212,23 @@ import Testing
         #expect(rig.logs.events.contains("intent_create_note_title_not_set"))
     }
 
+    /// The begin is stored, and the end falls back to `Inbox/`: the capture is not stored on
+    /// the store path, and no note is titled, not even the one its begin made (finding N3).
+    @Test func aCaptureWhoseEndFellBackSetsNoTitle() async throws {
+        let rig = IntentRig(engine: { inner, store in EndFallsBackEngine(inner: inner, store: store) })
+        defer { rig.remove() }
+        let entity = try await Self.intent(rig, name: "Synthetic title", content: "synthetic body")(donate: false)
+
+        #expect(rig.titles.isEmpty, "a title was set on a capture that was not stored")
+        for note in try await rig.store.stream(after: nil, limit: 100).notes {
+            #expect(note.note.title == nil)
+        }
+        guard case .capture = NoteReference(entity.id) else {
+            Issue.record("the answer is not named by its capture")
+            return
+        }
+    }
+
     /// No parameter reaches a log: the lines carry the capture's ID and codes only.
     @Test func noParameterReachesTheLog() async throws {
         let rig = IntentRig(refuseTitle: KnotError.storeBusy)
@@ -223,5 +240,29 @@ import Testing
             #expect(!line.contains("Zorbleflax"))
             #expect(!line.contains("quindlewump"))
         }
+    }
+}
+
+/// An engine whose store refuses every capture write once `begin` has returned, so that the
+/// capture's row and note exist while its end falls back to `Inbox/`.
+struct EndFallsBackEngine: CaptureEngine {
+    let inner: any CaptureEngine
+    let store: InMemoryNoteStore
+
+    func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+        let state = try await inner.begin(request)
+        await store.failNextCaptureWrites(
+            with: KnotError.storeNotOpen, KnotError.storeNotOpen, KnotError.storeNotOpen, KnotError.storeNotOpen)
+        return state
+    }
+    func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        try await inner.update(capture, with: content)
+    }
+    func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { try await inner.end(capture) }
+    func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { try await inner.discard(capture) }
+    func states() -> AsyncStream<CaptureState> { inner.states() }
+    func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> { inner.live(capture) }
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome {
+        try await inner.press(press, recording: request)
     }
 }
