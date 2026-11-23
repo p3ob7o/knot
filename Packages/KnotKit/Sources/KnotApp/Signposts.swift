@@ -31,6 +31,7 @@ public enum MeasuredMoment: String, Hashable, Sendable, Codable, CaseIterable {
     case launchOpenStore = "launch_open_store"
     case launchRecovery = "launch_recovery"
     case launchResumeJobs = "launch_resume_jobs"
+    case launchPurge = "launch_purge"
     case launchStartSync = "launch_start_sync"
 
     /// The signpost's name, which the system requires to be written in the code.
@@ -55,6 +56,7 @@ public enum MeasuredMoment: String, Hashable, Sendable, Codable, CaseIterable {
         case .launchOpenStore: "launch_open_store"
         case .launchRecovery: "launch_recovery"
         case .launchResumeJobs: "launch_resume_jobs"
+        case .launchPurge: "launch_purge"
         case .launchStartSync: "launch_start_sync"
         }
     }

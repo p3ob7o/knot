@@ -70,7 +70,13 @@ struct OrderingTests {
         try FileManager.default.createDirectory(
             at: locations.storeRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
         let ids = SystemIDGenerator()
-        let earlier = try OpenedStore.open(locations: locations, role: .app, settingsSuite: folder.settingsSuite)
+        // Made with this device's ID, the one the composition keeps, as a store the app creates
+        // is: the queue runs only the jobs of the segments this device processes.
+        let thisDevice = DeviceIdentity(storage: MemoryLaunchState(suiteName: folder.launchStateSuite))
+            .current(ids: SystemIDGenerator())
+        let earlier = try OpenedStore.open(
+            locations: locations, role: .app, settingsSuite: folder.settingsSuite,
+            creation: StoreCreation(deviceID: thisDevice))
         let id: CaptureID = ids.make()
         let assetID = AssetID(id)
         let file = try await earlier.assets.place(Data(repeating: 7, count: 4096), as: assetID, kind: .audio)

@@ -244,7 +244,8 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 22a | The ordering test keeps one live composition per store: a test of the composition's that failed under the strict cooperative pool, made right | WP-22 PR 1 |
-| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13 PR 1; WP-14 |
+| WP-22 | 22b | The composition's wiring, split out of the second PR: the processing queue given this device, the purge as a launch step, `Lifecycle` with its adapters, and background time on iOS around the store's opening | WP-22 PR 1; WP-15 PR 1 |
+| WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13 PR 1; WP-14; WP-22b |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
