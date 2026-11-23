@@ -2245,6 +2245,52 @@ else
     fail "the slow cases: '$slow_out'"
 fi
 
+# scripts/install.sh skips a device that holds the build's version and build number, and
+# with --again installs there all the same, as a build signed again needs. With a saved device
+# list of one synthetic paired iPhone, and a stand-in xcrun whose devicectl says that the
+# device holds 0.3.0 (1) and writes down each install it is asked for.
+ia="$scratch/install-again"
+mkdir -p "$ia/stub" "$ia/Knot.app"
+cat >"$ia/devices.json" <<'JSON'
+{"result": {"devices": [{"identifier": "SELF-TEST-DEVICE", "deviceProperties": {"name": "Self-test iPhone"},
+  "properties": {"hardware": {"platform": "iOS", "reality": "physical", "udid": "SELF-TEST-UDID"},
+                 "connection": {"pairingState": "paired", "state": "connected"}}}]}}
+JSON
+for key in "CFBundleIdentifier string com.p3ob7o.knot.dev" "CFBundleShortVersionString string 0.3.0" "CFBundleVersion string 1"; do
+    /usr/libexec/PlistBuddy -c "Add :$key" "$ia/Knot.app/Info.plist" >/dev/null
+done
+cat >"$ia/stub/xcrun" <<'SH'
+#!/bin/bash
+[[ $1 == devicectl ]] || exec /usr/bin/xcrun "$@"
+out=""
+for ((i = 1; i <= $#; i++)); do [[ ${!i} == --json-output ]] && { j=$((i + 1)); out=${!j}; }; done
+case "$2 $3 $4" in
+    "device info apps") printf '{"result": {"apps": [{"version": "0.3.0", "bundleVersion": "1"}]}}\n' >"$out" ;;
+    "device install app") echo "install $*" >>"$KNOT_INSTALL_RECORD" ;;
+    *) exit 1 ;;
+esac
+SH
+chmod +x "$ia/stub/xcrun"
+install_run() { # install_run <name> <options…>: the lines it printed, and how many installs it made
+    local name=$1
+    shift
+    env PATH="$ia/stub:$PATH" KNOT_DEVICECTL_JSON="$ia/devices.json" KNOT_INSTALL_RECORD="$ia/$name.record" \
+        "$KNOT_SCRIPTS/install.sh" "$ia/Knot.app" "$@" >"$ia/$name.out" 2>&1 || echo "status $?" >>"$ia/$name.out"
+    echo "$(grep -c . "$ia/$name.record" 2>/dev/null || echo 0) $(grep -e '^install: [0-9]' "$ia/$name.out")"
+}
+plain_install="$(install_run plain)"
+again_install="$(install_run again --again)"
+mac_again="$(mkdir -p "$ia/mac.app/Contents" && cp "$ia/Knot.app/Info.plist" "$ia/mac.app/Contents/" &&
+    "$KNOT_SCRIPTS/install.sh" "$ia/mac.app" --mac-folder "$ia/folder" --again 2>&1 || true)"
+if [[ $plain_install == "0 install: 0 installed, 1 already held the build, 0 missed" &&
+    $again_install == "1 install: 1 installed, 0 already held the build, 0 missed" &&
+    $(cat "$ia/again.record") == *"device install app --device SELF-TEST-DEVICE $ia/Knot.app"* &&
+    $mac_again == *"--again is for devices"* && ! -e $ia/folder/mac.app ]]; then
+    pass "install.sh skips a device that holds the build, and installs there again with --again"
+else
+    fail "install.sh and --again: without it '$plain_install', with it '$again_install' ($(cat "$ia/again.out")), a Mac build with it '$mac_again'"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

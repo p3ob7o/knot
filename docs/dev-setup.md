@@ -245,6 +245,7 @@ On the Mac every launch of the Mac app by a UI test waits its full minute for an
 | Command | Does |
 |---|---|
 | `scripts/install.sh <Knot.app>` | Installs an iOS build on every paired iPhone and iPad, and its Watch app on every paired Watch, with `devicectl`. It skips a device that holds the build already, names every device it could not reach, and exits non-zero when it missed one. `--device <name>` picks devices. |
+| `scripts/install.sh <Knot.app> --again` | Installs on a device that holds the same version and build too, as a build signed again needs. Without it such a device is skipped. |
 | `scripts/install.sh <Knot.app> --mac-folder <folder>` | Copies a Mac build to a folder the owner names. He opens it there. From the M4 milestone build on, no milestone build runs on the build Mac. |
 | `scripts/status.sh [--write]` | Prints the status table from the briefs, GitHub and the build folder's `threads.tsv`. `--write` writes `docs/status.md`, which goes to `main` only at milestones. |
 | `scripts/worktree-remove.sh <folder> [--force]` | Removes a worktree with its simulators and its development store folder. |
