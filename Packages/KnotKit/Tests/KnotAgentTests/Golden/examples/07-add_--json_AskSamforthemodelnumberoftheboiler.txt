@@ -1,0 +1,15 @@
+$ knot add --json 'Ask Sam for the model number of the boiler'
+{
+  "schema": 1,
+  "capture_id": "01a1ee59-9250-7007-8226-40675f51d85f",
+  "note_id": "01a1ee57-4860-7005-8704-c879c789544b",
+  "segment_ids": [
+    "01a1ee59-9250-7007-8226-40675f51d85f"
+  ],
+  "joined_existing_note": true,
+  "reason": "inside_window",
+  "outcome": "stored",
+  "revision": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1",
+  "cursor": "01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.3",
+  "sync": "off"
+}

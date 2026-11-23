@@ -1,0 +1,9 @@
+$ knot list
+note 01a1ee57-4860-7005-8704-c879c789544b  unsettled, settles at 2026-11-18T11:12:40Z
+  last_capture: 2026-11-18T11:07:40Z
+  revision: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+  segment 01a1ee57-4860-7004-b77b-fa39b2a42b6f  typed, ready, from cli, revision 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+    | Water the plants on Friday
+
+cursor: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+sync: off

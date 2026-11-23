@@ -1,0 +1,19 @@
+$ knot list
+note 01a1ee5a-0780-7009-a729-89cf21af74a0  unsettled, settles at 2026-11-18T11:15:40Z
+  last_capture: 2026-11-18T11:10:40Z
+  revision: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.4
+  segment 01a1ee5a-0780-7008-9c57-1b850491c0a3  typed, ready, from cli, revision 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+    | Book the dentist for March
+
+note 01a1ee57-4860-7005-8704-c879c789544b  settled
+  last_capture: 2026-11-18T11:10:10Z
+  revision: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.4
+  segment 01a1ee57-4860-7004-b77b-fa39b2a42b6f  typed, ready, from cli, revision 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+    | Water the plants on Friday
+  segment 01a1ee59-1d20-7006-832d-ffc1d17c83f7  typed, ready, from cli, revision 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+    | Call the plumber about the boiler
+  segment 01a1ee59-9250-7007-8226-40675f51d85f  typed, ready, from cli, revision 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+    | Ask Sam for the model number of the boiler
+
+cursor: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.4
+sync: off

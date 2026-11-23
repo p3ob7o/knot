@@ -1,0 +1,9 @@
+$ knot help add
+usage: knot add [--new] [--capture-id <id>] [--json] <text> | -
+
+Captures text, following the append window. `--new` forces a new note.
+
+  <text>  The text to capture. A single `-` reads it from standard input.
+  --new  Starts a new note, inside the window too.
+  --capture-id <id>  A full ID for the capture. Repeating the command with it changes nothing and answers with the capture as it is stored; the same ID with other text is refused.
+  --json  Prints the result, or the error, as JSON.
