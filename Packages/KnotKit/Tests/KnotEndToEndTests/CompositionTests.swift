@@ -295,22 +295,26 @@ struct CompositionTests {
         #expect(!composition.launchStateSuite.contains(this.container.lastPathComponent))
     }
 
-    @Test("The same store folder, written with /private or without, has one launch state")
-    func launchStateOfBothPathForms() {
-        let folder = LiveFolder()
-        defer { folder.remove() }
-        let root = folder.locations.storeRoot
-        try? FileManager.default.createDirectory(
-            at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let path = root.path
-        let other =
-            path.hasPrefix("/private/")
-            ? URL(fileURLWithPath: String(path.dropFirst("/private".count)), isDirectory: true)
-            : URL(fileURLWithPath: "/private" + path, isDirectory: true)
-        #expect(
-            LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: root)
-                == LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: other))
-    }
+    // The Mac's temporary folder has a second form, with /private in front. The Simulator's,
+    // under the account's own folder, has none.
+    #if os(macOS)
+        @Test("The same store folder, written with /private or without, has one launch state")
+        func launchStateOfBothPathForms() {
+            let folder = LiveFolder()
+            defer { folder.remove() }
+            let root = folder.locations.storeRoot
+            try? FileManager.default.createDirectory(
+                at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let path = root.path
+            let other =
+                path.hasPrefix("/private/")
+                ? URL(fileURLWithPath: String(path.dropFirst("/private".count)), isDirectory: true)
+                : URL(fileURLWithPath: "/private" + path, isDirectory: true)
+            #expect(
+                LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: root)
+                    == LiveComposition.launchStateSuite(settingsSuite: "s", storeRoot: other))
+        }
+    #endif
 
     @Test("A store the app creates takes the device ID the engine stamps")
     func deviceIDAgrees() async throws {
