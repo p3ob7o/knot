@@ -54,6 +54,41 @@ struct LifecycleEventTests {
         #expect(inboxManifests(folder.locations).isEmpty)
     }
 
+    /// An item that lands after recovery's own ingest has looked, with an event before recovery
+    /// ends: the event ingests nothing, and the launch answers it when recovery ends, so the
+    /// item is stored with no second event.
+    @Test("An event that came while recovery ran is answered when recovery ends")
+    func eventDuringRecoveryIsAnsweredAtItsEnd() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        try await WiringTests.earlierStore(folder) { _ in }
+        let lifecycle = FakeLifecycle()
+        let handled = EventCount()
+        let recorder = HoldingRecorder(holdsIn: .finishingRecordings)
+        var seams = Self.seams(lifecycle, handled: handled)
+        seams.recorder = recorder
+        let composition = folder.compose(seams: seams)
+        let running = Task { await composition.runLaunchSequence() }
+        // Recovery is in its last step, finishing the recordings: its ingest has looked.
+        await SuiteWait.until("recovery to finish its recordings") { recorder.entered }
+        let other = folder.compose()
+        let state = try await typeLine("a synthetic line after recovery's ingest", in: other)
+        _ = try await other.environment.engine.end(state.captureID)
+        #expect(inboxManifests(folder.locations).count == 1)
+        lifecycle.send(.cameForward)
+        await SuiteWait.until("the event to be handled") { handled.value == 1 }
+        #expect(inboxManifests(folder.locations).count == 1, "The event ingested ahead of recovery.")
+
+        recorder.release()
+        let report = try #require(await SuiteWait.value("the launch") { await running.value })
+        #expect(report.outcome(of: .recovery) == .done)
+        await SuiteWait.until("the item to be ingested at recovery's end") {
+            inboxManifests(folder.locations).isEmpty
+        }
+        #expect(try await streamTexts(composition) == ["a synthetic line after recovery's ingest."])
+        #expect(handled.value == 1)
+    }
+
     @Test("An event before the launch releases the queue wakes nothing in it")
     func eventBeforeReleaseWakesNothing() async throws {
         let folder = LiveFolder()
@@ -205,12 +240,23 @@ final class WatchedCleaner: Cleaner {
     }
 }
 
-/// A recorder whose recovery of orphaned recordings waits until `release()`: it holds the launch
-/// inside recovery's first step. It records nothing and opens no input. From the review of
-/// pull request 103.
+/// A recorder that holds the launch inside recovery until `release()`, and records nothing and
+/// opens no input. It holds either in recovery's first step, recovering the recordings (from
+/// the review of pull request 103), or in its last, finishing them: it then reports one orphaned
+/// recording with no audio and no row, whose working file recovery removes after its ingest.
 final class HoldingRecorder: Recorder {
+    enum Hold: Sendable {
+        case recoveringRecordings, finishingRecordings
+    }
+
+    private let hold: Hold
+    private let orphan = CaptureID(uuid: UUID())
     private let state = Mutex<(entered: Bool, released: Bool, waiter: CheckedContinuation<Void, Never>?)>(
         (false, false, nil))
+
+    init(holdsIn hold: Hold = .recoveringRecordings) {
+        self.hold = hold
+    }
 
     var entered: Bool { state.withLock { $0.entered } }
 
@@ -223,13 +269,7 @@ final class HoldingRecorder: Recorder {
         waiter?.resume()
     }
 
-    func prepare() async {}
-
-    func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
-        throw KnotError.portUnavailable
-    }
-
-    func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
+    private func waitForRelease() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let now = state.withLock { state -> Bool in
                 state.entered = true
@@ -239,14 +279,31 @@ final class HoldingRecorder: Recorder {
             }
             if now { continuation.resume() }
         }
-        return []
+    }
+
+    func prepare() async {}
+
+    func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
+        throw KnotError.portUnavailable
+    }
+
+    func recoverOrphans(currentLaunch: LaunchID) async throws(KnotError) -> [RecordedAudio] {
+        switch hold {
+        case .recoveringRecordings:
+            await waitForRelease()
+            return []
+        case .finishingRecordings:
+            return [RecordedAudio(captureID: orphan, frames: 0, sampleRate: 16_000, ending: .stopped, workingFile: nil)]
+        }
     }
 
     func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
         throw KnotError.portUnavailable
     }
 
-    func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {}
+    func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        if hold == .finishingRecordings, capture == orphan { await waitForRelease() }
+    }
 }
 
 /// A composition held weakly.
