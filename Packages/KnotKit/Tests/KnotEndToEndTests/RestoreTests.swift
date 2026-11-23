@@ -288,7 +288,9 @@ struct RestoreTests {
     /// after the pool closed, fails with `unexpected` (the engine's code 21), not
     /// `store_not_open`. The capture falls back to `Inbox/` carrying that code, and after the
     /// relaunch it is whole and there once. The write is held by the store's own hold.
-    @Test("A write that passed the gate before the restore falls back to Inbox, and is whole and there once after the relaunch")
+    @Test(
+        "A write that passed the gate before the restore falls back to Inbox, and is whole and there once after the relaunch"
+    )
     func writeThatPassedTheGate() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
