@@ -36,13 +36,20 @@
 
         /// Runs one covering run for each of `points`, each in a folder of its own, which goes when
         /// the run is green, and returns each verdict. A red run keeps its store, and says where.
-        static func run(_ points: [SoakKillPoint], fault: String? = nil) async throws -> [CaptureLedgerSoak.Verdict] {
+        /// `enabler` gives a point the point of the launches between, `enabler` by default: a
+        /// point the drain at a launch's start reaches is its own, since a launch between would
+        /// drain first what the point needs.
+        static func run(
+            _ points: [SoakKillPoint], fault: String? = nil,
+            enabler enablerOf: (SoakKillPoint) -> SoakKillPoint = { _ in enabler }
+        ) async throws -> [CaptureLedgerSoak.Verdict] {
             var verdicts: [CaptureLedgerSoak.Verdict] = []
             for listed in points {
                 let point = SoakKillPoint(trigger: listed.trigger, passes: 1...1)
+                let between = SoakKillPoint(trigger: enablerOf(point).trigger, passes: 1...1)
                 var configuration = CaptureLedgerSoak.Configuration(
-                    seed: seed, captures: captures, killPoints: [point, enabler])
-                configuration.covering = .init(point: point, enabler: enabler)
+                    seed: seed, captures: captures, killPoints: point == between ? [point] : [point, between])
+                configuration.covering = .init(point: point, enabler: between)
                 configuration.fault = fault
                 let folder = SoakFolders.make("cover")
                 var verdict = try await CaptureLedgerSoak(configuration: configuration).run(in: folder)

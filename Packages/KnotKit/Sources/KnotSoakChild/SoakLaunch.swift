@@ -189,6 +189,8 @@
         /// The store's assets, which the fault `recordingStoredTwice` writes to behind the engine.
         private let assets: AssetRepository
         private let engine: StandardCaptureEngine
+        /// The processing queue, which each launch drains after recovery.
+        private let queue: StandardProcessingQueue
         private let ingest: InboxIngest
         private let recovery: LaunchRecovery
         private let launchID: LaunchID
@@ -229,9 +231,16 @@
             let recorder = SoakRecorder(
                 locations: locations, clock: clock, log: KnotLog(.audio, sink: SoakLogSink(arming: arming)),
                 fault: options.fault)
+            // Scripted speech and cleanup (`SoakSpeech`): no model, no hardware input. A run reads
+            // two seconds, so a recording's transcription takes more than one run. The queue runs
+            // the jobs of this device's segments, as the live composition's does.
             let queue = StandardProcessingQueue(
-                notes: notes, assets: assets, transcriber: ScriptedTranscriber(), cleaner: ScriptedCleaner(),
-                clock: clock, ids: ids, log: log)
+                notes: notes, assets: assets,
+                transcriber: SoakTranscriber(wrong: options.fault == .transcriptNotTheScript),
+                cleaner: SoakCleaner(twice: options.fault == .cleanupAppliedTwice), clock: clock, ids: ids,
+                runBudget: .seconds(2), device: database.deviceID,
+                log: log)
+            self.queue = queue
             launchID = ids.make()
             ingest = InboxIngest(
                 notes: notes, assets: assets, recorder: recorder, queue: queue, clock: clock, launchID: launchID,
@@ -274,8 +283,10 @@
                     await runCapture(script.captures[index])
                 }
                 await recovered
+                await process()
             } else {
                 await recovering.run()
+                await process()
                 for index in options.range {
                     await runCapture(script.captures[index])
                 }
@@ -305,6 +316,75 @@
                 FileHandle.standardError.write(Data("KnotSoakChild: refused \(Say.refused) line after the last\n".utf8))
             }
             exit(0)
+        }
+
+        /// Drains the processing queue once recovery has run, as the app does at launch: it says
+        /// which jobs an earlier launch left marked running, resumes the queue, which counts their
+        /// deaths, and runs every job it can, awaited, so nothing of it runs after the last line.
+        /// The last launch, which runs no capture, drains what every launch before it left.
+        private func process() async {
+            let last = options.range.isEmpty
+            for job in (try? await notes.jobs(for: nil)) ?? [] where job.state == .running {
+                Say.line(
+                    SoakLine.foundRunning(
+                        capture: CaptureID(job.segmentID), kind: job.kind.rawValue, deaths: job.deaths
+                    )
+                    .rendered)
+                if options.fault == .deathNotCounted {
+                    var requeued = job
+                    requeued.state = .queued
+                    _ = try? await notes.saveJob(requeued)
+                }
+            }
+            if options.fault != .resumeSkipped { try? await queue.resume() }
+            if options.fault == .deathLimitIgnored {
+                for job in (try? await notes.jobs(for: nil)) ?? []
+                where job.state == .failed(KnotError.jobDiedTwice.code) {
+                    var again = job
+                    again.state = .queued
+                    _ = try? await notes.saveJob(again)
+                }
+            }
+            if options.fault != .drainSkipped {
+                _ = await queue.drain(using: StraightThroughRunner(), progress: { _ in })
+            }
+            if last { await injectAfterLastDrain() }
+        }
+
+        /// The faults of the processing queue's checks that the last launch writes.
+        private func injectAfterLastDrain() async {
+            let jobs = (try? await notes.jobs(for: nil)) ?? []
+            let transcribe = jobs.first { $0.kind == .transcribe }
+            switch options.fault {
+            case .jobWrittenTwice?:
+                if let transcribe {
+                    _ = try? await notes.saveJob(
+                        Job(id: ids.make(), segmentID: transcribe.segmentID, kind: .transcribe))
+                }
+            case .jobRowLost?:
+                if let transcribe { FaultyStoreWrites.deleteJob(transcribe.id, in: locations) }
+            case .jobOfATypedCapture?:
+                if let segment = FaultyStoreWrites.typedSegment(in: locations) {
+                    _ = try? await notes.saveJob(
+                        Job(id: .transcribe(of: segment), segmentID: segment, kind: .transcribe))
+                }
+            case .deathAdded?:
+                if var done = jobs.first(where: { $0.state == .done && $0.deaths == 0 }) {
+                    done.deaths += 1
+                    _ = try? await notes.saveJob(done)
+                }
+            case .cleanJobAfterFailure?:
+                if let failed = jobs.first(where: { $0.kind == .transcribe && $0.state != .done }) {
+                    _ = try? await notes.saveJob(
+                        Job(id: .clean(of: failed.segmentID), segmentID: failed.segmentID, kind: .clean))
+                }
+            case .segmentStepLeft?:
+                if let clean = jobs.first(where: { $0.kind == .clean && $0.state == .done }) {
+                    _ = try? await notes.setState(.voice(.transcribed), of: clean.segmentID)
+                }
+            default:
+                break
+            }
         }
 
         /// Whether a launch begins its captures while its recovery runs: one in three, by the seed.

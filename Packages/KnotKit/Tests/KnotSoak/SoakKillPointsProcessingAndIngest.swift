@@ -12,12 +12,11 @@
         /// holds. Launch recovery removes the temporaries such kills leave in `Inbox/`, so the
         /// witness counts any it finds after recovery as red (`SoakRules.inboxPartialsAreRed`).
         ///
-        /// Processing's half waits for the soak's child to drain the queue, with a witness for what
-        /// jobs leave: a pull request of its own, after this one. Its points will be the queue's
-        /// log events `transcript_run_saved`, `transcribed`, `clean_job_written`, `cleanup_applied`
-        /// and `job_found_running`. They are not listed here, since a point that never kills proves
-        /// nothing. Until then the queue's deaths are held by KnotCaptureTests, through real
-        /// launches over one store (`LaunchQueueTests`).
+        /// Processing's half: the queue's log events, now that the soak's child drains the queue
+        /// after recovery in every launch and the witness holds what jobs leave (WP-06's 06d,
+        /// `ProcessingWitness`). A run saved, the last run, the clean job written, a cleanup applied
+        /// and a death counted at launch. A recording's transcription takes two runs or more, so a
+        /// launch with a job reaches `transcript_run_saved` twice; each of the others once.
         ///
         /// What this list does not catch: an ingestor that removes an item before the store took it
         /// stays green here (the review of pull request 97, seeds 22 and 11), since none of these
@@ -27,8 +26,24 @@
         static let processingAndIngest: [SoakKillPoint] = [
             .engine(.betweenTypedManifestAndPayload, passes: 1...3),
             .log("inbox_item_stored", passes: 1...3),
+            .log("transcript_run_saved", passes: 1...2),
+            .log("transcribed", passes: 1...1),
+            .log("clean_job_written", passes: 1...1),
+            .log("cleanup_applied", passes: 1...1),
+            .log("job_found_running", passes: 1...1),
             .anywhere(passes: 1...60),
         ]
+
+        /// The point of the launches between, for a covering run of one of this list's: a point
+        /// of processing is its own, so that a launch's drain reaches it; a death counted at launch
+        /// needs a launch cut while a job runs.
+        static func processingEnabler(of point: SoakKillPoint) -> SoakKillPoint {
+            switch point.description {
+            case "log:job_found_running": .log("transcript_run_saved", passes: 1...1)
+            case "log:transcript_run_saved", "log:transcribed", "log:clean_job_written", "log:cleanup_applied": point
+            default: KillPointCoverage.enabler
+            }
+        }
     }
 
     @Suite struct SoakKillPointsProcessingAndIngestTests {
@@ -61,7 +76,9 @@
         /// Every point of the list kills, each armed at its first pass over the fixed script of
         /// `KillPointCoverage`, whose captures fall back to `Inbox/` and are ingested.
         @Test func everyPointOfProcessingAndIngestCanKill() async throws {
-            for verdict in try await KillPointCoverage.run(SoakKillPoint.processingAndIngest) {
+            for verdict in try await KillPointCoverage.run(
+                SoakKillPoint.processingAndIngest, enabler: SoakKillPoint.processingEnabler)
+            {
                 #expect(verdict.isGreen, "\(verdict.report)")
             }
         }

@@ -53,6 +53,31 @@
         /// The engine's log writes an error after the launch's last line, as the engine's work
         /// still in flight at the exit may: the line must not reach the parent.
         case errorLoggedAfterDone = "error-logged-after-done"
+        // The processing queue's checks, one fault each.
+        /// Launches do not resume the queue, so a job a kill left running stays so.
+        case resumeSkipped = "resume-skipped"
+        /// Launches mark the jobs they find running queued again themselves, so no death is counted.
+        case deathNotCounted = "death-not-counted"
+        /// Launches do not drain the queue.
+        case drainSkipped = "drain-skipped"
+        /// The last launch writes a second transcribe job, under another ID, for one recording.
+        case jobWrittenTwice = "job-written-twice"
+        /// The last launch loses one recording's transcribe job.
+        case jobRowLost = "job-row-lost"
+        /// The last launch writes a job for a typed capture's segment.
+        case jobOfATypedCapture = "job-of-a-typed-capture"
+        /// The last launch adds a death to one done job.
+        case deathAdded = "death-added"
+        /// One recording in two is transcribed with phrases that are not its own.
+        case transcriptNotTheScript = "transcript-not-the-script"
+        /// The cleaner applies its cleanup twice to one transcript in two.
+        case cleanupAppliedTwice = "cleanup-applied-twice"
+        /// Launches queue a job that died twice again, so it runs a third time.
+        case deathLimitIgnored = "death-limit-ignored"
+        /// The last launch moves one ready recording's segment back to transcribed.
+        case segmentStepLeft = "segment-step-left"
+        /// The last launch writes a clean job for a recording whose transcription died twice.
+        case cleanJobAfterFailure = "clean-job-after-failure"
     }
 
     /// The store's writes that the faults make behind the engine's back, on a connection of
@@ -69,6 +94,35 @@
             let orphan = stored.deletingLastPathComponent().appending(
                 path: "\(UUID().uuidString.lowercased()).\(stored.pathExtension)", directoryHint: .notDirectory)
             try? FileManager.default.copyItem(at: stored, to: orphan)
+        }
+
+        /// Deletes a job's row.
+        static func deleteJob(_ job: JobID, in locations: StoreLocations) {
+            write(in: locations) { db in
+                try db.execute(sql: "DELETE FROM job WHERE id = ?", arguments: [job.description])
+            }
+        }
+
+        /// A typed capture's segment, if the store holds one.
+        static func typedSegment(in locations: StoreLocations) -> SegmentID? {
+            var found: SegmentID?
+            write(in: locations) { db in
+                found = try String.fetchOne(db, sql: "SELECT id FROM segment WHERE kind = 'typed' LIMIT 1")
+                    .flatMap(SegmentID.init)
+            }
+            return found
+        }
+
+        private static func write(in locations: StoreLocations, _ body: (Database) throws -> Void) {
+            do {
+                var configuration = Configuration()
+                configuration.busyMode = .timeout(5)
+                let queue = try DatabaseQueue(path: locations.database.path, configuration: configuration)
+                try queue.write(body)
+                try queue.close()
+            } catch {
+                Say.fail("the injected fault could not write the store")
+            }
         }
 
         /// Deletes a capture's row and leaves its segments, with foreign keys off on this

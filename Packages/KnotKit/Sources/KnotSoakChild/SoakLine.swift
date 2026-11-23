@@ -23,6 +23,9 @@
         /// A temporary of a cut peaks write left in `Recording/`, by its name, which holds a
         /// capture ID.
         case peaksTemporary(String)
+        /// A job of an earlier launch that this one found marked running before its queue
+        /// resumed: a death the queue must count. Its capture, its kind and the deaths it had.
+        case foundRunning(capture: CaptureID, kind: String, deaths: Int)
         /// A row of an earlier launch that recovery left open.
         case leftOpen(CaptureID)
         /// A temporary of a cut write that recovery left in `Inbox/` (`InboxEntries`), by its name,
@@ -81,6 +84,7 @@
             case .recoveredOwn(let count): "recovered-own \(count)"
             case .recordingLeft(let others, let temporaries): "recording-left \(others) \(temporaries)"
             case .peaksTemporary(let name): "peaks-temporary \(name)"
+            case .foundRunning(let capture, let kind, let deaths): "found-running \(capture) \(kind) \(deaths)"
             case .leftOpen(let capture): "left-open \(capture)"
             case .inboxPartial(let name): "inbox-partial \(name)"
             case .intent(let index): "intent \(index)"
@@ -115,6 +119,10 @@
                     InboxEntries.capture(ofFile: fields[1]) != nil
                 else { return nil }
                 return .peaksTemporary(fields[1])
+            case "found-running":
+                guard fields.count == 4, let capture = CaptureID(fields[1]), !fields[2].isEmpty, let deaths = int(3)
+                else { return nil }
+                return .foundRunning(capture: capture, kind: fields[2], deaths: deaths)
             case "left-open": return fields.count == 2 ? CaptureID(fields[1]).map(SoakLine.leftOpen) : nil
             case "inbox-partial":
                 guard fields.count == 2, InboxEntries.capture(ofPartial: fields[1]) != nil else { return nil }
