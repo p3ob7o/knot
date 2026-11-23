@@ -99,7 +99,7 @@ public struct StoreLocations: Hashable, Sendable {
         flavour: Flavour, platform: Platform, appContainer: URL, appGroup: AppGroup, devStoreFolder: String? = nil,
         environment: [String: String]
     ) throws(KnotError) -> StoreLocations {
-        if flavour == .milestone, environment["KNOT_AGENT"] == "1" { throw KnotError.agentRefusedMilestoneStore }
+        if flavour == .milestone, ProcessSigns.isAgent(environment) { throw KnotError.agentRefusedMilestoneStore }
         let groupContainer: URL?
         switch appGroup {
         case .present(let container):
