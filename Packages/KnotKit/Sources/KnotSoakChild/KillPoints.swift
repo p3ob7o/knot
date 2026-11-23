@@ -7,10 +7,43 @@
 
     /// What the child tells its parent: one line at a time, written straight to the pipe, with
     /// IDs, indexes, numbers, codes and hashes, never a word of a capture's text.
+    ///
+    /// Every line goes through one lock, and the launch's last line, `done`, closes the writer
+    /// under it: nothing is written after it, by construction. A line can still come then. The
+    /// launch exits as a process quits, with the engine's work still in flight, such as an ingest
+    /// or a late answer it started, which the next launch finishes; that work may log an error,
+    /// which the log sink passes on as a line. The parent reads `done` as the launch's end, so
+    /// such a line is refused, and counted.
     enum Say {
-        static func line(_ line: String) {
-            FileHandle.standardOutput.write(Data((line + "\n").utf8))
+        private struct Writer {
+            var closed = false
+            /// The lines that came after the last one, and were not written.
+            var refused = 0
         }
+
+        private static let writer = Mutex(Writer())
+
+        static func line(_ line: String) {
+            writer.withLock { writer in
+                guard !writer.closed else {
+                    writer.refused += 1
+                    return
+                }
+                FileHandle.standardOutput.write(Data((line + "\n").utf8))
+            }
+        }
+
+        /// Writes the launch's last line and closes the writer: every line after it is refused.
+        static func last(_ line: String) {
+            writer.withLock { writer in
+                guard !writer.closed else { return }
+                FileHandle.standardOutput.write(Data((line + "\n").utf8))
+                writer.closed = true
+            }
+        }
+
+        /// How many lines came after the last one, and were not written.
+        static var refused: Int { writer.withLock { $0.refused } }
 
         static func fail(_ message: String) -> Never {
             FileHandle.standardError.write(Data("KnotSoakChild: \(message)\n".utf8))
