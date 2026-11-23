@@ -59,6 +59,14 @@ public final class LiveComposition: Sendable {
         public var lifecycle: (any Lifecycle)?
         /// The background time held around the store's opening, instead of the system's.
         public var backgroundTime: (any BackgroundTimeHold)?
+        /// The speech module's call for the app coming forward, instead of
+        /// `KnotSpeechLive.appCameForward`.
+        public var speechCameForward: (@Sendable (AppEnvironment) async -> Void)?
+        /// Called once the composition has ingested and woken the queue for an event of the app
+        /// coming forward, so that a test knows the event's work is done.
+        public var cameForwardHandled: (@Sendable () -> Void)?
+        /// The error a launch step fails with before its work, for the tests of a step's failure.
+        public var stepFailure: (@Sendable (LaunchStep) -> KnotError?)?
 
         public init(
             input: (any AudioInput)? = nil, transcriber: (any Transcriber)? = nil,
@@ -66,7 +74,9 @@ public final class LiveComposition: Sendable {
             storeHooks: StoreHooks = StoreHooks(), installSpeechModel: Bool = true, recorder: (any Recorder)? = nil,
             wiring: (@Sendable (String, AppEnvironment) -> Void)? = nil,
             launchState: (@Sendable (String) -> any LaunchStateStorage)? = nil, lifecycle: (any Lifecycle)? = nil,
-            backgroundTime: (any BackgroundTimeHold)? = nil, cleaner: (any Cleaner)? = nil
+            backgroundTime: (any BackgroundTimeHold)? = nil, cleaner: (any Cleaner)? = nil,
+            speechCameForward: (@Sendable (AppEnvironment) async -> Void)? = nil,
+            cameForwardHandled: (@Sendable () -> Void)? = nil, stepFailure: (@Sendable (LaunchStep) -> KnotError?)? = nil
         ) {
             self.input = input
             self.transcriber = transcriber
@@ -80,6 +90,9 @@ public final class LiveComposition: Sendable {
             self.lifecycle = lifecycle
             self.backgroundTime = backgroundTime
             self.cleaner = cleaner
+            self.speechCameForward = speechCameForward
+            self.cameForwardHandled = cameForwardHandled
+            self.stepFailure = stepFailure
         }
     }
 
@@ -322,28 +335,62 @@ struct RefusingCaptureEngine: CaptureEngine {
 /// killed ingest twice is then not ingested again in this launch, whoever asks, the engine
 /// included, which ingests `Inbox/` as soon as a capture ends on that path. This launch's own
 /// items are never held.
+///
+/// It also says when an event of the app coming forward may ingest: only once recovery has
+/// ended, so that no event takes an earlier launch's item ahead of recovery, whose own ingest
+/// runs between recovering the recordings and finishing the open captures (§5). An event that
+/// comes before is answered when recovery ends, once.
 final class RecoveryLatch: Sendable {
     enum Phase: Sendable {
         /// Recovery has not begun: its own ingest takes the earlier launches' items.
         case notYet
+        /// Recovery runs: its own ingest may take them.
         case ran
+        /// Recovery has ended: any ingest may take them, an event's included.
+        case ended
         /// The breaker skipped recovery in this launch.
         case skippedByBreaker
     }
 
-    private let phase = Mutex(Phase.notYet)
+    private struct State {
+        var phase = Phase.notYet
+        /// An event came before recovery ended, and ingested nothing.
+        var eventWaits = false
+    }
 
-    var current: Phase { phase.withLock { $0 } }
+    private let state = Mutex(State())
 
-    func recoveryRuns() { phase.withLock { $0 = .ran } }
+    var current: Phase { state.withLock { $0.phase } }
 
-    func recoverySkipped() { phase.withLock { $0 = .skippedByBreaker } }
+    func recoveryRuns() { state.withLock { $0.phase = .ran } }
+
+    func recoverySkipped() { state.withLock { $0.phase = .skippedByBreaker } }
+
+    /// Marks recovery ended, and returns whether an event came before and waits to be answered.
+    func end() -> Bool {
+        state.withLock { state in
+            state.phase = .ended
+            defer { state.eventWaits = false }
+            return state.eventWaits
+        }
+    }
+
+    /// Whether an event may ingest now. Before recovery has ended it may not, and the event is
+    /// kept for `end()` to answer: the two are one step under the lock, so no event falls
+    /// between them.
+    func ingestsOnEvent() -> Bool {
+        state.withLock { state in
+            if state.phase == .ended { return true }
+            state.eventWaits = true
+            return false
+        }
+    }
 
     /// The code an item is kept with, or `nil` when it may be ingested now.
     func holds(_ manifest: CaptureManifest, launch: LaunchID) -> ErrorCode? {
         guard manifest.launchID != launch else { return nil }
         switch current {
-        case .ran: return nil
+        case .ran, .ended: return nil
         // Recovery runs next and ingests the item; a run of ingest before it stops there.
         case .notYet: return KnotError.storeNotOpen.code
         // The step died twice: the code of a step that did, as for a job.

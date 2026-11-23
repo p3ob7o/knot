@@ -126,6 +126,27 @@ func launch(_ composition: LiveComposition, sourceLocation: SourceLocation = #_s
     }
 }
 
+/// The job `id` once `holds` is true of it, waited for on the store's change signals: the
+/// signals are subscribed to before the first read, so a commit between the two is not missed.
+func job(
+    _ id: JobID, of segment: SegmentID, in composition: LiveComposition, _ what: String,
+    sourceLocation: SourceLocation = #_sourceLocation, where holds: @escaping @Sendable (Job) -> Bool
+) async -> Job? {
+    let notes = composition.environment.notes
+    let signals = notes.changeSignals()
+    let found = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Job? in
+        func current() async -> Job? {
+            ((try? await notes.jobs(for: segment)) ?? []).first { $0.id == id && holds($0) }
+        }
+        if let job = await current() { return job }
+        for await _ in signals {
+            if let job = await current() { return job }
+        }
+        return nil
+    }
+    return found ?? nil
+}
+
 /// A gate one test thread holds a store hook at, on the thread that opens the store, which is
 /// a thread of its own: the cooperative pool is never blocked.
 final class HookHold: Sendable {

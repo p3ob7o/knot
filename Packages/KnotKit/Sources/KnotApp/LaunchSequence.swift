@@ -94,6 +94,7 @@ public actor LaunchSequence {
     private var finished: LaunchReport?
     private var speechWatch: Task<Void, Never>?
     private var lifecycleWatch: Task<Void, Never>?
+    private var speechForwardWatch: Task<Void, Never>?
 
     init(composition: LiveComposition) {
         self.composition = composition
@@ -143,6 +144,11 @@ public actor LaunchSequence {
             skip(.startSync, .recoveryDidNotEnd, into: &report)
             return report
         }
+        // Recovery has ended: from here an event ingests `Inbox/` itself. An event that came while
+        // recovery ran ingested nothing, so that recovery's own ingest took the earlier launches'
+        // items in its order; it is answered now, once, for an item that came after recovery's own
+        // ingest had looked (`RecoveryLatch.end()`).
+        if composition.recoveryLatch.end() { _ = await composition.ingest?.ingestAll() }
         let jobs = await step(.resumeJobs, into: &report) { () throws(KnotError) -> Void in
             try await self.resumeJobs()
         }
@@ -168,6 +174,7 @@ public actor LaunchSequence {
         let started = ContinuousClock.now
         let outcome: LaunchStepOutcome
         do throws(KnotError) {
+            if let failure = composition.seams.stepFailure?(step) { throw failure }
             try await body()
             outcome = .done
             log.log(.info, Self.doneEvent(step))
@@ -287,21 +294,36 @@ public actor LaunchSequence {
     }
 
     /// Wires the app's foreground events to the calls the modules expose for the app coming
-    /// forward (docs/architecture.md §5): the transcriber checks its readiness again, `Inbox/` is
-    /// ingested (docs/architecture.md §6, rule 2), and the queue is woken. Each of them holds its
-    /// own order: ingest holds the earlier launches' items until recovery has run, and the queue
-    /// runs nothing before the launch releases it.
+    /// forward (docs/architecture.md §5): `Inbox/` is ingested (docs/architecture.md §6, rule 2),
+    /// the queue is woken, and the transcriber checks its readiness again.
+    ///
+    /// Two watches, so that ingest and the wake never wait on the speech module, whose call may
+    /// wait for a model to install. The first ingests, then wakes the queue: a capture reaches the
+    /// store first, and a job it brings is then run by the wake. The second tells the speech
+    /// module, in its own time; a model that arrives wakes the queue again (`watchSpeech()`). Each
+    /// call holds its own order: the event ingests only once recovery has ended (`RecoveryLatch`),
+    /// and the queue runs nothing before the launch releases it.
     private func watchLifecycle() {
         guard lifecycleWatch == nil else { return }
-        let events = composition.environment.lifecycle.events()
+        let lifecycle = composition.environment.lifecycle
+        let events = lifecycle.events()
+        let speechEvents = lifecycle.events()
         // Weak: a composition that is dropped, as a test drops one to stand for a kill, must not
-        // be kept alive by its own watch, with a queue that could still run jobs.
+        // be kept alive by its own watches, with a queue that could still run jobs.
         lifecycleWatch = Task { [weak composition = self.composition] in
             for await event in events where event == .cameForward {
                 guard let composition else { return }
-                await KnotSpeechLive.appCameForward(composition.environment)
-                if case .open = composition.gate.phase { _ = await composition.ingest?.ingestAll() }
+                if case .open = composition.gate.phase, composition.recoveryLatch.ingestsOnEvent() {
+                    _ = await composition.ingest?.ingestAll()
+                }
                 await composition.gatedQueue?.wake()
+                composition.seams.cameForwardHandled?()
+            }
+        }
+        speechForwardWatch = Task { [weak composition = self.composition] in
+            for await event in speechEvents where event == .cameForward {
+                guard let composition else { return }
+                await (composition.seams.speechCameForward ?? KnotSpeechLive.appCameForward)(composition.environment)
             }
         }
     }
