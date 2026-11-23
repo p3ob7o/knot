@@ -2294,8 +2294,9 @@ fi
 # scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
 # down its arguments and makes a synthetic product, a codesign that fails on a part named in
 # KNOT_MB_UNSIGNED, a defaults that holds KNOT_MB_ACCOUNTS saved accounts, and an install.sh
-# that writes down what it was asked; the project is not generated. A scratch git tree holds
-# the identifiers and a dummy link for the team's configuration. A part that fails its check
+# that writes down what it was asked, and an XcodeGen that generates nothing. A scratch git
+# tree holds the identifiers and a stand-in for the team's configuration, which a run keeps
+# (the first real run found that generating the project removed it). A part that fails its check
 # stops the run before any install; a derived-data folder that is not empty, a HEAD that is
 # not the commit named, a dirty tree and an empty list of accounts are refused before any
 # build; and no provisioning flag reaches the build unless asked, the device one never.
@@ -2315,14 +2316,7 @@ mb_commit="$(mb_git rev-parse HEAD)"
 mkdir -p "$mb/tree/.build/config"
 printf '// a stand-in: no team\n' >"$mb/tree/.build/config/Local.xcconfig"
 cp -R "$KNOT_SCRIPTS" "$mb/scripts"
-python3 -I - "$mb/scripts/milestone-build.sh" <<'PY'
-import sys
-path = sys.argv[1]
-text = open(path).read()
-old = "generate() { knot_generate_project; }"
-assert old in text, old
-open(path, "w").write(text.replace(old, "generate() { :; }"))
-PY
+printf '#!/bin/sh\n[ "$1" = --version ] && echo "Version: %s"\nexit 0\n' "$KNOT_XCODEGEN_VERSION" >"$mb/stub/xcodegen"
 printf '#!/bin/bash\necho "install $*" >>"$KNOT_MB_RECORD"\n' >"$mb/scripts/install.sh"
 cat >"$mb/stub/defaults" <<'SH'
 #!/bin/bash
@@ -2372,20 +2366,23 @@ else
 fi
 echo "** BUILD SUCCEEDED **"
 SH
-chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild"
+chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild" "$mb/stub/xcodegen"
 mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no derived data; prints its status
     local name=$1 status=0
     shift
     rm -rf "$mb/tree/.build/milestone"
     : >"$mb/$name.record"
-    env PATH="$mb/stub:$PATH" KNOT_TREE="$mb/tree" KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" \
+    env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
+        KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" \
         "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
     echo "$status"
 }
 mb_builds() { grep -c -e '^xcodebuild .* build$' "$mb/$1.record" || true; }
 mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
-# A clean run of both products, with the install, and no provisioning flag.
+# A clean run of both products, with the install, and no provisioning flag. It keeps the
+# team's configuration.
 mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_kept="$( [[ -e $mb/tree/.build/config/Local.xcconfig ]] && echo kept || echo removed)"
 # The same, with the provisioning updates the owner allowed.
 mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
 # An option for the device's registration does not exist.
@@ -2397,7 +2394,8 @@ mb_dd_status=0
 : >"$mb/derived.record"
 mkdir -p "$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios"
 echo earlier >"$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios/earlier"
-env PATH="$mb/stub:$PATH" KNOT_TREE="$mb/tree" KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" \
+env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
+    KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" \
     "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/derived.out" 2>&1 || mb_dd_status=$?
 # HEAD is not the commit named: a later commit is checked out.
 printf 'later\n' >"$mb/tree/later.txt"
@@ -2410,8 +2408,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="plain $mb_plain/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "plain 0/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2423,7 +2421,7 @@ if [[ $mb_verdicts == "plain 0/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived
     grep -e 'holds an earlier build' "$mb/derived.out" >/dev/null && grep -e 'uncommitted changes' "$mb/dirty.out" >/dev/null &&
     grep -e 'saved list of accounts is empty' "$mb/none.out" >/dev/null &&
     grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null; then
-    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, and passes a provisioning flag only when asked, the device's never"
+    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration, and passes a provisioning flag only when asked, the device's never"
 else
     fail "milestone-build.sh: $mb_verdicts; plain: $(tail -n 4 "$mb/plain.out"); unsigned: $(grep -e 'failed on' "$mb/unsigned.out")"
 fi

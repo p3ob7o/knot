@@ -160,8 +160,14 @@ WANT_TOOL="$(identifier KNOT_TOOL_FILE_milestone)"
         "Read the file: KNOT_BUNDLE_ID_milestone, KNOT_MARKETING_VERSION, KNOT_BUILD_NUMBER and KNOT_TOOL_FILE_milestone." "safe" "nothing"
 
 knot_select_xcode
-generate() { knot_generate_project; }
-generate
+# The project from this commit's project.yml, with the pinned XcodeGen. Not through
+# knot_generate_project: it links the team's configuration again only from KNOT_LOCAL_CONFIG,
+# and removes the link without it, so the build would have no team.
+knot_check_xcodegen || knot_fail "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
+(cd "$KNOT_ROOT" && "$KNOT_XCODEGEN_PATH" generate --spec project.yml --quiet)
+[[ -e $KNOT_CONFIG/Local.xcconfig ]] ||
+    knot_fail "milestone-build-no-team" "The team's configuration was linked, and is not after the project was generated." \
+        "Run KNOT_LOCAL_CONFIG=<the owner's Local.xcconfig> scripts/bootstrap.sh, then rerun." "safe" "Knot.xcodeproj, generated"
 say "project generated, $(knot_xcode_label)"
 
 plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
