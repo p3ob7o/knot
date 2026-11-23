@@ -1062,12 +1062,20 @@ step_soak() {
 # The timed targets of docs/product-spec.md §14, on an optimised build that keeps the fakes
 # (-DKNOT_FAKES). It holds every build slot, so that nothing else runs beside it. The
 # measured tests are WP-42's; until they exist this step says so.
+#
+# The build compiles every module for testing, -enable-testing, as a debug build does: the
+# tests are one bundle, and a test target that imports a module with @testable cannot resolve
+# it from a module built without, so with no such flag the optimised build of the tests
+# failed at nine test targets (item 7, 2026-11-24). It is still -O with whole-module
+# optimisation, but an internal declaration keeps a symbol other modules can reach, so the
+# optimiser may not drop it or treat it as private: a measured time can be a little slower
+# than the shipped app's, never faster.
 step_perf() {
     local scratch="$KNOT_BUILD/swiftpm-perf" output="$KNOT_LOGS/verify-perf.out"
-    swift build --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES --build-tests
+    local flags=(--package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES -Xswiftc -enable-testing)
+    swift build "${flags[@]}" --build-tests
     perf_tests() {
-        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
-            --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
+        swift test "${flags[@]}" --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
     }
     knot_swift_test_limited perf perf_tests || return 1
     if grep -E 'Test run with [1-9][0-9]* tests?|Executed [1-9]' "$output" >/dev/null; then

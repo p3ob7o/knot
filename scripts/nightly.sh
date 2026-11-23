@@ -13,7 +13,10 @@
 #   5. the recorder's kill test and its shared recording state in the iOS Simulator, with a
 #      fresh seed (scripts/verify.sh --only recorder-sim);
 #   6. the report of a model that changed with an update of the operating system
-#      (scripts/verify.sh --only model-report).
+#      (scripts/verify.sh --only model-report);
+#   7. the timed targets on an optimised build with the fakes (scripts/verify.sh --perf),
+#      holding every build slot, so that a change that breaks that build shows the next
+#      morning and not at a milestone.
 # It prints each run's status line, and exits non-zero when any run failed. A red night
 # stops the merge queue (docs/orchestrator.md).
 
@@ -24,7 +27,7 @@ case ${1:-} in
     "") ;;
     --skip) [[ ${2:-} == mac-ui ]] || knot_fail "nightly-usage" "--skip takes mac-ui only." "Run scripts/nightly.sh --help." "safe" "nothing"
         FULL=(--full --skip mac-ui) ;;
-    -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) knot_fail "nightly-usage" "Unknown argument: $1" "Run scripts/nightly.sh --help." "safe" "nothing" ;;
 esac
 branch="$(git -C "$KNOT_ROOT" symbolic-ref --quiet --short HEAD || echo detached)"
@@ -47,6 +50,7 @@ run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_SCRIPTS/verify.sh" --onl
 run recorder-sim "$KNOT_SCRIPTS/verify.sh" --only recorder-sim
 run models "$KNOT_SCRIPTS/verify.sh" --only model-report
 grep -e 'changed since' "$KNOT_LOGS/verify-model-report.log" 2>/dev/null || true
+run perf "$KNOT_SCRIPTS/verify.sh" --perf
 
 printf 'nightly: %s\n' "${summary[@]}"
 if ((${#failed[@]})); then
