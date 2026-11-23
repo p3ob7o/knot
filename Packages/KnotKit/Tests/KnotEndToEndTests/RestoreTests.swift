@@ -124,9 +124,10 @@ struct RestoreTests {
         _ = try #require(await launch(second))
         let records = try await streamRecords(second)
         let texts = records.flatMap(\.liveSegments).map(\.text)
-        #expect(texts.sorted() == [
-            "a synthetic line in the copy.", "tell \(word) after the restore.", "tell \(word) during the restore.",
-        ])
+        #expect(
+            texts.sorted() == [
+                "a synthetic line in the copy.", "tell \(word) after the restore.", "tell \(word) during the restore.",
+            ])
         for id in [during.captureID, after.captureID] {
             #expect(try await second.environment.notes.capture(id)?.outcome == .stored)
         }
@@ -174,7 +175,9 @@ struct RestoreTests {
     /// gate closed and the restore's background time held, before the pool closes and the
     /// store's own restore begins. Inside the store's restore, a kill is the store's to settle,
     /// from its journal, at the next open (`RestoreJournal`), and its own tests kill it there.
-    @Test("A kill during the restore loses nothing: the next launch opens the store as it was, and ingests the line typed meanwhile")
+    @Test(
+        "A kill during the restore loses nothing: the next launch opens the store as it was, and ingests the line typed meanwhile"
+    )
     func killDuringTheRestore() async throws {
         let folder = LiveFolder()
         defer { folder.remove() }
