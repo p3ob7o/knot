@@ -2291,6 +2291,143 @@ else
     fail "install.sh and --again: without it '$plain_install', with it '$again_install' ($(cat "$ia/again.out")), a Mac build with it '$mac_again'"
 fi
 
+# scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
+# down its arguments and makes a synthetic product, a codesign that fails on a part named in
+# KNOT_MB_UNSIGNED, a defaults that holds KNOT_MB_ACCOUNTS saved accounts, and an install.sh
+# that writes down what it was asked; the project is not generated. A scratch git tree holds
+# the identifiers and a dummy link for the team's configuration. A part that fails its check
+# stops the run before any install; a derived-data folder that is not empty, a HEAD that is
+# not the commit named, a dirty tree and an empty list of accounts are refused before any
+# build; and no provisioning flag reaches the build unless asked, the device one never.
+mb="$scratch/milestone-build"
+mkdir -p "$mb/tree/Apps/Config" "$mb/stub" "$mb/slots"
+cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$mb/tree/Apps/Config/"
+cp "$KNOT_SELF/.xcode-version" "$mb/tree/"
+printf '.build/\n' >"$mb/tree/.gitignore"
+mb_git() { git -C "$mb/tree" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false "$@"; }
+mb_record() { # mb_record <message>: records the tree's staged files as a commit
+    mb_git commit -q -m "$1"
+}
+mb_git init -q
+mb_git add .gitignore .xcode-version Apps/Config/Identifiers.xcconfig
+mb_record "the milestone's commit"
+mb_commit="$(mb_git rev-parse HEAD)"
+mkdir -p "$mb/tree/.build/config"
+printf '// a stand-in: no team\n' >"$mb/tree/.build/config/Local.xcconfig"
+cp -R "$KNOT_SCRIPTS" "$mb/scripts"
+python3 -I - "$mb/scripts/milestone-build.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+old = "generate() { knot_generate_project; }"
+assert old in text, old
+open(path, "w").write(text.replace(old, "generate() { :; }"))
+PY
+printf '#!/bin/bash\necho "install $*" >>"$KNOT_MB_RECORD"\n' >"$mb/scripts/install.sh"
+cat >"$mb/stub/defaults" <<'SH'
+#!/bin/bash
+[[ "$1 $2" == "export com.apple.dt.Xcode" ]] || exec /usr/bin/defaults "$@"
+entries=""
+for ((i = 0; i < ${KNOT_MB_ACCOUNTS:-1}; i++)); do entries="$entries<dict><key>identifier</key><string>synthetic-$i</string></dict>"; done
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>DVTDeveloperAccountManagerAppleIDLists</key><dict><key>IDE.Identifiers.Prod</key><array>%s</array></dict></dict></plist>\n' "$entries"
+SH
+cat >"$mb/stub/codesign" <<'SH'
+#!/bin/bash
+part="${@: -1}"
+echo "codesign $*" >>"$KNOT_MB_RECORD"
+if [[ -n ${KNOT_MB_UNSIGNED:-} && $part == *"$KNOT_MB_UNSIGNED" ]]; then
+    echo "$part: code object is not signed at all" >&2
+    exit 1
+fi
+SH
+cat >"$mb/stub/xcodebuild" <<'SH'
+#!/bin/bash
+[[ ${1:-} == -version ]] && exec /usr/bin/xcodebuild "$@"
+echo "xcodebuild $*" >>"$KNOT_MB_RECORD"
+derived="" scheme="" level=""
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in
+        -derivedDataPath) derived=${!j} ;;
+        -scheme) scheme=${!j} ;;
+        KNOT_MILESTONE_LEVEL=*) level=${!i#KNOT_MILESTONE_LEVEL=} ;;
+    esac
+done
+info() { # info <folder> <bundle ID>
+    mkdir -p "$1"
+    printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleShortVersionString</key><string>0.3.0</string><key>CFBundleVersion</key><string>1</string><key>CFBundleExecutable</key><string>Knot</string><key>KnotFlavour</key><string>milestone</string><key>KnotMilestoneLevel</key><string>%s</string></dict></plist>\n' "$2" "$level" >"$1/Info.plist"
+}
+if [[ $scheme == Knot-iOS ]]; then
+    app="$derived/Build/Products/Release-iphoneos/Knot.app"
+    info "$app" com.p3ob7o.knot
+    info "$app/PlugIns/Widgets-iOS.appex" com.p3ob7o.knot.widgets
+    info "$app/Watch/KnotWatch.app" com.p3ob7o.knot.watchkitapp
+    info "$app/Watch/KnotWatch.app/PlugIns/Widgets-watchOS.appex" com.p3ob7o.knot.watchkitapp.widgets
+else
+    app="$derived/Build/Products/Release/Knot.app"
+    info "$app/Contents" com.p3ob7o.knot
+    mkdir -p "$app/Contents/MacOS"
+    echo app >"$app/Contents/MacOS/Knot"
+    echo tool >"$app/Contents/MacOS/knot-cli"
+fi
+echo "** BUILD SUCCEEDED **"
+SH
+chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild"
+mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no derived data; prints its status
+    local name=$1 status=0
+    shift
+    rm -rf "$mb/tree/.build/milestone"
+    : >"$mb/$name.record"
+    env PATH="$mb/stub:$PATH" KNOT_TREE="$mb/tree" KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" \
+        "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
+    echo "$status"
+}
+mb_builds() { grep -c -e '^xcodebuild .* build$' "$mb/$1.record" || true; }
+mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
+# A clean run of both products, with the install, and no provisioning flag.
+mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+# The same, with the provisioning updates the owner allowed.
+mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
+# An option for the device's registration does not exist.
+mb_device="$(mb_run device M1 --commit "$mb_commit" --allow-provisioning-device-registration)"
+# The iOS widget unsigned: the run stops at it, and installs nothing.
+mb_unsigned="$(KNOT_MB_UNSIGNED=Widgets-iOS.appex mb_run unsigned M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+# Derived data that is not empty.
+mb_dd_status=0
+: >"$mb/derived.record"
+mkdir -p "$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios"
+echo earlier >"$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios/earlier"
+env PATH="$mb/stub:$PATH" KNOT_TREE="$mb/tree" KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" \
+    "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/derived.out" 2>&1 || mb_dd_status=$?
+# HEAD is not the commit named: a later commit is checked out.
+printf 'later\n' >"$mb/tree/later.txt"
+mb_git add later.txt
+mb_record "a later one"
+mb_head="$(mb_run head M1 --commit "$mb_commit")"
+# A dirty tree, at the commit named.
+printf 'changed\n' >>"$mb/tree/later.txt"
+mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
+printf 'later\n' >"$mb/tree/later.txt"
+# No saved account.
+mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
+mb_verdicts="plain $mb_plain/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "plain 0/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+    ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
+    grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
+    ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
+    grep -e "^install .*/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app --mac-folder $mb/folder$" "$mb/plain.record" >/dev/null &&
+    grep -e 'codesign --verify --strict .*Knot.app/Contents/MacOS/knot-cli$' "$mb/plain.record" >/dev/null &&
+    ! grep -e 'codesign .*--deep' "$mb/plain.record" >/dev/null &&
+    grep -e 'failed on Knot.app/PlugIns/Widgets-iOS.appex' "$mb/unsigned.out" >/dev/null &&
+    grep -e 'not the commit named' "$mb/head.out" >/dev/null && grep -e "(tree " "$mb/head.out" >/dev/null &&
+    grep -e 'holds an earlier build' "$mb/derived.out" >/dev/null && grep -e 'uncommitted changes' "$mb/dirty.out" >/dev/null &&
+    grep -e 'saved list of accounts is empty' "$mb/none.out" >/dev/null &&
+    grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null; then
+    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, and passes a provisioning flag only when asked, the device's never"
+else
+    fail "milestone-build.sh: $mb_verdicts; plain: $(tail -n 4 "$mb/plain.out"); unsigned: $(grep -e 'failed on' "$mb/unsigned.out")"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"

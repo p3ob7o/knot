@@ -683,7 +683,7 @@ knot_filter_config() { echo "${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-$KNOT_CONF
 knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_TEAM_FILTER"; }
 
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
-# the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
+# the files named verify-*, bootstrap-* and milestone-build-*. Other files are left alone: one may be the output
 # of a command still writing to it, and a rewrite would give the file a new inode under the
 # writer, whose lines would then be lost. Each log keeps its time, so that a log of an earlier
 # run is not taken for a later one's (item 115). A run of verify.sh moves the earlier run's
@@ -691,7 +691,7 @@ knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_
 knot_scrub_logs() {
     local folder=$1 log stamp
     [[ -d $folder ]] || return 0
-    for log in "$folder"/verify-* "$folder"/bootstrap-*; do
+    for log in "$folder"/verify-* "$folder"/bootstrap-* "$folder"/milestone-build-*; do
         [[ -f $log ]] || continue
         stamp="$(date -r "$(stat -f %m "$log")" +%Y%m%d%H%M.%S)"
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
