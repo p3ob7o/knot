@@ -213,6 +213,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-11 | 11b | A recording whose file reached `Assets/` before its capture ended reaches the stream: one that recovery could never finish, found by the soak, cured | WP-11 PR 1 |
 | WP-11 | 2 | The engine as the one applier of a press, live words and levels, a stored recording's peaks, KnotCapture's copy of the real-path code replaced by KnotCore's, the moments with no kill seam, and the two tests of `FollowerPlacementTests` restated as limits | WP-11 PR 1; the contract pull request that gives `CaptureEngine` its `live` and `press` |
 | WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
+| WP-11 | 11c | A late answer reads the capture's entry after its kill point: a discard that passed while the answer waited there was missed, a fault the third PR brought and the random interleavings found under load | WP-11 PR 3 |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
