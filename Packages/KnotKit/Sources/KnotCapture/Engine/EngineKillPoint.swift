@@ -45,6 +45,12 @@ public enum EngineKillPoint: String, CaseIterable, Sendable {
     /// A store call that the engine stopped waiting for has committed, and the engine has not
     /// taken its late answer yet.
     case beforeLateAnswer = "before_late_answer"
+    /// A recording's row, whose store call the engine stopped waiting for, has committed, and its
+    /// file has not joined it: a row comes without its file, which the recording's end, or ingest
+    /// of its item, adds. The store records a row that commits after a newer capture began as
+    /// ended at that start, waiting for its file (docs/architecture.md §5). Reached as the engine
+    /// takes the late answer, for a recording only.
+    case lateRecordingRow = "late_recording_row"
 }
 
 #if DEBUG || KNOT_FAKES

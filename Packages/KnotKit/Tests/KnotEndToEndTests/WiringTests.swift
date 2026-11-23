@@ -78,6 +78,33 @@ struct WiringTests {
         #expect(try await composition.environment.notes.note(deleted) == nil)
     }
 
+    @Test("A purge that fails is reported, and sync still has its turn")
+    func purgeFailureLeavesSync() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var seams = LiveComposition.Seams.forTests
+        seams.stepFailure = { $0 == .purge ? KnotError.storeBusy : nil }
+        let report = try #require(await launch(folder.compose(seams: seams)))
+        #expect(report.outcome(of: .purge) == .failed(KnotError.storeBusy.code))
+        #expect(report.steps.map(\.step) == [.openStore, .recovery, .resumeJobs, .purge, .startSync])
+    }
+
+    @Test("The purge is skipped after two deaths inside it, sync still follows, and the next launch purges")
+    func purgeTwoDeaths() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        try await Self.earlierStore(folder) { _ in }
+        folder.breaker.enter(.purge)
+        folder.breaker.enter(.purge)
+        let first = try #require(await launch(folder.compose()))
+        #expect(first.outcome(of: .purge) == .skipped(.diedTwice))
+        #expect(first.outcome(of: .recovery) == .done)
+        #expect(first.steps.map(\.step).last == .startSync)
+        // The skip is written, so the next launch runs the step again.
+        let second = try #require(await launch(folder.compose()))
+        #expect(second.outcome(of: .purge) == .done)
+    }
+
     @Test("The queue runs the jobs of the segments this device processes, and leaves another device's")
     func queueRunsOnlyThisDevicesJobs() async throws {
         let folder = LiveFolder()
@@ -217,5 +244,26 @@ struct WiringTests {
         #expect(report.outcome(of: .openStore) == .done)
         #expect(
             time.events.withLock { $0 } == ["hold while opening", "migrating while opening", "release while open"])
+    }
+
+    @Test("Background time is released when the open fails, once")
+    func backgroundTimeReleasedOnFailure() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        try await Self.earlierStore(folder) { _ in }
+        let time = RecordedBackgroundTime()
+        var seams = LiveComposition.Seams.forTests
+        seams.backgroundTime = time
+        seams.migrations =
+            StoreSchema.migrations + [
+                StoreSchema.Migration(version: StoreSchema.currentVersion + 1) { _ in
+                    throw DatabaseError(message: "a synthetic failed migration")
+                }
+            ]
+        let composition = folder.compose(seams: seams)
+        time.gate.withLock { $0 = composition.gate }
+        let report = try #require(await launch(composition))
+        #expect(report.outcome(of: .openStore) != .done)
+        #expect(time.events.withLock { $0 } == ["hold while opening", "release while failed"])
     }
 }
