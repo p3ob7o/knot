@@ -150,4 +150,31 @@ import Testing
             })
         #expect(r.logs.lines.filter { $0.hasPrefix("discard_end_settled capture=\(id)") }.isEmpty)
     }
+
+    /// Seed 17 of the random interleavings, on main after pull request 102. A recording's held
+    /// record commits after the engine stopped waiting for it, and the late answer is held at
+    /// `late_recording_row`, as a pause and not a kill, while the recording is discarded. The
+    /// late answer then goes on: the row is ended as discarded, and the stream does not show it.
+    @Test func recordingDiscardedWhileItsLateRowIsHeldEndsTheRow() async throws {
+        let r = Rig()
+        let manual = ManualDeadline()
+        let pause = KillSwitch()
+        pause.arm(.lateRecordingRow)
+        let engine = BoundedEngine(r.engine(deadline: manual.deadline, killPoint: pause.hook))
+        let (recording, hold) = try await Self.recordingOnTheInboxPath(r, engine, manual)
+        let id = recording.captureID
+        hold.release()
+        let held = try #require(await pause.untilKilled())
+        #expect(held == id)
+        let discarded = try await engine.discard(id)
+        #expect(discarded.outcome == .discardedEmpty)
+        pause.release()
+        #expect(
+            await eventually("the late row to end as discarded") {
+                (try? await r.notes.capture(id))?.outcome == .discardedEmpty
+            })
+        #expect(try await r.notes.openCaptures().isEmpty)
+        let inStream = try await r.stream().notes.flatMap(\.liveSegments).contains { $0.id == SegmentID(id) }
+        #expect(!inStream)
+    }
 }
