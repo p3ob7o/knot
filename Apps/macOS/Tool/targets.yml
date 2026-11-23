@@ -11,7 +11,8 @@ targets:
       - path: ../../../Packages/KnotKit/Sources/knot
     settings:
       base:
-        PRODUCT_NAME: $(KNOT_TOOL_NAME)
+        # The file inside the app, not the command's name (Identifiers.xcconfig).
+        PRODUCT_NAME: $(KNOT_TOOL_FILE)
         PRODUCT_MODULE_NAME: knot
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).cli
         INFOPLIST_FILE: Apps/macOS/Tool/Info.plist
