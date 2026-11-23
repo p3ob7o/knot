@@ -50,6 +50,9 @@
         /// The child never passes the step `after_end`: a point a list names that the child never
         /// reaches, which `KillPointCoverage` must find.
         case afterEndNeverPassed = "after-end-never-passed"
+        /// The engine's log writes an error after the launch's last line, as the engine's work
+        /// still in flight at the exit may: the line must not reach the parent.
+        case errorLoggedAfterDone = "error-logged-after-done"
     }
 
     /// The store's writes that the faults make behind the engine's back, on a connection of
