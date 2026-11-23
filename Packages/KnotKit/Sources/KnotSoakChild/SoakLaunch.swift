@@ -325,6 +325,12 @@
         private func process() async {
             let last = options.range.isEmpty
             for job in (try? await notes.jobs(for: nil)) ?? [] where job.state == .running {
+                if options.fault == .foundLineTwice {
+                    Say.line(
+                        SoakLine.foundRunning(
+                            capture: CaptureID(job.segmentID), kind: job.kind.rawValue, deaths: job.deaths
+                        ).rendered)
+                }
                 Say.line(
                     SoakLine.foundRunning(
                         capture: CaptureID(job.segmentID), kind: job.kind.rawValue, deaths: job.deaths

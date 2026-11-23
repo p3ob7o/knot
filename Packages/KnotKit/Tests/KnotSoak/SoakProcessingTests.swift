@@ -33,6 +33,18 @@
             #expect(jobs.contains { $0.kind == .clean && $0.state == .done }, "No recording was cleaned.")
         }
 
+        /// A death seen twice counts once: a kill between a `found-running` line and the queue's save
+        /// has the next launch say the same number again. The fault says every line twice, over
+        /// launches cut while jobs run, and the run is green.
+        @Test func aDeathSeenTwiceCountsOnce() async throws {
+            var configuration = CaptureLedgerSoak.Configuration(
+                seed: 91, captures: 30, killPoints: [.log("transcript_run_saved", passes: 1...1)], launchBudget: 2...4)
+            configuration.fault = "found-line-twice"
+            let (verdict, jobs) = try await run(configuration, "found-twice")
+            #expect(verdict.isGreen, "\(verdict.report)")
+            #expect(jobs.contains { $0.deaths > 0 }, "No job died.")
+        }
+
         /// Armed at `transcript_run_saved`'s first pass in every launch, of two to four captures each,
         /// a launch kills the first job it runs, and a job that died is the first the next launch
         /// runs: it dies twice, and fails.

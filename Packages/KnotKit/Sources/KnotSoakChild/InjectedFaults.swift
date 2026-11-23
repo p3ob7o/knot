@@ -76,6 +76,9 @@
         case deathLimitIgnored = "death-limit-ignored"
         /// The last launch moves one ready recording's segment back to transcribed.
         case segmentStepLeft = "segment-step-left"
+        /// Each job found running is said twice, as a kill between the line and the queue's save
+        /// would have the next launch say it again: one death seen twice, which counts once.
+        case foundLineTwice = "found-line-twice"
         /// The last launch writes a clean job for a recording whose transcription died twice.
         case cleanJobAfterFailure = "clean-job-after-failure"
     }

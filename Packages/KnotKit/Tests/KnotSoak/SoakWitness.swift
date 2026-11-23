@@ -71,9 +71,11 @@ struct SoakWitness {
     /// The captures the script discarded, or was about to: one may end empty, whatever it was
     /// acknowledged with before.
     private(set) var discarding: Set<CaptureID> = []
-    /// How many launches found each job marked running before their queue resumed, by
-    /// `key(capture, kind)`: the deaths the queue must have counted (`ProcessingWitness`).
-    private(set) var foundRunning: [String: Int] = [:]
+    /// The deaths each job had when a launch found it marked running before its queue resumed,
+    /// by `key(capture, kind)`: each number one death the queue must have counted
+    /// (`ProcessingWitness`). A set: a kill between the line and the queue's save leaves the same
+    /// number for the next launch to find, and that is one death seen twice.
+    private(set) var foundRunning: [String: Set<Int>] = [:]
 
     /// How one launch ended, as the parent saw it.
     enum LaunchEnd: Sendable {
@@ -126,8 +128,8 @@ struct SoakWitness {
                 highestIntent = max(highestIntent, index)
             case .discarding(_, let capture):
                 discarding.insert(capture)
-            case .foundRunning(let capture, let kind, _):
-                foundRunning[Self.key(capture, kind), default: 0] += 1
+            case .foundRunning(let capture, let kind, let deaths):
+                foundRunning[Self.key(capture, kind), default: []].insert(deaths)
             case .ack(let a):
                 acknowledgements[a.capture, default: []].append(
                     Acknowledgement(

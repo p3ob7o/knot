@@ -16,7 +16,8 @@
     ///   No job belongs to any other segment.
     /// - Nothing left: every job is done, or failed with `job_died_twice` and two deaths, its
     ///   segment then in its failed step; a done job's segment is ready.
-    /// - Deaths: a job has as many deaths as launches found it running, and a done job at most one.
+    /// - Deaths: a job has one death for each number of deaths launches found it running with, and
+    ///   a done job at most one.
     /// - Once, and the script's: a done transcription's raw transcript is the script's phrases,
     ///   each once; a failed one's, those of its saved runs; a done cleanup's text is the scripted
     ///   cleanup of that transcript, applied once.
@@ -48,7 +49,10 @@
                     continue
                 }
                 problems += jobProblems(transcribe, capture: capture)
-                guard let read = try await notes.segment(segment) else { continue }
+                guard let read = try await notes.segment(segment) else {
+                    problem("recording_without_segment")
+                    continue
+                }
                 let raw = read.rawTranscript ?? ""
                 if transcribe.state == .done {
                     if raw != SoakSpeech.transcript(of: capture) {
@@ -103,7 +107,7 @@
             case .failed(let code):
                 if !Self.diedTwice(job) { problem("job_not_done", [code.rawValue, "deaths=\(job.deaths)"]) }
             }
-            let found = foundRunning[Self.key(capture, job.kind.rawValue)] ?? 0
+            let found = foundRunning[Self.key(capture, job.kind.rawValue)]?.count ?? 0
             if job.deaths < found { problem("death_not_counted", ["deaths=\(job.deaths)", "found=\(found)"]) }
             if job.deaths > found { problem("deaths_beyond_kills", ["deaths=\(job.deaths)", "found=\(found)"]) }
             return problems
