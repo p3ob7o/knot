@@ -61,13 +61,22 @@ public struct LiveConfiguration: Sendable {
 
     /// The configuration of this process, read from the main bundle and the launch arguments.
     public static func current() -> LiveConfiguration {
-        let info = Bundle.main.infoDictionary ?? [:]
+        current(
+            info: Bundle.main.infoDictionary ?? [:], bundleID: Bundle.main.bundleIdentifier ?? "knot",
+            arguments: ProcessInfo.processInfo.arguments, environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// The configuration a build with this Info.plist, bundle ID, launch arguments and
+    /// environment reads: `current()` gives it this process's, and the composition's smoke test
+    /// gives it a temporary store's launch arguments, as a UI test launches the app with them.
+    static func current(
+        info: [String: Any], bundleID: String, arguments: [String], environment: [String: String]
+    ) -> LiveConfiguration {
         func value(_ key: String) -> String? {
             guard let text = info[key] as? String, !text.isEmpty, !text.hasPrefix("$(") else { return nil }
             return text
         }
-        let bundleID = Bundle.main.bundleIdentifier ?? "knot"
-        let flavour = currentFlavour()
+        let flavour = flavour(info: info)
         // The build's configuration says whether it has an app group. The local signing
         // configuration of every agent, simulator and gate build carries neither the group nor
         // iCloud, and `KnotSyncAvailable` is `NO` there: both follow `KNOT_SIGNING`.
@@ -82,7 +91,7 @@ public struct LiveConfiguration: Sendable {
         var appContainer = URL.applicationSupportDirectory
         var settingsSuite = "\(bundleID).v1.device"
         var refusal: KnotError?
-        switch LaunchArguments.read(ProcessInfo.processInfo.arguments, flavour: flavour).temporaryStore {
+        switch LaunchArguments.read(arguments, flavour: flavour).temporaryStore {
         case .none:
             break
         case .named(let name):
@@ -95,7 +104,7 @@ public struct LiveConfiguration: Sendable {
         }
         return LiveConfiguration(
             flavour: flavour, platform: .current, appContainer: appContainer, appGroup: appGroup,
-            devStoreFolder: value("KnotDevStoreFolder"), environment: ProcessInfo.processInfo.environment,
+            devStoreFolder: value("KnotDevStoreFolder"), environment: environment,
             milestoneLevel: value("KnotMilestoneLevel").flatMap(MilestoneLevel.init(infoValue:)),
             settingsSuite: settingsSuite,
             build: BuildInfo(
@@ -107,7 +116,12 @@ public struct LiveConfiguration: Sendable {
 
     /// The flavour the main bundle's Info.plist names: `milestone`, or `dev` for anything else.
     public static func currentFlavour() -> StoreLocations.Flavour {
-        (Bundle.main.infoDictionary?["KnotFlavour"] as? String) == "milestone" ? .milestone : .dev
+        flavour(info: Bundle.main.infoDictionary ?? [:])
+    }
+
+    /// The flavour an Info.plist names.
+    static func flavour(info: [String: Any]) -> StoreLocations.Flavour {
+        (info["KnotFlavour"] as? String) == "milestone" ? .milestone : .dev
     }
 
     /// True when the launch arguments select `.preview`: only in a debug build that is not a
