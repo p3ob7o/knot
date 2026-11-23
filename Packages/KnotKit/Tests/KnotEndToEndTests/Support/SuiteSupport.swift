@@ -123,9 +123,17 @@ final class HeldTranscriber: Transcriber {
 }
 
 /// What this test process has written to the unified log under Knot's subsystem, read back from
-/// the system's store of this process's entries. It holds every line at the info level and
-/// above: the store keeps no debug line, and of the modules the composition wires on the Mac
-/// none logs at the debug level (only KnotLink does, on iOS).
+/// the system's store of this process's entries: every line at the info level and above.
+///
+/// It cannot see a line at the debug level, which the store does not keep. The logging facade
+/// has no tap that would hand a test every line the composition writes: each module logs
+/// through `KnotLog` on the system's sink. So the canary reads what the store keeps, and starts
+/// no stream of the system's log. What guards a debug line is the facade and the lint: a
+/// `KnotLog` line takes only a `StaticString` event and typed fields, IDs, numbers, flags and
+/// codes, so no text can reach it at any level; and the lint's rule on log calls holds any other
+/// log call: each value it interpolates states its privacy, and one shown as public is named as
+/// an ID, a count or a code. Of the modules the composition wires on the Mac, none logs at the
+/// debug level today; only KnotLink does, on iOS.
 enum ProcessLog {
     static func lines(since start: Date) throws -> [String] {
         let store = try OSLogStore(scope: .currentProcessIdentifier)

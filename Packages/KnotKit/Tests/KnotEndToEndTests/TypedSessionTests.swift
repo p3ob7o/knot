@@ -18,10 +18,13 @@ struct TypedSessionTests {
         _ = try #require(await launch(first))
         let engine = first.environment.engine
 
-        // A line saved at each keystroke, then ended.
+        // A line saved at each keystroke, then ended: the store holds each keystroke's text
+        // as soon as its save returns.
         let a = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "B"))
         _ = try await engine.update(a.captureID, with: .text("Buy"))
+        #expect(try await Self.storedText(of: a.captureID, in: first) == "Buy")
         _ = try await engine.update(a.captureID, with: .text("Buy synthetic stamps."))
+        #expect(try await Self.storedText(of: a.captureID, in: first) == "Buy synthetic stamps.")
         let aEnded = try await engine.end(a.captureID)
         #expect(aEnded.outcome == .stored)
         #expect(aEnded.path == .store)
@@ -58,6 +61,11 @@ struct TypedSessionTests {
         #expect(try await second.environment.notes.capture(e.captureID)?.outcome == .stored)
         #expect(try await second.environment.notes.openCaptures().isEmpty)
         #expect(inboxManifests(folder.locations).isEmpty)
+    }
+
+    /// The text the store holds for the typed capture `id`, read from the stream.
+    static func storedText(of id: CaptureID, in composition: LiveComposition) async throws -> String? {
+        try await streamRecords(composition).flatMap(\.liveSegments).first { $0.id == SegmentID(id) }?.text
     }
 
     /// Each note's live segments' texts, in the order of their segments.

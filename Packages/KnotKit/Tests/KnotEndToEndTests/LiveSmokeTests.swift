@@ -23,8 +23,12 @@ struct LiveSmokeTests {
         let temporary = FileManager.default.temporaryDirectory
             .appending(path: "KnotTemporaryStore", directoryHint: .isDirectory)
             .appending(path: name, directoryHint: .isDirectory)
+        // What the test makes, it removes: the store's folder, and the folder of temporary
+        // stores above it when it was not there before.
+        let temporaryStores = temporary.deletingLastPathComponent()
+        let storesWereThere = FileManager.default.fileExists(atPath: temporaryStores.path)
         defer {
-            try? FileManager.default.removeItem(at: temporary)
+            try? FileManager.default.removeItem(at: storesWereThere ? temporary : temporaryStores)
             MemoryLaunchState.remove(prefix: configuration.settingsSuite)
         }
         #expect(configuration.refusal == nil)

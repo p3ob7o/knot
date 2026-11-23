@@ -9,6 +9,10 @@ import Testing
 /// made-up word, they go through the live composition from the recorder and the keyboard to a
 /// cleaned note, they are searched for and refused, and the word, or any word the transcriber
 /// returned, must be in no log line this process wrote, no error and no diagnostics file.
+///
+/// The log lines are those the system keeps of this process, at the info level and above
+/// (`ProcessLog`). A line at the debug level is not kept, so the canary cannot see one: the
+/// facade, which takes no text at any level, and the lint's rule on log calls guard it.
 @Suite("The log canary")
 struct LogCanaryTests {
     @Test("end-to-end-log-canary", .tags(.named))

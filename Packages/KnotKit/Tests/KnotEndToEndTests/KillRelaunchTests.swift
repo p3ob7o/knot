@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 import KnotFakes
 import KnotTestSupport
@@ -57,6 +58,9 @@ struct KillRelaunchTests {
         switch stage {
         case .beforeTheStoreIsOpen:
             #expect(begun.path == .inbox(KnotError.storeNotOpen.code))
+            // A recording keeps its manifest and its working file beside the store, in
+            // `Recording/`, not in `Inbox/`, until recovery takes it.
+            #expect(Self.recordingFiles(of: id, in: folder).count >= 2)
         case .whileTheCaptureIsOpen:
             #expect(begun.path == .store)
         case .afterItsEndBeforeItsJob:
@@ -98,15 +102,28 @@ struct KillRelaunchTests {
         #expect(try await second.environment.notes.openCaptures().isEmpty)
         #expect(try await second.environment.notes.capture(id)?.outcome == .stored)
         #expect(inboxManifests(folder.locations).isEmpty)
-        switch stage {
-        case .whileItsJobRuns:
-            // The relaunch found the job running: a death, and it ran again.
+        // The recording's place before the store opened is empty once recovery has run.
+        #expect(Self.recordingFiles(of: id, in: folder).isEmpty)
+        // The recording's audio is kept, whole: found, on the drive, and as long as the clip.
+        let audio = try #require(try await second.environment.assets.find(AssetID(id), kind: .audio))
+        #expect(FileManager.default.fileExists(atPath: audio.url.path))
+        let stored = try AVAudioFile(forReading: audio.url)
+        let seconds = Double(stored.length) / stored.fileFormat.sampleRate
+        let clipSeconds = Double(clip.samples.count) / clip.sampleRate
+        #expect(abs(seconds - clipSeconds) < 0.2, "The stored audio lasts \(seconds) s, the clip \(clipSeconds) s.")
+        // Each job ran once: the relaunch ran the job once at every stage that left it to run,
+        // and nothing at the stage after it.
+        #expect(relaunchTranscriber.runCount == (stage == .afterItsJob ? 0 : 1))
+        if stage == .whileItsJobRuns {
+            // The relaunch found the job running: a death.
             #expect(jobs.first { $0.id == transcribe }?.deaths == 1)
-        case .afterItsJob:
-            // Nothing ran again.
-            #expect(relaunchTranscriber.runCount == 0)
-        default:
-            #expect(relaunchTranscriber.runCount > 0)
         }
+    }
+
+    /// The files of the recording `id` in `Recording/`, where a recording keeps its manifest,
+    /// its working file and its peaks until it is stored.
+    static func recordingFiles(of id: CaptureID, in folder: LiveFolder) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.locations.recording.path)) ?? []
+        return names.filter { $0.hasPrefix(id.description) }
     }
 }
