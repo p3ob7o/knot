@@ -182,26 +182,6 @@ func segment(
     return found ?? nil
 }
 
-/// The job `id` once `holds` is true of it, waited for on the store's change signals.
-func job(
-    _ id: JobID, of segment: SegmentID, in composition: LiveComposition, _ what: String,
-    sourceLocation: SourceLocation = #_sourceLocation, where holds: @escaping @Sendable (Job) -> Bool
-) async -> Job? {
-    let notes = composition.environment.notes
-    let signals = notes.changeSignals()
-    let found = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Job? in
-        func current() async -> Job? {
-            ((try? await notes.jobs(for: segment)) ?? []).first { $0.id == id && holds($0) }
-        }
-        if let job = await current() { return job }
-        for await _ in signals {
-            if let job = await current() { return job }
-        }
-        return nil
-    }
-    return found ?? nil
-}
-
 /// A voice segment whose transcription and cleanup are done.
 @Sendable func isCleaned(_ segment: Segment) -> Bool {
     segment.state == .voice(.ready) && segment.textOrigin == .cleaned
