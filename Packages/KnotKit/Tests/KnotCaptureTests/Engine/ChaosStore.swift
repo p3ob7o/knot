@@ -15,6 +15,9 @@ struct ChaosStore: NoteStore {
     var refuseCaptureRead: (@Sendable (CaptureID) throws(KnotError) -> Void)? = nil
     /// Run before each set of a segment's peaks: it may refuse it.
     var refusePeaks: (@Sendable (SegmentID) throws(KnotError) -> Void)? = nil
+    /// While true, a read of an asset's row answers none, as for a row that comes to name the
+    /// file after the read.
+    var hidesAssets = false
     /// Awaited before each set of a segment's peaks, and before nothing else: it may hold it.
     var holdPeaks: (@Sendable () async -> Void)? = nil
 
@@ -67,6 +70,7 @@ struct ChaosStore: NoteStore {
         return try await store.segment(id)
     }
     func asset(_ id: AssetID) async throws(KnotError) -> Asset? {
+        if hidesAssets { return nil }
         return try await store.asset(id)
     }
     func stream(after position: StreamPosition?, limit: Int) async throws(KnotError) -> StreamPage {

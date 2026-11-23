@@ -1151,6 +1151,7 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// empty; an ended capture's item is ingested now that the store answers.
     private func lateAnswer(of id: CaptureID, committed: Bool) async {
         guard committed, let entry = entries[id] else { return }
+        if entry.kind == .voice { await reach(.lateRecordingRow, id) }
         log.capture(id, "store_answered_late")
         entries[id]?.hasRow = true
         if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
