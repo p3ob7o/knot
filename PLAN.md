@@ -249,6 +249,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-22 | 22b | The composition's wiring, split out of the second PR: the processing queue given this device, the purge as a launch step, `Lifecycle` with its adapters, and background time on iOS around the store's opening | WP-22 PR 1; WP-15 PR 1 |
 | WP-22 | 2 | The end-to-end suite | WP-10 PR 1; WP-15 PR 1; WP-11 PR 1; WP-12 PR 2; WP-13 PR 1; WP-14; WP-22b |
 | WP-22 | 22c | The composition's restore of a kept copy: the store stays closed for the rest of the launch, and Knot must be opened again | WP-22 PR 2 |
+| WP-22 | 22d | The Mac app's milestone build embeds its tool: the tool's file has a name of its own, and the app copies it by its built name | WP-22c |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 2 | The iPhone app, built from the direction's structure sheet | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
