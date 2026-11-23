@@ -196,12 +196,24 @@ func segment(
 }
 
 /// Records `clip` through the composition's engine: begins a voice capture on the composition's
-/// injected input and waits until the recorder has written every frame. The capture is left
-/// open, as a recording is until it is stopped.
+/// injected input and waits until the recorder has written every frame and synced it, the
+/// engine's durable revision of a recording being its frames on the drive. The sync that makes
+/// the last frame durable also writes the peaks with it, so from then on the session writes
+/// nothing until it is stopped: a kill there leaves what a kill leaves, and the session, still
+/// alive in this process, writes no file again after a relaunch's recovery has removed it. The
+/// capture is left open, as a recording is until it is stopped.
 func record(_ frames: FrameCount, of clip: FixtureClip, in composition: LiveComposition) async throws -> CaptureState {
-    let begun = try await composition.environment.engine.begin(CaptureRequest(kind: .voice, surface: .app))
+    let engine = composition.environment.engine
+    let states = engine.states()
+    let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
+    let id = begun.captureID
     let total = Int64(clip.samples.count)
     await SuiteWait.until("every frame of the clip to reach the recorder") { frames.value >= total }
+    let durable = await SuiteWait.value("every frame of the clip to be durable") {
+        for await state in states where state.captureID == id && state.durableRevision >= total { return true }
+        return false
+    }
+    #expect(durable == true)
     return begun
 }
 
