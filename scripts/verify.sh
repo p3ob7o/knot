@@ -631,6 +631,43 @@ step_apps() {
         xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
 }
 
+# The Mac app at the milestone flavour, which no other step builds: Release, unsigned, in
+# derived data of its own, for this Mac's architecture alone. Both faults of the first
+# milestone's Mac build were in the copy of its tool, and showed only at that flavour (WP-22,
+# row 22d): a copy that looked for the tool under the development flavour's name, which
+# fails the build, and a tool named like the app, which on a volume that ignores case
+# replaced the app's executable. So the build must pass, and Contents/MacOS must hold the
+# app's executable and the tool, by their exact names, as two files. It signs nothing and
+# needs no team: KNOT_SIGNING=team is what the flavour's own check asks for, and
+# DEVELOPMENT_TEAM is emptied so that a worktree with the owner's configuration linked builds
+# as the gate does. What it cannot show is the signing: a profile, an entitlement or a part
+# left unsigned shows at scripts/milestone-build.sh.
+#   packaging_milestone_mac <log>
+packaging_milestone_mac() {
+    local log=$1 derived="$KNOT_BUILD/DerivedData-milestone" app executable tool listing
+    milestone_mac_build() {
+        { xcodebuild -project "$KNOT_PROJECT" -derivedDataPath "$derived" \
+            -clonedSourcePackagesDirPath "$KNOT_SOURCE_PACKAGES" -configuration Release -scheme Knot-macOS \
+            -destination 'platform=macOS' KNOT_FLAVOUR=milestone KNOT_MILESTONE_LEVEL=M1 KNOT_SIGNING=team \
+            DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES COMPILER_INDEX_STORE_ENABLE=NO \
+            build 2>&1 | knot_filter_team >>"$log"; } 2>/dev/null # limit: milestone_mac_build
+    }
+    if ! knot_run_limited "The milestone-flavour build of Knot-macOS" "$KNOT_BUILD_LIMIT" milestone_mac_build; then
+        echo "      the build failed; its log is .build/logs/$(basename "$log"):"
+        grep -E 'error:' "$log" | sed -e "s|$KNOT_ROOT/||g" | sort -u | head -n 5 | sed 's/^/        /' || true
+        return 1
+    fi
+    app="$derived/Build/Products/Release/Knot.app"
+    executable="$(plist_value "$app/Contents/Info.plist" CFBundleExecutable)"
+    tool="$(sed -n -E 's/^[[:space:]]*KNOT_TOOL_FILE_milestone[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$KNOT_ROOT/Apps/Config/Identifiers.xcconfig")"
+    listing="$(ls -1 "$app/Contents/MacOS" 2>/dev/null || true)"
+    echo "      flavour $(plist_value "$app/Contents/Info.plist" KnotFlavour), Contents/MacOS holds: $(tr '\n' ' ' <<<"$listing")"
+    [[ "$(plist_value "$app/Contents/Info.plist" KnotFlavour)" == milestone && -n $executable && -n $tool ]] &&
+        grep -x -e "$executable" <<<"$listing" >/dev/null &&
+        grep -x -e "$tool" <<<"$listing" >/dev/null &&
+        [[ ! "$app/Contents/MacOS/$executable" -ef "$app/Contents/MacOS/$tool" ]]
+}
+
 # The packaging that otherwise fails late, each proven with one trivial instance
 # (docs/plan/WP-01.md).
 step_packaging() {
@@ -689,6 +726,11 @@ step_packaging() {
     check "knot-dev embedded and signed in the Mac app, with its own sandbox, and runs" tool_embedded || failed=1
 
     check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets || failed=1
+
+    local milestone_log="$KNOT_LOGS/verify-packaging-milestone.log"
+    : >"$milestone_log"
+    check "the Mac app builds at the milestone flavour, with the app's executable and its tool as two files" \
+        packaging_milestone_mac "$milestone_log" || failed=1
 
     # Scans every Mach-O file of an app bundle, its main executable included, for fakes:
     # the KnotFakes module, and any type of a Knot module named Fake…, such as a fake
