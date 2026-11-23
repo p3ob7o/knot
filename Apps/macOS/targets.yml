@@ -20,11 +20,38 @@ targets:
     dependencies:
       - package: KnotKit
         products: [KnotApp, KnotCore, KnotIntents, KnotUI]
+      # Built before the app, and embedded by the script below rather than by a copy phase.
+      # A copy phase names the tool by the product name its target has without the build's
+      # command-line settings, so with KNOT_FLAVOUR=milestone on the command line it looked
+      # for knot-dev while the tool was built under the milestone's name. The script runs in
+      # this target's settings, which hold the command line's (WP-22, row 22d).
       - target: knot-tool
-        embed: true
-        codeSign: true
-        copy:
-          destination: executables
+        embed: false
+        link: false
+    postBuildScripts:
+      - name: Embed the knot tool
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(KNOT_TOOL_FILE)
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(KNOT_TOOL_FILE)
+        script: |
+          set -eu
+          # The tool's file and the app's executable share Contents/MacOS. On a volume that
+          # ignores case, names that differ only in case are one file, and the copy would
+          # replace the app's executable.
+          tool=$(printf '%s' "$KNOT_TOOL_FILE" | tr '[:upper:]' '[:lower:]')
+          app=$(printf '%s' "$EXECUTABLE_NAME" | tr '[:upper:]' '[:lower:]')
+          if [ "$tool" = "$app" ]; then
+            echo "error: the knot tool's file, $KNOT_TOOL_FILE, is the app's executable, $EXECUTABLE_NAME, without regard to case."
+            exit 1
+          fi
+          # The tool as its own target built and signed it, with its own entitlements, into
+          # Contents/MacOS under its file's name: knot-dev, or knot-cli for a milestone build.
+          # The app's signature, made after every build phase, seals it.
+          destination="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          mkdir -p "$destination"
+          rm -f "$destination/$KNOT_TOOL_FILE"
+          ditto "$BUILT_PRODUCTS_DIR/$KNOT_TOOL_FILE" "$destination/$KNOT_TOOL_FILE"
 
   Knot-macOS-UITests:
     type: bundle.ui-testing

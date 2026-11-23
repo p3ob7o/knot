@@ -23,9 +23,18 @@ KNOT_MAC_APP_GROUP_dev = $(KNOT_APP_GROUP_dev)
 KNOT_CLOUD_CONTAINER_milestone = iCloud.com.p3ob7o.knot
 KNOT_CLOUD_CONTAINER_dev = iCloud.com.p3ob7o.knot.dev
 
-// A development build installs the tool as knot-dev (docs/architecture.md §15).
+// The command's name: what a person types, `knot`, or `knot-dev` for a development build
+// (docs/architecture.md §15). The script on the PATH that runs the tool takes this name
+// (docs/product-spec.md §10).
 KNOT_TOOL_NAME_milestone = knot
 KNOT_TOOL_NAME_dev = knot-dev
+
+// The tool's file inside the Mac app, in Contents/MacOS beside the app's own executable.
+// A milestone build's cannot be `knot`: on a volume that ignores case it is the same file
+// as the app's executable, `Knot` (WP-22, row 22d). The tool's target names its product by
+// it, and the app's embed script copies it under it.
+KNOT_TOOL_FILE_milestone = knot-cli
+KNOT_TOOL_FILE_dev = knot-dev
 
 KNOT_DISPLAY_NAME_milestone = Knot
 KNOT_DISPLAY_NAME_dev = Knot Dev
@@ -35,6 +44,7 @@ KNOT_APP_GROUP = $(KNOT_APP_GROUP_$(KNOT_FLAVOUR))
 KNOT_MAC_APP_GROUP = $(KNOT_MAC_APP_GROUP_$(KNOT_FLAVOUR))
 KNOT_CLOUD_CONTAINER = $(KNOT_CLOUD_CONTAINER_$(KNOT_FLAVOUR))
 KNOT_TOOL_NAME = $(KNOT_TOOL_NAME_$(KNOT_FLAVOUR))
+KNOT_TOOL_FILE = $(KNOT_TOOL_FILE_$(KNOT_FLAVOUR))
 KNOT_DISPLAY_NAME = $(KNOT_DISPLAY_NAME_$(KNOT_FLAVOUR))
 
 // A milestone build carries a version above 0.2.0, which is the retired app's.
