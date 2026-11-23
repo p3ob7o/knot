@@ -1185,6 +1185,13 @@ public actor StandardCaptureEngine: CaptureEngine {
             // point 4).
             let end = CaptureEnd(
                 captureID: id, endedAt: clock.now(), outcome: .failed(code), revision: entry.durableRevision)
+            // No line is held here: while the end waits, a conversion tried again may store the
+            // recording and clear its pending failure, and a refused end below then puts back a
+            // copy made before it. That copy is harmless. The store takes a failure for a
+            // recording only while its row is open, failed with the same code, or waiting for
+            // its file; for one stored with its file it is other content, refused with
+            // `capture_id_conflict`, and nothing is written (`NoteStoreContract.endWithEachOutcome`).
+            // The engine's old work then drops it and reads the row (`settleRefused`).
             do throws(KnotError) {
                 _ = try await notes.end(end)
                 pendingFailures[id] = nil
@@ -1221,6 +1228,12 @@ public actor StandardCaptureEngine: CaptureEngine {
                 log.capture(id, "discard_end_not_taken", .code(answer.fallbackCode ?? KnotError.storeNotOpen.code))
             }
         }
+        // A copy of the pending failures, walked across the awaits of the ends before: an end
+        // that another call cleared meanwhile, by storing the recording or ending its row, is
+        // still sent, and two walks can overlap. That end is harmless. A failure for a recording
+        // stored with its file is other content, which the store refuses with
+        // `capture_id_conflict` and writes nothing (`NoteStoreContract.endWithEachOutcome`), and a
+        // repeat of a failure the row holds is the same receipt.
         for (id, end) in pendingFailures {
             let answer = await deadline.race { [notes] () async throws(KnotError) in try await notes.end(end) }
             switch answer {
