@@ -68,12 +68,14 @@ final class LiveFolder: Sendable {
     func remove() {
         try? FileManager.default.removeItem(at: container)
         MemoryLaunchState.remove(prefix: settingsSuite)
-        let preferences = FileManager.default.homeDirectoryForCurrentUser.appending(
-            path: "Library/Preferences", directoryHint: .isDirectory)
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
-        for file in files where file.hasPrefix(settingsSuite) && file.hasSuffix(".plist") {
-            try? FileManager.default.removeItem(at: preferences.appending(path: file))
-        }
+        #if os(macOS)
+            let preferences = FileManager.default.homeDirectoryForCurrentUser.appending(
+                path: "Library/Preferences", directoryHint: .isDirectory)
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
+            for file in files where file.hasPrefix(settingsSuite) && file.hasSuffix(".plist") {
+                try? FileManager.default.removeItem(at: preferences.appending(path: file))
+            }
+        #endif
     }
 }
 
@@ -85,8 +87,16 @@ extension LiveComposition.Seams {
     static var forTests: Self {
         LiveComposition.Seams(
             transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false,
-            launchState: { MemoryLaunchState(suiteName: $0) })
+            launchState: { MemoryLaunchState(suiteName: $0) }, backgroundTime: NoTestBackgroundTime(),
+            cleaner: ScriptedCleaner())
     }
+}
+
+/// No background time: a package test runs in no app, and on iOS the system's would ask an
+/// application that is not there. The tests of background time give their own.
+struct NoTestBackgroundTime: BackgroundTimeHold, BackgroundTimeRelease {
+    func hold(_ name: String) async -> any BackgroundTimeRelease { self }
+    func release() async {}
 }
 
 /// A typed capture of synthetic text, made through the composition's engine as a capture
@@ -124,6 +134,27 @@ func launch(_ composition: LiveComposition, sourceLocation: SourceLocation = #_s
     await SuiteWait.value("the launch sequence", sourceLocation: sourceLocation) {
         await composition.runLaunchSequence()
     }
+}
+
+/// The job `id` once `holds` is true of it, waited for on the store's change signals: the
+/// signals are subscribed to before the first read, so a commit between the two is not missed.
+func job(
+    _ id: JobID, of segment: SegmentID, in composition: LiveComposition, _ what: String,
+    sourceLocation: SourceLocation = #_sourceLocation, where holds: @escaping @Sendable (Job) -> Bool
+) async -> Job? {
+    let notes = composition.environment.notes
+    let signals = notes.changeSignals()
+    let found = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Job? in
+        func current() async -> Job? {
+            ((try? await notes.jobs(for: segment)) ?? []).first { $0.id == id && holds($0) }
+        }
+        if let job = await current() { return job }
+        for await _ in signals {
+            if let job = await current() { return job }
+        }
+        return nil
+    }
+    return found ?? nil
 }
 
 /// A gate one test thread holds a store hook at, on the thread that opens the store, which is

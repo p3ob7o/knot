@@ -23,6 +23,7 @@ struct EnvironmentTests {
         // `.live` as the app composes it, KnotSpeech's transcriber included. Nothing is opened.
         var seams = LiveComposition.Seams.forTests
         seams.transcriber = nil
+        seams.cleaner = nil
         let composition = LiveComposition(configuration: folder.configuration(platform: platform), seams: seams)
         #expect(composition.locations != nil)
         let unavailable = UnavailablePorts.of(composition.environment)
@@ -45,7 +46,7 @@ struct EnvironmentTests {
     func allowedListByLevel() {
         let always: Set<EnvironmentPort> = [.watchLink]
         let ink: Set<EnvironmentPort> = [.inkRecogniser, .drawingImages]
-        let beforeM2: Set<EnvironmentPort> = [.recordingState, .installIdentity, .lifecycle, .recordingActivity]
+        let beforeM2: Set<EnvironmentPort> = [.recordingState, .installIdentity, .recordingActivity]
         let iOS: [MilestoneLevel: Set<EnvironmentPort>] = [
             .m1: always.union(ink).union(beforeM2).union([.notifier, .sync, .surfaces, .cues]),
             .m2: always.union(ink).union([.notifier, .sync]),
@@ -213,7 +214,7 @@ struct DiagnosticsTests {
         #expect(file.captures.map(\.id) == [state.captureID.description])
         #expect(file.captures.first?.outcome == "stored")
         #expect(file.captures.first?.kind == "typed")
-        #expect(file.launch?.steps.count == 4)
+        #expect(file.launch?.steps.count == 5)
         #expect(file.timings[MeasuredMoment.typedTextOnDisk.rawValue]?.count ?? 0 >= 1)
         #expect(file.timings[MeasuredMoment.searchResults.rawValue]?.count == 1)
         #expect(file.timings[MeasuredMoment.launchOpenStore.rawValue]?.count == 1)
