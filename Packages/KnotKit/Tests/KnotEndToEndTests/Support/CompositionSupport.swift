@@ -68,12 +68,14 @@ final class LiveFolder: Sendable {
     func remove() {
         try? FileManager.default.removeItem(at: container)
         MemoryLaunchState.remove(prefix: settingsSuite)
-        let preferences = FileManager.default.homeDirectoryForCurrentUser.appending(
-            path: "Library/Preferences", directoryHint: .isDirectory)
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
-        for file in files where file.hasPrefix(settingsSuite) && file.hasSuffix(".plist") {
-            try? FileManager.default.removeItem(at: preferences.appending(path: file))
-        }
+        #if os(macOS)
+            let preferences = FileManager.default.homeDirectoryForCurrentUser.appending(
+                path: "Library/Preferences", directoryHint: .isDirectory)
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
+            for file in files where file.hasPrefix(settingsSuite) && file.hasSuffix(".plist") {
+                try? FileManager.default.removeItem(at: preferences.appending(path: file))
+            }
+        #endif
     }
 }
 
@@ -85,8 +87,16 @@ extension LiveComposition.Seams {
     static var forTests: Self {
         LiveComposition.Seams(
             transcriber: ScriptedTranscriber(), deadline: .after(SuiteWait.limit), installSpeechModel: false,
-            launchState: { MemoryLaunchState(suiteName: $0) }, cleaner: ScriptedCleaner())
+            launchState: { MemoryLaunchState(suiteName: $0) }, backgroundTime: NoTestBackgroundTime(),
+            cleaner: ScriptedCleaner())
     }
+}
+
+/// No background time: a package test runs in no app, and on iOS the system's would ask an
+/// application that is not there. The tests of background time give their own.
+struct NoTestBackgroundTime: BackgroundTimeHold, BackgroundTimeRelease {
+    func hold(_ name: String) async -> any BackgroundTimeRelease { self }
+    func release() async {}
 }
 
 /// A typed capture of synthetic text, made through the composition's engine as a capture
