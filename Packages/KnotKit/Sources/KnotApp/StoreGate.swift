@@ -11,7 +11,9 @@ import Synchronization
 /// to the opened store once it is open. Before that, and while it migrates, a call fails at
 /// once with `store_not_open`, so the engine never waits for the store: its capture takes
 /// `Inbox/`, and ingest stores it once the store is open. A store that did not open fails each
-/// call with the error it failed with, and the stream says what is wrong.
+/// call with the error it failed with, and the stream says what is wrong. A restore closes the
+/// store for the rest of the launch: each call then fails with `store_not_open` again, a capture
+/// takes `Inbox/`, and Knot must be opened again (row 22c).
 public final class StoreGate: Sendable {
     /// The store's ports, as `KnotStoreLive.wire(_:store:)` put them in an environment.
     public struct Ports: Sendable {
@@ -36,6 +38,9 @@ public final class StoreGate: Sendable {
         case opening
         case open(Ports)
         case failed(KnotError)
+        /// Closed by a restore of a kept copy, for the rest of this launch: Knot must be opened
+        /// again, and the next launch opens the store as any launch does.
+        case closedForRestore
     }
 
     private struct State {
@@ -55,6 +60,7 @@ public final class StoreGate: Sendable {
         case .opening: throw KnotError.storeNotOpen
         case .open(let ports): return ports
         case .failed(let error): throw error
+        case .closedForRestore: throw KnotError.storeNotOpen
         }
     }
 
@@ -67,7 +73,7 @@ public final class StoreGate: Sendable {
                     state.waiters.append(continuation)
                     return nil
                 case .open(let ports): return .some(ports)
-                case .failed: return .some(nil)
+                case .failed, .closedForRestore: return .some(nil)
                 }
             }
             if let ready { continuation.resume(returning: ready) }
@@ -82,6 +88,23 @@ public final class StoreGate: Sendable {
 
     func fail(_ error: KnotError) {
         settle(.failed(error), with: nil)
+    }
+
+    /// Closes the store for a restore, from its open or failed phase, and returns the ports of
+    /// the store that was open, whose pool the restore closes. From then on every call fails
+    /// with `store_not_open`. A store still opening, or closed already, refuses: the launch has
+    /// ended before a restore, and one restore is the last thing a launch does to its store.
+    func closeForRestore() throws(KnotError) -> Ports? {
+        try state.withLock { state throws(KnotError) -> Ports? in
+            let ports: Ports?
+            switch state.phase {
+            case .open(let open): ports = open
+            case .failed: ports = nil
+            case .opening, .closedForRestore: throw KnotError.illegalTransition
+            }
+            state.phase = .closedForRestore
+            return ports
+        }
     }
 
     private func settle(_ phase: Phase, with ports: Ports?) {

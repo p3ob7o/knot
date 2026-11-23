@@ -210,6 +210,7 @@ struct WiringTests {
                 case .opening?: "opening"
                 case .open?: "open"
                 case .failed?: "failed"
+                case .closedForRestore?: "closed"
                 case nil: "none"
                 }
             events.withLock { $0.append("\(event) while \(phase)") }
