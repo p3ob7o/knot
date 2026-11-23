@@ -295,7 +295,15 @@
             // The app quits as a process does: its last line, then the exit, with the store as it
             // stands. Closing the store first would fail the engine's own work in flight, such as
             // an ingest it started, which the next launch finishes.
-            Say.line(SoakLine.done.rendered)
+            Say.last(SoakLine.done.rendered)
+            // The fault `errorLoggedAfterDone`: the engine's log writes an error after the last
+            // line, from another task, as work still in flight at the exit would. The child says on
+            // its standard error how many lines were refused, so a test sees the line was tried.
+            if options.fault == .errorLoggedAfterDone {
+                let log = KnotLog(.capture, sink: SoakLogSink(arming: arming))
+                await Task.detached { log.failure(KnotError.storeBusy, "store_write_failed") }.value
+                FileHandle.standardError.write(Data("KnotSoakChild: refused \(Say.refused) line after the last\n".utf8))
+            }
             exit(0)
         }
 
