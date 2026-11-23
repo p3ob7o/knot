@@ -257,7 +257,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-33 | 1 | A skeleton that does not depend on the design direction: a line typed on the Mac is found in the stream after relaunch | WP-21 PR 1 |
 | WP-33 | 2 | The Mac app, built from the direction's structure sheet: the hotkey, the panel, hold-to-record, the menu bar item, the main window and Settings | the design direction; SP-5; WP-21 PR 2; WP-22 PR 1 |
 | WP-34 | 1 | `status`, `add`, `list`, the error contract and the access switch | WP-05 |
-| WP-34 | 2 | The other commands | WP-10 PR 2; WP-20 |
+| WP-34 | 2 | The other commands | WP-10 PR 2; WP-20; the contract pull request for what the tool shows that KnotCore gives no source for |
 | WP-34 | 3 | The MCP server, and the embedding of the tool in the Mac app | WP-34 PR 2; SP-3 for the embedding |
 | WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-11 PR 4; WP-21 PR 2; WP-30 PR 2 |
 | WP-40 | 1 | The theme: the tokens translated from the handoff, and `DESIGN.md` | the ruling; the accepted handoff |
