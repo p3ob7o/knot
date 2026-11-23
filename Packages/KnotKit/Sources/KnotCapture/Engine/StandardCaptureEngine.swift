@@ -1150,8 +1150,12 @@ public actor StandardCaptureEngine: CaptureEngine {
     /// the `Inbox/` path. A row the call made for a capture that keeps nothing is ended as
     /// empty; an ended capture's item is ingested now that the store answers.
     private func lateAnswer(of id: CaptureID, committed: Bool) async {
-        guard committed, let entry = entries[id] else { return }
-        if entry.kind == .voice { await reach(.lateRecordingRow, id) }
+        guard committed, let kind = entries[id]?.kind else { return }
+        // Only the kind, fixed at the start, is held across the kill point: a discard, an end or a
+        // durable event may pass while the answer waits there (seed 17), so the entry is read
+        // after it.
+        if kind == .voice { await reach(.lateRecordingRow, id) }
+        guard let entry = entries[id] else { return }
         log.capture(id, "store_answered_late")
         entries[id]?.hasRow = true
         if entry.kind == .typed, entry.outcome == .open, entry.durableRevision == 0 {
