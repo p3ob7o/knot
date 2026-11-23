@@ -71,6 +71,11 @@ struct SoakWitness {
     /// The captures the script discarded, or was about to: one may end empty, whatever it was
     /// acknowledged with before.
     private(set) var discarding: Set<CaptureID> = []
+    /// The deaths each job had when a launch found it marked running before its queue resumed,
+    /// by `key(capture, kind)`: each number one death the queue must have counted
+    /// (`ProcessingWitness`). A set: a kill between the line and the queue's save leaves the same
+    /// number for the next launch to find, and that is one death seen twice.
+    private(set) var foundRunning: [String: Set<Int>] = [:]
 
     /// How one launch ended, as the parent saw it.
     enum LaunchEnd: Sendable {
@@ -123,6 +128,8 @@ struct SoakWitness {
                 highestIntent = max(highestIntent, index)
             case .discarding(_, let capture):
                 discarding.insert(capture)
+            case .foundRunning(let capture, let kind, let deaths):
+                foundRunning[Self.key(capture, kind), default: []].insert(deaths)
             case .ack(let a):
                 acknowledgements[a.capture, default: []].append(
                     Acknowledgement(
@@ -293,6 +300,7 @@ struct SoakWitness {
         }
 
         var recordingFiles: Set<String> = []
+        var storedRecordings: Set<CaptureID> = []
         for (index, ids) in captures.sorted(by: { $0.key < $1.key }) {
             let planned = script.captures[index]
             var stored: [CaptureID] = []
@@ -304,6 +312,7 @@ struct SoakWitness {
                     problems += found.problems
                     if let file = found.file {
                         stored.append(capture)
+                        storedRecordings.insert(capture)
                         recordingFiles.insert(file.standardizedFileURL.path)
                     }
                     continue
@@ -350,6 +359,8 @@ struct SoakWitness {
         for file in Self.files(under: locations.assets) where !recordingFiles.contains(file) {
             problems.append(Problem(code: "asset_file_of_no_capture", ids: ["bytes=\(Self.size(of: file))"]))
         }
+        // 5. What the processing queue's jobs left (`ProcessingWitness`).
+        problems += try await processingProblems(notes, recordings: storedRecordings)
         return problems
     }
 
