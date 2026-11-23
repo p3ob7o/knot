@@ -1703,6 +1703,37 @@ else
     fail "the team filter left an ID or took too much, or the scrub changed the log's time to $scrubbed_time: $filtered"
 fi
 
+# At the start of a run, the earlier run's logs go aside, to .build/logs-earlier/, so that no
+# file in .build/logs/ after a run is older than that run: an earlier run's soak output, dated
+# 2020 here, a screenshot and a hidden file move, keeping their times, and the run before
+# that, in logs-earlier/ already, is gone. Through verify.sh's loop, `--only doctor` with the
+# doctor a stand-in (the lock loop's copy of scripts/), on a scratch tree.
+la="$scratch/logs-aside"
+mkdir -p "$la/tree/.build/logs" "$la/tree/.build/logs-earlier"
+cp "$KNOT_SELF/.xcode-version" "$la/tree/"
+printf 'capture ledger soak: RED with seed 1\nTeamIdentifierPrefix=%s.\n' "$fake_team" >"$la/tree/.build/logs/verify-soak.out"
+touch -t 202001020304.05 "$la/tree/.build/logs/verify-soak.out"
+printf 'png\n' >"$la/tree/.build/logs/launch-iphone.png"
+printf 'hidden\n' >"$la/tree/.build/logs/.earlier-hidden"
+printf 'older\n' >"$la/tree/.build/logs-earlier/verify-older-run.log"
+la_started=$(knot_now)
+la_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$wl/scripts/verify.sh" --only doctor >"$la/out" 2>&1 || la_status=$?
+la_old=""
+for f in "$la/tree/.build/logs"/* "$la/tree/.build/logs"/.[!.]*; do
+    [[ -e $f ]] || continue
+    (($(stat -f %m "$f") >= la_started)) || la_old="$la_old $(basename "$f")"
+done
+la_aside="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
+la_soak_time="$(date -r "$(stat -f %m "$la/tree/.build/logs-earlier/verify-soak.out" 2>/dev/null || echo 0)" +%Y%m%d%H%M.%S)"
+if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-doctor.log &&
+    $la_aside == ".earlier-hidden launch-iphone.png verify-soak.out " && $la_soak_time == 202001020304.05 ]] &&
+    ! grep -e "$fake_team" "$la/tree/.build/logs-earlier/verify-soak.out" >/dev/null; then
+    pass "a run moves the earlier run's logs aside, scrubbed and keeping their times, and the run before that goes"
+else
+    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time: $(tail -n 5 "$la/out")"
+fi
+
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands
 # when the run names the owner's configuration and so knows it. The configuration here is
 # made up, with the same made-up ID.

@@ -685,10 +685,9 @@ knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
 # the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
 # of a command still writing to it, and a rewrite would give the file a new inode under the
-# writer, whose lines would then be lost. Each log keeps its time: the log of a step that an
-# earlier run started, and this one does not, keeps the earlier run's, so that it is not taken
-# for this run's (item 115). The logs are kept, since a thread that reruns one step still
-# reads the others.
+# writer, whose lines would then be lost. Each log keeps its time, so that a log of an earlier
+# run is not taken for a later one's (item 115). A run of verify.sh moves the earlier run's
+# logs aside before it scrubs them (knot_set_logs_aside).
 knot_scrub_logs() {
     local folder=$1 log stamp
     [[ -d $folder ]] || return 0
@@ -698,6 +697,30 @@ knot_scrub_logs() {
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
         touch -t "$stamp" "$log" 2>/dev/null || true
     done
+}
+
+# Moves the files an earlier run left in the log folder aside, at the start of a run, into
+# the folder beside it, logs-earlier/, which holds the run before this one and nothing older:
+# after a run, no file in the log folder is older than that run. A step that this run does not
+# start, such as the soak at a gate whose depth takes none, then leaves no log of another run
+# behind, dated or not, for a reader to take for this run's. They are moved, not removed: a
+# thread that reruns one step, or a run that stopped early, still finds the earlier run's
+# other logs there, and the evidence of a red run, a soak's verdict or a crash's log, outlives
+# the next run by one. A move keeps each file's inode, so a command of another run still
+# writing to one loses no line. The moved logs are scrubbed of the team's ID as they always
+# were (knot_scrub_logs).
+#   knot_set_logs_aside <log folder>
+knot_set_logs_aside() {
+    local folder=$1 aside entry
+    aside="$(dirname "$folder")/logs-earlier"
+    [[ -d $folder ]] || return 0
+    rm -rf "$aside"
+    mkdir -p "$aside"
+    for entry in "$folder"/* "$folder"/.[!.]*; do
+        [[ -e $entry || -L $entry ]] || continue
+        mv "$entry" "$aside/"
+    done
+    knot_scrub_logs "$aside"
 }
 
 # Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error

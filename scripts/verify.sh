@@ -30,7 +30,8 @@
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
 # and the command that reruns only that step. Heavy steps wait for a build slot
-# (scripts/build-slot.sh). Logs go to .build/logs/.
+# (scripts/build-slot.sh). Logs go to .build/logs/, and the run before's to
+# .build/logs-earlier/.
 #
 # The gate refuses --only, --module, --skip, KNOT_LOCAL_CONFIG and an Xcode named by
 # KNOT_XCODE that is not the pinned one, and it fails on a skipped step. It runs on a
@@ -1208,9 +1209,10 @@ else
     [[ $SKIP == mac-ui ]] && LABEL="--full, skip mac-ui"
 fi
 
+# The logs of earlier runs go aside, to .build/logs-earlier/, scrubbed of the team's ID, so
+# that every file in .build/logs/ after this run is this run's (knot_set_logs_aside).
+knot_set_logs_aside "$KNOT_LOGS"
 mkdir -p "$KNOT_LOGS"
-# Logs that earlier runs kept, before the filter existed, lose the team's ID too.
-knot_scrub_logs "$KNOT_LOGS"
 START=$(knot_now)
 PASSED=0
 SKIPPED_STEPS=0
