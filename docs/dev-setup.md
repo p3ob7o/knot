@@ -85,7 +85,7 @@ Signing has two configurations, chosen by `KNOT_SIGNING`:
 - `local`, for tests and agent builds. It keeps the sandbox, signs ad hoc, and leaves out the entitlements that need the owner's signing profile: the app group, iCloud and push. Sync is off (`KnotSyncAvailable` is `NO`). `scripts/verify.sh` always builds with it.
 - `team`, for device builds, spikes and milestone builds. It needs a team ID, which never enters the repository. Copy `Apps/Config/Local.xcconfig.example` to a file outside the repository, for the owner `~/knot-build/Local.xcconfig`, fill in the team, and set `KNOT_LOCAL_CONFIG` to its path. `scripts/bootstrap.sh` links it into `.build/config/Local.xcconfig`, and removes that link when the variable is not set.
 
-A build reads the team's configuration only through that link: `Apps/Config/Base.xcconfig` includes `.build/config/Local.xcconfig`, and nothing else. So the worktree of a milestone build needs `KNOT_LOCAL_CONFIG` set when `scripts/bootstrap.sh` runs, as it was at the first milestone's commit, `c2a1315b`. `KNOT_TEAM_CONFIG` is read by the team-ID check alone and links nothing, so it gives a build no team.
+A build reads the team's configuration only through that link, which `Apps/Config/Base.xcconfig` includes when it is there: no other file of the build's settings names a team. So the worktree of a milestone build needs `KNOT_LOCAL_CONFIG` set when `scripts/bootstrap.sh` runs, as it was at the first milestone's commit, `c2a1315b`. `KNOT_TEAM_CONFIG` is read by the team-ID check alone and links nothing, so it gives a build no team.
 
 ## The fakes in an optimised build
 

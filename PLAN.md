@@ -515,7 +515,7 @@ gstack reviews of the plan came first: `/plan-ceo-review` for scope, `/plan-eng-
 | G2 | After the direction | Run the full Claude Design round and return the handoff | 90 |
 | G2 | Before WP-40 starts | Read the handoff's gap list | 15 |
 | G4 | M1 | Checklist | 15 |
-| G4 | M2 | Checklist in two sittings, with locked and unlocked rows for each trigger | 50 |
+| G4 | M2 | Checklist in three sittings, with locked and unlocked rows for each trigger, and the rows for Shortcuts, Siri and the live cue | 60 |
 | G4 | Seven days after the M2 checklist has passed | The keep-gate sitting (§5) | 30 |
 | G4 | M3 | Checklist | 30 |
 | G4 | M4 | Checklist in three sittings: hotkey, CLI and MCP, two-device sync | 45 |
