@@ -76,7 +76,8 @@ public final class LiveComposition: Sendable {
             launchState: (@Sendable (String) -> any LaunchStateStorage)? = nil, lifecycle: (any Lifecycle)? = nil,
             backgroundTime: (any BackgroundTimeHold)? = nil, cleaner: (any Cleaner)? = nil,
             speechCameForward: (@Sendable (AppEnvironment) async -> Void)? = nil,
-            cameForwardHandled: (@Sendable () -> Void)? = nil, stepFailure: (@Sendable (LaunchStep) -> KnotError?)? = nil
+            cameForwardHandled: (@Sendable () -> Void)? = nil,
+            stepFailure: (@Sendable (LaunchStep) -> KnotError?)? = nil
         ) {
             self.input = input
             self.transcriber = transcriber
