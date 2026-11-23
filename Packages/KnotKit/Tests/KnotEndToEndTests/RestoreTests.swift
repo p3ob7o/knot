@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 import GRDB
 import KnotFakes
@@ -151,14 +152,21 @@ struct RestoreTests {
         try earlier.gate.ports().opened.database.close()
 
         // A composition whose launch has not run: the restore runs it first, and then no more.
+        // Every statement its store's connections run is counted: a step run again after the
+        // restore would open the store again, and run statements on it.
         let lifecycle = FakeLifecycle()
         let handled = EventCount()
+        let statements = EventCount()
         var seams = LiveComposition.Seams.forTests
         seams.lifecycle = lifecycle
         seams.cameForwardHandled = { handled.add() }
+        seams.storeHooks = StoreHooks(statements: { _ in statements.add() })
         let composition = folder.compose(seams: seams)
         #expect(await composition.launch.reportIfRun() == nil)
         _ = try await composition.restore(copy)
+        // The launch's own open ran statements; the restore closed that pool.
+        let statementsAtTheRestore = statements.value
+        #expect(statementsAtTheRestore > 0)
         let report = try #require(await composition.launch.reportIfRun())
         #expect(report.steps.map(\.step) == [.openStore, .recovery, .resumeJobs, .purge, .startSync])
         #expect(report.outcome(of: .openStore) == .done)
@@ -169,6 +177,8 @@ struct RestoreTests {
         lifecycle.send(.cameForward)
         await SuiteWait.until("the event to be handled") { handled.value == 1 }
         #expect(inboxManifests(folder.locations).count == 1)
+        // No step ran a second time: no store was opened again, and no statement ran.
+        #expect(statements.value == statementsAtTheRestore, "The store was opened again after the restore.")
     }
 
     /// A kill in the middle of the restore, as far as the composition reaches it: the store's
@@ -201,6 +211,107 @@ struct RestoreTests {
                 "a synthetic line after the copy.", "a synthetic line during the restore.",
                 "a synthetic line in the copy.",
             ])
+        #expect(inboxManifests(folder.locations).isEmpty)
+    }
+
+    // MARK: Captures across the restore
+
+    /// A typed line begun on the store path, with one keystroke acknowledged, and ended after
+    /// the restore, whether the copy holds that keystroke or not: after the relaunch it is whole,
+    /// stored and there once.
+    @Test(
+        "A typed line begun before the restore and ended after it is whole and there once after the relaunch",
+        arguments: [false, true])
+    func typedLineAcrossTheRestore(copyAfterTheFirstKeystroke: Bool) async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let first = folder.compose()
+        _ = try #require(await launch(first))
+        try await Self.typeAndEnd("a synthetic line in the copy", in: first)
+        var copy: URL? = copyAfterTheFirstKeystroke ? nil : try first.gate.ports().opened.database.makeDailyCopy()
+        let engine = first.environment.engine
+        let begun = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "a"))
+        #expect(begun.path == .store)
+        let keystroke = try await engine.update(begun.captureID, with: .text("a synthetic"))
+        #expect(keystroke.path == .store)
+        #expect(keystroke.durableRevision >= 1)
+        if copy == nil { copy = try first.gate.ports().opened.database.makeDailyCopy() }
+        _ = try await first.restore(try #require(copy))
+        _ = try await engine.update(begun.captureID, with: .text("a synthetic whole line."))
+        _ = try await engine.end(begun.captureID)
+        // The kill: the composition goes.
+
+        let second = folder.compose()
+        _ = try #require(await launch(second))
+        #expect(try await streamTexts(second).sorted() == ["a synthetic line in the copy.", "a synthetic whole line."])
+        #expect(try await second.environment.notes.capture(begun.captureID)?.outcome == .stored)
+        #expect(try await second.environment.notes.openCaptures().isEmpty)
+        #expect(inboxManifests(folder.locations).isEmpty)
+    }
+
+    /// A recording on injected audio, begun before the restore and stopped after it. Its end
+    /// reports the closed store; recovery stores it whole at the next launch, once.
+    @Test("A recording begun before the restore and stopped after it is whole and there once after the relaunch")
+    func recordingAcrossTheRestore() async throws {
+        let clip = try FixtureClip.load("canary")
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let frames = FrameCount()
+        let first = folder.compose(seams: .recording(clip, frames: frames))
+        _ = try #require(await launch(first))
+        try await Self.typeAndEnd("a synthetic line in the copy", in: first)
+        let copy = try first.gate.ports().opened.database.makeDailyCopy()
+        let begun = try await record(frames, of: clip, in: first)
+        #expect(begun.path == .store)
+        _ = try await first.restore(copy)
+        let ended = try await first.environment.engine.end(begun.captureID)
+        #expect(ended.outcome == .failed(KnotError.storeNotOpen.code))
+        // The kill: the composition goes.
+
+        let second = folder.compose(seams: .recording(clip, frames: FrameCount()))
+        _ = try #require(await launch(second))
+        let id = begun.captureID
+        _ = try #require(
+            await segment(SegmentID(id), in: second, "the relaunch to make it a cleaned note", where: isCleaned))
+        let segments = try await streamRecords(second).flatMap(\.liveSegments)
+        #expect(segments.filter { $0.id == SegmentID(id) }.count == 1)
+        #expect(try await second.environment.notes.capture(id)?.outcome == .stored)
+        #expect(inboxManifests(folder.locations).isEmpty)
+        let audio = try #require(try await second.environment.assets.find(AssetID(id), kind: .audio))
+        let stored = try AVAudioFile(forReading: audio.url)
+        let seconds = Double(stored.length) / stored.fileFormat.sampleRate
+        let clipSeconds = Double(clip.samples.count) / clip.sampleRate
+        #expect(abs(seconds - clipSeconds) < 0.2, "The stored audio lasts \(seconds) s, the clip \(clipSeconds) s.")
+    }
+
+    /// The known limit: a store call that passed the gate before it closed, and reaches the pool
+    /// after the pool closed, fails with `unexpected` (the engine's code 21), not
+    /// `store_not_open`. The capture falls back to `Inbox/` carrying that code, and after the
+    /// relaunch it is whole and there once. The write is held by the store's own hold.
+    @Test("A write that passed the gate before the restore falls back to Inbox, and is whole and there once after the relaunch")
+    func writeThatPassedTheGate() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let first = folder.compose()
+        _ = try #require(await launch(first))
+        try await Self.typeAndEnd("a synthetic line in the copy", in: first)
+        let copy = try first.gate.ports().opened.database.makeDailyCopy()
+        let engine = first.environment.engine
+        let begun = try await engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "a"))
+        #expect(begun.path == .store)
+        let hold = await (try first.gate.ports()).opened.notes.holdNextCaptureWrite()
+        let typing = Task { try await engine.update(begun.captureID, with: .text("a whole synthetic line.")) }
+        await hold.untilReached()
+        _ = try await first.restore(copy)
+        hold.release()
+        let state = try #require(await SuiteWait.value("the held write") { try? await typing.value } ?? nil)
+        #expect(state.path == .inbox(KnotError.unexpected.code))
+        _ = try await engine.end(begun.captureID)
+        // The kill: the composition goes.
+
+        let second = folder.compose()
+        _ = try #require(await launch(second))
+        #expect(try await streamTexts(second).sorted() == ["a synthetic line in the copy.", "a whole synthetic line."])
         #expect(inboxManifests(folder.locations).isEmpty)
     }
 }

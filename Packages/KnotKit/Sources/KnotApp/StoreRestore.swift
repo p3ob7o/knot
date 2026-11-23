@@ -2,8 +2,8 @@ import Foundation
 import KnotCore
 import KnotStore
 
-/// The composition's restore of a kept copy (docs/architecture.md §7; open point 11, as ruled on
-/// 2026-11-23; row 22c). The store's own restore needs nothing to have the store open, so the
+/// The composition's restore of a kept copy (docs/architecture.md §7; the orchestrator's ruling of
+/// 2026-11-23 on the composition during a restore; WP-22's row 22c). The store's own restore needs nothing to have the store open, so the
 /// composition closes it for the rest of the launch: a capture takes `Inbox/` meanwhile, Knot
 /// must be opened again, and the next launch opens, recovers and ingests as any launch does.
 /// Nothing of the launch runs twice in one launch.
