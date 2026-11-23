@@ -10,12 +10,14 @@ import Testing
 /// interleavings found, each as a sequence of its own, with the seed that found it. Each fails
 /// with its fix taken out (patches F1 to F4 of the re-check).
 @Suite struct InterleavingFixesTests {
-    /// An engine over the rig's parts and a store whose ends `refuse` may refuse.
+    /// An engine over the rig's parts and a store whose ends `hold` may hold and `refuse` may refuse.
     private static func engine(
-        _ r: Rig, deadline: StoreDeadline, refuse: @escaping @Sendable (CaptureEnd) throws(KnotError) -> Void
+        _ r: Rig, deadline: StoreDeadline, hold: EndGate? = nil,
+        refuse: (@Sendable (CaptureEnd) throws(KnotError) -> Void)? = nil
     ) -> BoundedEngine {
         var store = ChaosStore(store: r.notes) {}
         store.beforeEnd = refuse
+        if let hold { store.holdEnd = { end in await hold.hold(end) } }
         return BoundedEngine(
             StandardCaptureEngine(
                 notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
@@ -176,5 +178,169 @@ import Testing
         #expect(try await r.notes.openCaptures().isEmpty)
         let inStream = try await r.stream().notes.flatMap(\.liveSegments).contains { $0.id == SegmentID(id) }
         #expect(!inStream)
+    }
+
+    /// N1 of the second reading of pull request 105. A recording on the `Inbox/` path will not
+    /// convert and ends failed; its held record then commits, and the late answer's end as failed
+    /// is held at the store. Meanwhile the conversion is tried again, and ingest stores the
+    /// recording with its file. The held end is then refused, and the late answer puts it among
+    /// the pending failures: a copy made before the retry. The engine's old work sends it, the
+    /// store refuses a failure for a stored recording and writes nothing, and the row, its note
+    /// and the stream stay as the retry left them.
+    @Test func staleFailedEndOfALateRowChangesNothing() async throws {
+        let r = Rig()
+        let manual = ManualDeadline()
+        let gate = EndGate { $0.outcome == .failed(KnotError.conversionFailed.code) }
+        let engine = Self.engine(r, deadline: manual.deadline, hold: gate)
+        let (recording, hold) = try await Self.recordingOnTheInboxPath(r, engine, manual)
+        let id = recording.captureID
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let ended = try await engine.end(id)
+        #expect(ended.outcome == .failed(KnotError.conversionFailed.code))
+        gate.arm()
+        hold.release()
+        #expect(await gate.untilHeld() == id, "The late answer's end as failed is held.")
+        await engine.retryConversions()
+        #expect(
+            await eventually("ingest to store the recording") {
+                (try? await r.notes.capture(id))?.outcome == .stored && r.inboxFiles().isEmpty
+            })
+        let row = try await r.notes.capture(id)
+        let notes = try await r.stream().notes
+        gate.release()
+        #expect(await eventually("the late answer to keep the refused end") { r.logs.logged("late_row_not_ended", id) })
+        await engine.retryConversions()
+        #expect(r.logs.lines.contains("failed_end_settled capture=\(id) code=capture_id_conflict"))
+        #expect(try await r.notes.capture(id) == row)
+        #expect(try await r.stream().notes == notes)
+        #expect(try await r.notes.segment(SegmentID(id))?.segment.assetID == AssetID(id))
+        #expect(notes.flatMap(\.liveSegments).filter { $0.id == SegmentID(id) }.count == 1)
+    }
+
+    /// N2 of the second reading of pull request 105. Two recordings will not convert, and the
+    /// store does not take their ends as failed, so both are pending failures:
+    ///
+    /// - the first goes to `Inbox/` as its record is held, ends failed, and its record commits
+    ///   after the second began, so its late answer's end is the one refused;
+    /// - the second is on the store path, and its own end is refused.
+    ///
+    /// A pass of the engine's old work walks a copy of the two and is held at its first end. A
+    /// second pass sends both ends, tries both conversions again, and ingest stores both
+    /// recordings. The first pass then goes on and sends the ends of its copy, both cleared
+    /// meanwhile. The store refuses a failure for a stored recording and writes nothing: the
+    /// rows, their notes and the stream stay as the second pass left them.
+    @Test func staleFailedEndsOfAnOverlappingPassChangeNothing() async throws {
+        let r = Rig()
+        let manual = ManualDeadline()
+        let refusing = Mutex(true)
+        let failed = KnotError.conversionFailed.code
+        // Only the first pass is held: the engine's own housekeeping runs detached, without the
+        // mark, and a pass of it may still run from the ends below.
+        let gate = EndGate(marked: true) { $0.outcome == .failed(failed) }
+        let engine = Self.engine(r, deadline: manual.deadline, hold: gate) { end throws(KnotError) in
+            if case .failed = end.outcome, refusing.withLock({ $0 }) { throw KnotError.storeBusy }
+        }
+        let (late, hold) = try await Self.recordingOnTheInboxPath(r, engine, manual)
+        r.recorder.failNextConversions(with: .conversionFailed)
+        #expect(try await engine.end(late.captureID).outcome == .failed(failed))
+        r.clock.advance(by: 1)
+        let onStore = try await r.beginRecording(on: engine)
+        #expect(onStore.path == .store)
+        r.recorder.failNextConversions(with: .conversionFailed)
+        #expect(try await engine.end(onStore.captureID).outcome == .failed(failed))
+        hold.release()
+        #expect(
+            await eventually("the late answer's end to be refused") {
+                r.logs.logged("late_row_not_ended", late.captureID)
+            })
+        let ids = [late.captureID, onStore.captureID]
+        gate.arm()
+        // Refused until the first pass is held, so that no other pass clears an end before the
+        // first pass copies them.
+        let first = Task { await EndGate.$marked.withValue(true) { await engine.retryConversions() } }
+        let held = try #require(await gate.untilHeld())
+        #expect(ids.contains(held))
+        refusing.withLock { $0 = false }
+        await engine.retryConversions()
+        #expect(
+            await eventually("ingest to store both recordings") {
+                var stored = r.inboxFiles().isEmpty
+                for id in ids where (try? await r.notes.capture(id))?.outcome != .stored { stored = false }
+                return stored
+            })
+        var rows: [Capture?] = []
+        for id in ids { rows.append(try await r.notes.capture(id)) }
+        let notes = try await r.stream().notes
+        gate.release()
+        await first.value
+        for id in ids {
+            #expect(
+                r.logs.lines.contains("failed_end_settled capture=\(id) code=capture_id_conflict"),
+                "The first pass sent the end of its copy, and the store refused it.")
+        }
+        for (id, row) in zip(ids, rows) {
+            #expect(try await r.notes.capture(id) == row)
+            #expect(try await r.notes.segment(SegmentID(id))?.segment.assetID == AssetID(id))
+        }
+        #expect(try await r.stream().notes == notes)
+    }
+}
+
+/// Holds the first end that `matches`, once armed, until released: with `marked`, only one sent
+/// from a task that runs under `EndGate.$marked`.
+final class EndGate: Sendable {
+    @TaskLocal static var marked = false
+
+    private struct State {
+        var armed = false
+        var held: CaptureID?
+        var released = false
+        var waiting: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+    private let matches: @Sendable (CaptureEnd) -> Bool
+    private let onlyMarked: Bool
+
+    init(marked: Bool = false, _ matches: @escaping @Sendable (CaptureEnd) -> Bool) {
+        self.onlyMarked = marked
+        self.matches = matches
+    }
+
+    func arm() { state.withLock { $0.armed = true } }
+
+    var held: CaptureID? { state.withLock { $0.held } }
+
+    func hold(_ end: CaptureEnd) async {
+        let wanted = matches(end) && (!onlyMarked || Self.marked)
+        let take = state.withLock { state -> Bool in
+            guard wanted, state.armed, state.held == nil, !state.released else { return false }
+            state.held = end.captureID
+            return true
+        }
+        guard take else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let go = state.withLock { state -> Bool in
+                if state.released { return true }
+                state.waiting.append(continuation)
+                return false
+            }
+            if go { continuation.resume() }
+        }
+    }
+
+    /// Waits until an end is held, and names its capture.
+    func untilHeld(sourceLocation: SourceLocation = #_sourceLocation) async -> CaptureID? {
+        _ = await SuiteWait.until("an end to be held", sourceLocation: sourceLocation) { self.held != nil }
+        return held
+    }
+
+    func release() {
+        let waiting = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.released = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
     }
 }

@@ -12,9 +12,10 @@
         /// fault comes first and must be green, so that what turns the soak red is the fault.
         private func soak(
             _ fault: String, seed: UInt64, killPoints: [SoakKillPoint] = SoakKillPoint.captures, captures: Int = 30,
-            replayingRecovery: Bool = false
+            launchBudget: ClosedRange<Int> = 4...40, replayingRecovery: Bool = false
         ) async throws -> Set<String> {
-            var configuration = CaptureLedgerSoak.Configuration(seed: seed, captures: captures, killPoints: killPoints)
+            var configuration = CaptureLedgerSoak.Configuration(
+                seed: seed, captures: captures, killPoints: killPoints, launchBudget: launchBudget)
             let control = try await run(configuration, "\(fault)-control", expectGreen: true)
             #expect(control.isGreen, "The run is red with no fault:\n\(control.report)")
             configuration.fault = fault
@@ -188,6 +189,44 @@
         @Test func lostRecordingRowIsMissing() async throws {
             let codes = try await soak("recording-row-lost", seed: 73)
             #expect(codes.contains("acknowledged_capture_missing"), "\(codes.sorted())")
+        }
+
+        // The checks of the processing queue's jobs (`ProcessingWitness`), one fault each, each
+        // red by a code that only it turns red. A fault whose check needs a job cut while it runs
+        // is armed at `transcript_run_saved`'s first pass in every launch, with launches of two to
+        // four captures, so that a job is cut twice (`SoakProcessingTests.aJobCutTwiceFails`).
+
+        struct ProcessingFault: Sendable, CustomTestStringConvertible {
+            let fault: String
+            let seed: UInt64
+            let code: String
+            let cutsJobs: Bool
+            var testDescription: String { fault }
+        }
+
+        static let processingFaults: [ProcessingFault] = [
+            .init(fault: "resume-skipped", seed: 77, code: "job_left_running", cutsJobs: true),
+            .init(fault: "death-not-counted", seed: 78, code: "death_not_counted", cutsJobs: true),
+            .init(fault: "death-limit-ignored", seed: 79, code: "done_job_died_twice", cutsJobs: true),
+            .init(
+                fault: "clean-job-after-failure", seed: 80, code: "clean_job_of_failed_transcription", cutsJobs: true),
+            .init(fault: "drain-skipped", seed: 81, code: "job_not_done", cutsJobs: false),
+            .init(fault: "job-written-twice", seed: 82, code: "job_twice", cutsJobs: false),
+            .init(fault: "job-row-lost", seed: 83, code: "job_missing", cutsJobs: false),
+            .init(fault: "job-of-a-typed-capture", seed: 84, code: "job_of_no_recording", cutsJobs: false),
+            .init(fault: "death-added", seed: 85, code: "deaths_beyond_kills", cutsJobs: false),
+            .init(fault: "transcript-not-the-script", seed: 86, code: "transcript_not_the_script", cutsJobs: false),
+            .init(fault: "cleanup-applied-twice", seed: 87, code: "cleaned_text_not_the_script", cutsJobs: false),
+            .init(fault: "segment-step-left", seed: 88, code: "segment_step_not_done", cutsJobs: false),
+        ]
+
+        @Test(arguments: processingFaults)
+        func processingFaultIsRed(_ case: ProcessingFault) async throws {
+            let codes = try await soak(
+                `case`.fault, seed: `case`.seed,
+                killPoints: `case`.cutsJobs ? [.log("transcript_run_saved", passes: 1...1)] : SoakKillPoint.captures,
+                launchBudget: `case`.cutsJobs ? 2...4 : 4...40)
+            #expect(codes.contains(`case`.code), "\(codes.sorted())")
         }
 
         /// The engine answers a capture as begun and saved, and writes none of it.

@@ -20,6 +20,8 @@ struct ChaosStore: NoteStore {
     var hidesAssets = false
     /// Awaited before each set of a segment's peaks, and before nothing else: it may hold it.
     var holdPeaks: (@Sendable () async -> Void)? = nil
+    /// Awaited before each end the store is asked for, before `beforeEnd`: it may hold it.
+    var holdEnd: (@Sendable (CaptureEnd) async -> Void)? = nil
 
     func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError) {
         await holdPeaks?()
@@ -52,6 +54,7 @@ struct ChaosStore: NoteStore {
         return try await store.checkpoint(checkpoint)
     }
     func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt {
+        await holdEnd?(end)
         try beforeEnd?(end)
         return try await store.end(end)
     }

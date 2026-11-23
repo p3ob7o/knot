@@ -70,6 +70,9 @@
             "inbox_item_kept", "capture_recovered", "start_waits_for_open_capture",
             // The recorder's (WP-12): a start live, a stop's last sync done, a copy in place.
             "recording_live", "recording_stopped", "recording_converted",
+            // The processing queue's (WP-15): a transcription run saved, its last run, the clean
+            // job written, a cleanup applied, and a death counted at launch.
+            "transcript_run_saved", "transcribed", "clean_job_written", "cleanup_applied", "job_found_running",
         ]
 
         static var all: [String] {
