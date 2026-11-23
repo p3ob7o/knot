@@ -1,0 +1,8 @@
+$ knot add 'Call the plumber about the boiler'
+joined note 01a1ee57-4860-7005-8704-c879c789544b (inside_window)
+capture_id: 01a1ee59-1d20-7006-832d-ffc1d17c83f7
+segment_id: 01a1ee59-1d20-7006-832d-ffc1d17c83f7
+outcome: stored
+revision: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.1
+cursor: 01a1ee56-5e00-7003-8724-6d77eff2ad7f.0.2
+sync: off
