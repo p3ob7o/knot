@@ -111,7 +111,7 @@ Each list names the states a surface must be designed in. The matrix at the end 
   - a recording that cannot start: permission refused, no space, the microphone in use;
   - text that could not be saved, with the surface staying open.
 - **Stream:**
-  - a row: the title or first line, a preview of the latest segment, the time, the kinds of segment, and any pending or failed state. At large sizes the preview gives way first, then the kinds. The title or first line, the time and a failed marker always stay;
+  - a row: the title or first line, a short preview, the time, the kinds of segment, and any pending or failed state. At large sizes the preview gives way first, then the kinds. The title or first line, the time and a failed marker always stay;
   - populated;
   - empty on first run, with the line about sync, for sync on and for sync you switched off, and up to three dismissible setup rows. Propose the line for sync you switched off;
   - rows holding pending and failed segments;
