@@ -226,6 +226,14 @@ assert "scripts/verify.sh" not in excluded, excluded       # "the soak step of s
 assert k.package_of_branch("wp/01-tooling") == "WP-01"
 assert k.package_of_branch("origin/wp/10-store") == "WP-10"
 assert k.package_of_branch("contract/ports") == "contract"
+# A pull request beside the planned ones, lettered, is its number's package; wp/13-note stays
+# WP-13's note, and anything else between the number and the dash names no package.
+assert k.package_of_branch("wp/06b-done-line") == "WP-06", k.package_of_branch("wp/06b-done-line")
+assert k.package_of_branch("origin/wp/22d-mac-tool") == "WP-22"
+assert k.package_of_branch("wp/13-note") == "WP-13" and k.is_note_branch("wp/13-note")
+assert not k.is_note_branch("wp/13b-note")
+assert k.package_of_branch("wp/06B-x") is None and k.package_of_branch("wp/06bc-x") is None
+assert k.package_of_branch("wp/06b") is None and k.package_of_branch("wp/6-x") == "WP-06"
 assert k.classify(["docs/architecture.md", "PLAN.md"])[0] == "documents"
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[0] == "leaf"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[0] == "everything"
