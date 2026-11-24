@@ -34,6 +34,21 @@ import Testing
         }
     }
 
+    /// The files in `Recording/` and `Assets/`, by their place under the store.
+    private static func files(_ r: Rig) throws -> [String] {
+        var found: [String] = []
+        if r.layer.exists(r.locations.recording) {
+            found += try r.layer.contents(of: r.locations.recording).map { "Recording/\($0)" }
+        }
+        guard r.layer.exists(r.locations.assets) else { return found }
+        for folder in try r.layer.contents(of: r.locations.assets) {
+            let url = r.locations.assets.appending(path: folder, directoryHint: .isDirectory)
+            guard r.layer.entryKind(url) == .folder else { continue }
+            found += try r.layer.contents(of: url).map { "Assets/\(folder)/\($0)" }
+        }
+        return found.sorted()
+    }
+
     // MARK: The rule's table
 
     @Test func aTapStartsARecording() async throws {
@@ -201,6 +216,67 @@ import Testing
         #expect(state.captureID != orphan)
         #expect(p.r.logs.logged("press_found_orphan", orphan))
         #expect(try await p.r.notes.capture(state.captureID)?.outcome == .open)
+    }
+
+    /// A press right after a recording of this launch stopped, while the saved state still reads
+    /// "recording" for that very capture, by this launch and this process, with a fresh
+    /// heartbeat, and the recorder is idle: a read that gives back the process's own write from
+    /// before the stop's two (row 11f). The rule decides `recoverOrphanThenStart`, and the
+    /// engine starts a new recording at once. The stopped capture's row, segment and file stay
+    /// exactly as they were, nothing is stored twice, no file of it is touched or looked for,
+    /// and the one line that names it is `press_found_orphan`: the engine names it an orphan,
+    /// and does nothing to it. The new recording then stops and is stored, as a press, a stop
+    /// and a press again would have it.
+    @Test func aPressAfterAStopThatMeetsItsOwnStaleStateStartsANewRecording() async throws {
+        let p = Self.parts()
+        let states = p.engine.states()
+        let first = try #require(try await p.engine.press(p.r.press(.tap)).started)
+        let a = first.captureID
+        await Self.durable(a, p.engine, states: states)
+        p.r.clock.advance(by: 2)
+        let stopped = try #require(try await p.engine.press(p.r.press(.tap)).stopped)
+        #expect(stopped.captureID == a && stopped.outcome == .stored && stopped.path == .store)
+        // What the stop left: the row, its segment, its file in `Assets/`, and nothing else.
+        let row = try #require(try await p.r.notes.capture(a))
+        let segment = try #require(try await p.r.notes.segment(SegmentID(a))).segment
+        let asset = try #require(try await p.r.notes.asset(AssetID(a)))
+        let file = try #require(try await p.r.assets.find(AssetID(a), kind: .audio))
+        let filesBefore = try Self.files(p.r)
+        #expect(filesBefore == ["Assets/\(AssetID(a).folderName)/\(a).\(AssetKind.audio.fileExtension)"])
+        // The stale read: this launch's own write from while it recorded.
+        p.saved.write(
+            RecordingStateSnapshot(
+                phase: .recording, captureID: a, startedAt: row.startedAt, heartbeat: p.r.clock.now(),
+                ownerLaunch: p.r.launchID, ownerPID: ProcessInfo.processInfo.processIdentifier))
+        let linesBefore = p.r.logs.lines.count
+        p.r.clock.advance(by: 1)
+        let second = try #require(try await p.engine.press(p.r.press(.tap)).started, "The press starts a recording.")
+        let b = second.captureID
+        #expect(b != a)
+        #expect(second.kind == .voice && second.outcome == .open)
+        #expect(try await p.r.notes.capture(b)?.outcome == .open)
+        // The stopped capture, exactly as the stop left it.
+        #expect(try await p.r.notes.capture(a) == row)
+        #expect(try await p.r.notes.segment(SegmentID(a))?.segment == segment)
+        #expect(try await p.r.notes.asset(AssetID(a)) == asset)
+        #expect(try await p.r.assets.find(AssetID(a), kind: .audio) == file)
+        #expect(try Self.files(p.r).filter { $0.contains(a.description) } == filesBefore)
+        // The one line that names it.
+        let named = p.r.logs.lines.dropFirst(linesBefore).filter { $0.contains("capture=\(a)") }
+        #expect(named == ["press_found_orphan capture=\(a)"], "Every line after the press that names it: \(named).")
+        #expect(p.r.logs.logged("press_started", b))
+        // A press, a stop and a press again: the new recording stops and is stored, and each
+        // recording is in the stream once.
+        await Self.durable(b, p.engine, states: states)
+        p.r.clock.advance(by: 2)
+        let again = try #require(try await p.engine.press(p.r.press(.tap)).stopped)
+        #expect(again.captureID == b && again.outcome == .stored)
+        let segments = try await p.r.stream().notes.flatMap(\.liveSegments).map(\.id)
+        #expect(segments.filter { $0 == SegmentID(a) }.count == 1)
+        #expect(segments.filter { $0 == SegmentID(b) }.count == 1)
+        #expect(segments.count == 2)
+        #expect(try await p.r.notes.capture(a) == row)
+        #expect(p.r.logs.lines.dropFirst(linesBefore).filter { $0.contains("capture=\(a)") }.count == 1)
     }
 
     /// A saved state that names another capture while this engine records: the press stops the
