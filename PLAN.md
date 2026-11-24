@@ -209,6 +209,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | SP-5 | 1 | The report, `docs/spikes/SP-5.md`, which ends with a decision | SP-5 notes |
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 10a | The store's tests leave no file outside their own folders | WP-10 PR 1 |
+| WP-10 | 10b | The seeded store of the M1 milestone build, committed at its tag | WP-10a |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
 | WP-11 | 11a | The engine's tests made steady: tests that failed now and then on loaded runs wait for what they read, and one outcome of the random interleavings is a stated limit | WP-11 PR 1 |
@@ -223,6 +224,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-12 | 2 | Everything else | WP-12 PR 1; WP-02 PR 3 |
 | WP-12 | 12a | The recorder's tests wait by an order and not by a bound: two waits of ten seconds ran out together at a loaded gate under the strict pool | WP-12 PR 2 |
 | WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
+| WP-12 | 12b | The mix-down test's cases run one at a time: run in parallel, the thread sanitizer took memory that the system's audio buffers reuse for a data race, and the nightly run was red | WP-12 PR 3 |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
 | WP-13 | 13a | The cancel test no longer rests on a wall-clock second: a test of the transcriber's that failed a gate under load, made right | WP-13 PR 1 |

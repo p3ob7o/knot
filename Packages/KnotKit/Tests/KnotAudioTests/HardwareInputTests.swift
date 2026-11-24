@@ -123,7 +123,13 @@ import Testing
     /// the mix must still be right on every frame the copy kept. On any other system, and for any
     /// other loss, a short copy fails the test, as a wrong mix of a whole copy does. After finding
     /// 25.
-    @Test(arguments: [16_000.0, 44_100.0, 48_000.0])
+    ///
+    /// The cases run one at a time. The system takes a buffer's memory from an allocator of its
+    /// own, `caulk::audio_buffer_resource`, which the thread sanitizer does not follow: memory
+    /// that one case let go and another case got back looked to it like two threads writing one
+    /// address, though no two live buffers ever shared it. One at a time, the cases are ordered
+    /// for the sanitizer. WP-12b.
+    @Test(.serialized, arguments: [16_000.0, 44_100.0, 48_000.0])
     func anInterleavedTapBufferIsMixedDown(rate: Double) throws {
         let stereo = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: true))
