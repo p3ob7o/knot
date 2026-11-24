@@ -657,7 +657,9 @@ knot_start_tool() {
 # before `.com.` or `.*`, as a plist's whole string, as codesign's `[String]` value, and as
 # the parenthesised end of a certificate's name, escaped or not, as xcodebuild's exported
 # settings write it. A signing identity is masked too: its SHA-1 after `--sign`, and the name of
-# a certificate after "Apple Development:" and its like. A run that has the owner's configuration
+# a certificate after "Apple Development:" and its like. The SHA-1 is masked only where a flag or
+# a key names it, --sign, -signing-cert and a setting whose name holds IDENTITY, so that a
+# commit's hash elsewhere stays readable. A run that has the owner's configuration
 # knows the ID: the filter reads it, as the team-ID step does, from KNOT_TEAM_CONFIG, else
 # KNOT_LOCAL_CONFIG, else the configuration that bootstrap linked into the tree, never prints
 # it, and masks it wherever it stands.
@@ -679,6 +681,8 @@ KNOT_TEAM_FILTER='
     s/(\[String\]\s+)[A-Z0-9]{10}\b/$1<TEAM>/g;
     s/(\\?\()[A-Z0-9]{10}(\\?\))/$1<TEAM>$2/g;
     s/(--sign\s+)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
+    s/(-signing-cert\s+)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
+    s/(IDENTITY\w*\s*\\?[=:]\s*"?)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
     s/((?:Apple|Mac|iPhone|Developer)(?:\\?\s)+(?:Development|Distribution|Developer|ID(?:\\?\s)+Application):(?:\\?\s)+)(.+?)((?:\\?\s)+\\?\()/$1<NAME>$3/g;
     s/\Q$main::team\E/<TEAM>/g if defined $main::team;
 '

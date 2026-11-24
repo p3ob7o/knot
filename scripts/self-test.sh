@@ -2562,6 +2562,10 @@ fi
 echo "    /usr/bin/codesign --force --sign 0123456789ABCDEF0123456789ABCDEF01234567 --timestamp=none $app"
 echo '    Signing Identity:     "Apple Development: Self Test Owner (QQ1WW2EE3R)"'
 echo '    export EXPANDED_CODE_SIGN_IDENTITY_NAME\=Apple\ Development:\ Self\ Test\ Owner\ \(QQ1WW2EE3R\)'
+echo '    export EXPANDED_CODE_SIGN_IDENTITY\=0123456789ABCDEF0123456789ABCDEF01234567'
+echo "    builtin-embeddedBinaryValidationUtility $app -signing-cert 0123456789ABCDEF0123456789ABCDEF01234567 -info-plist-path x"
+# A commit's hash, which no flag or key names, stays readable.
+echo "    a commit 0123456789abcdef0123456789abcdef01234567 of the tree"
 echo "** BUILD SUCCEEDED **"
 SH
 chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild" "$mb/stub/xcodegen" "$mb/stub/security"
@@ -2599,8 +2603,9 @@ mb_log="$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
 mkdir -p "$mb/tree/.build/logs"
 (KNOT_TREE="$mb/tree" bash -c 'source "$1/lib/common.sh"; knot_set_logs_aside "$KNOT_LOGS"' _ "$mb/scripts")
 mb_logs="$( [[ -f $mb_log && -f ${mb_log%-ios.log}-mac.log && ! -e $mb/tree/.build/logs-earlier/$(basename "$mb_log") ]] && echo beside || echo moved)"
-# The signing identity leaves the build's log: its SHA-1, the certificate's name and its ID.
-mb_identity="$( { grep -h -e '0123456789ABCDEF0123456789ABCDEF01234567' -e 'Self Test Owner' -e 'QQ1WW2EE3R' "$mb_log" ${mb_log%-ios.log}-mac.log || true; } | grep -c . || true)/$(grep -c -e '<IDENTITY>' -e '<NAME>' "$mb_log" || true)"
+# The signing identity leaves the build's log: its SHA-1 after --sign, after -signing-cert and as
+# EXPANDED_CODE_SIGN_IDENTITY, the certificate's name and its ID; a commit's hash stays.
+mb_identity="$( { grep -h -e '0123456789ABCDEF0123456789ABCDEF01234567' -e 'Self Test Owner' -e 'QQ1WW2EE3R' "$mb_log" ${mb_log%-ios.log}-mac.log || true; } | grep -c . || true)/$(grep -c -e '<IDENTITY>' -e '<NAME>' "$mb_log" || true)/$(grep -c -e 'a commit 0123456789abcdef0123456789abcdef01234567 of the tree' "$mb_log" || true)"
 # The app group: a profile that does not allow the iOS widget's group, and a Watch app signed
 # with no group, which its entitlements file gives one.
 mb_profile="$(KNOT_MB_PROFILE_OTHER=Widgets-iOS.appex mb_run profile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
@@ -2691,7 +2696,7 @@ printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
 mb_verdicts="packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "packages 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+if [[ $mb_verdicts == "packages 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
