@@ -631,41 +631,74 @@ step_apps() {
         xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
 }
 
-# The Mac app at the milestone flavour, which no other step builds: Release, unsigned, in
-# derived data of its own, for this Mac's architecture alone. Both faults of the first
+# The Mac app at the milestone flavour, which no other step builds: Release, unsigned, for this
+# Mac's architecture alone, under the development identifiers. Both faults of the first
 # milestone's Mac build were in the copy of its tool, and showed only at that flavour (WP-22,
 # row 22d): a copy that looked for the tool under the development flavour's name, which
 # fails the build, and a tool named like the app, which on a volume that ignores case
 # replaced the app's executable. So the build must pass, and Contents/MacOS must hold the
-# app's executable and the tool, by their exact names, as two files. It signs nothing and
-# needs no team: KNOT_SIGNING=team is what the flavour's own check asks for, and
-# DEVELOPMENT_TEAM is emptied so that a worktree with the owner's configuration linked builds
-# as the gate does. What it cannot show is the signing: a profile, an entitlement or a part
-# left unsigned shows at scripts/milestone-build.sh.
+# app's executable and the tool, by their exact names, as two files.
+#
+# No build but scripts/milestone-build.sh carries the milestone's identifiers (AGENTS.md):
+# Xcode registers every Mac app it builds with LaunchServices, and the owner runs his own
+# Knot under the milestone's bundle ID on this Mac. So the three milestone identifier
+# settings take their development values on the command line, while the flavour, its level
+# and its tool's file stay the milestone's; and the check fails if the product carries the
+# milestone's bundle ID all the same. It signs nothing and needs no team: KNOT_SIGNING=team
+# is what the flavour's own check asks for, and DEVELOPMENT_TEAM is emptied so that a
+# worktree with the owner's configuration linked builds as the gate does. The derived data
+# is fresh each time; after the check, pass or fail, the product is unregistered from
+# LaunchServices and the derived data removed. What it cannot show is the signing: a
+# profile, an entitlement or a part left unsigned shows at scripts/milestone-build.sh.
 #   packaging_milestone_mac <log>
 packaging_milestone_mac() {
-    local log=$1 derived="$KNOT_BUILD/DerivedData-milestone" app executable tool listing
+    local log=$1 derived="$KNOT_BUILD/DerivedData-milestone" app executable tool listing bundle status=0
+    local milestone_bundle dev_bundle dev_group dev_container
+    setting() { sed -n -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p" "$KNOT_ROOT/Apps/Config/Identifiers.xcconfig" | head -n 1; }
+    milestone_bundle="$(setting KNOT_BUNDLE_ID_milestone)"
+    dev_bundle="$(setting KNOT_BUNDLE_ID_dev)"
+    dev_group="$(setting KNOT_APP_GROUP_dev)"
+    dev_container="$(setting KNOT_CLOUD_CONTAINER_dev)"
+    tool="$(setting KNOT_TOOL_FILE_milestone)"
+    if [[ -z $milestone_bundle || -z $dev_bundle || -z $dev_group || -z $dev_container || -z $tool ]]; then
+        echo "      Apps/Config/Identifiers.xcconfig does not give the identifiers the check builds under"
+        return 1
+    fi
+    app="$derived/Build/Products/Release/Knot.app"
+    # A product an earlier check left, as when its run was killed, leaves LaunchServices first.
+    knot_unregister_apps "$derived"
+    rm -rf "$derived"
     milestone_mac_build() {
         { xcodebuild -project "$KNOT_PROJECT" -derivedDataPath "$derived" \
             -clonedSourcePackagesDirPath "$KNOT_SOURCE_PACKAGES" -configuration Release -scheme Knot-macOS \
             -destination 'platform=macOS' KNOT_FLAVOUR=milestone KNOT_MILESTONE_LEVEL=M1 KNOT_SIGNING=team \
+            KNOT_BUNDLE_ID_milestone="$dev_bundle" KNOT_APP_GROUP_milestone="$dev_group" \
+            KNOT_CLOUD_CONTAINER_milestone="$dev_container" \
             DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | knot_filter_team >>"$log"; } 2>/dev/null # limit: milestone_mac_build
     }
     if ! knot_run_limited "The milestone-flavour build of Knot-macOS" "$KNOT_BUILD_LIMIT" milestone_mac_build; then
         echo "      the build failed; its log is .build/logs/$(basename "$log"):"
         grep -E 'error:' "$log" | sed -e "s|$KNOT_ROOT/||g" | sort -u | head -n 5 | sed 's/^/        /' || true
-        return 1
+        status=1
+    else
+        bundle="$(plist_value "$app/Contents/Info.plist" CFBundleIdentifier)"
+        executable="$(plist_value "$app/Contents/Info.plist" CFBundleExecutable)"
+        listing="$(ls -1 "$app/Contents/MacOS" 2>/dev/null || true)"
+        echo "      bundle ID $bundle, flavour $(plist_value "$app/Contents/Info.plist" KnotFlavour), Contents/MacOS holds: $(tr '\n' ' ' <<<"$listing")"
+        if [[ $bundle == "$milestone_bundle" || $bundle != "$dev_bundle" ]]; then
+            echo "      the product carries $bundle, not the development bundle ID $dev_bundle: no build but scripts/milestone-build.sh carries the milestone's"
+            status=1
+        elif ! { [[ "$(plist_value "$app/Contents/Info.plist" KnotFlavour)" == milestone && -n $executable ]] &&
+            grep -x -e "$executable" <<<"$listing" >/dev/null &&
+            grep -x -e "$tool" <<<"$listing" >/dev/null &&
+            [[ ! "$app/Contents/MacOS/$executable" -ef "$app/Contents/MacOS/$tool" ]]; }; then
+            status=1
+        fi
     fi
-    app="$derived/Build/Products/Release/Knot.app"
-    executable="$(plist_value "$app/Contents/Info.plist" CFBundleExecutable)"
-    tool="$(sed -n -E 's/^[[:space:]]*KNOT_TOOL_FILE_milestone[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$KNOT_ROOT/Apps/Config/Identifiers.xcconfig")"
-    listing="$(ls -1 "$app/Contents/MacOS" 2>/dev/null || true)"
-    echo "      flavour $(plist_value "$app/Contents/Info.plist" KnotFlavour), Contents/MacOS holds: $(tr '\n' ' ' <<<"$listing")"
-    [[ "$(plist_value "$app/Contents/Info.plist" KnotFlavour)" == milestone && -n $executable && -n $tool ]] &&
-        grep -x -e "$executable" <<<"$listing" >/dev/null &&
-        grep -x -e "$tool" <<<"$listing" >/dev/null &&
-        [[ ! "$app/Contents/MacOS/$executable" -ef "$app/Contents/MacOS/$tool" ]]
+    knot_unregister_apps "$derived"
+    rm -rf "$derived"
+    return "$status"
 }
 
 # The packaging that otherwise fails late, each proven with one trivial instance

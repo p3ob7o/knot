@@ -723,6 +723,22 @@ knot_set_logs_aside() {
     knot_scrub_logs "$aside"
 }
 
+# LaunchServices' own tool. Xcode registers every Mac app it builds; a script that builds one
+# it must not leave registered unregisters it (knot_unregister_apps). KNOT_LSREGISTER names a
+# stand-in, for a test.
+KNOT_LSREGISTER="${KNOT_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
+
+# Unregisters from LaunchServices every app bundle under a folder, the folder's own products,
+# before they are removed or kept aside. A folder that does not exist holds none.
+#   knot_unregister_apps <folder>
+knot_unregister_apps() {
+    local app
+    [[ -d $1 ]] || return 0
+    while IFS= read -r -d '' app; do
+        "$KNOT_LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    done < <(find "$1" -type d -name '*.app' -prune -print0 2>/dev/null)
+}
+
 # Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error
 # lines, "<file>:<line>: error: …", by file and line with the folder taken off, each once and
 # at most twenty, and then the longer log they come from, by its path in the tree.
