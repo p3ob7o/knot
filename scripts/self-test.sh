@@ -2464,6 +2464,7 @@ signed() { # signed <part> <group> [<profile>]: the group it is signed with, and
     printf '<string>%s</string>' "$2" >"$1.groups-signed"
     local allowed=$2
     [[ -n ${KNOT_MB_PROFILE_OTHER:-} && $1 == *"$KNOT_MB_PROFILE_OTHER" ]] && allowed="$KNOT_MB_TEAM.com.example.other"
+    [[ -n ${KNOT_MB_NO_PROFILE:-} && $1 == *"$KNOT_MB_NO_PROFILE" ]] && return 0
     [[ -z ${3:-} ]] || printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Entitlements</key><dict><key>com.apple.security.application-groups</key><array><string>%s</string></array></dict></dict></plist>\n' "$allowed" >"$3"
 }
 if [[ $scheme == Knot-iOS ]]; then
@@ -2518,6 +2519,9 @@ mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
 # team's configuration.
 mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_kept="$( [[ -e $mb/tree/.build/config/Local.xcconfig ]] && echo kept || echo removed)"
+# The app-group check's lines go into the build's log as well as to the terminal.
+mb_group_log="$( { grep -c -e 'milestone-build: ios: Knot.app: app group group.com.p3ob7o.knot, allowed by its profile' -e 'milestone-build: ios: the app group checked on 4 parts' \
+    "$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" || true; } )"
 # Its logs lie beside the derived data, and a verify run's set-aside of .build/logs/ leaves them.
 mb_log="$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
 mkdir -p "$mb/tree/.build/logs"
@@ -2532,6 +2536,10 @@ mb_profile="$(KNOT_MB_PROFILE_OTHER=Widgets-iOS.appex mb_run profile M1 --commit
 # carries the made-up team prefix.
 mb_profile_log="$( { grep -h -e 'app group Knot.app/PlugIns/Widgets-iOS.appex' "$mb/tree/.build/milestone/"*.log || true; } | tr '\n' ' ')"
 mb_nogroup="$(KNOT_MB_NO_GROUP=Watch/KnotWatch.app mb_run nogroup M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_group_log="$mb_group_log/$( { grep -c -e 'is signed with no app group' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
+# A part signed with a group that holds no profile.
+mb_noprofile="$(KNOT_MB_NO_PROFILE=Widgets-iOS.appex mb_run noprofile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_group_log="$mb_group_log/$( { grep -c -e 'Widgets-iOS.appex is signed with an app group and holds no provisioning profile' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
 # What the build reads beyond the commit: an ignored Swift file under Sources, an untracked
 # file, a key beyond its own in each of the two configurations the build includes, and a binary
 # that holds the fakes' module or a debug launch argument.
@@ -2596,8 +2604,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&

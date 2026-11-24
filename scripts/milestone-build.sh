@@ -316,6 +316,8 @@ for group in plist.get("com.apple.security.application-groups", []) or []:
 #   check_groups <ios|mac> <app> <log>
 check_groups() {
     local name=$1 app=$2 log=$3 base part path bundle file signed allowed group profile count=0
+    # Each line it prints goes to the build's log too, filtered: the milestone's evidence.
+    note() { say "$1"; printf 'milestone-build: %s\n' "$1" | knot_filter_team >>"$log"; }
     base="$(dirname "$app")"
     while IFS= read -r part; do
         path="$base/$part"
@@ -328,10 +330,10 @@ check_groups() {
         signed="$(codesign -d --entitlements - --xml "$path" 2>/dev/null | groups_in)"
         if [[ -z $signed ]]; then
             if [[ -n $file && -n "$(groups_in <"$KNOT_ROOT/$file")" ]]; then
-                say "$name: $part is signed with no app group, and $file gives it one"
+                note "$name: $part is signed with no app group, and $file gives it one"
                 return 1
             fi
-            say "$name: $part: no app group, as $file asks"
+            note "$name: $part: no app group, as $file asks"
             continue
         fi
         profile=""
@@ -340,11 +342,11 @@ check_groups() {
         done
         if [[ -z $profile ]]; then
             if [[ $part == */Contents/MacOS/* ]]; then
-                say "$name: $part: signed with $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team); a bare executable carries no profile to compare"
+                note "$name: $part: signed with $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team); a bare executable carries no profile to compare"
                 count=$((count + 1))
                 continue
             fi
-            say "$name: $part is signed with an app group and holds no provisioning profile"
+            note "$name: $part is signed with an app group and holds no provisioning profile"
             return 1
         fi
         allowed="$(security cms -D -i "$profile" 2>/dev/null | groups_in --profile)"
@@ -352,15 +354,15 @@ check_groups() {
             [[ -n $group ]] || continue
             if ! python3 -I -c 'import fnmatch, sys; sys.exit(0 if any(fnmatch.fnmatchcase(sys.argv[1], a) for a in sys.argv[2:]) else 1)' \
                 "$group" $allowed; then
-                say "$name: $part is signed with the app group $(knot_filter_team <<<"$group"), which its provisioning profile does not allow; it allows: $(tr '\n' ' ' <<<"${allowed:-none}" | sed 's/ $//' | knot_filter_team)"
+                note "$name: $part is signed with the app group $(knot_filter_team <<<"$group"), which its provisioning profile does not allow; it allows: $(tr '\n' ' ' <<<"${allowed:-none}" | sed 's/ $//' | knot_filter_team)"
                 printf 'app group %s: signed %s, profile allows %s\n' "$part" "$(tr '\n' ' ' <<<"$signed")" "$(tr '\n' ' ' <<<"$allowed")" | knot_filter_team >>"$log"
                 return 1
             fi
         done <<<"$signed"
-        say "$name: $part: app group $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team), allowed by its profile"
+        note "$name: $part: app group $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team), allowed by its profile"
         count=$((count + 1))
     done < <(parts_of "$app")
-    say "$name: the app group checked on $count parts"
+    note "$name: the app group checked on $count parts"
 }
 
 # The fakes and the debug launch arguments, in every Mach-O file of a product, as the packaging
