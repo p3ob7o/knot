@@ -164,7 +164,7 @@ def load_brief(package):
             fail("%s: a row of the 'Starts after' table must have three cells: %s" % (brief.path, cells))
             return brief
         label = cells[0]
-        if not re.fullmatch(r"\d+|Proof step|Notes|Campaign|%s[a-d]" % re.escape(package[3:]), label):
+        if not re.fullmatch(r"\d+|Proof step|Notes|Campaign|%s[a-z]" % re.escape(package[3:]), label):
             fail("%s: '%s' is not a row label. Use a number, 'Proof step', 'Notes', 'Campaign' or a sub-package such as '40a'"
                  % (brief.path, label))
         if label in labels:
@@ -180,11 +180,11 @@ for name in sorted(os.listdir(BRIEFS)) if os.path.isdir(BRIEFS) else []:
     if re.fullmatch(r"(WP-\d\d|SP-\d)\.md", name) and name[:-3] not in briefs:
         fail("%s/%s: no such package" % (BRIEFS, name))
 
-REFERENCE = re.compile(r"\b(WP-\d\d|SP-\d)([a-d])?\b(?: (PR (\d+)|proof step|notes))?")
+REFERENCE = re.compile(r"\b(WP-\d\d|SP-\d)([a-z])?\b(?: (PR (\d+)|proof step|notes))?")
 
 
 def numbered(brief):
-    return [label for label, _, _ in brief.rows if re.fullmatch(r"\d+|\d\d[a-d]", label)]
+    return [label for label, _, _ in brief.rows if re.fullmatch(r"\d+|\d\d[a-z]", label)]
 
 
 def resolve(match, where):

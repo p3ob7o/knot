@@ -655,7 +655,11 @@ knot_start_tool() {
 # application-identifier. No run needs the ID, and most do not know it, so a team ID is
 # matched by its shape, ten capitals and digits, where those keys or an identifier put it:
 # before `.com.` or `.*`, as a plist's whole string, as codesign's `[String]` value, and as
-# the parenthesised end of a certificate's name. A run that has the owner's configuration
+# the parenthesised end of a certificate's name, escaped or not, as xcodebuild's exported
+# settings write it. A signing identity is masked too: its SHA-1 after `--sign`, and the name of
+# a certificate after "Apple Development:" and its like. The SHA-1 is masked only where a flag or
+# a key names it, --sign, -signing-cert and a setting whose name holds IDENTITY, so that a
+# commit's hash elsewhere stays readable. A run that has the owner's configuration
 # knows the ID: the filter reads it, as the team-ID step does, from KNOT_TEAM_CONFIG, else
 # KNOT_LOCAL_CONFIG, else the configuration that bootstrap linked into the tree, never prints
 # it, and masks it wherever it stands.
@@ -675,7 +679,11 @@ KNOT_TEAM_FILTER='
     s/\b[A-Z0-9]{10}(?=\.(?:(?:com|group|iCloud|org|net)\b|\*))/<TEAM>/g;
     s/(<string>\s*)[A-Z0-9]{10}(?=\s*<\/string>)/$1<TEAM>/g;
     s/(\[String\]\s+)[A-Z0-9]{10}\b/$1<TEAM>/g;
-    s/\([A-Z0-9]{10}\)/(<TEAM>)/g;
+    s/(\\?\()[A-Z0-9]{10}(\\?\))/$1<TEAM>$2/g;
+    s/(--sign\s+)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
+    s/(-signing-cert\s+)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
+    s/(IDENTITY\w*\s*\\?[=:]\s*"?)[0-9A-Fa-f]{40}\b/$1<IDENTITY>/g;
+    s/((?:Apple|Mac|iPhone|Developer)(?:\\?\s)+(?:Development|Distribution|Developer|ID(?:\\?\s)+Application):(?:\\?\s)+)(.+?)((?:\\?\s)+\\?\()/$1<NAME>$3/g;
     s/\Q$main::team\E/<TEAM>/g if defined $main::team;
 '
 # The configuration the filter reads the ID from, chosen as step_team_id chooses it.
@@ -683,21 +691,76 @@ knot_filter_config() { echo "${KNOT_TEAM_CONFIG:-${KNOT_LOCAL_CONFIG:-$KNOT_CONF
 knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_TEAM_FILTER"; }
 
 # Rewrites, in place, the logs that the scripts kept in a folder, through knot_filter_team:
-# the files named verify-* and bootstrap-*. Other files are left alone: one may be the output
+# the files named verify-*, bootstrap-* and milestone-build-*. Other files are left alone: one may be the output
 # of a command still writing to it, and a rewrite would give the file a new inode under the
-# writer, whose lines would then be lost. Each log keeps its time: the log of a step that an
-# earlier run started, and this one does not, keeps the earlier run's, so that it is not taken
-# for this run's (item 115). The logs are kept, since a thread that reruns one step still
-# reads the others.
+# writer, whose lines would then be lost. Each log keeps its time, so that a log of an earlier
+# run is not taken for a later one's (item 115). A run of verify.sh moves the earlier run's
+# logs aside before it scrubs them (knot_set_logs_aside).
+#   knot_scrub_logs <folder> [<file name>…]: with names, only those files of the folder, a run's
+#   own, so that a run scrubs no log another run may still be writing
 knot_scrub_logs() {
-    local folder=$1 log stamp
+    local folder=$1 log stamp names=" ${*:2} "
     [[ -d $folder ]] || return 0
-    for log in "$folder"/verify-* "$folder"/bootstrap-*; do
+    for log in "$folder"/verify-* "$folder"/bootstrap-* "$folder"/milestone-build-*; do
         [[ -f $log ]] || continue
+        (($# == 1)) || [[ $names == *" $(basename "$log") "* ]] || continue
         stamp="$(date -r "$(stat -f %m "$log")" +%Y%m%d%H%M.%S)"
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
         touch -t "$stamp" "$log" 2>/dev/null || true
     done
+}
+
+# Moves the files an earlier run left in the log folder aside, at the start of a whole run, a
+# tier of verify.sh, into the folder beside it, logs-earlier/, which holds the run before this
+# one and nothing older: after a whole run, no file in the log folder is older than that run. A
+# step that the run does not start, such as the soak at a gate whose depth takes none, then
+# leaves no log of another run behind, dated or not, for a reader to take for this run's. They
+# are moved, not removed: a run that stopped early leaves the earlier run's logs to read, and
+# the evidence of a red run, a soak's verdict or a crash's log, outlives the next whole run by
+# one. A run of one step, --only or --module, does not call it: it rewrites its own step's logs
+# and leaves the rest, so that a thread that reruns one step, or a sequence of such runs after a
+# stop, keeps the whole run's logs. The moved logs are scrubbed of the team's ID as they always
+# were (knot_scrub_logs), which rewrites each file: two whole runs at once in one worktree are
+# not supported.
+#   knot_set_logs_aside <log folder>
+knot_set_logs_aside() {
+    local folder=$1 aside entry
+    aside="$(dirname "$folder")/logs-earlier"
+    [[ -d $folder ]] || return 0
+    rm -rf "$aside"
+    mkdir -p "$aside"
+    for entry in "$folder"/* "$folder"/.[!.]*; do
+        [[ -e $entry || -L $entry ]] || continue
+        mv "$entry" "$aside/"
+    done
+    knot_scrub_logs "$aside"
+}
+
+# LaunchServices' own tool. Xcode registers every Mac app it builds; a script that builds one
+# it must not leave registered unregisters it (knot_unregister_apps). KNOT_LSREGISTER names a
+# stand-in, for a test.
+KNOT_LSREGISTER="${KNOT_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
+
+# Unregisters from LaunchServices every app bundle under a folder, the folder's own products,
+# before they are removed or kept aside. A folder that does not exist holds none. It returns
+# non-zero when the tool is missing or an unregister failed, and says why in
+# KNOT_UNREGISTER_WHY, so that a caller never claims what did not happen.
+#   knot_unregister_apps <folder>
+knot_unregister_apps() {
+    local app status=0
+    KNOT_UNREGISTER_WHY=""
+    [[ -d $1 ]] || return 0
+    if [[ ! -x $KNOT_LSREGISTER ]]; then
+        KNOT_UNREGISTER_WHY="LaunchServices' tool is not at $KNOT_LSREGISTER"
+        return 1
+    fi
+    while IFS= read -r -d '' app; do
+        if ! "$KNOT_LSREGISTER" -u "$app" >/dev/null 2>&1; then
+            status=1
+            KNOT_UNREGISTER_WHY="lsregister -u failed on $(basename "$app")"
+        fi
+    done < <(find "$1" -type d -name '*.app' -prune -print0 2>/dev/null)
+    return "$status"
 }
 
 # Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error
