@@ -28,12 +28,13 @@
 # Apps/Config/Identifiers.xcconfig, then runs codesign --verify --strict on every part, each
 # alone, innermost first. It stops at the first failure, naming the part, and installs
 # nothing. It never starts what it builds: a milestone build that runs opens the owner's own
-# store. It prints no team ID and no signing identity. Its logs go to .build/logs/, filtered
-# for the team's ID as they are written.
+# store. It prints no team ID and no signing identity. Each build's log lies beside its
+# derived data, .build/milestone/milestone-build-<level>-<commit>-<product>.log, filtered for
+# the team's ID as it is written; a run of verify.sh does not move it.
 
 source "$(dirname "$0")/lib/common.sh"
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "milestone-build-usage" "$1" "Run scripts/milestone-build.sh --help." "safe" "nothing"; }
 say() { printf 'milestone-build: %s\n' "$1"; }
 
@@ -102,7 +103,10 @@ fi
 WANTED="ios mac"
 [[ $PRODUCTS == both ]] || WANTED=$PRODUCTS
 
-mkdir -p "$KNOT_LOGS"
+# The milestone builds' logs, which earlier runs left, are filtered for the team's ID as the
+# scripts' other logs are (knot_scrub_logs), each keeping its time.
+mkdir -p "$KNOT_BUILD/milestone"
+knot_scrub_logs "$KNOT_BUILD/milestone"
 
 # ------------------------------------------------------------------ before it builds
 
@@ -187,7 +191,9 @@ parts_of() {
 }
 
 # Checks one product: what it says it is, then each part's signature. Prints a line for each,
-# and returns non-zero at the first failure, having named it.
+# and returns non-zero at the first failure, having named it. A failure's detail goes to the
+# build's log.
+#   check_product <ios|mac> <app> <log>
 check_product() {
     local name=$1 app=$2 info bundle version build flavour level part count=0 out
     info="$(info_of "$app")"
@@ -231,7 +237,7 @@ check_product() {
     while IFS= read -r part; do
         if ! out="$(codesign --verify --strict "$(dirname "$app")/$part" 2>&1)"; then
             say "$name: codesign --verify --strict failed on $part: $(head -n 1 <<<"$out" | sed -e "s|$(dirname "$app")/||g" | knot_filter_team)"
-            printf 'codesign --verify --strict %s\n%s\n' "$part" "$out" | knot_filter_team >>"$KNOT_LOGS/milestone-build-$name.log"
+            printf 'codesign --verify --strict %s\n%s\n' "$part" "$out" | knot_filter_team >>"$3"
             return 1
         fi
         count=$((count + 1))
@@ -247,12 +253,14 @@ for product in $WANTED; do
         mac) scheme=Knot-macOS destination=generic/platform=macOS folder=Release ;;
     esac
     derived="$KNOT_BUILD/milestone/$LEVEL-${head:0:12}-$product"
-    if [[ -d $derived && -n "$(ls -A "$derived" 2>/dev/null)" ]]; then
-        knot_fail "milestone-build-derived-data" "The derived data folder .build/milestone/$(basename "$derived") holds an earlier build: a milestone build is never incremental." \
-            "Remove that folder by its path, or keep it and build elsewhere, then rerun." "safe" "nothing"
+    # The build's log lies beside its derived data, named by level, commit and product: a
+    # milestone's evidence, which a later run of verify.sh does not move aside.
+    log="$KNOT_BUILD/milestone/milestone-build-$LEVEL-${head:0:12}-$product.log"
+    if [[ -d $derived && -n "$(ls -A "$derived" 2>/dev/null)" ]] || [[ -s $log ]]; then
+        knot_fail "milestone-build-derived-data" "The derived data folder .build/milestone/$(basename "$derived"), or its log, .build/milestone/$(basename "$log"), holds an earlier build: a milestone build is never incremental." \
+            "Keep the log if it is evidence, by copying it out; then remove both by their paths, and rerun." "safe" "nothing"
     fi
     mkdir -p "$derived"
-    log="$KNOT_LOGS/milestone-build-$product.log"
     : >"$log"
     say "$product: building $scheme, Release, $LEVEL, in fresh derived data .build/milestone/$(basename "$derived")$( ((PROVISIONING)) && echo ', with -allowProvisioningUpdates')"
     started=$(knot_now)
@@ -265,19 +273,19 @@ for product in $WANTED; do
     if ((status != 0)); then
         say "$product: the build failed after $took. The last lines of its log:"
         grep -E 'error:|BUILD FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
-        knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is .build/logs/$(basename "$log")." \
+        knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is .build/milestone/$(basename "$log")." \
             "Read the log. A signing error that names an account, a profile or a device needs the owner: say so, and do not pass a flag he has not allowed." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
     fi
     say "$product: built in $took"
     app="$derived/Build/Products/$folder/Knot.app"
-    if ! check_product "$product" "$app"; then
+    if ! check_product "$product" "$app" "$log"; then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
-            "Do not install it. Read .build/logs/$(basename "$log"), then build again in fresh derived data." \
+            "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
     fi
     APPS+=("$product=$app")
-    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took, every part verified, at ${app#"$KNOT_ROOT"/}")
+    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took, every part verified, at ${app#"$KNOT_ROOT"/}, its log .build/milestone/$(basename "$log")")
 done
 
 # ------------------------------------------------------------------ then

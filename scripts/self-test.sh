@@ -2340,6 +2340,8 @@ fi
 # stops the run before any install; a derived-data folder that is not empty, a HEAD that is
 # not the commit named, a dirty tree and an empty list of accounts are refused before any
 # build; and no provisioning flag reaches the build unless asked, the device one never.
+# Each build's log lies beside its derived data, where a later verify run's set-aside of
+# .build/logs/ does not reach it.
 mb="$scratch/milestone-build"
 mkdir -p "$mb/tree/Apps/Config" "$mb/stub" "$mb/slots"
 cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$mb/tree/Apps/Config/"
@@ -2423,6 +2425,11 @@ mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
 # team's configuration.
 mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_kept="$( [[ -e $mb/tree/.build/config/Local.xcconfig ]] && echo kept || echo removed)"
+# Its logs lie beside the derived data, and a verify run's set-aside of .build/logs/ leaves them.
+mb_log="$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
+mkdir -p "$mb/tree/.build/logs"
+(KNOT_TREE="$mb/tree" bash -c 'source "$1/lib/common.sh"; knot_set_logs_aside "$KNOT_LOGS"' _ "$mb/scripts")
+mb_logs="$( [[ -f $mb_log && -f ${mb_log%-ios.log}-mac.log && ! -e $mb/tree/.build/logs-earlier/$(basename "$mb_log") ]] && echo beside || echo moved)"
 # The same, with the provisioning updates the owner allowed.
 mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
 # An option for the device's registration does not exist.
@@ -2448,8 +2455,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="logs $mb_logs plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "logs beside plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2460,8 +2467,9 @@ if [[ $mb_verdicts == "plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 de
     grep -e 'not the commit named' "$mb/head.out" >/dev/null && grep -e "(tree " "$mb/head.out" >/dev/null &&
     grep -e 'holds an earlier build' "$mb/derived.out" >/dev/null && grep -e 'uncommitted changes' "$mb/dirty.out" >/dev/null &&
     grep -e 'saved list of accounts is empty' "$mb/none.out" >/dev/null &&
-    grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null; then
-    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration, and passes a provisioning flag only when asked, the device's never"
+    grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null &&
+    grep -e "its log .build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" "$mb/plain.out" >/dev/null; then
+    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration and its logs, and passes a provisioning flag only when asked, the device's never"
 else
     fail "milestone-build.sh: $mb_verdicts; plain: $(tail -n 4 "$mb/plain.out"); unsigned: $(grep -e 'failed on' "$mb/unsigned.out")"
 fi
