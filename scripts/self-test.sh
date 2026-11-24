@@ -2792,6 +2792,68 @@ else
     fail "milestone-build.sh: $mb_verdicts; order $mb_order; plain: $(grep -e 'app group' "$mb/plain.out" | tr '\n' '|'); profile: $(grep -e 'app group' "$mb/profile.out" | tail -n 1); install: $(grep -e 'again' "$mb/install.out" | tr '\n' '|')"
 fi
 
+# The gate's packaging check of the milestone flavour builds under the development identifiers
+# (B1): the build is given KNOT_BUNDLE_ID_milestone, KNOT_APP_GROUP_milestone and
+# KNOT_CLOUD_CONTAINER_milestone with their development values before it starts, and a product
+# that carries the milestone's bundle ID fails the check. The check's own function, from
+# verify.sh, with a stand-in xcodebuild that writes down its arguments and makes a product under
+# the bundle ID it is given (the milestone's when it is given none, as the project would), and a
+# stand-in lsregister; on a scratch tree that holds the identifiers.
+pk="$scratch/packaging-milestone"
+mkdir -p "$pk/tree/Apps/Config" "$pk/stub"
+cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$pk/tree/Apps/Config/"
+cat >"$pk/stub/xcodebuild" <<'SH'
+#!/bin/bash
+echo "xcodebuild $*" >>"$KNOT_PK_RECORD"
+derived="" bundle=com.p3ob7o.knot
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in
+        -derivedDataPath) derived=${!j} ;;
+        KNOT_BUNDLE_ID_milestone=*) bundle=${!i#KNOT_BUNDLE_ID_milestone=} ;;
+    esac
+done
+[[ -z ${KNOT_PK_FORCE_BUNDLE:-} ]] || bundle=$KNOT_PK_FORCE_BUNDLE
+app="$derived/Build/Products/Release/Knot.app"
+mkdir -p "$app/Contents/MacOS"
+echo app >"$app/Contents/MacOS/Knot"
+echo tool >"$app/Contents/MacOS/knot-cli"
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>Knot</string><key>KnotFlavour</key><string>milestone</string></dict></plist>\n' "$bundle" >"$app/Contents/Info.plist"
+echo "** BUILD SUCCEEDED **"
+SH
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_PK_RECORD"\n' >"$pk/stub/lsregister"
+chmod +x "$pk/stub/xcodebuild" "$pk/stub/lsregister"
+python3 -I - "$KNOT_SCRIPTS/verify.sh" "$pk/check.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+def function(name):
+    start = text.index(name + "() {")
+    return text[start:text.index("\n}\n", start) + 3]
+open(sys.argv[2], "w").write('source "$KNOT_SCRIPTS/lib/common.sh"\n' + function("plist_value") + function("packaging_milestone_mac") +
+                            'packaging_milestone_mac "$1"\n')
+PY
+pk_run() { # pk_run <name> <environment…>: the check's status
+    local name=$1 status=0
+    shift
+    : >"$pk/$name.record"
+    env PATH="$pk/stub:$PATH" KNOT_SCRIPTS="$KNOT_SCRIPTS" KNOT_TREE="$pk/tree" KNOT_TREE_NAMED=1 \
+        KNOT_LSREGISTER="$pk/stub/lsregister" KNOT_PK_RECORD="$pk/$name.record" "$@" \
+        bash "$pk/check.sh" "$pk/$name.log" >"$pk/$name.out" 2>&1 || status=$?
+    echo "$status"
+}
+pk_dev="$(pk_run dev)"
+pk_forced="$(pk_run forced KNOT_PK_FORCE_BUNDLE=com.p3ob7o.knot)"
+if [[ $pk_dev == 0 && $pk_forced == 1 ]] &&
+    grep -e '^xcodebuild .* KNOT_FLAVOUR=milestone .*KNOT_BUNDLE_ID_milestone=com.p3ob7o.knot.dev KNOT_APP_GROUP_milestone=group.com.p3ob7o.knot.dev KNOT_CLOUD_CONTAINER_milestone=iCloud.com.p3ob7o.knot.dev ' "$pk/dev.record" >/dev/null &&
+    grep -e '^lsregister -u .*/DerivedData-milestone/Build/Products/Release/Knot.app$' "$pk/dev.record" >/dev/null &&
+    [[ ! -e $pk/tree/.build/DerivedData-milestone ]] &&
+    grep -e 'carries com.p3ob7o.knot, not the development bundle ID com.p3ob7o.knot.dev' "$pk/forced.out" >/dev/null &&
+    grep -e '^lsregister -u ' "$pk/forced.record" >/dev/null; then
+    pass "the gate's milestone-flavour check builds under the development identifiers, and fails a product with the milestone's bundle ID, unregistering it"
+else
+    fail "the gate's milestone-flavour check: status $pk_dev, with the milestone's ID $pk_forced: $(head -n 1 "$pk/dev.record" | cut -c1-300) / $(tail -n 2 "$pk/forced.out" | tr '\n' ' ')"
+fi
+
 if ((FAILED)); then
     knot_fail "self-test" "The scripts' self-test failed. Each FAIL line above says which check." \
         "Fix the script that the check names, then rerun scripts/self-test.sh." "safe" "nothing"
