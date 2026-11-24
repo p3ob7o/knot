@@ -1303,8 +1303,15 @@ else
 fi
 
 # The logs of earlier runs go aside, to .build/logs-earlier/, scrubbed of the team's ID, so
-# that every file in .build/logs/ after this run is this run's (knot_set_logs_aside).
-knot_set_logs_aside "$KNOT_LOGS"
+# that every file in .build/logs/ after this run is this run's (knot_set_logs_aside). A run
+# of one step, --only or --module, rewrites its own step's logs and leaves the rest where they
+# are, scrubbed of the team's ID as they always were.
+if [[ -n $TIER ]]; then
+    knot_set_logs_aside "$KNOT_LOGS"
+else
+    mkdir -p "$KNOT_LOGS"
+    knot_scrub_logs "$KNOT_LOGS"
+fi
 mkdir -p "$KNOT_LOGS"
 START=$(knot_now)
 PASSED=0

@@ -1743,14 +1743,26 @@ else
     fail "the team filter left an ID or took too much, or the scrub changed the log's time to $scrubbed_time: $filtered"
 fi
 
-# At the start of a run, the earlier run's logs go aside, to .build/logs-earlier/, so that no
-# file in .build/logs/ after a run is older than that run: an earlier run's soak output, dated
-# 2020 here, a screenshot and a hidden file move, keeping their times, and the run before
-# that, in logs-earlier/ already, is gone. Through verify.sh's loop, `--only doctor` with the
-# doctor a stand-in (the lock loop's copy of scripts/), on a scratch tree.
+# At the start of a whole run, a tier, the earlier run's logs go aside, to .build/logs-earlier/,
+# so that no file in .build/logs/ after the run is older than it: an earlier run's soak output,
+# dated 2020 here, a screenshot and a hidden file move, keeping their times, and the run before
+# that, in logs-earlier/ already, is gone. A run of one step, --only, leaves the whole run's
+# logs where they are, and moves nothing. Through verify.sh's loop, `--perf` and then
+# `--only doctor`, with the doctor and the perf step stand-ins, on a scratch tree.
 la="$scratch/logs-aside"
-mkdir -p "$la/tree/.build/logs" "$la/tree/.build/logs-earlier"
+mkdir -p "$la/tree/.build/logs" "$la/tree/.build/logs-earlier" "$la/slots"
 cp "$KNOT_SELF/.xcode-version" "$la/tree/"
+cp -R "$KNOT_SCRIPTS" "$la/scripts"
+python3 -I - "$la/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("step_perf", 'echo "perf stand-in"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+open(path, "w").write(text)
+PY
 printf 'capture ledger soak: RED with seed 1\nTeamIdentifierPrefix=%s.\n' "$fake_team" >"$la/tree/.build/logs/verify-soak.out"
 touch -t 202001020304.05 "$la/tree/.build/logs/verify-soak.out"
 printf 'png\n' >"$la/tree/.build/logs/launch-iphone.png"
@@ -1758,7 +1770,7 @@ printf 'hidden\n' >"$la/tree/.build/logs/.earlier-hidden"
 printf 'older\n' >"$la/tree/.build/logs-earlier/verify-older-run.log"
 la_started=$(knot_now)
 la_status=0
-env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$wl/scripts/verify.sh" --only doctor >"$la/out" 2>&1 || la_status=$?
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$la/scripts/verify.sh" --perf >"$la/out" 2>&1 || la_status=$?
 la_old=""
 for f in "$la/tree/.build/logs"/* "$la/tree/.build/logs"/.[!.]*; do
     [[ -e $f ]] || continue
@@ -1766,12 +1778,19 @@ for f in "$la/tree/.build/logs"/* "$la/tree/.build/logs"/.[!.]*; do
 done
 la_aside="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
 la_soak_time="$(date -r "$(stat -f %m "$la/tree/.build/logs-earlier/verify-soak.out" 2>/dev/null || echo 0)" +%Y%m%d%H%M.%S)"
-if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-doctor.log &&
-    $la_aside == ".earlier-hidden launch-iphone.png verify-soak.out " && $la_soak_time == 202001020304.05 ]] &&
+# Then one step alone: the whole run's logs stay, and logs-earlier/ is as the whole run left it.
+la_only_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$la/scripts/verify.sh" --only doctor >"$la/only.out" 2>&1 || la_only_status=$?
+la_after_only="$(cd "$la/tree/.build/logs" && ls | tr '\n' ' ')"
+la_aside_after_only="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
+if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-perf.log &&
+    $la_aside == ".earlier-hidden launch-iphone.png verify-soak.out " && $la_soak_time == 202001020304.05 &&
+    $la_only_status == 0 && $la_after_only == *"verify-perf.log"* && $la_after_only == *"verify-doctor.log"* &&
+    $la_aside_after_only == "$la_aside" ]] &&
     ! grep -e "$fake_team" "$la/tree/.build/logs-earlier/verify-soak.out" >/dev/null; then
-    pass "a run moves the earlier run's logs aside, scrubbed and keeping their times, and the run before that goes"
+    pass "a whole run moves the earlier run's logs aside, scrubbed and keeping their times, and the run before that goes; a run of one step moves nothing"
 else
-    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time: $(tail -n 5 "$la/out")"
+    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time; after --only doctor ($la_only_status): logs '$la_after_only', logs-earlier '$la_aside_after_only': $(tail -n 5 "$la/out")"
 fi
 
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands

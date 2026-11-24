@@ -703,16 +703,18 @@ knot_scrub_logs() {
     done
 }
 
-# Moves the files an earlier run left in the log folder aside, at the start of a run, into
-# the folder beside it, logs-earlier/, which holds the run before this one and nothing older:
-# after a run, no file in the log folder is older than that run. A step that this run does not
-# start, such as the soak at a gate whose depth takes none, then leaves no log of another run
-# behind, dated or not, for a reader to take for this run's. They are moved, not removed: a
-# thread that reruns one step, or a run that stopped early, still finds the earlier run's
-# other logs there, and the evidence of a red run, a soak's verdict or a crash's log, outlives
-# the next run by one. A move keeps each file's inode, so a command of another run still
-# writing to one loses no line. The moved logs are scrubbed of the team's ID as they always
-# were (knot_scrub_logs).
+# Moves the files an earlier run left in the log folder aside, at the start of a whole run, a
+# tier of verify.sh, into the folder beside it, logs-earlier/, which holds the run before this
+# one and nothing older: after a whole run, no file in the log folder is older than that run. A
+# step that the run does not start, such as the soak at a gate whose depth takes none, then
+# leaves no log of another run behind, dated or not, for a reader to take for this run's. They
+# are moved, not removed: a run that stopped early leaves the earlier run's logs to read, and
+# the evidence of a red run, a soak's verdict or a crash's log, outlives the next whole run by
+# one. A run of one step, --only or --module, does not call it: it rewrites its own step's logs
+# and leaves the rest, so that a thread that reruns one step, or a sequence of such runs after a
+# stop, keeps the whole run's logs. The moved logs are scrubbed of the team's ID as they always
+# were (knot_scrub_logs), which rewrites each file: two whole runs at once in one worktree are
+# not supported.
 #   knot_set_logs_aside <log folder>
 knot_set_logs_aside() {
     local folder=$1 aside entry
