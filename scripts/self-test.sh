@@ -2423,6 +2423,13 @@ cat >"$mb/stub/codesign" <<'SH'
 #!/bin/bash
 part="${@: -1}"
 echo "codesign $*" >>"$KNOT_MB_RECORD"
+if [[ $1 == -dv ]]; then
+    # Who signed it: the made-up team, or no team where KNOT_MB_ADHOC names the part.
+    team="$KNOT_MB_TEAM"
+    [[ -n ${KNOT_MB_ADHOC:-} && $part == *"$KNOT_MB_ADHOC" ]] && team="not set"
+    printf 'Executable=%s\nTeamIdentifier=%s\n' "$part" "$team" >&2
+    exit 0
+fi
 if [[ $1 == -d ]]; then
     groups=""
     [[ -n ${KNOT_MB_NO_GROUP:-} && $part == *"$KNOT_MB_NO_GROUP" ]] || groups="$(cat "$part.groups-signed")"
@@ -2486,7 +2493,7 @@ else
     binary "$app/Contents/MacOS/Knot"
     binary "$app/Contents/MacOS/knot-cli"
     signed "$app" "$KNOT_MB_TEAM.com.p3ob7o.knot" "$app/Contents/embedded.provisionprofile"
-    signed "$app/Contents/MacOS/knot-cli" "$KNOT_MB_TEAM.com.p3ob7o.knot"
+    signed "$app/Contents/MacOS/knot-cli" "${KNOT_MB_TOOL_GROUP:-$KNOT_MB_TEAM.com.p3ob7o.knot}"
 fi
 # The three forms in which xcodebuild writes the signing identity, made up: its SHA-1, the
 # certificate's name, and the name in an exported setting, with its parentheses escaped.
@@ -2537,6 +2544,9 @@ mb_profile="$(KNOT_MB_PROFILE_OTHER=Widgets-iOS.appex mb_run profile M1 --commit
 mb_profile_log="$( { grep -h -e 'app group Knot.app/PlugIns/Widgets-iOS.appex' "$mb/tree/.build/milestone/"*.log || true; } | tr '\n' ' ')"
 mb_nogroup="$(KNOT_MB_NO_GROUP=Watch/KnotWatch.app mb_run nogroup M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_group_log="$mb_group_log/$( { grep -c -e 'is signed with no app group' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
+# Who signed each part: an ad hoc widget, and a Mac tool with another app group than the app's.
+mb_adhoc="$(KNOT_MB_ADHOC=Widgets-iOS.appex mb_run adhoc M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_tool_group="$(KNOT_MB_TOOL_GROUP=group.com.example.other mb_run tool-group M1 --commit "$mb_commit" --products mac --install --mac-folder "$mb/folder")"
 # A part signed with a group that holds no profile.
 mb_noprofile="$(KNOT_MB_NO_PROFILE=Widgets-iOS.appex mb_run noprofile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_group_log="$mb_group_log/$( { grep -c -e 'Widgets-iOS.appex is signed with an app group and holds no provisioning profile' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
@@ -2604,8 +2614,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2627,6 +2637,10 @@ if [[ $mb_verdicts == "group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e 'ios: Knot.app/PlugIns/Widgets-iOS.appex is signed with no team, ad hoc or not at all' "$mb/adhoc.out" >/dev/null &&
+    grep -e "mac: the tool's app groups, group.com.example.other, are not the app's, <TEAM>.com.p3ob7o.knot" "$mb/tool-group.out" >/dev/null &&
+    grep -e "ios: each of its 5 parts is signed by the app's own team" "$mb/plain.out" >/dev/null &&
+    grep -e "mac: the tool's app groups are the app's" "$mb/plain.out" >/dev/null &&
     [[ $mb_mac_install == 1 ]] &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app --mac-folder /[^ ]*/folder$" "$mb/mac-install.out" >/dev/null &&
     grep -e 'move it away first' "$mb/mac-install.out" >/dev/null &&

@@ -365,6 +365,45 @@ check_groups() {
     note "$name: the app group checked on $count parts"
 }
 
+# Who signed each part: the app's own team, for every part. An ad hoc signature passes
+# codesign --verify --strict, so this is the check that each part was signed with the team at
+# all. On the Mac, the tool's app groups are the app's. The team is compared in memory and
+# never printed: each line says only whether they agree.
+#   check_signers <ios|mac> <app> <log>
+check_signers() {
+    local name=$1 app=$2 log=$3 base part team app_team app_groups tool_groups count=0
+    note() { say "$1"; printf 'milestone-build: %s\n' "$1" | knot_filter_team >>"$log"; }
+    team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1 || true; }
+    base="$(dirname "$app")"
+    app_team="$(team_of "$app")"
+    if [[ -z $app_team || $app_team == "not set" ]]; then
+        note "$name: $(basename "$app") is signed with no team, ad hoc or not at all"
+        return 1
+    fi
+    while IFS= read -r part; do
+        team="$(team_of "$base/$part")"
+        if [[ $team != "$app_team" ]]; then
+            if [[ -z $team || $team == "not set" ]]; then
+                note "$name: $part is signed with no team, ad hoc or not at all"
+            else
+                note "$name: $part is signed by another team than the app's"
+            fi
+            return 1
+        fi
+        count=$((count + 1))
+    done < <(parts_of "$app")
+    note "$name: each of its $count parts is signed by the app's own team"
+    if [[ -f $app/Contents/MacOS/$WANT_TOOL ]]; then
+        app_groups="$(codesign -d --entitlements - --xml "$app" 2>/dev/null | groups_in | sort)"
+        tool_groups="$(codesign -d --entitlements - --xml "$app/Contents/MacOS/$WANT_TOOL" 2>/dev/null | groups_in | sort)"
+        if [[ $tool_groups != "$app_groups" ]]; then
+            note "$name: the tool's app groups, $(tr '\n' ' ' <<<"${tool_groups:-none}" | sed 's/ $//' | knot_filter_team), are not the app's, $(tr '\n' ' ' <<<"${app_groups:-none}" | sed 's/ $//' | knot_filter_team)"
+            return 1
+        fi
+        note "$name: the tool's app groups are the app's"
+    fi
+}
+
 # The fakes and the debug launch arguments, in every Mach-O file of a product, as the packaging
 # step scans a development Release build: a build that compiled DEBUG or KNOT_FAKES in holds
 # them. It fails when it found no Mach-O file, so that it cannot pass by reading nothing.
@@ -422,7 +461,8 @@ for product in $WANTED; do
     fi
     say "$product: built in $took"
     app="$derived/Build/Products/$folder/Knot.app"
-    if ! check_product "$product" "$app" "$log" || ! check_groups "$product" "$app" "$log" ||
+    if ! check_product "$product" "$app" "$log" || ! check_signers "$product" "$app" "$log" ||
+        ! check_groups "$product" "$app" "$log" ||
         ! check_binaries "$product" "$app" "$log"; then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
             "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
