@@ -233,7 +233,11 @@ knot_select_xcode
 # The project from this commit's project.yml, with the pinned XcodeGen. Not through
 # knot_generate_project: it links the team's configuration again only from KNOT_LOCAL_CONFIG,
 # and removes the link without it, so the build would have no team.
+# The generated project goes first: XcodeGen leaves files of its own making alone, and a user
+# scheme, a mirror setting or a workspace's Package.resolved left in Knot.xcodeproj would reach
+# the build.
 knot_check_xcodegen || knot_fail "$KNOT_XCODEGEN_CODE" "$KNOT_XCODEGEN_WHAT" "$KNOT_XCODEGEN_FIX" "safe" "nothing"
+rm -rf "$KNOT_PROJECT"
 (cd "$KNOT_ROOT" && "$KNOT_XCODEGEN_PATH" generate --spec project.yml --quiet)
 [[ -e $KNOT_CONFIG/Local.xcconfig ]] ||
     knot_fail "milestone-build-no-team" "The team's configuration was linked, and is not after the project was generated." \
