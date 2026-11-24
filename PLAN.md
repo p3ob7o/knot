@@ -219,6 +219,8 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-11 | 3 | The engine's kill points in the soak | WP-11 PR 2; WP-06 PR 2 |
 | WP-11 | 11c | A late answer reads the capture's entry after its kill point: a discard that passed while the answer waited there was missed, a fault the third PR brought and the random interleavings found under load | WP-11 PR 3 |
 | WP-11 | 11d | Two stale failed ends of a stored recording are shown to change nothing: the store refuses them, and a test holds each | WP-11c |
+| WP-11 | 11e | Four of the engine's tests wait for the ingest run to end, not for an empty inbox: one failed by chance on a loaded Mac | WP-11d |
+| WP-11 | 11f | A press right after a stop that meets this launch's own saved state still reading "recording" starts a new recording and leaves the stopped capture alone: a test holds it | WP-11e |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
