@@ -1070,9 +1070,19 @@ step_soak() {
 # optimisation, but an internal declaration keeps a symbol other modules can reach, so the
 # optimiser may not drop it or treat it as private: a measured time can be a little slower
 # than the shipped app's, never faster.
+#
+# It also defines DEBUG. Tests that use a member declared under `#if DEBUG` alone, and not
+# `#if DEBUG || KNOT_FAKES`, compile in no other optimised build: the live smoke test reads
+# LiveConfiguration's launch arguments, and the inbox's lock test sets InboxItems'
+# afterManifestPlaced hook. So the measured modules hold the seven blocks of the sources
+# guarded by DEBUG alone (in KnotApp's EnvironmentFactory and LiveConfiguration, and in
+# KnotCapture's InboxItems): a scan of the launch arguments at the composition's start, and a
+# read of a lock each time a typed item is written. Once those tests guard themselves, this
+# define goes, and the measured modules hold none of it.
 step_perf() {
     local scratch="$KNOT_BUILD/swiftpm-perf" output="$KNOT_LOGS/verify-perf.out"
-    local flags=(--package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES -Xswiftc -enable-testing)
+    local flags=(--package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES
+        -Xswiftc -enable-testing -Xswiftc -DDEBUG)
     swift build "${flags[@]}" --build-tests
     perf_tests() {
         swift test "${flags[@]}" --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
