@@ -2684,6 +2684,12 @@ mb_pkg_git add Other.swift
 mb_pkg_git commit -q -m "a later revision"
 mb_pkg_moved="$(mb_run pkg-moved M1 --commit "$mb_commit")"
 mb_pkg_git reset -q --hard HEAD~1
+# An ignored Swift file in the checkout, under a folder the package's own ignore list names.
+printf 'build/\n' >>"$mb_pkg/.git/info/exclude"
+mkdir -p "$mb_pkg/build"
+printf '#error("hidden")\n' >"$mb_pkg/build/Hidden.swift"
+mb_pkg_ignored="$(mb_run pkg-ignored M1 --commit "$mb_commit")"
+rm -r "$mb_pkg/build"
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
 mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
@@ -2716,8 +2722,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "project removed packages 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&

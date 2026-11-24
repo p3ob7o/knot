@@ -192,7 +192,8 @@ while IFS=$'\t' read -r name revision; do
     checkout="$KNOT_SOURCE_PACKAGES/checkouts/$name"
     [[ -d $checkout ]] || continue
     at="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || echo unreadable)"
-    changes="$(git -C "$checkout" status --porcelain --untracked-files=normal 2>/dev/null || echo unreadable)"
+    # Ignored files too: a package's own .gitignore may ignore a folder its sources are read from.
+    changes="$(git -C "$checkout" status --porcelain --untracked-files=normal --ignored 2>/dev/null || echo unreadable)"
     if [[ $at != "$revision" || -n $changes ]]; then
         knot_fail "milestone-build-package-checkout" "The checkout of $name in .build/SourcePackages is $( [[ $at != "$revision" ]] && echo "at ${at:0:12}, not the pinned ${revision:0:12}" || echo "changed, in $(grep -c . <<<"$changes") of its paths"): xcodebuild would build it as it is." \
             "Remove .build/SourcePackages/checkouts/$name by its path, so that the build clones it again at its pin, then rerun." "safe" "nothing"
