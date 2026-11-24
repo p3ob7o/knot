@@ -18,9 +18,10 @@
 #      holding every build slot, so that a change that breaks that build shows the next
 #      morning and not at a milestone.
 # It prints each run's status line, and exits non-zero when any run failed. A red night
-# stops the merge queue (docs/orchestrator.md). A run that did not start for want of a build
-# slot, verify.sh's status 4, as --perf can on a busy night, is reported as not run, apart from
-# the failures, and does not make the night red. Each run's logs, the files it wrote in
+# stops the merge queue (docs/orchestrator.md). A run that did not run to its end for want of
+# a build slot, verify.sh's status 4, is reported as not run, apart from the failures. The night
+# ends 0 only when every run ran and passed; 1 when any run failed; and 4, no verdict, when none
+# failed and at least one did not run, its last line naming those. Each run's logs, the files it wrote in
 # .build/logs/, are kept in a folder of their own, .build/nightly/<run>/, cleared when the
 # night starts: one verify run's logs would otherwise go aside at the next whole run.
 
@@ -73,15 +74,14 @@ grep -e 'changed since' "$NIGHTLY/models/verify-model-report.log" 2>/dev/null ||
 run perf "$KNOT_SCRIPTS/verify.sh" --perf
 
 printf 'nightly: %s\n' "${summary[@]}"
-((${#not_run[@]} == 0)) ||
-    echo "nightly: not run, for want of a build slot: ${not_run[*]}. No failure of the code; run each again when the slots are free."
 if ((${#failed[@]})); then
-    knot_fail "nightly" "The nightly run failed in: ${failed[*]}." \
+    knot_fail "nightly" "The nightly run failed in: ${failed[*]}.$( ((${#not_run[@]})) && echo " Not run, for want of a build slot: ${not_run[*]}.")" \
         "Read each run's logs in .build/nightly/<run>/. A red night stops the queue: bisect the squash merges and revert the cause." \
         "safe" "build products in .build/ only"
 fi
 if ((${#not_run[@]})); then
-    echo "nightly: every run that ran passed"
-else
-    echo "nightly: every run passed"
+    # No run failed, and some did not run: no verdict, neither red nor green.
+    echo "nightly: no verdict: no run failed, and these did not run, for want of a build slot: ${not_run[*]}"
+    exit 4
 fi
+echo "nightly: every run passed"

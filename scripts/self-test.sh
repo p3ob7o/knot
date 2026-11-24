@@ -2378,8 +2378,9 @@ cp "$KNOT_SELF/.xcode-version" "$ng/tree/"
 cat >"$ng/scripts/verify.sh" <<'SH'
 #!/bin/bash
 [[ ${1:-} == --status-line ]] && { echo "stand-in status"; exit 0; }
-# The perf run finds no slot when asked: verify.sh's status 4.
-[[ ${1:-} == --perf && -n ${KNOT_NG_NO_SLOT:-} ]] && exit 4
+# A run finds no slot when KNOT_NG_NO_SLOT names it, and fails when KNOT_NG_FAIL does.
+[[ -n ${KNOT_NG_NO_SLOT:-} && " $* " == *" $KNOT_NG_NO_SLOT "* ]] && exit 4
+[[ -n ${KNOT_NG_FAIL:-} && " $* " == *" $KNOT_NG_FAIL "* ]] && exit 1
 source "$(dirname "$0")/lib/common.sh"
 # A whole run sets the earlier logs aside, as verify.sh does; a run of one step does not.
 [[ ${1:-} == --only ]] || knot_set_logs_aside "$KNOT_LOGS"
@@ -2399,15 +2400,24 @@ else
     fail "the nightly's logs: status $ng_status, folders '$ng_folders', full's '$ng_full', tsan's '$ng_tsan': $(tail -n 3 "$ng/out")"
 fi
 
-# A run that found no build slot is reported as not run, apart from the failures, and leaves
-# the night green.
-ng_slot_status=0
-(cd "$ng/tree" && env KNOT_TREE="$ng/tree" KNOT_NG_NO_SLOT=1 "$ng/scripts/nightly.sh" >"$ng/no-slot.out" 2>&1) || ng_slot_status=$?
-if [[ $ng_slot_status == 0 ]] && grep -e '^nightly: not run, for want of a build slot: perf\.' "$ng/no-slot.out" >/dev/null &&
-    grep -e '^nightly: every run that ran passed$' "$ng/no-slot.out" >/dev/null; then
-    pass "the nightly reports a run with no slot as not run, apart from the failures"
+# A night that did not run every run gives no verdict: status 4, neither green nor red, its last
+# line naming what did not run, whether perf or the full run found no slot; a run that failed
+# makes it red, status 1, whatever else did not run.
+ng_night() { # ng_night <name> <environment…>: the night's status and its last line
+    local name=$1 status=0
+    shift
+    (cd "$ng/tree" && env KNOT_TREE="$ng/tree" "$@" "$ng/scripts/nightly.sh" >"$ng/$name.out" 2>&1) || status=$?
+    echo "$status|$(grep -v -e '^ ' -e '^FAIL' "$ng/$name.out" | tail -n 1)"
+}
+ng_perf="$(ng_night no-slot-perf KNOT_NG_NO_SLOT=--perf)"
+ng_full="$(ng_night no-slot-full KNOT_NG_NO_SLOT=--full)"
+ng_red="$(ng_night red KNOT_NG_NO_SLOT=--perf KNOT_NG_FAIL=--soak)"
+if [[ $ng_perf == "4|nightly: no verdict: no run failed, and these did not run, for want of a build slot: perf" &&
+    $ng_full == "4|nightly: no verdict: no run failed, and these did not run, for want of a build slot: full" &&
+    ${ng_red%%|*} == 1 ]] && grep -e 'failed in: soak. Not run, for want of a build slot: perf.' "$ng/red.out" >/dev/null; then
+    pass "a night that did not run every run gives no verdict, status 4, naming what did not run; a failed run makes it red"
 else
-    fail "the nightly with no slot for perf: status $ng_slot_status: $(tail -n 3 "$ng/no-slot.out")"
+    fail "the nightly's verdicts: perf with no slot '$ng_perf', full with no slot '$ng_full', a failure beside '$ng_red'"
 fi
 
 # scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
