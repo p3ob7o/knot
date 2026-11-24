@@ -666,7 +666,7 @@ packaging_milestone_mac() {
     fi
     app="$derived/Build/Products/Release/Knot.app"
     # A product an earlier check left, as when its run was killed, leaves LaunchServices first.
-    knot_unregister_apps "$derived"
+    knot_unregister_apps "$derived" || echo "      could not unregister an earlier check's product from LaunchServices: $KNOT_UNREGISTER_WHY"
     rm -rf "$derived"
     milestone_mac_build() {
         { xcodebuild -project "$KNOT_PROJECT" -derivedDataPath "$derived" \
@@ -696,7 +696,10 @@ packaging_milestone_mac() {
             status=1
         fi
     fi
-    knot_unregister_apps "$derived"
+    if ! knot_unregister_apps "$derived"; then
+        echo "      could not unregister the product from LaunchServices: $KNOT_UNREGISTER_WHY"
+        status=1
+    fi
     rm -rf "$derived"
     return "$status"
 }

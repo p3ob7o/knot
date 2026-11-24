@@ -511,8 +511,11 @@ for product in $WANTED; do
     # failed, every app in its derived data leaves LaunchServices; the product stays on disk
     # for the copy.
     unregister() {
-        knot_unregister_apps "$derived"
-        say "$product: its products are unregistered from LaunchServices; they stay on disk"
+        if knot_unregister_apps "$derived"; then
+            say "$product: its products are unregistered from LaunchServices; they stay on disk"
+        else
+            say "$product: its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY. Unregister each by hand with lsregister -u <app>; they stay on disk"
+        fi
     }
     if ((status != 0)); then
         unregister

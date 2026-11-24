@@ -742,14 +742,25 @@ knot_set_logs_aside() {
 KNOT_LSREGISTER="${KNOT_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 
 # Unregisters from LaunchServices every app bundle under a folder, the folder's own products,
-# before they are removed or kept aside. A folder that does not exist holds none.
+# before they are removed or kept aside. A folder that does not exist holds none. It returns
+# non-zero when the tool is missing or an unregister failed, and says why in
+# KNOT_UNREGISTER_WHY, so that a caller never claims what did not happen.
 #   knot_unregister_apps <folder>
 knot_unregister_apps() {
-    local app
+    local app status=0
+    KNOT_UNREGISTER_WHY=""
     [[ -d $1 ]] || return 0
+    if [[ ! -x $KNOT_LSREGISTER ]]; then
+        KNOT_UNREGISTER_WHY="LaunchServices' tool is not at $KNOT_LSREGISTER"
+        return 1
+    fi
     while IFS= read -r -d '' app; do
-        "$KNOT_LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+        if ! "$KNOT_LSREGISTER" -u "$app" >/dev/null 2>&1; then
+            status=1
+            KNOT_UNREGISTER_WHY="lsregister -u failed on $(basename "$app")"
+        fi
     done < <(find "$1" -type d -name '*.app' -prune -print0 2>/dev/null)
+    return "$status"
 }
 
 # Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error

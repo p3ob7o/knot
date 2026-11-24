@@ -2600,7 +2600,7 @@ mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no de
     : >"$mb/$name.record"
     env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
         KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
-        KNOT_LSREGISTER="$mb/stub/lsregister" \
+        KNOT_LSREGISTER="${KNOT_MB_LSREGISTER:-$mb/stub/lsregister}" \
         "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
     echo "$status"
 }
@@ -2638,6 +2638,11 @@ mb_group_log="$mb_group_log/$( { grep -c -e 'is signed with no app group' "$mb/t
 # Who signed each part: an ad hoc widget, and a Mac tool with another app group than the app's.
 mb_adhoc="$(KNOT_MB_ADHOC=Widgets-iOS.appex mb_run adhoc M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_tool_group="$(KNOT_MB_TOOL_GROUP=group.com.example.other mb_run tool-group M1 --commit "$mb_commit" --products mac --install --mac-folder "$mb/folder")"
+# An unregister that fails, and LaunchServices' tool missing: said as such, never claimed.
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_MB_RECORD"\nexit 1\n' >"$mb/stub/lsregister-fails"
+chmod +x "$mb/stub/lsregister-fails"
+mb_unregister_fails="$(KNOT_MB_LSREGISTER="$mb/stub/lsregister-fails" mb_run unregister-fails M1 --commit "$mb_commit" --products mac)"
+mb_unregister_missing="$(KNOT_MB_LSREGISTER="$mb/stub/no-such-tool" mb_run unregister-missing M1 --commit "$mb_commit" --products mac)"
 # A part signed with a group that holds no profile.
 mb_noprofile="$(KNOT_MB_NO_PROFILE=Widgets-iOS.appex mb_run noprofile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_group_log="$mb_group_log/$( { grep -c -e 'Widgets-iOS.appex is signed with an app group and holds no provisioning profile' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
@@ -2727,8 +2732,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_unparsed_config/$(mb_builds unparsed-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="unregister $mb_unregister_fails $mb_unregister_missing project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_unparsed_config/$(mb_builds unparsed-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "unregister 0 0 project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2750,6 +2755,9 @@ if [[ $mb_verdicts == "project removed packages 1/0 1/0 1/0 unregistered 1/kept/
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e 'mac: its products could not be unregistered from LaunchServices: lsregister -u failed on Knot.app' "$mb/unregister-fails.out" >/dev/null &&
+    grep -e "mac: its products could not be unregistered from LaunchServices: LaunchServices' tool is not at" "$mb/unregister-missing.out" >/dev/null &&
+    ! grep -e 'are unregistered from LaunchServices' "$mb/unregister-fails.out" "$mb/unregister-missing.out" >/dev/null &&
     grep -e '^milestone-build: ios: built in [0-9]*s, after waiting [0-9]*s for a build slot$' "$mb/plain.out" >/dev/null &&
     grep -e 'built in [0-9]*s (the wait for a slot apart), every part verified' "$mb/plain.out" >/dev/null &&
     [[ -z "$(ls -A "$mb/tree/.build/milestone" | grep -e '^\.slot-time' || true)" ]] &&
