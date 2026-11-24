@@ -169,6 +169,36 @@ for entry in "Worktree.xcconfig KNOT_WORKTREE KNOT_WORKTREE_ID" "Local.xcconfig 
 done
 say "the configurations the build includes set only their own keys"
 
+# The packages' clones under .build/SourcePackages, which git ignores: xcodebuild resolves the
+# packages without resetting a checkout that was changed (a probe of 2026-11-24 kept an edit to
+# GRDB through -resolvePackageDependencies), so a checkout must stand at the revision that
+# Packages/KnotKit/Package.resolved pins, with no change. A missing one is cloned at the pin.
+resolved="$KNOT_ROOT/Packages/KnotKit/Package.resolved"
+[[ -f $resolved ]] || knot_fail "milestone-build-pins" "Packages/KnotKit/Package.resolved is missing: the packages have no pinned revision." \
+    "Check out a commit that holds it." "safe" "nothing"
+pins="$(python3 -I -c '
+import json, sys
+for pin in json.load(open(sys.argv[1])).get("pins", []):
+    name = pin.get("location", "").rstrip("/").split("/")[-1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    print("%s\t%s" % (name, pin.get("state", {}).get("revision", "")))
+' "$resolved")"
+checked_out=0
+while IFS=$'\t' read -r name revision; do
+    [[ -n $name ]] || continue
+    checkout="$KNOT_SOURCE_PACKAGES/checkouts/$name"
+    [[ -d $checkout ]] || continue
+    at="$(git -C "$checkout" rev-parse HEAD 2>/dev/null || echo unreadable)"
+    changes="$(git -C "$checkout" status --porcelain --untracked-files=normal 2>/dev/null || echo unreadable)"
+    if [[ $at != "$revision" || -n $changes ]]; then
+        knot_fail "milestone-build-package-checkout" "The checkout of $name in .build/SourcePackages is $( [[ $at != "$revision" ]] && echo "at ${at:0:12}, not the pinned ${revision:0:12}" || echo "changed, in $(grep -c . <<<"$changes") of its paths"): xcodebuild would build it as it is." \
+            "Remove .build/SourcePackages/checkouts/$name by its path, so that the build clones it again at its pin, then rerun." "safe" "nothing"
+    fi
+    checked_out=$((checked_out + 1))
+done <<<"$pins"
+say "the packages' checkouts stand at their pinned revisions, with no change ($checked_out read)"
+
 # Xcode's saved list of accounts, as a count and nothing else (docs/orchestrator.md): the
 # entries under IDE.Identifiers.Prod of DVTDeveloperAccountManagerAppleIDLists. Never the
 # Accounts pane, which can show an account that is no longer saved.

@@ -2441,8 +2441,19 @@ mb_git() { git -C "$mb/tree" -c user.name=self-test -c user.email=self-test@exam
 mb_record() { # mb_record <message>: records the tree's staged files as a commit
     mb_git commit -q -m "$1"
 }
+# A package's checkout, a small git repository, and the pin of its revision in Package.resolved.
+mb_pkg="$mb/tree/.build/SourcePackages/checkouts/Synthetic"
+mkdir -p "$mb_pkg"
+mb_pkg_git() { git -C "$mb_pkg" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false "$@"; }
+mb_pkg_git init -q
+printf 'one\n' >"$mb_pkg/Source.swift"
+mb_pkg_git add Source.swift
+mb_pkg_git commit -q -m "the pinned revision"
+mkdir -p "$mb/tree/Packages/KnotKit"
+printf '{"pins": [{"identity": "synthetic", "kind": "remoteSourceControl", "location": "https://example.invalid/Synthetic.git", "state": {"revision": "%s", "version": "1.0.0"}}], "version": 3}\n' \
+    "$(mb_pkg_git rev-parse HEAD)" >"$mb/tree/Packages/KnotKit/Package.resolved"
 mb_git init -q
-mb_git add .gitignore .xcode-version Apps/Config/Identifiers.xcconfig "${mb_entitlements[@]}"
+mb_git add .gitignore .xcode-version Apps/Config/Identifiers.xcconfig "${mb_entitlements[@]}" Packages/KnotKit/Package.resolved
 mb_record "the milestone's commit"
 mb_commit="$(mb_git rev-parse HEAD)"
 mkdir -p "$mb/tree/.build/config"
@@ -2610,7 +2621,7 @@ mb_group_log="$mb_group_log/$( { grep -c -e 'Widgets-iOS.appex is signed with an
 mkdir -p "$mb/tree/Packages/KnotKit/Sources/KnotCore/build"
 printf '#error("hidden")\n' >"$mb/tree/Packages/KnotKit/Sources/KnotCore/build/Hidden.swift"
 mb_ignored="$(mb_run ignored M1 --commit "$mb_commit")"
-rm -r "$mb/tree/Packages"
+rm -r "$mb/tree/Packages/KnotKit/Sources"
 printf 'untracked\n' >"$mb/tree/Apps/Untracked.swift"
 mb_untracked="$(mb_run untracked M1 --commit "$mb_commit")"
 rm "$mb/tree/Apps/Untracked.swift"
@@ -2638,6 +2649,15 @@ env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen"
     KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/earlier-log.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
     KNOT_LSREGISTER="$mb/stub/lsregister" \
     "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/earlier-log.out" 2>&1 || mb_earlier_log=$?
+# A package's checkout that was changed, and one at another revision than its pin.
+printf 'an edit\n' >>"$mb_pkg/Source.swift"
+mb_pkg_edited="$(mb_run pkg-edited M1 --commit "$mb_commit")"
+mb_pkg_git checkout -q -- Source.swift
+printf 'two\n' >"$mb_pkg/Other.swift"
+mb_pkg_git add Other.swift
+mb_pkg_git commit -q -m "a later revision"
+mb_pkg_moved="$(mb_run pkg-moved M1 --commit "$mb_commit")"
+mb_pkg_git reset -q --hard HEAD~1
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
 mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
@@ -2670,8 +2690,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "packages 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2693,6 +2713,9 @@ if [[ $mb_verdicts == "unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 nop
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e 'The checkout of Synthetic in .build/SourcePackages is changed, in 1 of its paths' "$mb/pkg-edited.out" >/dev/null &&
+    grep -e 'The checkout of Synthetic in .build/SourcePackages is at [0-9a-f]*, not the pinned' "$mb/pkg-moved.out" >/dev/null &&
+    grep -e "the packages' checkouts stand at their pinned revisions, with no change (1 read)" "$mb/plain.out" >/dev/null &&
     grep -e 'ios: Knot.app/PlugIns/Widgets-iOS.appex is signed with no team, ad hoc or not at all' "$mb/adhoc.out" >/dev/null &&
     grep -e "mac: the tool's app groups, group.com.example.other, are not the app's, <TEAM>.com.p3ob7o.knot" "$mb/tool-group.out" >/dev/null &&
     grep -e "ios: each of its 5 parts is signed by the app's own team" "$mb/plain.out" >/dev/null &&
