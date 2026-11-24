@@ -103,6 +103,9 @@ if ((INSTALL)); then
         usage_fail "--device and --again are for the iPhone app, and --products mac builds none."
     [[ $PRODUCTS != ios || -z $MAC_FOLDER ]] || usage_fail "--mac-folder is for the Mac app, and --products ios builds none."
 fi
+# A folder named relative to where the script was started is made absolute, so that the
+# command it prints to install again is right wherever it is run.
+[[ -z $MAC_FOLDER || $MAC_FOLDER == /* ]] || MAC_FOLDER="$PWD/$MAC_FOLDER"
 WANTED="ios mac"
 [[ $PRODUCTS == both ]] || WANTED=$PRODUCTS
 
@@ -450,9 +453,11 @@ if ((INSTALL)); then
         fi
         say "$product: scripts/install.sh"
         if ! "$KNOT_SCRIPTS/install.sh" "$app" ${options[@]+"${options[@]}"}; then
-            again="scripts/install.sh $(printf '%q' "${app#"$KNOT_ROOT"/}")"
+            again="$(printf '%q' "$KNOT_SCRIPTS/install.sh") $(printf '%q' "$app")"
             for option in ${options[@]+"${options[@]}"}; do again="$again $(printf '%q' "$option")"; done
-            say "$product: the install failed. The build is whole and checked, at ${app#"$KNOT_ROOT"/}. Install it again from there, from the worktree's root: $again"
+            say "$product: the install failed. The build is whole and checked, at ${app#"$KNOT_ROOT"/}. Install it again from there, from any folder: $again"
+            [[ $product == ios ]] ||
+                say "mac: if $MAC_FOLDER holds part of the copy, move it away first: install.sh refuses a folder that holds the app already."
             say "$product: do not rerun milestone-build.sh for it: it would refuse the folder that holds this build."
             missed+=("$product")
         fi

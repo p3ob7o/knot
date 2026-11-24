@@ -2546,6 +2546,9 @@ mb_debug="$(KNOT_MB_DEBUG_ARGUMENT=MacOS/knot-cli mb_run debug M1 --commit "$mb_
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
 mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
+# The Mac app's install fails, with the folder named relative to where the script was started:
+# the command names the absolute folder, and says to move a part of a copy away first.
+mb_mac_install="$(cd "$mb" && KNOT_MB_INSTALL_FAIL=mac mb_run mac-install M1 --commit "$mb_commit" --products mac --install --mac-folder folder)"
 # The same, with the provisioning updates the owner allowed.
 mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
 # An option for the device's registration does not exist.
@@ -2592,8 +2595,11 @@ if [[ $mb_verdicts == "read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 pro
     ! grep -e "$mb_team" "$mb"/*.out >/dev/null &&
     grep -e "its log .build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" "$mb/plain.out" >/dev/null &&
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
-    grep -e "Install it again from there, from the worktree's root: scripts/install.sh .build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
+    grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    [[ $mb_mac_install == 1 ]] &&
+    grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app --mac-folder /[^ ]*/folder$" "$mb/mac-install.out" >/dev/null &&
+    grep -e 'move it away first' "$mb/mac-install.out" >/dev/null &&
     grep -e 'git ignores under the folders the build reads, 1 of them, such as Packages/KnotKit/Sources/KnotCore/build/Hidden.swift' "$mb/ignored.out" >/dev/null &&
     grep -e 'uncommitted changes' "$mb/untracked.out" >/dev/null &&
     grep -e 'Worktree.xcconfig sets more than KNOT_WORKTREE and KNOT_WORKTREE_ID: SWIFT_ACTIVE_COMPILATION_CONDITIONS\.' "$mb/worktree-config.out" >/dev/null &&
