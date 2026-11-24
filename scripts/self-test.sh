@@ -2331,6 +2331,36 @@ else
     fail "install.sh and --again: without it '$plain_install', with it '$again_install' ($(cat "$ia/again.out")), a Mac build with it '$mac_again'"
 fi
 
+# scripts/nightly.sh keeps each of its runs' logs in a folder of its own, .build/nightly/<run>/,
+# cleared when the night starts: a whole run sets the earlier runs' logs aside, so without the
+# folders only the last two runs' logs were left. With a stand-in verify.sh that writes one log
+# named for its arguments, and a scratch tree.
+ng="$scratch/nightly-logs"
+mkdir -p "$ng/tree/.build/nightly/from-an-earlier-night"
+cp -R "$KNOT_SCRIPTS" "$ng/scripts"
+cp "$KNOT_SELF/.xcode-version" "$ng/tree/"
+cat >"$ng/scripts/verify.sh" <<'SH'
+#!/bin/bash
+[[ ${1:-} == --status-line ]] && { echo "stand-in status"; exit 0; }
+source "$(dirname "$0")/lib/common.sh"
+# A whole run sets the earlier logs aside, as verify.sh does; a run of one step does not.
+[[ ${1:-} == --only ]] || knot_set_logs_aside "$KNOT_LOGS"
+mkdir -p "$KNOT_LOGS"
+echo "a log of verify.sh $*" >"$KNOT_LOGS/verify-$(printf '%s' "$*" | tr -c 'a-z0-9' '-').log"
+SH
+chmod +x "$ng/scripts/verify.sh"
+ng_status=0
+(cd "$ng/tree" && git init -q && env KNOT_TREE="$ng/tree" "$ng/scripts/nightly.sh" >"$ng/out" 2>&1) || ng_status=$?
+ng_folders="$( { cd "$ng/tree/.build/nightly" && ls; } 2>/dev/null | tr '\n' ' ' || true)"
+ng_full="$( { cat "$ng/tree/.build/nightly/full/"verify-* || true; } 2>/dev/null | tr '\n' ' ')"
+ng_tsan="$( { ls "$ng/tree/.build/nightly/tsan/" || true; } 2>/dev/null | tr '\n' ' ')"
+if [[ $ng_status == 0 && $ng_folders == "full models oldest-runtime perf recorder-sim soak tsan " &&
+    $ng_full == "a log of verify.sh --full " && $ng_tsan == "verify---only-tsan.log " ]]; then
+    pass "the nightly run keeps each run's logs in a folder of its own, and clears an earlier night's"
+else
+    fail "the nightly's logs: status $ng_status, folders '$ng_folders', full's '$ng_full', tsan's '$ng_tsan': $(tail -n 3 "$ng/out")"
+fi
+
 # scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
 # down its arguments and makes a synthetic product, a codesign that fails on a part named in
 # KNOT_MB_UNSIGNED, a defaults that holds KNOT_MB_ACCOUNTS saved accounts, and an install.sh

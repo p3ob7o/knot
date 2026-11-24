@@ -18,7 +18,9 @@
 #      holding every build slot, so that a change that breaks that build shows the next
 #      morning and not at a milestone.
 # It prints each run's status line, and exits non-zero when any run failed. A red night
-# stops the merge queue (docs/orchestrator.md).
+# stops the merge queue (docs/orchestrator.md). Each run's logs, the files it wrote in
+# .build/logs/, are kept in a folder of their own, .build/nightly/<run>/, cleared when the
+# night starts: one verify run's logs would otherwise go aside at the next whole run.
 
 source "$(dirname "$0")/lib/common.sh"
 
@@ -27,20 +29,29 @@ case ${1:-} in
     "") ;;
     --skip) [[ ${2:-} == mac-ui ]] || knot_fail "nightly-usage" "--skip takes mac-ui only." "Run scripts/nightly.sh --help." "safe" "nothing"
         FULL=(--full --skip mac-ui) ;;
-    -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) knot_fail "nightly-usage" "Unknown argument: $1" "Run scripts/nightly.sh --help." "safe" "nothing" ;;
 esac
 branch="$(git -C "$KNOT_ROOT" symbolic-ref --quiet --short HEAD || echo detached)"
 [[ $branch == main || $branch == detached ]] ||
     echo "nightly: running on $branch, not main. The nightly run of record is on main."
 
+NIGHTLY="$KNOT_BUILD/nightly"
+rm -rf "$NIGHTLY"
+mkdir -p "$NIGHTLY" "$KNOT_LOGS"
 failed=()
 summary=()
 run() {
-    local name=$1
+    local name=$1 marker
     shift
     echo "nightly: $name"
+    marker="$NIGHTLY/.started-$name"
+    : >"$marker"
     if "$@"; then :; else failed+=("$name"); fi
+    # The files the run wrote, kept in its own folder.
+    mkdir -p "$NIGHTLY/$name"
+    find "$KNOT_LOGS" -maxdepth 1 -type f -newer "$marker" -exec cp -p {} "$NIGHTLY/$name/" \;
+    rm -f "$marker"
     summary+=("$name: $("$KNOT_SCRIPTS/verify.sh" --status-line 2>/dev/null || echo "no status line")")
 }
 run full "$KNOT_SCRIPTS/verify.sh" "${FULL[@]}"
@@ -49,13 +60,13 @@ run soak "$KNOT_SCRIPTS/verify.sh" --soak
 run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_SCRIPTS/verify.sh" --only launch
 run recorder-sim "$KNOT_SCRIPTS/verify.sh" --only recorder-sim
 run models "$KNOT_SCRIPTS/verify.sh" --only model-report
-grep -e 'changed since' "$KNOT_LOGS/verify-model-report.log" 2>/dev/null || true
+grep -e 'changed since' "$NIGHTLY/models/verify-model-report.log" 2>/dev/null || true
 run perf "$KNOT_SCRIPTS/verify.sh" --perf
 
 printf 'nightly: %s\n' "${summary[@]}"
 if ((${#failed[@]})); then
     knot_fail "nightly" "The nightly run failed in: ${failed[*]}." \
-        "Read each run's log in .build/logs/. A red night stops the queue: bisect the squash merges and revert the cause." \
+        "Read each run's logs in .build/nightly/<run>/. A red night stops the queue: bisect the squash merges and revert the cause." \
         "safe" "build products in .build/ only"
 fi
 echo "nightly: every run passed"
