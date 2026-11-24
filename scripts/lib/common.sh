@@ -696,11 +696,14 @@ knot_filter_team() { KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pe "$KNOT_
 # writer, whose lines would then be lost. Each log keeps its time, so that a log of an earlier
 # run is not taken for a later one's (item 115). A run of verify.sh moves the earlier run's
 # logs aside before it scrubs them (knot_set_logs_aside).
+#   knot_scrub_logs <folder> [<file name>…]: with names, only those files of the folder, a run's
+#   own, so that a run scrubs no log another run may still be writing
 knot_scrub_logs() {
-    local folder=$1 log stamp
+    local folder=$1 log stamp names=" ${*:2} "
     [[ -d $folder ]] || return 0
     for log in "$folder"/verify-* "$folder"/bootstrap-* "$folder"/milestone-build-*; do
         [[ -f $log ]] || continue
+        (($# == 1)) || [[ $names == *" $(basename "$log") "* ]] || continue
         stamp="$(date -r "$(stat -f %m "$log")" +%Y%m%d%H%M.%S)"
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$log" 2>/dev/null || true
         touch -t "$stamp" "$log" 2>/dev/null || true

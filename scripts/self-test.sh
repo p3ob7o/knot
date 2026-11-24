@@ -1757,7 +1757,7 @@ python3 -I - "$la/scripts/verify.sh" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
-for name, body in (("step_doctor", 'echo "doctor stand-in"'), ("step_perf", 'echo "perf stand-in"')):
+for name, body in (("step_doctor", 'echo "doctor stand-in"; [[ -z ${KNOT_LA_EXTRA:-} ]] || printf "TeamIdentifierPrefix=%s.\\n" "$KNOT_LA_EXTRA" >"$KNOT_LOGS/verify-doctor-extra.out"'), ("step_perf", 'echo "perf stand-in"')):
     start = text.index(name + "() {")
     end = text.index("\n}\n", start) + 3
     text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
@@ -1779,18 +1779,25 @@ done
 la_aside="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
 la_soak_time="$(date -r "$(stat -f %m "$la/tree/.build/logs-earlier/verify-soak.out" 2>/dev/null || echo 0)" +%Y%m%d%H%M.%S)"
 # Then one step alone: the whole run's logs stay, and logs-earlier/ is as the whole run left it.
+# A log another run may still be writing, which holds an ID, is not touched: same inode, same
+# text. The run's own output, written unfiltered by its step, is scrubbed at its end.
+printf 'TeamIdentifierPrefix=%s.\n' "$fake_team" >"$la/tree/.build/logs/verify-live-elsewhere.log"
+la_live_inode="$(stat -f %i "$la/tree/.build/logs/verify-live-elsewhere.log")"
 la_only_status=0
-env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$la/scripts/verify.sh" --only doctor >"$la/only.out" 2>&1 || la_only_status=$?
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" KNOT_LA_EXTRA="$fake_team" "$la/scripts/verify.sh" --only doctor >"$la/only.out" 2>&1 || la_only_status=$?
+la_live="$( [[ "$(stat -f %i "$la/tree/.build/logs/verify-live-elsewhere.log")" == "$la_live_inode" ]] && grep -c -e "$fake_team" "$la/tree/.build/logs/verify-live-elsewhere.log" || echo moved)"
+la_own="$(grep -c -e "$fake_team" "$la/tree/.build/logs/verify-doctor-extra.out" 2>/dev/null || true)/$(grep -c -e '<TEAM>' "$la/tree/.build/logs/verify-doctor-extra.out" 2>/dev/null || true)"
 la_after_only="$(cd "$la/tree/.build/logs" && ls | tr '\n' ' ')"
 la_aside_after_only="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
 if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-perf.log &&
     $la_aside == ".earlier-hidden launch-iphone.png verify-soak.out " && $la_soak_time == 202001020304.05 &&
     $la_only_status == 0 && $la_after_only == *"verify-perf.log"* && $la_after_only == *"verify-doctor.log"* &&
+    $la_live == 1 && $la_own == 0/1 &&
     $la_aside_after_only == "$la_aside" ]] &&
     ! grep -e "$fake_team" "$la/tree/.build/logs-earlier/verify-soak.out" >/dev/null; then
     pass "a whole run moves the earlier run's logs aside, scrubbed and keeping their times, and the run before that goes; a run of one step moves nothing"
 else
-    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time; after --only doctor ($la_only_status): logs '$la_after_only', logs-earlier '$la_aside_after_only': $(tail -n 5 "$la/out")"
+    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time; after --only doctor ($la_only_status): logs '$la_after_only', logs-earlier '$la_aside_after_only', another run's live log $la_live, its own output $la_own: $(tail -n 5 "$la/out")"
 fi
 # A step whose wait for a build slot runs out did not run, and is named apart from a failure:
 # --perf, which takes every slot, with one of them held and a wait of 2 s, ends NOT RUN with

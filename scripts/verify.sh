@@ -1305,14 +1305,36 @@ fi
 # The logs of earlier runs go aside, to .build/logs-earlier/, scrubbed of the team's ID, so
 # that every file in .build/logs/ after this run is this run's (knot_set_logs_aside). A run
 # of one step, --only or --module, rewrites its own step's logs and leaves the rest where they
-# are, scrubbed of the team's ID as they always were.
-if [[ -n $TIER ]]; then
-    knot_set_logs_aside "$KNOT_LOGS"
-else
-    mkdir -p "$KNOT_LOGS"
-    knot_scrub_logs "$KNOT_LOGS"
-fi
+# are, untouched: it scrubs, at its end, only the logs it wrote itself, so that it cannot cut
+# the live log of another run beside it. One run at a time in a worktree is the rule all the
+# same.
+[[ -z $TIER ]] || knot_set_logs_aside "$KNOT_LOGS"
 mkdir -p "$KNOT_LOGS"
+
+# Whether a file of the log folder is one that a step of this run writes: verify-<step>.… and
+# verify-<step>-…, the outputs named otherwise (the contract suite's run, and what the packaging
+# step runs of the apps and the contract), and the status line; never a longer step's own file
+# when that step is not this run's, such as verify-package-test-strict.out beside package-test.
+own_log() {
+    local name=$1 step prefix other
+    [[ $name == verify-status.txt ]] && return 0
+    for step in $STEPS; do
+        local prefixes=("verify-$step")
+        case $step in
+            contract-two-targets) prefixes+=(verify-contract-run) ;;
+            packaging) prefixes+=(verify-apps verify-contract-run) ;;
+        esac
+        for prefix in "${prefixes[@]}"; do
+            [[ $name == "$prefix".* || $name == "$prefix"-* ]] || continue
+            for other in $ALL_STEPS; do
+                [[ $other != "$step" && ${#other} -gt ${#step} && " $STEPS " != *" $other "* ]] || continue
+                [[ $name == "verify-$other".* || $name == "verify-$other"-* ]] && continue 2
+            done
+            return 0
+        done
+    done
+    return 1
+}
 START=$(knot_now)
 PASSED=0
 SKIPPED_STEPS=0
@@ -1446,6 +1468,19 @@ for step in $STEPS; do
         break
     fi
 done
+
+# The logs this run wrote, scrubbed of the team's ID, each keeping its time: a step's own log is
+# filtered as it is written, and an output a step keeps beside it may not be. A whole run, which
+# set the earlier logs aside, scrubs the folder; a run of one step, only the files it writes.
+if [[ -n $TIER ]]; then
+    knot_scrub_logs "$KNOT_LOGS"
+else
+    own=()
+    for f in "$KNOT_LOGS"/*; do
+        [[ -f $f ]] && own_log "$(basename "$f")" && own+=("$(basename "$f")")
+    done
+    ((${#own[@]} == 0)) || knot_scrub_logs "$KNOT_LOGS" "${own[@]}"
+fi
 
 total=$(echo $STEPS | wc -w | tr -d ' ')
 failed=$((${#FAILED_STEP} > 0 ? 1 : 0))
