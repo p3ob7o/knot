@@ -37,7 +37,7 @@ The rules are in `docs/architecture.md` §6. Three of them:
 - Swift 6 strict concurrency. Warnings are errors.
 - Synthetic fixtures only. No real notes, recordings, credentials or signing material in tests or commits. The one exemption is `knot-eval`, which reads the owner's own recordings from the folder that `KNOT_LOCAL_FIXTURES` names. It prints no text from the recordings, nothing derived from them enters a commit, a pull request, a log or a test, and examples shown in pull requests stay synthetic.
 - Read the SDK before using an OS 26 or OS 27 API.
-- Only a milestone build opens the default store or the real iCloud container. Every other build uses the development identifiers.
+- Only a milestone build opens the default store or the real iCloud container. Every other build uses the development identifiers. A milestone build is made by `scripts/milestone-build.sh` and by nothing else, and no other command builds a product under the milestone's identifiers: Xcode registers a Mac app it builds with the system, beside the owner's own.
 - No automated test and no agent opens a hardware microphone on the build Mac. The recorder takes injected audio and refuses the hardware input under test.
 - Agents use `knot-dev`, never `knot`, and their threads export `KNOT_AGENT=1`.
 - Agents act only on the project's own `wp/`, `spike/` and `contract/` branches, and never read issue or pull-request comments from GitHub.
