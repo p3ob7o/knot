@@ -29,6 +29,29 @@
             #expect(!child.lines.contains { $0.hasPrefix("intent ") }, "It ran nothing.")
         }
 
+        /// A run's box follows what its script asks: the soak tier's runs of 200 and 500 captures
+        /// get more than the package tier's, which keep 180 s, and four times as much under the
+        /// sanitizer. A replay keeps the box its line gives.
+        @Test func theBoxFollowsWhatTheScriptAsks() throws {
+            let factor: Int64 = SoakTime.underThreadSanitizer ? 4 : 1
+            func box(_ captures: Int) -> Int64 {
+                CaptureLedgerSoak.Configuration(seed: 925_561_768, captures: captures, killPoints: []).box
+                    .components.seconds
+            }
+            #expect(box(40) == 180 * factor)
+            #expect(box(200) > 180 * factor)
+            #expect(box(500) > box(200))
+            let script = SoakScript(seed: 925_561_768, count: 500)
+            let recordings = Int64(script.captures.filter { $0.kind == .voice }.count)
+            #expect(box(500) == factor * (60 + (500 - recordings) + 3 * recordings))
+            let read = try #require(
+                CaptureLedgerSoak.Configuration.parse(
+                    CaptureLedgerSoak.Configuration(
+                        seed: 1, captures: 500, killPoints: [.anywhere(passes: 1...9)], timeBox: .seconds(90)
+                    ).line))
+            #expect(read.box == .seconds(90))
+        }
+
         /// A report's replay names its run whole: a configuration reads back from its line.
         @Test func aConfigurationReadsBackFromItsLine() throws {
             var configuration = CaptureLedgerSoak.Configuration(

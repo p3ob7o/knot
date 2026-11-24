@@ -28,7 +28,12 @@
             /// How many captures a launch may run before it quits by itself, at most.
             var launchBudget: ClosedRange<Int> = 4...40
             /// When the soak starts no more launches: it then recovers and checks what it made.
-            var timeBox: Duration = SoakTime.box
+            /// Its own box, or `nil` for the one its script asks (`SoakTime.box(for:)`). A replay
+            /// gives the box its run had.
+            var timeBox: Duration?
+
+            /// The box of this run.
+            var box: Duration { timeBox ?? SoakTime.box(for: SoakScript(seed: seed, count: captures)) }
             /// A fault the child injects, for the tests that prove the soak catches it.
             var fault: String?
             /// Whether the draws favour the points of `killPoints` that have not killed yet, as at
@@ -57,7 +62,7 @@
                         + killPoints.map { "\($0)@\($0.passes.lowerBound)-\($0.passes.upperBound)" }
                         .joined(separator: ","),
                     "budget=\(launchBudget.lowerBound)-\(launchBudget.upperBound)",
-                    "box=\(timeBox.components.seconds)",
+                    "box=\(box.components.seconds)",
                 ]
                 if let fault { fields.append("fault=\(fault)") }
                 if everyPointKills { fields.append("every=1") }
@@ -285,11 +290,12 @@
             var stoppedByTimeBox = false
             var killedPoints: Set<SoakKillPoint> = []
             let total = configuration.captures
+            let box = configuration.box
             // A run that makes no progress ends: every launch begins at least one capture
             // unless its kill point comes first, and the next point is drawn again.
             let launchLimit = total + 20
             while next < total {
-                if ContinuousClock.now - started > configuration.timeBox {
+                if ContinuousClock.now - started > box {
                     // Not a failure of the ledger: the run did not reach the end of its script, so
                     // it proves less than it should, and says so. It may be run again.
                     stoppedByTimeBox = true
