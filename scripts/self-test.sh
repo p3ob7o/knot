@@ -2700,6 +2700,19 @@ mkdir -p "$mb_pkg/build"
 printf '#error("hidden")\n' >"$mb_pkg/build/Hidden.swift"
 mb_pkg_ignored="$(mb_run pkg-ignored M1 --commit "$mb_commit")"
 rm -r "$mb_pkg/build"
+# A build that waits for its slot: both slots a build outside the gate may take are held for
+# 3 s, so the wait is said apart and the build's own time stays short.
+/usr/bin/lockf -k "$mb/slots/build-1.lock" sleep 3 &
+mb_hold_1=$!
+/usr/bin/lockf -k "$mb/slots/build-2.lock" sleep 3 &
+mb_hold_2=$!
+for _ in $(seq 1 50); do
+    /usr/bin/lockf -s -t 0 -k "$mb/slots/build-1.lock" true 2>/dev/null || /usr/bin/lockf -s -t 0 -k "$mb/slots/build-2.lock" true 2>/dev/null || break
+    sleep 0.1
+done
+mb_wait="$(mb_run wait M1 --commit "$mb_commit" --products ios)"
+wait "$mb_hold_1" "$mb_hold_2" 2>/dev/null || true
+mb_wait_line="$(grep -e '^milestone-build: ios: built in ' "$mb/wait.out" || true)"
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
 mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
@@ -2732,8 +2745,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="unregister $mb_unregister_fails $mb_unregister_missing project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_unparsed_config/$(mb_builds unparsed-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "unregister 0 0 project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="wait $mb_wait unregister $mb_unregister_fails $mb_unregister_missing project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_unparsed_config/$(mb_builds unparsed-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "wait 0 unregister 0 0 project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2755,6 +2768,7 @@ if [[ $mb_verdicts == "unregister 0 0 project removed packages 1/0 1/0 1/0 unreg
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    [[ $mb_wait_line =~ built\ in\ ([0-9]+)s,\ after\ waiting\ ([0-9]+)s ]] && ((BASH_REMATCH[1] <= 1 && BASH_REMATCH[2] >= 2)) &&
     grep -e 'mac: its products could not be unregistered from LaunchServices: lsregister -u failed on Knot.app' "$mb/unregister-fails.out" >/dev/null &&
     grep -e "mac: its products could not be unregistered from LaunchServices: LaunchServices' tool is not at" "$mb/unregister-missing.out" >/dev/null &&
     ! grep -e 'are unregistered from LaunchServices' "$mb/unregister-fails.out" "$mb/unregister-missing.out" >/dev/null &&
