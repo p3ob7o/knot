@@ -28,7 +28,7 @@
             /// How many captures a launch may run before it quits by itself, at most.
             var launchBudget: ClosedRange<Int> = 4...40
             /// When the soak starts no more launches: it then recovers and checks what it made.
-            var timeBox: Duration = .seconds(180)
+            var timeBox: Duration = SoakTime.box
             /// A fault the child injects, for the tests that prove the soak catches it.
             var fault: String?
             /// Whether the draws favour the points of `killPoints` that have not killed yet, as at

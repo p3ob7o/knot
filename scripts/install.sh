@@ -3,12 +3,14 @@
 #
 #   scripts/install.sh <Knot.app for iOS>               every paired iPhone, iPad and Watch
 #   scripts/install.sh <Knot.app for iOS> --device <name or UDID> [--device …]
+#   scripts/install.sh <Knot.app for iOS> --again [--device …]
 #   scripts/install.sh <Knot.app for macOS> --mac-folder <folder>
 #
 # For an iPhone or an iPad it installs the app, and for a Watch the Watch app embedded in
 # it. A device that already holds this build, by bundle ID, version and build number, is
-# skipped, so a rerun installs only on the devices it missed. It names every device it
-# could not reach and exits non-zero when it missed one.
+# skipped, so a rerun installs only on the devices it missed. --again installs there too:
+# a build signed again carries the same version and build number as the one it replaces.
+# It names every device it could not reach and exits non-zero when it missed one.
 #
 # devicectl does not install onto a Mac. For a Mac build it copies the app to a folder the
 # owner names, and he opens it there. From the M4 milestone build on, no milestone build is
@@ -19,16 +21,18 @@
 
 source "$(dirname "$0")/lib/common.sh"
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "install-usage" "$1" "Run scripts/install.sh --help." "safe" "nothing"; }
 
 APP=""
 MAC_FOLDER=""
+AGAIN=0
 WANTED=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --device) [[ -n ${2:-} ]] || usage_fail "--device needs a name or a UDID."; WANTED+=("$2"); shift 2 ;;
         --mac-folder) MAC_FOLDER=${2:-}; [[ -n $MAC_FOLDER ]] || usage_fail "--mac-folder needs a folder."; shift 2 ;;
+        --again) AGAIN=1; shift ;;
         -h | --help) usage; exit 0 ;;
         -*) usage_fail "Unknown option: $1" ;;
         *) [[ -z $APP ]] || usage_fail "Name one build."; APP=${1%/}; shift ;;
@@ -43,6 +47,7 @@ plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
 
 if [[ -f $APP/Contents/Info.plist ]]; then
     [[ -n $MAC_FOLDER ]] || usage_fail "A Mac build is not installed with devicectl. Name a folder: --mac-folder <folder>."
+    ((AGAIN == 0)) || usage_fail "--again is for devices: a Mac build is copied to a folder, which must not hold it already."
     mkdir -p "$MAC_FOLDER"
     destination="$MAC_FOLDER/$(basename "$APP")"
     [[ ! -e $destination ]] || knot_fail "install-mac-exists" "$destination exists already." \
@@ -56,6 +61,7 @@ if [[ -f $APP/Contents/Info.plist ]]; then
     exit 0
 fi
 [[ -z $MAC_FOLDER ]] || usage_fail "--mac-folder is for a Mac build, and $APP is not one."
+((AGAIN == 0)) || echo "install: --again: a device that holds this version and build already gets it again"
 [[ -f $APP/Info.plist ]] || usage_fail "$APP has no Info.plist."
 
 # ------------------------------------------------------------------ devices
@@ -86,7 +92,8 @@ PY
 
 bundle="$(plist "$APP/Info.plist" CFBundleIdentifier)"
 version="$(plist "$APP/Info.plist" CFBundleShortVersionString) ($(plist "$APP/Info.plist" CFBundleVersion))"
-watch_app="$(find "$APP/Watch" -maxdepth 1 -name '*.app' 2>/dev/null | head -n 1)"
+# An app without a Watch folder has no Watch app: find's failure there does not end the run.
+watch_app="$( { find "$APP/Watch" -maxdepth 1 -name '*.app' 2>/dev/null || true; } | head -n 1)"
 
 # Whether a device already holds this build.
 holds() {
@@ -124,7 +131,7 @@ while IFS=$'\t' read -r identifier name platform state udid; do
             path=$watch_app id="$(plist "$watch_app/Info.plist" CFBundleIdentifier)" ;;
         *) echo "install: $name runs $platform, which this build is not for"; continue ;;
     esac
-    if holds "$identifier" "$id"; then
+    if ((AGAIN == 0)) && holds "$identifier" "$id"; then
         echo "install: $name holds $id $version already"
         skipped=$((skipped + 1))
         continue
