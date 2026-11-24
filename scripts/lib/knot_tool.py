@@ -101,7 +101,7 @@ def merge_state(package, merged):
 
     `merged` is a list of (package, is_note) for every merged pull request. A note fills the
     brief's "Proof step" or "Notes" row; every other pull request fills the next of its
-    other rows, "1", "2" or "40a" to "40d"."""
+    other rows, "1", "2" or a lettered one such as "40a"."""
     rows = plan_rows(package)
     note_rows = sum(1 for row in rows if row in NOTE_ROWS)
     other_rows = len(rows) - note_rows
@@ -187,11 +187,12 @@ def matches(path, pattern):
 
 
 def package_of_branch(branch):
-    """The package a branch belongs to: wp/01-tooling is WP-01, wp/13-note is WP-13; a spike
-    branch, or its -note branch, is the spike whose brief owns it; a contract branch is
-    'contract'."""
+    """The package a branch belongs to: wp/01-tooling is WP-01, wp/13-note is WP-13, and a
+    pull request beside the planned ones, lettered as wp/06b-done-line, is its number's
+    package, WP-06; a spike branch, or its -note branch, is the spike whose brief owns it; a
+    contract branch is 'contract'."""
     branch = re.sub(r"^(refs/heads/|origin/)", "", branch)
-    match = re.match(r"^wp/(\d+)-", branch)
+    match = re.match(r"^wp/(\d+)[a-z]?-", branch)
     if match:
         return "WP-%02d" % int(match.group(1))
     if branch.startswith("contract/"):

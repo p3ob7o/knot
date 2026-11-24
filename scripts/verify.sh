@@ -30,7 +30,8 @@
 # Every run starts with scripts/doctor.sh and ends with one summary line: the counts, the
 # skips, the duration, the Xcode and the macOS build. A failed step names itself, its log
 # and the command that reruns only that step. Heavy steps wait for a build slot
-# (scripts/build-slot.sh). Logs go to .build/logs/.
+# (scripts/build-slot.sh). Logs go to .build/logs/, and the run before's to
+# .build/logs-earlier/.
 #
 # The gate refuses --only, --module, --skip, KNOT_LOCAL_CONFIG and an Xcode named by
 # KNOT_XCODE that is not the pinned one, and it fails on a skipped step. It runs on a
@@ -630,6 +631,79 @@ step_apps() {
         xcb "$log" -scheme Knot-macOS -configuration Debug -destination 'platform=macOS' build
 }
 
+# The Mac app at the milestone flavour, which no other step builds: Release, unsigned, for this
+# Mac's architecture alone, under the development identifiers. Both faults of the first
+# milestone's Mac build were in the copy of its tool, and showed only at that flavour (WP-22,
+# row 22d): a copy that looked for the tool under the development flavour's name, which
+# fails the build, and a tool named like the app, which on a volume that ignores case
+# replaced the app's executable. So the build must pass, and Contents/MacOS must hold the
+# app's executable and the tool, by their exact names, as two files.
+#
+# No build but scripts/milestone-build.sh carries the milestone's identifiers (AGENTS.md):
+# Xcode registers every Mac app it builds with LaunchServices, and the owner runs his own
+# Knot under the milestone's bundle ID on this Mac. So the three milestone identifier
+# settings take their development values on the command line, while the flavour, its level
+# and its tool's file stay the milestone's; and the check fails if the product carries the
+# milestone's bundle ID all the same. It signs nothing and needs no team: KNOT_SIGNING=team
+# is what the flavour's own check asks for, and DEVELOPMENT_TEAM is emptied so that a
+# worktree with the owner's configuration linked builds as the gate does. The derived data
+# is fresh each time; after the check, pass or fail, the product is unregistered from
+# LaunchServices and the derived data removed. What it cannot show is the signing: a
+# profile, an entitlement or a part left unsigned shows at scripts/milestone-build.sh.
+#   packaging_milestone_mac <log>
+packaging_milestone_mac() {
+    local log=$1 derived="$KNOT_BUILD/DerivedData-milestone" app executable tool listing bundle status=0
+    local milestone_bundle dev_bundle dev_group dev_container
+    setting() { sed -n -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p" "$KNOT_ROOT/Apps/Config/Identifiers.xcconfig" | head -n 1; }
+    milestone_bundle="$(setting KNOT_BUNDLE_ID_milestone)"
+    dev_bundle="$(setting KNOT_BUNDLE_ID_dev)"
+    dev_group="$(setting KNOT_APP_GROUP_dev)"
+    dev_container="$(setting KNOT_CLOUD_CONTAINER_dev)"
+    tool="$(setting KNOT_TOOL_FILE_milestone)"
+    if [[ -z $milestone_bundle || -z $dev_bundle || -z $dev_group || -z $dev_container || -z $tool ]]; then
+        echo "      Apps/Config/Identifiers.xcconfig does not give the identifiers the check builds under"
+        return 1
+    fi
+    app="$derived/Build/Products/Release/Knot.app"
+    # A product an earlier check left, as when its run was killed, leaves LaunchServices first.
+    knot_unregister_apps "$derived" || echo "      could not unregister an earlier check's product from LaunchServices: $KNOT_UNREGISTER_WHY"
+    rm -rf "$derived"
+    milestone_mac_build() {
+        { xcodebuild -project "$KNOT_PROJECT" -derivedDataPath "$derived" \
+            -clonedSourcePackagesDirPath "$KNOT_SOURCE_PACKAGES" -configuration Release -scheme Knot-macOS \
+            -destination 'platform=macOS' KNOT_FLAVOUR=milestone KNOT_MILESTONE_LEVEL=M1 KNOT_SIGNING=team \
+            KNOT_BUNDLE_ID_milestone="$dev_bundle" KNOT_APP_GROUP_milestone="$dev_group" \
+            KNOT_CLOUD_CONTAINER_milestone="$dev_container" \
+            DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES COMPILER_INDEX_STORE_ENABLE=NO \
+            build 2>&1 | knot_filter_team >>"$log"; } 2>/dev/null # limit: milestone_mac_build
+    }
+    if ! knot_run_limited "The milestone-flavour build of Knot-macOS" "$KNOT_BUILD_LIMIT" milestone_mac_build; then
+        echo "      the build failed; its log is .build/logs/$(basename "$log"):"
+        grep -E 'error:' "$log" | sed -e "s|$KNOT_ROOT/||g" | sort -u | head -n 5 | sed 's/^/        /' || true
+        status=1
+    else
+        bundle="$(plist_value "$app/Contents/Info.plist" CFBundleIdentifier)"
+        executable="$(plist_value "$app/Contents/Info.plist" CFBundleExecutable)"
+        listing="$(ls -1 "$app/Contents/MacOS" 2>/dev/null || true)"
+        echo "      bundle ID $bundle, flavour $(plist_value "$app/Contents/Info.plist" KnotFlavour), Contents/MacOS holds: $(tr '\n' ' ' <<<"$listing")"
+        if [[ $bundle == "$milestone_bundle" || $bundle != "$dev_bundle" ]]; then
+            echo "      the product carries $bundle, not the development bundle ID $dev_bundle: no build but scripts/milestone-build.sh carries the milestone's"
+            status=1
+        elif ! { [[ "$(plist_value "$app/Contents/Info.plist" KnotFlavour)" == milestone && -n $executable ]] &&
+            grep -x -e "$executable" <<<"$listing" >/dev/null &&
+            grep -x -e "$tool" <<<"$listing" >/dev/null &&
+            [[ ! "$app/Contents/MacOS/$executable" -ef "$app/Contents/MacOS/$tool" ]]; }; then
+            status=1
+        fi
+    fi
+    if ! knot_unregister_apps "$derived"; then
+        echo "      could not unregister the product from LaunchServices: $KNOT_UNREGISTER_WHY"
+        status=1
+    fi
+    rm -rf "$derived"
+    return "$status"
+}
+
 # The packaging that otherwise fails late, each proven with one trivial instance
 # (docs/plan/WP-01.md).
 step_packaging() {
@@ -688,6 +762,11 @@ step_packaging() {
     check "knot-dev embedded and signed in the Mac app, with its own sandbox, and runs" tool_embedded || failed=1
 
     check "a contract suite in KnotTestSupport run from two test targets" step_contract_two_targets || failed=1
+
+    local milestone_log="$KNOT_LOGS/verify-packaging-milestone.log"
+    : >"$milestone_log"
+    check "the Mac app builds at the milestone flavour, with the app's executable and its tool as two files" \
+        packaging_milestone_mac "$milestone_log" || failed=1
 
     # Scans every Mach-O file of an app bundle, its main executable included, for fakes:
     # the KnotFakes module, and any type of a Knot module named Fake…, such as a fake
@@ -1019,12 +1098,30 @@ step_soak() {
 # The timed targets of docs/product-spec.md §14, on an optimised build that keeps the fakes
 # (-DKNOT_FAKES). It holds every build slot, so that nothing else runs beside it. The
 # measured tests are WP-42's; until they exist this step says so.
+#
+# The build compiles every module for testing, -enable-testing, as a debug build does: the
+# tests are one bundle, and a test target that imports a module with @testable cannot resolve
+# it from a module built without, so with no such flag the optimised build of the tests
+# failed at nine test targets (item 7, 2026-11-24). It is still -O with whole-module
+# optimisation, but an internal declaration keeps a symbol other modules can reach, so the
+# optimiser may not drop it or treat it as private: a measured time can be a little slower
+# than the shipped app's, never faster.
+#
+# It also defines DEBUG. Tests that use a member declared under `#if DEBUG` alone, and not
+# `#if DEBUG || KNOT_FAKES`, compile in no other optimised build: the live smoke test reads
+# LiveConfiguration's launch arguments, and the inbox's lock test sets InboxItems'
+# afterManifestPlaced hook. So the measured modules hold the seven blocks of the sources
+# guarded by DEBUG alone (in KnotApp's EnvironmentFactory and LiveConfiguration, and in
+# KnotCapture's InboxItems): a scan of the launch arguments at the composition's start, and a
+# read of a lock each time a typed item is written. Once those tests guard themselves, this
+# define goes, and the measured modules hold none of it.
 step_perf() {
     local scratch="$KNOT_BUILD/swiftpm-perf" output="$KNOT_LOGS/verify-perf.out"
-    swift build --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES --build-tests
+    local flags=(--package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES
+        -Xswiftc -enable-testing -Xswiftc -DDEBUG)
+    swift build "${flags[@]}" --build-tests
     perf_tests() {
-        swift test --package-path "$KNOT_PACKAGE" --scratch-path "$scratch" -c release -Xswiftc -DKNOT_FAKES \
-            --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
+        swift test "${flags[@]}" --filter 'Performance' 2>&1 | tee "$output" # limit: perf_tests
     }
     knot_swift_test_limited perf perf_tests || return 1
     if grep -E 'Test run with [1-9][0-9]* tests?|Executed [1-9]' "$output" >/dev/null; then
@@ -1208,9 +1305,39 @@ else
     [[ $SKIP == mac-ui ]] && LABEL="--full, skip mac-ui"
 fi
 
+# The logs of earlier runs go aside, to .build/logs-earlier/, scrubbed of the team's ID, so
+# that every file in .build/logs/ after this run is this run's (knot_set_logs_aside). A run
+# of one step, --only or --module, rewrites its own step's logs and leaves the rest where they
+# are, untouched: it scrubs, at its end, only the logs it wrote itself, so that it cannot cut
+# the live log of another run beside it. One run at a time in a worktree is the rule all the
+# same.
+[[ -z $TIER ]] || knot_set_logs_aside "$KNOT_LOGS"
 mkdir -p "$KNOT_LOGS"
-# Logs that earlier runs kept, before the filter existed, lose the team's ID too.
-knot_scrub_logs "$KNOT_LOGS"
+
+# Whether a file of the log folder is one that a step of this run writes: verify-<step>.… and
+# verify-<step>-…, the outputs named otherwise (the contract suite's run, and what the packaging
+# step runs of the apps and the contract), and the status line; never a longer step's own file
+# when that step is not this run's, such as verify-package-test-strict.out beside package-test.
+own_log() {
+    local name=$1 step prefix other
+    [[ $name == verify-status.txt ]] && return 0
+    for step in $STEPS; do
+        local prefixes=("verify-$step")
+        case $step in
+            contract-two-targets) prefixes+=(verify-contract-run) ;;
+            packaging) prefixes+=(verify-apps verify-contract-run) ;;
+        esac
+        for prefix in "${prefixes[@]}"; do
+            [[ $name == "$prefix".* || $name == "$prefix"-* ]] || continue
+            for other in $ALL_STEPS; do
+                [[ $other != "$step" && ${#other} -gt ${#step} && " $STEPS " != *" $other "* ]] || continue
+                [[ $name == "verify-$other".* || $name == "verify-$other"-* ]] && continue 2
+            done
+            return 0
+        done
+    done
+    return 1
+}
 START=$(knot_now)
 PASSED=0
 SKIPPED_STEPS=0
@@ -1219,6 +1346,8 @@ SKIPPED_NAMES=""
 SKIPPED_CODE=3
 SKIPPABLE="team-id ownership"
 FAILED_STEP=""
+# A step whose wait for a build slot ran out did not run: no failure of the code, named apart.
+NO_SLOT_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
@@ -1318,6 +1447,13 @@ for step in $STEPS; do
         [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
+    elif grep -e '^FAIL infra-slot-timeout' "$log" >/dev/null; then
+        NO_SLOT_STEP=$step
+        printf 'verify: NOT RUN %-20s %s, no build slot came free\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
+        grep -e '^  what:' "$log" | head -n 1 | sed 's/^  what: */        /' || true
+        knot_report "verify-$step-no-slot" "The step $step did not run: no build slot came free within its wait. That is no failure of the code. Its log is $log." \
+            "Rerun it when the slots are free: scripts/build-slot.sh status names their holders." "safe" "nothing" || true
+        break
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
@@ -1336,6 +1472,19 @@ for step in $STEPS; do
     fi
 done
 
+# The logs this run wrote, scrubbed of the team's ID, each keeping its time: a step's own log is
+# filtered as it is written, and an output a step keeps beside it may not be. A whole run, which
+# set the earlier logs aside, scrubs the folder; a run of one step, only the files it writes.
+if [[ -n $TIER ]]; then
+    knot_scrub_logs "$KNOT_LOGS"
+else
+    own=()
+    for f in "$KNOT_LOGS"/*; do
+        [[ -f $f ]] && own_log "$(basename "$f")" && own+=("$(basename "$f")")
+    done
+    ((${#own[@]} == 0)) || knot_scrub_logs "$KNOT_LOGS" "${own[@]}"
+fi
+
 total=$(echo $STEPS | wc -w | tr -d ' ')
 failed=$((${#FAILED_STEP} > 0 ? 1 : 0))
 not_run=$((total - PASSED - failed - SKIPPED_STEPS))
@@ -1343,6 +1492,12 @@ ALLOWED=${ALLOWED:-0}
 pending=$PENDING_COUNT
 status=ok
 [[ -n $FAILED_STEP ]] && status=FAILED
+# A step that did not run for want of a slot fails the gate, which needs every step, and makes
+# any other run NOT RUN, with an exit status of its own, 4, so that a caller such as the nightly
+# run tells it from a failure.
+if [[ -n $NO_SLOT_STEP && $status == ok ]]; then
+    if [[ $TIER == gate ]]; then status=FAILED; else status="NOT RUN"; fi
+fi
 # The gate refuses a partial run: a step that could not run here fails it. Every other tier
 # reports the step as skipped and ends ok.
 if [[ $TIER == gate && -z $FAILED_STEP && -n $SKIPPED_NAMES ]]; then
@@ -1362,7 +1517,7 @@ printf 'verify %s: %s · steps %d passed, %d failed, %d skipped, %d not run, %d 
 
 # The status line: the same facts in at most 140 characters, for a commit status, whose
 # description GitHub cuts at 140. scripts/verify.sh --status-line prints it again.
-short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}: $PASSED/$total steps, $TESTS_PASSED tests"
+short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}${NO_SLOT_STEP:+ at $NO_SLOT_STEP, no slot}: $PASSED/$total steps, $TESTS_PASSED tests"
 ((TESTS_FAILED)) && short="$short, $TESTS_FAILED failed"
 ((TESTS_SKIPPED)) && short="$short, $TESTS_SKIPPED skipped"
 ((SKIPPED_STEPS)) && short="$short, $SKIPPED_STEPS steps skipped"
@@ -1375,4 +1530,6 @@ candidate="$short · macOS $(sw_vers -buildVersion)"
 ((${#candidate} <= 140)) && short=$candidate
 short="${short:0:140}"
 printf '%s\n' "$short" >"$STATUS_FILE"
-[[ $status == ok ]]
+[[ $status == ok ]] && exit 0
+[[ $status == "NOT RUN" ]] && exit 4
+exit 1

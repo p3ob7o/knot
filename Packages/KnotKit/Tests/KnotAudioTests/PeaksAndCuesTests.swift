@@ -232,7 +232,7 @@ import Testing
         // is here, the state is idle, with no time to wait out.
         #expect(await SuiteWait.until("the stopped-early cue") { cues.cues.contains(.stoppedEarly) })
         #expect(cues.cues == [.stoppedEarly])
-        #expect(store.read() == .idle)
+        #expect(store.writes.last?.snapshot == .idle)
         #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
     }
 

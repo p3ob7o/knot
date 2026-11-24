@@ -13,9 +13,17 @@
 #   5. the recorder's kill test and its shared recording state in the iOS Simulator, with a
 #      fresh seed (scripts/verify.sh --only recorder-sim);
 #   6. the report of a model that changed with an update of the operating system
-#      (scripts/verify.sh --only model-report).
+#      (scripts/verify.sh --only model-report);
+#   7. the timed targets on an optimised build with the fakes (scripts/verify.sh --perf),
+#      holding every build slot, so that a change that breaks that build shows the next
+#      morning and not at a milestone.
 # It prints each run's status line, and exits non-zero when any run failed. A red night
-# stops the merge queue (docs/orchestrator.md).
+# stops the merge queue (docs/orchestrator.md). A run that did not run to its end for want of
+# a build slot, verify.sh's status 4, is reported as not run, apart from the failures. The night
+# ends 0 only when every run ran and passed; 1 when any run failed; and 4, no verdict, when none
+# failed and at least one did not run, its last line naming those. Each run's logs, the files it wrote in
+# .build/logs/, are kept in a folder of their own, .build/nightly/<run>/, cleared when the
+# night starts: one verify run's logs would otherwise go aside at the next whole run.
 
 source "$(dirname "$0")/lib/common.sh"
 
@@ -24,20 +32,36 @@ case ${1:-} in
     "") ;;
     --skip) [[ ${2:-} == mac-ui ]] || knot_fail "nightly-usage" "--skip takes mac-ui only." "Run scripts/nightly.sh --help." "safe" "nothing"
         FULL=(--full --skip mac-ui) ;;
-    -h | --help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) knot_fail "nightly-usage" "Unknown argument: $1" "Run scripts/nightly.sh --help." "safe" "nothing" ;;
 esac
 branch="$(git -C "$KNOT_ROOT" symbolic-ref --quiet --short HEAD || echo detached)"
 [[ $branch == main || $branch == detached ]] ||
     echo "nightly: running on $branch, not main. The nightly run of record is on main."
 
+NIGHTLY="$KNOT_BUILD/nightly"
+rm -rf "$NIGHTLY"
+mkdir -p "$NIGHTLY" "$KNOT_LOGS"
 failed=()
+not_run=()
 summary=()
 run() {
-    local name=$1
+    local name=$1 marker
     shift
     echo "nightly: $name"
-    if "$@"; then :; else failed+=("$name"); fi
+    marker="$NIGHTLY/.started-$name"
+    : >"$marker"
+    local status=0
+    "$@" || status=$?
+    if ((status == 4)); then
+        not_run+=("$name")
+    elif ((status != 0)); then
+        failed+=("$name")
+    fi
+    # The files the run wrote, kept in its own folder.
+    mkdir -p "$NIGHTLY/$name"
+    find "$KNOT_LOGS" -maxdepth 1 -type f -newer "$marker" -exec cp -p {} "$NIGHTLY/$name/" \;
+    rm -f "$marker"
     summary+=("$name: $("$KNOT_SCRIPTS/verify.sh" --status-line 2>/dev/null || echo "no status line")")
 }
 run full "$KNOT_SCRIPTS/verify.sh" "${FULL[@]}"
@@ -46,12 +70,18 @@ run soak "$KNOT_SCRIPTS/verify.sh" --soak
 run oldest-runtime env KNOT_SIM_IOS_VERSION=27.0 "$KNOT_SCRIPTS/verify.sh" --only launch
 run recorder-sim "$KNOT_SCRIPTS/verify.sh" --only recorder-sim
 run models "$KNOT_SCRIPTS/verify.sh" --only model-report
-grep -e 'changed since' "$KNOT_LOGS/verify-model-report.log" 2>/dev/null || true
+grep -e 'changed since' "$NIGHTLY/models/verify-model-report.log" 2>/dev/null || true
+run perf "$KNOT_SCRIPTS/verify.sh" --perf
 
 printf 'nightly: %s\n' "${summary[@]}"
 if ((${#failed[@]})); then
-    knot_fail "nightly" "The nightly run failed in: ${failed[*]}." \
-        "Read each run's log in .build/logs/. A red night stops the queue: bisect the squash merges and revert the cause." \
+    knot_fail "nightly" "The nightly run failed in: ${failed[*]}.$( ((${#not_run[@]})) && echo " Not run, for want of a build slot: ${not_run[*]}.")" \
+        "Read each run's logs in .build/nightly/<run>/. A red night stops the queue: bisect the squash merges and revert the cause." \
         "safe" "build products in .build/ only"
+fi
+if ((${#not_run[@]})); then
+    # No run failed, and some did not run: no verdict, neither red nor green.
+    echo "nightly: no verdict: no run failed, and these did not run, for want of a build slot: ${not_run[*]}"
+    exit 4
 fi
 echo "nightly: every run passed"
