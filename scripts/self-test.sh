@@ -190,6 +190,40 @@ else
     fail "the plan check missed a brief with a missing heading (status $status)"
 fi
 
+# 3b. A row lettered past d, a fifth pull request beside the planned ones, is a row: on fresh
+#     copies of the real plan, a row 22e after WP-22d, in the brief and in PLAN.md's table,
+#     passes; a row after WP-22f, which does not exist, is read and refused; and a row of two
+#     letters, 22ab, is still no row label.
+lettered_plan() { # lettered_plan <name> <label> <starts after>: the check's status on a copy with that row added
+    local copy="$scratch/plan-$1"
+    mkdir -p "$copy/docs"
+    cp -R "$plan/scripts" "$copy/"
+    cp "$KNOT_SELF/PLAN.md" "$copy/"
+    cp -R "$KNOT_SELF/docs/plan" "$copy/docs/"
+    python3 -I - "$copy" "$2" "$3" <<'PY'
+import sys
+copy, label, after = sys.argv[1:]
+for path, old, new in (
+        (copy + "/docs/plan/WP-22.md", "| WP-22c |\n", "| WP-22c |\n| %s | A synthetic fifth row | %s |\n" % (label, after)),
+        (copy + "/PLAN.md", "| WP-22c |\n", "| WP-22c |\n| WP-22 | %s | A synthetic fifth row | %s |\n" % (label, after))):
+    text = open(path).read()
+    assert text.count(old) == 1, (path, old)
+    open(path, "w").write(text.replace(old, new))
+PY
+    local status=0
+    KNOT_TREE="$copy" "$copy/scripts/check-plan.sh" >"$scratch/plan-$1.log" 2>&1 || status=$?
+    echo "$status"
+}
+row_e="$(lettered_plan row-e 22e WP-22d)"
+row_f="$(lettered_plan after-f 22e WP-22f)"
+row_ab="$(lettered_plan row-ab 22ab WP-22d)"
+if [[ $row_e == 0 && $row_f == 1 && $row_ab == 1 ]] && grep -e "WP-22f" "$scratch/plan-after-f.log" >/dev/null &&
+    grep -e "'22ab' is not a row label" "$scratch/plan-row-ab.log" >/dev/null; then
+    pass "the plan check takes a row lettered past d, reads a reference to one, and refuses two letters"
+else
+    fail "lettered rows: 22e status $row_e ($(grep -e FAIL -e "is not" "$scratch/plan-row-e.log" | head -n 2)), after WP-22f status $row_f, 22ab status $row_ab"
+fi
+
 # 4. The gate's helper reads the plan as it states it. It reads a fixture plan of the
 #    self-test's own and pins nothing of the real one (item 104): a documents pull request
 #    that changes a brief's rows passes the gate at the documents depth, which does not run
@@ -211,6 +245,7 @@ fixture_brief WP-02 '- `Packages/KnotKit/Sources/KnotFakes/`, except its `Previe
 fixture_brief WP-06 '- the soak step of `scripts/verify.sh`' '1'
 fixture_brief WP-10 '- `Packages/KnotKit/Sources/KnotStore/`' '1'
 fixture_brief WP-11 '- `Packages/KnotKit/Sources/KnotCapture/`' $'1\n11a\n2\n3\n4'
+fixture_brief WP-22 '- `Packages/KnotKit/Sources/KnotApp/`' $'1\n22a\n2\n22d\n22e'
 fixture_brief WP-14 '- `Packages/KnotKit/Sources/KnotCleanup/`' $'Proof step\n1'
 fixture_brief WP-40 '- `Packages/KnotKit/Sources/KnotSync/`' $'Proof step\n40a\n40b\n40c\n40d'
 fixture_brief SP-1 '- `spike/locked-recording`' 'Notes'
@@ -234,6 +269,11 @@ assert k.package_of_branch("wp/13-note") == "WP-13" and k.is_note_branch("wp/13-
 assert not k.is_note_branch("wp/13b-note")
 assert k.package_of_branch("wp/06B-x") is None and k.package_of_branch("wp/06bc-x") is None
 assert k.package_of_branch("wp/06b") is None and k.package_of_branch("wp/6-x") == "WP-06"
+# A fifth lettered row counts toward its package: four merged of five, then all of them.
+assert k.plan_rows("WP-22") == ["1", "22a", "2", "22d", "22e"], k.plan_rows("WP-22")
+assert k.merge_state("WP-22", [("WP-22", False)] * 4) == (4, 5)
+assert k.package_of_branch("wp/22e-fifth") == "WP-22"
+assert k.merge_state("WP-22", [("WP-22", False)] * 5) == (5, 5)
 assert k.classify(["docs/architecture.md", "PLAN.md"])[0] == "documents"
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[0] == "leaf"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[0] == "everything"

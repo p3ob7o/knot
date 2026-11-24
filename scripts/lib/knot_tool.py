@@ -101,7 +101,7 @@ def merge_state(package, merged):
 
     `merged` is a list of (package, is_note) for every merged pull request. A note fills the
     brief's "Proof step" or "Notes" row; every other pull request fills the next of its
-    other rows, "1", "2" or "40a" to "40d"."""
+    other rows, "1", "2" or a lettered one such as "40a"."""
     rows = plan_rows(package)
     note_rows = sum(1 for row in rows if row in NOTE_ROWS)
     other_rows = len(rows) - note_rows
