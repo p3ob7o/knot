@@ -2342,6 +2342,8 @@ fi
 # build; and no provisioning flag reaches the build unless asked, the device one never.
 # Each build's log lies beside its derived data, where a later verify run's set-aside of
 # .build/logs/ does not reach it.
+# An install that fails comes after the summary, names the command that installs the build
+# again, and the next product is still installed.
 mb="$scratch/milestone-build"
 mkdir -p "$mb/tree/Apps/Config" "$mb/stub" "$mb/slots"
 cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$mb/tree/Apps/Config/"
@@ -2359,7 +2361,13 @@ mkdir -p "$mb/tree/.build/config"
 printf '// a stand-in: no team\n' >"$mb/tree/.build/config/Local.xcconfig"
 cp -R "$KNOT_SCRIPTS" "$mb/scripts"
 printf '#!/bin/sh\n[ "$1" = --version ] && echo "Version: %s"\nexit 0\n' "$KNOT_XCODEGEN_VERSION" >"$mb/stub/xcodegen"
-printf '#!/bin/bash\necho "install $*" >>"$KNOT_MB_RECORD"\n' >"$mb/scripts/install.sh"
+cat >"$mb/scripts/install.sh" <<'SH'
+#!/bin/bash
+echo "install $*" >>"$KNOT_MB_RECORD"
+[[ -n ${KNOT_MB_INSTALL_FAIL:-} && $1 == *"-$KNOT_MB_INSTALL_FAIL/"* ]] && { echo "install: could not reach a locked device"; exit 1; }
+exit 0
+SH
+chmod +x "$mb/scripts/install.sh"
 cat >"$mb/stub/defaults" <<'SH'
 #!/bin/bash
 [[ "$1 $2" == "export com.apple.dt.Xcode" ]] || exec /usr/bin/defaults "$@"
@@ -2430,6 +2438,9 @@ mb_log="$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
 mkdir -p "$mb/tree/.build/logs"
 (KNOT_TREE="$mb/tree" bash -c 'source "$1/lib/common.sh"; knot_set_logs_aside "$KNOT_LOGS"' _ "$mb/scripts")
 mb_logs="$( [[ -f $mb_log && -f ${mb_log%-ios.log}-mac.log && ! -e $mb/tree/.build/logs-earlier/$(basename "$mb_log") ]] && echo beside || echo moved)"
+# An install that fails: the iPhone app's.
+mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
+mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
 # The same, with the provisioning updates the owner allowed.
 mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
 # An option for the device's registration does not exist.
@@ -2455,8 +2466,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="logs $mb_logs plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "logs beside plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="logs $mb_logs install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "logs beside install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2468,8 +2479,12 @@ if [[ $mb_verdicts == "logs beside plain 0/kept/2/2 allowed 0/1 device 1/0 unsig
     grep -e 'holds an earlier build' "$mb/derived.out" >/dev/null && grep -e 'uncommitted changes' "$mb/dirty.out" >/dev/null &&
     grep -e 'saved list of accounts is empty' "$mb/none.out" >/dev/null &&
     grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null &&
-    grep -e "its log .build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" "$mb/plain.out" >/dev/null; then
-    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration and its logs, and passes a provisioning flag only when asked, the device's never"
+    grep -e "its log .build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" "$mb/plain.out" >/dev/null &&
+    [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
+    grep -e "Install it again from there, from the worktree's root: scripts/install.sh .build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
+    grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e "^install .*-mac/Build/Products/Release/Knot.app --mac-folder" "$mb/install.record" >/dev/null; then
+    pass "milestone-build.sh stops before the install at a part that fails its check, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration and its logs, prints its summary before an install that, failing, names how to install again, and passes a provisioning flag only when asked, the device's never"
 else
     fail "milestone-build.sh: $mb_verdicts; plain: $(tail -n 4 "$mb/plain.out"); unsigned: $(grep -e 'failed on' "$mb/unsigned.out")"
 fi

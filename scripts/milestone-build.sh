@@ -27,14 +27,16 @@
 # the level from the product and compares them with the level asked for and with
 # Apps/Config/Identifiers.xcconfig, then runs codesign --verify --strict on every part, each
 # alone, innermost first. It stops at the first failure, naming the part, and installs
-# nothing. It never starts what it builds: a milestone build that runs opens the owner's own
-# store. It prints no team ID and no signing identity. Each build's log lies beside its
-# derived data, .build/milestone/milestone-build-<level>-<commit>-<product>.log, filtered for
-# the team's ID as it is written; a run of verify.sh does not move it.
+# nothing. It prints the summary, with each product's path, before any install; an install
+# that fails leaves the build whole, and the script names the command that installs it again.
+# It never starts what it builds: a milestone build that runs opens the owner's own store. It
+# prints no team ID and no signing identity. Each build's log lies beside its derived data,
+# .build/milestone/milestone-build-<level>-<commit>-<product>.log, filtered for the team's ID
+# as it is written; a run of verify.sh does not move it.
 
 source "$(dirname "$0")/lib/common.sh"
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "milestone-build-usage" "$1" "Run scripts/milestone-build.sh --help." "safe" "nothing"; }
 say() { printf 'milestone-build: %s\n' "$1"; }
 
@@ -288,25 +290,40 @@ for product in $WANTED; do
     SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took, every part verified, at ${app#"$KNOT_ROOT"/}, its log .build/milestone/$(basename "$log")")
 done
 
+# The summary comes before any install, so that an install that fails leaves the build's
+# paths on the screen.
+say "summary, $LEVEL at ${head:0:12}:"
+for line in "${SUMMARY[@]}"; do printf '    %s\n' "$line"; done
+
 # ------------------------------------------------------------------ then
 
+# A failed install leaves the build whole and checked: it says so, names the command that
+# installs it again from its path, and goes on to the next product. The run fails at the end.
 if ((INSTALL)); then
+    missed=()
     for entry in "${APPS[@]}"; do
         product=${entry%%=*}
         app=${entry#*=}
+        options=()
         if [[ $product == ios ]]; then
-            options=()
             for device in ${DEVICES[@]+"${DEVICES[@]}"}; do options+=(--device "$device"); done
             ((AGAIN)) && options+=(--again)
-            say "ios: scripts/install.sh"
-            "$KNOT_SCRIPTS/install.sh" "$app" ${options[@]+"${options[@]}"}
         else
-            say "mac: scripts/install.sh --mac-folder"
-            "$KNOT_SCRIPTS/install.sh" "$app" --mac-folder "$MAC_FOLDER"
+            options=(--mac-folder "$MAC_FOLDER")
+        fi
+        say "$product: scripts/install.sh"
+        if ! "$KNOT_SCRIPTS/install.sh" "$app" ${options[@]+"${options[@]}"}; then
+            again="scripts/install.sh $(printf '%q' "${app#"$KNOT_ROOT"/}")"
+            for option in ${options[@]+"${options[@]}"}; do again="$again $(printf '%q' "$option")"; done
+            say "$product: the install failed. The build is whole and checked, at ${app#"$KNOT_ROOT"/}. Install it again from there, from the worktree's root: $again"
+            say "$product: do not rerun milestone-build.sh for it: it would refuse the folder that holds this build."
+            missed+=("$product")
         fi
     done
+    if ((${#missed[@]})); then
+        knot_fail "milestone-build-install" "The install of ${missed[*]} failed, named above. The build is whole and checked." \
+            "Run the install command printed above for each, once the devices are unlocked and near, or the folder is free." \
+            "safe" "the products that installed above"
+    fi
 fi
-
-say "summary, $LEVEL at ${head:0:12}:"
-for line in "${SUMMARY[@]}"; do printf '    %s\n' "$line"; done
 ((INSTALL)) || say "nothing installed and nothing started"
