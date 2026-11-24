@@ -250,6 +250,10 @@ public final class LiveComposition: Sendable {
     /// The live entry points of the modules whose ports need nothing that only the composition
     /// knows. Each returns the environment it is given until its package fills it in, so those
     /// packages wire themselves in without editing this folder.
+    ///
+    /// KnotIntents comes last, after every module that fills a port: it registers the
+    /// environment it is given for the intents, so that environment must be the composition's
+    /// own, which a module wired after it would change (WP-22, row 22e).
     private static func wireModules(_ environment: AppEnvironment, seams: Seams) -> AppEnvironment {
         var environment = environment
         func wire(_ name: String, _ entry: (AppEnvironment) -> AppEnvironment) {
@@ -260,7 +264,6 @@ public final class LiveComposition: Sendable {
         wire("KnotCapture", KnotCaptureLive.wire)
         wire("KnotInk", KnotInkLive.wire)
         wire("KnotSync", KnotSyncLive.wire)
-        wire("KnotIntents", KnotIntentsLive.wire)
         wire("KnotExport", KnotExportLive.wire)
         wire("KnotUI", KnotUILive.wire)
         #if os(iOS)
@@ -269,6 +272,7 @@ public final class LiveComposition: Sendable {
         #if os(macOS)
             wire("KnotAgent", KnotAgentLive.wire)
         #endif
+        wire("KnotIntents", KnotIntentsLive.wire)
         return environment
     }
 

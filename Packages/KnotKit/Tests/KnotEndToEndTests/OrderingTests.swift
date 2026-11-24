@@ -141,4 +141,38 @@ struct OrderingTests {
         #expect(wired.count >= 10)
         for (module, shells) in wired { #expect(shells, "\(module) was wired without the shell's ports") }
     }
+
+    /// KnotIntents is wired last (WP-22, row 22e). The environment the intents reach is the one
+    /// `KnotIntentsLive.wire` is given, which it registers with the App Intents dependency
+    /// manager, and the composition's own is `composition.environment`, which `wireModules`
+    /// returns. The modules after KnotIntents's earlier place fill no port yet, so the test holds
+    /// the order as well as the ports: a module wired after KnotIntents would fill a port that
+    /// the intents never see.
+    @Test("KnotIntents is wired last, and the intents reach the composition's own environment")
+    func intentsAreWiredLast() throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let shell = ShellPorts(cues: RecordingCueEmitter(), surfaces: RecordingSurfaceRouter())
+        let wired = Mutex<[(String, AppEnvironment)]>([])
+        var seams = LiveComposition.Seams.forTests
+        seams.wiring = { module, environment in wired.withLock { $0.append((module, environment)) } }
+        let composition = folder.compose(shell: shell, seams: seams)
+        let order = wired.withLock { $0.map(\.0) }
+        let after = order.drop { $0 != "KnotIntents" }.dropFirst()
+        #expect(order.last == "KnotIntents", "wired after KnotIntents: \(Array(after))")
+        let reached = try #require(wired.withLock { $0.last { $0.0 == "KnotIntents" }?.1 })
+        #expect(Self.portsDiffering(reached, composition.environment) == [])
+    }
+
+    /// The ports of `a` that are not those of `b`: another instance of a reference type, or
+    /// another type. Read by reflection, so a port added to `AppEnvironment` is compared too.
+    static func portsDiffering(_ a: AppEnvironment, _ b: AppEnvironment) -> [String] {
+        zip(Mirror(reflecting: a).children, Mirror(reflecting: b).children).compactMap { left, right in
+            let same =
+                type(of: left.value) is AnyClass
+                ? (left.value as AnyObject) === (right.value as AnyObject)
+                : type(of: left.value) == type(of: right.value)
+            return same ? nil : left.label ?? "?"
+        }
+    }
 }

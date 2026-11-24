@@ -190,10 +190,12 @@ else
     fail "the plan check missed a brief with a missing heading (status $status)"
 fi
 
-# 3b. A row lettered past d, a fifth pull request beside the planned ones, is a row: on fresh
-#     copies of the real plan, a row 22e after WP-22d, in the brief and in PLAN.md's table,
-#     passes; a row after WP-22f, which does not exist, is read and refused; and a row of two
-#     letters, 22ab, is still no row label.
+# 3b. A row lettered past d, a pull request beside the planned ones, is a row: on fresh
+#     copies of the real plan, a row 22y after WP-22d, in the brief and in PLAN.md's table,
+#     passes; a row after WP-22z, which does not exist, is read and refused; and a row of two
+#     letters, 22ab, is still no row label. The letters are y and z so that the case does not
+#     meet a row the real plan holds: with 22e it failed on the tree that gave WP-22 its row
+#     22e, a label twice.
 lettered_plan() { # lettered_plan <name> <label> <starts after>: the check's status on a copy with that row added
     local copy="$scratch/plan-$1"
     mkdir -p "$copy/docs"
@@ -214,14 +216,14 @@ PY
     KNOT_TREE="$copy" "$copy/scripts/check-plan.sh" >"$scratch/plan-$1.log" 2>&1 || status=$?
     echo "$status"
 }
-row_e="$(lettered_plan row-e 22e WP-22d)"
-row_f="$(lettered_plan after-f 22e WP-22f)"
+row_e="$(lettered_plan row-e 22y WP-22d)"
+row_f="$(lettered_plan after-f 22y WP-22z)"
 row_ab="$(lettered_plan row-ab 22ab WP-22d)"
-if [[ $row_e == 0 && $row_f == 1 && $row_ab == 1 ]] && grep -e "WP-22f" "$scratch/plan-after-f.log" >/dev/null &&
+if [[ $row_e == 0 && $row_f == 1 && $row_ab == 1 ]] && grep -e "WP-22z" "$scratch/plan-after-f.log" >/dev/null &&
     grep -e "'22ab' is not a row label" "$scratch/plan-row-ab.log" >/dev/null; then
     pass "the plan check takes a row lettered past d, reads a reference to one, and refuses two letters"
 else
-    fail "lettered rows: 22e status $row_e ($(grep -e FAIL -e "is not" "$scratch/plan-row-e.log" | head -n 2)), after WP-22f status $row_f, 22ab status $row_ab"
+    fail "lettered rows: 22y status $row_e ($(grep -e FAIL -e "is not" "$scratch/plan-row-e.log" | head -n 2)), after WP-22z status $row_f, 22ab status $row_ab"
 fi
 
 # 4. The gate's helper reads the plan as it states it. It reads a fixture plan of the
