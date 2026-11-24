@@ -190,6 +190,40 @@ else
     fail "the plan check missed a brief with a missing heading (status $status)"
 fi
 
+# 3b. A row lettered past d, a fifth pull request beside the planned ones, is a row: on fresh
+#     copies of the real plan, a row 22e after WP-22d, in the brief and in PLAN.md's table,
+#     passes; a row after WP-22f, which does not exist, is read and refused; and a row of two
+#     letters, 22ab, is still no row label.
+lettered_plan() { # lettered_plan <name> <label> <starts after>: the check's status on a copy with that row added
+    local copy="$scratch/plan-$1"
+    mkdir -p "$copy/docs"
+    cp -R "$plan/scripts" "$copy/"
+    cp "$KNOT_SELF/PLAN.md" "$copy/"
+    cp -R "$KNOT_SELF/docs/plan" "$copy/docs/"
+    python3 -I - "$copy" "$2" "$3" <<'PY'
+import sys
+copy, label, after = sys.argv[1:]
+for path, old, new in (
+        (copy + "/docs/plan/WP-22.md", "| WP-22c |\n", "| WP-22c |\n| %s | A synthetic fifth row | %s |\n" % (label, after)),
+        (copy + "/PLAN.md", "| WP-22c |\n", "| WP-22c |\n| WP-22 | %s | A synthetic fifth row | %s |\n" % (label, after))):
+    text = open(path).read()
+    assert text.count(old) == 1, (path, old)
+    open(path, "w").write(text.replace(old, new))
+PY
+    local status=0
+    KNOT_TREE="$copy" "$copy/scripts/check-plan.sh" >"$scratch/plan-$1.log" 2>&1 || status=$?
+    echo "$status"
+}
+row_e="$(lettered_plan row-e 22e WP-22d)"
+row_f="$(lettered_plan after-f 22e WP-22f)"
+row_ab="$(lettered_plan row-ab 22ab WP-22d)"
+if [[ $row_e == 0 && $row_f == 1 && $row_ab == 1 ]] && grep -e "WP-22f" "$scratch/plan-after-f.log" >/dev/null &&
+    grep -e "'22ab' is not a row label" "$scratch/plan-row-ab.log" >/dev/null; then
+    pass "the plan check takes a row lettered past d, reads a reference to one, and refuses two letters"
+else
+    fail "lettered rows: 22e status $row_e ($(grep -e FAIL -e "is not" "$scratch/plan-row-e.log" | head -n 2)), after WP-22f status $row_f, 22ab status $row_ab"
+fi
+
 # 4. The gate's helper reads the plan as it states it. It reads a fixture plan of the
 #    self-test's own and pins nothing of the real one (item 104): a documents pull request
 #    that changes a brief's rows passes the gate at the documents depth, which does not run
@@ -211,6 +245,7 @@ fixture_brief WP-02 '- `Packages/KnotKit/Sources/KnotFakes/`, except its `Previe
 fixture_brief WP-06 '- the soak step of `scripts/verify.sh`' '1'
 fixture_brief WP-10 '- `Packages/KnotKit/Sources/KnotStore/`' '1'
 fixture_brief WP-11 '- `Packages/KnotKit/Sources/KnotCapture/`' $'1\n11a\n2\n3\n4'
+fixture_brief WP-22 '- `Packages/KnotKit/Sources/KnotApp/`' $'1\n22a\n2\n22d\n22e'
 fixture_brief WP-14 '- `Packages/KnotKit/Sources/KnotCleanup/`' $'Proof step\n1'
 fixture_brief WP-40 '- `Packages/KnotKit/Sources/KnotSync/`' $'Proof step\n40a\n40b\n40c\n40d'
 fixture_brief SP-1 '- `spike/locked-recording`' 'Notes'
@@ -226,6 +261,19 @@ assert "scripts/verify.sh" not in excluded, excluded       # "the soak step of s
 assert k.package_of_branch("wp/01-tooling") == "WP-01"
 assert k.package_of_branch("origin/wp/10-store") == "WP-10"
 assert k.package_of_branch("contract/ports") == "contract"
+# A pull request beside the planned ones, lettered, is its number's package; wp/13-note stays
+# WP-13's note, and anything else between the number and the dash names no package.
+assert k.package_of_branch("wp/06b-done-line") == "WP-06", k.package_of_branch("wp/06b-done-line")
+assert k.package_of_branch("origin/wp/22d-mac-tool") == "WP-22"
+assert k.package_of_branch("wp/13-note") == "WP-13" and k.is_note_branch("wp/13-note")
+assert not k.is_note_branch("wp/13b-note")
+assert k.package_of_branch("wp/06B-x") is None and k.package_of_branch("wp/06bc-x") is None
+assert k.package_of_branch("wp/06b") is None and k.package_of_branch("wp/6-x") == "WP-06"
+# A fifth lettered row counts toward its package: four merged of five, then all of them.
+assert k.plan_rows("WP-22") == ["1", "22a", "2", "22d", "22e"], k.plan_rows("WP-22")
+assert k.merge_state("WP-22", [("WP-22", False)] * 4) == (4, 5)
+assert k.package_of_branch("wp/22e-fifth") == "WP-22"
+assert k.merge_state("WP-22", [("WP-22", False)] * 5) == (5, 5)
 assert k.classify(["docs/architecture.md", "PLAN.md"])[0] == "documents"
 assert k.classify(["Packages/KnotKit/Sources/KnotSpeech/Transcriber.swift"])[0] == "leaf"
 assert k.classify(["Packages/KnotKit/Sources/KnotStore/Store.swift"])[0] == "everything"
@@ -1695,6 +1743,80 @@ else
     fail "the team filter left an ID or took too much, or the scrub changed the log's time to $scrubbed_time: $filtered"
 fi
 
+# At the start of a whole run, a tier, the earlier run's logs go aside, to .build/logs-earlier/,
+# so that no file in .build/logs/ after the run is older than it: an earlier run's soak output,
+# dated 2020 here, a screenshot and a hidden file move, keeping their times, and the run before
+# that, in logs-earlier/ already, is gone. A run of one step, --only, leaves the whole run's
+# logs where they are, and moves nothing. Through verify.sh's loop, `--perf` and then
+# `--only doctor`, with the doctor and the perf step stand-ins, on a scratch tree.
+la="$scratch/logs-aside"
+mkdir -p "$la/tree/.build/logs" "$la/tree/.build/logs-earlier" "$la/slots"
+cp "$KNOT_SELF/.xcode-version" "$la/tree/"
+cp -R "$KNOT_SCRIPTS" "$la/scripts"
+python3 -I - "$la/scripts/verify.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+for name, body in (("step_doctor", 'echo "doctor stand-in"; [[ -z ${KNOT_LA_EXTRA:-} ]] || printf "TeamIdentifierPrefix=%s.\\n" "$KNOT_LA_EXTRA" >"$KNOT_LOGS/verify-doctor-extra.out"'), ("step_perf", 'echo "perf stand-in"')):
+    start = text.index(name + "() {")
+    end = text.index("\n}\n", start) + 3
+    text = text[:start] + name + "() {\n    " + body + "\n}\n" + text[end:]
+open(path, "w").write(text)
+PY
+printf 'capture ledger soak: RED with seed 1\nTeamIdentifierPrefix=%s.\n' "$fake_team" >"$la/tree/.build/logs/verify-soak.out"
+touch -t 202001020304.05 "$la/tree/.build/logs/verify-soak.out"
+printf 'png\n' >"$la/tree/.build/logs/launch-iphone.png"
+printf 'hidden\n' >"$la/tree/.build/logs/.earlier-hidden"
+printf 'older\n' >"$la/tree/.build/logs-earlier/verify-older-run.log"
+la_started=$(knot_now)
+la_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" "$la/scripts/verify.sh" --perf >"$la/out" 2>&1 || la_status=$?
+la_old=""
+for f in "$la/tree/.build/logs"/* "$la/tree/.build/logs"/.[!.]*; do
+    [[ -e $f ]] || continue
+    (($(stat -f %m "$f") >= la_started)) || la_old="$la_old $(basename "$f")"
+done
+la_aside="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
+la_soak_time="$(date -r "$(stat -f %m "$la/tree/.build/logs-earlier/verify-soak.out" 2>/dev/null || echo 0)" +%Y%m%d%H%M.%S)"
+# Then one step alone: the whole run's logs stay, and logs-earlier/ is as the whole run left it.
+# A log another run may still be writing, which holds an ID, is not touched: same inode, same
+# text. The run's own output, written unfiltered by its step, is scrubbed at its end.
+printf 'TeamIdentifierPrefix=%s.\n' "$fake_team" >"$la/tree/.build/logs/verify-live-elsewhere.log"
+la_live_inode="$(stat -f %i "$la/tree/.build/logs/verify-live-elsewhere.log")"
+la_only_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" KNOT_LA_EXTRA="$fake_team" "$la/scripts/verify.sh" --only doctor >"$la/only.out" 2>&1 || la_only_status=$?
+la_live="$( [[ "$(stat -f %i "$la/tree/.build/logs/verify-live-elsewhere.log")" == "$la_live_inode" ]] && grep -c -e "$fake_team" "$la/tree/.build/logs/verify-live-elsewhere.log" || echo moved)"
+la_own="$(grep -c -e "$fake_team" "$la/tree/.build/logs/verify-doctor-extra.out" 2>/dev/null || true)/$(grep -c -e '<TEAM>' "$la/tree/.build/logs/verify-doctor-extra.out" 2>/dev/null || true)"
+la_after_only="$(cd "$la/tree/.build/logs" && ls | tr '\n' ' ')"
+la_aside_after_only="$(cd "$la/tree/.build/logs-earlier" && ls -A | tr '\n' ' ')"
+if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-perf.log &&
+    $la_aside == ".earlier-hidden launch-iphone.png verify-soak.out " && $la_soak_time == 202001020304.05 &&
+    $la_only_status == 0 && $la_after_only == *"verify-perf.log"* && $la_after_only == *"verify-doctor.log"* &&
+    $la_live == 1 && $la_own == 0/1 &&
+    $la_aside_after_only == "$la_aside" ]] &&
+    ! grep -e "$fake_team" "$la/tree/.build/logs-earlier/verify-soak.out" >/dev/null; then
+    pass "a whole run moves the earlier run's logs aside, scrubbed and keeping their times, and the run before that goes; a run of one step moves nothing"
+else
+    fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time; after --only doctor ($la_only_status): logs '$la_after_only', logs-earlier '$la_aside_after_only', another run's live log $la_live, its own output $la_own: $(tail -n 5 "$la/out")"
+fi
+# A step whose wait for a build slot runs out did not run, and is named apart from a failure:
+# --perf, which takes every slot, with one of them held and a wait of 2 s, ends NOT RUN with
+# its own status, 4.
+/usr/bin/lockf -k "$la/slots/build-1.lock" sleep 20 &
+la_holder=$!
+for _ in $(seq 1 50); do /usr/bin/lockf -s -t 0 -k "$la/slots/build-1.lock" true 2>/dev/null || break; sleep 0.1; done
+la_slot_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" KNOT_SLOT_TIMEOUT=2 "$la/scripts/verify.sh" --perf >"$la/no-slot.out" 2>&1 || la_slot_status=$?
+kill "$la_holder" 2>/dev/null || true
+wait "$la_holder" 2>/dev/null || true
+if [[ $la_slot_status == 4 ]] && grep -e '^verify: NOT RUN perf .*no build slot came free' "$la/no-slot.out" >/dev/null &&
+    grep -e '^verify --perf: NOT RUN' "$la/no-slot.out" >/dev/null && ! grep -e '^verify: FAIL' "$la/no-slot.out" >/dev/null &&
+    grep -e 'perf NOT RUN at perf, no slot' "$la/tree/.build/logs/verify-status.txt" >/dev/null; then
+    pass "a step whose wait for a slot runs out is NOT RUN, with a status of its own, not a failure"
+else
+    fail "a step with no slot: status $la_slot_status: $(grep -e '^verify' "$la/no-slot.out" | tr '\n' '|')"
+fi
+
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands
 # when the run names the owner's configuration and so knows it. The configuration here is
 # made up, with the same made-up ID.
@@ -2204,6 +2326,546 @@ if [[ $slow_out == "$slow_want" ]]; then
     pass "a step names each case that took longer than a minute, with its destination and its seconds, and no other"
 else
     fail "the slow cases: '$slow_out'"
+fi
+
+# scripts/install.sh skips a device that holds the build's version and build number, and
+# with --again installs there all the same, as a build signed again needs. With a saved device
+# list of one synthetic paired iPhone, and a stand-in xcrun whose devicectl says that the
+# device holds 0.3.0 (1) and writes down each install it is asked for.
+ia="$scratch/install-again"
+mkdir -p "$ia/stub" "$ia/Knot.app"
+cat >"$ia/devices.json" <<'JSON'
+{"result": {"devices": [{"identifier": "SELF-TEST-DEVICE", "deviceProperties": {"name": "Self-test iPhone"},
+  "properties": {"hardware": {"platform": "iOS", "reality": "physical", "udid": "SELF-TEST-UDID"},
+                 "connection": {"pairingState": "paired", "state": "connected"}}}]}}
+JSON
+for key in "CFBundleIdentifier string com.p3ob7o.knot.dev" "CFBundleShortVersionString string 0.3.0" "CFBundleVersion string 1"; do
+    /usr/libexec/PlistBuddy -c "Add :$key" "$ia/Knot.app/Info.plist" >/dev/null
+done
+cat >"$ia/stub/xcrun" <<'SH'
+#!/bin/bash
+[[ $1 == devicectl ]] || exec /usr/bin/xcrun "$@"
+out=""
+for ((i = 1; i <= $#; i++)); do [[ ${!i} == --json-output ]] && { j=$((i + 1)); out=${!j}; }; done
+case "$2 $3 $4" in
+    "device info apps") printf '{"result": {"apps": [{"version": "0.3.0", "bundleVersion": "1"}]}}\n' >"$out" ;;
+    "device install app") echo "install $*" >>"$KNOT_INSTALL_RECORD" ;;
+    *) exit 1 ;;
+esac
+SH
+chmod +x "$ia/stub/xcrun"
+install_run() { # install_run <name> <options…>: the lines it printed, and how many installs it made
+    local name=$1
+    shift
+    env PATH="$ia/stub:$PATH" KNOT_DEVICECTL_JSON="$ia/devices.json" KNOT_INSTALL_RECORD="$ia/$name.record" \
+        "$KNOT_SCRIPTS/install.sh" "$ia/Knot.app" "$@" >"$ia/$name.out" 2>&1 || echo "status $?" >>"$ia/$name.out"
+    echo "$(grep -c . "$ia/$name.record" 2>/dev/null || echo 0) $(grep -e '^install: [0-9]' "$ia/$name.out")"
+}
+plain_install="$(install_run plain)"
+again_install="$(install_run again --again)"
+mac_again="$(mkdir -p "$ia/mac.app/Contents" && cp "$ia/Knot.app/Info.plist" "$ia/mac.app/Contents/" &&
+    "$KNOT_SCRIPTS/install.sh" "$ia/mac.app" --mac-folder "$ia/folder" --again 2>&1 || true)"
+if [[ $plain_install == "0 install: 0 installed, 1 already held the build, 0 missed" &&
+    $again_install == "1 install: 1 installed, 0 already held the build, 0 missed" &&
+    $(cat "$ia/again.record") == *"device install app --device SELF-TEST-DEVICE $ia/Knot.app"* &&
+    $mac_again == *"--again is for devices"* && ! -e $ia/folder/mac.app ]]; then
+    pass "install.sh skips a device that holds the build, and installs there again with --again"
+else
+    fail "install.sh and --again: without it '$plain_install', with it '$again_install' ($(cat "$ia/again.out")), a Mac build with it '$mac_again'"
+fi
+
+# scripts/nightly.sh keeps each of its runs' logs in a folder of its own, .build/nightly/<run>/,
+# cleared when the night starts: a whole run sets the earlier runs' logs aside, so without the
+# folders only the last two runs' logs were left. With a stand-in verify.sh that writes one log
+# named for its arguments, and a scratch tree.
+ng="$scratch/nightly-logs"
+mkdir -p "$ng/tree/.build/nightly/from-an-earlier-night"
+cp -R "$KNOT_SCRIPTS" "$ng/scripts"
+cp "$KNOT_SELF/.xcode-version" "$ng/tree/"
+cat >"$ng/scripts/verify.sh" <<'SH'
+#!/bin/bash
+[[ ${1:-} == --status-line ]] && { echo "stand-in status"; exit 0; }
+# A run finds no slot when KNOT_NG_NO_SLOT names it, and fails when KNOT_NG_FAIL does.
+[[ -n ${KNOT_NG_NO_SLOT:-} && " $* " == *" $KNOT_NG_NO_SLOT "* ]] && exit 4
+[[ -n ${KNOT_NG_FAIL:-} && " $* " == *" $KNOT_NG_FAIL "* ]] && exit 1
+source "$(dirname "$0")/lib/common.sh"
+# A whole run sets the earlier logs aside, as verify.sh does; a run of one step does not.
+[[ ${1:-} == --only ]] || knot_set_logs_aside "$KNOT_LOGS"
+mkdir -p "$KNOT_LOGS"
+echo "a log of verify.sh $*" >"$KNOT_LOGS/verify-$(printf '%s' "$*" | tr -c 'a-z0-9' '-').log"
+SH
+chmod +x "$ng/scripts/verify.sh"
+ng_status=0
+(cd "$ng/tree" && git init -q && env KNOT_TREE="$ng/tree" "$ng/scripts/nightly.sh" >"$ng/out" 2>&1) || ng_status=$?
+ng_folders="$( { cd "$ng/tree/.build/nightly" && ls; } 2>/dev/null | tr '\n' ' ' || true)"
+ng_full="$( { cat "$ng/tree/.build/nightly/full/"verify-* || true; } 2>/dev/null | tr '\n' ' ')"
+ng_tsan="$( { ls "$ng/tree/.build/nightly/tsan/" || true; } 2>/dev/null | tr '\n' ' ')"
+if [[ $ng_status == 0 && $ng_folders == "full models oldest-runtime perf recorder-sim soak tsan " &&
+    $ng_full == "a log of verify.sh --full " && $ng_tsan == "verify---only-tsan.log " ]]; then
+    pass "the nightly run keeps each run's logs in a folder of its own, and clears an earlier night's"
+else
+    fail "the nightly's logs: status $ng_status, folders '$ng_folders', full's '$ng_full', tsan's '$ng_tsan': $(tail -n 3 "$ng/out")"
+fi
+
+# A night that did not run every run gives no verdict: status 4, neither green nor red, its last
+# line naming what did not run, whether perf or the full run found no slot; a run that failed
+# makes it red, status 1, whatever else did not run.
+ng_night() { # ng_night <name> <environment…>: the night's status and its last line
+    local name=$1 status=0
+    shift
+    (cd "$ng/tree" && env KNOT_TREE="$ng/tree" "$@" "$ng/scripts/nightly.sh" >"$ng/$name.out" 2>&1) || status=$?
+    echo "$status|$(grep -v -e '^ ' -e '^FAIL' "$ng/$name.out" | tail -n 1)"
+}
+ng_perf="$(ng_night no-slot-perf KNOT_NG_NO_SLOT=--perf)"
+ng_full="$(ng_night no-slot-full KNOT_NG_NO_SLOT=--full)"
+ng_red="$(ng_night red KNOT_NG_NO_SLOT=--perf KNOT_NG_FAIL=--soak)"
+if [[ $ng_perf == "4|nightly: no verdict: no run failed, and these did not run, for want of a build slot: perf" &&
+    $ng_full == "4|nightly: no verdict: no run failed, and these did not run, for want of a build slot: full" &&
+    ${ng_red%%|*} == 1 ]] && grep -e 'failed in: soak. Not run, for want of a build slot: perf.' "$ng/red.out" >/dev/null; then
+    pass "a night that did not run every run gives no verdict, status 4, naming what did not run; a failed run makes it red"
+else
+    fail "the nightly's verdicts: perf with no slot '$ng_perf', full with no slot '$ng_full', a failure beside '$ng_red'"
+fi
+
+# scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
+# down its arguments and makes a synthetic product, a codesign that fails on a part named in
+# KNOT_MB_UNSIGNED, a defaults that holds KNOT_MB_ACCOUNTS saved accounts, and an install.sh
+# that writes down what it was asked, and an XcodeGen that generates nothing. A scratch git
+# tree holds the identifiers and a stand-in for the team's configuration, which a run keeps
+# (the first real run found that generating the project removed it). A part that fails its check
+# stops the run before any install; a derived-data folder that is not empty, a HEAD that is
+# not the commit named, a dirty tree and an empty list of accounts are refused before any
+# build; and no provisioning flag reaches the build unless asked, the device one never.
+# The app group: the stand-in xcodebuild writes down beside each part the groups it is
+# signed with, which the stand-in codesign -d reads, and a profile that allows them, which a
+# stand-in security decodes; the Mac's group carries a made-up team prefix. A part signed with
+# a group its profile does not allow, and a part signed with none that its entitlements file
+# gives one, stop the run before any install, naming the part; no printed line holds the
+# made-up team ID. Each build's log lies beside its derived data, where a later verify run's
+# set-aside does not reach it. And an install that fails comes after the summary, names the
+# command that installs the build again, and the next product is still installed.
+mb="$scratch/milestone-build"
+mkdir -p "$mb/tree/Apps/Config" "$mb/stub" "$mb/slots"
+cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$mb/tree/Apps/Config/"
+mb_entitlements=(Apps/iOS/Knot-iOS-team.entitlements Apps/macOS/Knot-macOS-team.entitlements
+    Apps/watchOS/Knot-watchOS-team.entitlements Apps/macOS/Tool/knot-team.entitlements
+    Apps/Extensions/Widgets-iOS/Widgets-iOS-team.entitlements Apps/Extensions/Widgets-watchOS/Widgets-watchOS-team.entitlements)
+for f in "${mb_entitlements[@]}"; do mkdir -p "$mb/tree/$(dirname "$f")" && cp "$KNOT_SELF/$f" "$mb/tree/$f"; done
+mb_team="ZZ9QX42K7T"
+cp "$KNOT_SELF/.xcode-version" "$mb/tree/"
+printf '.build/\nbuild/\n*.xcodeproj/\n' >"$mb/tree/.gitignore"
+mb_git() { git -C "$mb/tree" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false "$@"; }
+mb_record() { # mb_record <message>: records the tree's staged files as a commit
+    mb_git commit -q -m "$1"
+}
+# A package's checkout, a small git repository, and the pin of its revision in Package.resolved.
+mb_pkg="$mb/tree/.build/SourcePackages/checkouts/Synthetic"
+mkdir -p "$mb_pkg"
+mb_pkg_git() { git -C "$mb_pkg" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false "$@"; }
+mb_pkg_git init -q
+printf 'one\n' >"$mb_pkg/Source.swift"
+mb_pkg_git add Source.swift
+mb_pkg_git commit -q -m "the pinned revision"
+mkdir -p "$mb/tree/Packages/KnotKit"
+printf '{"pins": [{"identity": "synthetic", "kind": "remoteSourceControl", "location": "https://example.invalid/Synthetic.git", "state": {"revision": "%s", "version": "1.0.0"}}], "version": 3}\n' \
+    "$(mb_pkg_git rev-parse HEAD)" >"$mb/tree/Packages/KnotKit/Package.resolved"
+mb_git init -q
+mb_git add .gitignore .xcode-version Apps/Config/Identifiers.xcconfig "${mb_entitlements[@]}" Packages/KnotKit/Package.resolved
+mb_record "the milestone's commit"
+mb_commit="$(mb_git rev-parse HEAD)"
+mkdir -p "$mb/tree/.build/config"
+printf '// a stand-in: no team\n' >"$mb/tree/.build/config/Local.xcconfig"
+cp -R "$KNOT_SCRIPTS" "$mb/scripts"
+printf '#!/bin/sh\n[ "$1" = --version ] && echo "Version: %s"\nexit 0\n' "$KNOT_XCODEGEN_VERSION" >"$mb/stub/xcodegen"
+cat >"$mb/scripts/install.sh" <<'SH'
+#!/bin/bash
+echo "install $*" >>"$KNOT_MB_RECORD"
+[[ -n ${KNOT_MB_INSTALL_FAIL:-} && $1 == *"-$KNOT_MB_INSTALL_FAIL/"* ]] && { echo "install: could not reach a locked device"; exit 1; }
+exit 0
+SH
+chmod +x "$mb/scripts/install.sh"
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_MB_RECORD"\n' >"$mb/stub/lsregister"
+chmod +x "$mb/stub/lsregister"
+cat >"$mb/stub/security" <<'SH'
+#!/bin/bash
+[[ "$1 $2 $3" == "cms -D -i" ]] || exec /usr/bin/security "$@"
+cat "$4"
+SH
+cat >"$mb/stub/defaults" <<'SH'
+#!/bin/bash
+[[ "$1 $2" == "export com.apple.dt.Xcode" ]] || exec /usr/bin/defaults "$@"
+entries=""
+for ((i = 0; i < ${KNOT_MB_ACCOUNTS:-1}; i++)); do entries="$entries<dict><key>identifier</key><string>synthetic-$i</string></dict>"; done
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>DVTDeveloperAccountManagerAppleIDLists</key><dict><key>IDE.Identifiers.Prod</key><array>%s</array></dict></dict></plist>\n' "$entries"
+SH
+cat >"$mb/stub/codesign" <<'SH'
+#!/bin/bash
+part="${@: -1}"
+echo "codesign $*" >>"$KNOT_MB_RECORD"
+if [[ $1 == -dv ]]; then
+    # Who signed it: the made-up team, or no team where KNOT_MB_ADHOC names the part.
+    team="$KNOT_MB_TEAM"
+    [[ -n ${KNOT_MB_ADHOC:-} && $part == *"$KNOT_MB_ADHOC" ]] && team="not set"
+    printf 'Executable=%s\nTeamIdentifier=%s\n' "$part" "$team" >&2
+    exit 0
+fi
+if [[ $1 == -d ]]; then
+    groups=""
+    [[ -n ${KNOT_MB_NO_GROUP:-} && $part == *"$KNOT_MB_NO_GROUP" ]] || groups="$(cat "$part.groups-signed")"
+    printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.application-groups</key><array>%s</array></dict></plist>\n' "$groups"
+    exit 0
+fi
+if [[ -n ${KNOT_MB_UNSIGNED:-} && $part == *"$KNOT_MB_UNSIGNED" ]]; then
+    echo "$part: code object is not signed at all" >&2
+    exit 1
+fi
+SH
+cat >"$mb/stub/xcodebuild" <<'SH'
+#!/bin/bash
+[[ ${1:-} == -version ]] && exec /usr/bin/xcodebuild "$@"
+echo "xcodebuild $*" >>"$KNOT_MB_RECORD"
+derived="" scheme="" level=""
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in
+        -derivedDataPath) derived=${!j} ;;
+        -scheme) scheme=${!j} ;;
+        KNOT_MILESTONE_LEVEL=*) level=${!i#KNOT_MILESTONE_LEVEL=} ;;
+    esac
+done
+info() { # info <folder> <bundle ID>: a wrong build number or level where asked
+    local build=1 at=$level
+    [[ -n ${KNOT_MB_WRONG_BUILD:-} && $1 == *"$KNOT_MB_WRONG_BUILD" ]] && build=2
+    [[ -n ${KNOT_MB_WRONG_LEVEL:-} && $1 == *"$KNOT_MB_WRONG_LEVEL" ]] && at=M2
+    mkdir -p "$1"
+    printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleShortVersionString</key><string>0.3.0</string><key>CFBundleVersion</key><string>%s</string><key>CFBundleExecutable</key><string>Knot</string><key>KnotFlavour</key><string>milestone</string><key>KnotMilestoneLevel</key><string>%s</string></dict></plist>\n' "$2" "$build" "$at" >"$1/Info.plist"
+}
+binary() { # binary <path>: a Mach-O file, which holds the fakes' module or a debug argument when asked
+    local kind=plain
+    [[ -n ${KNOT_MB_FAKES:-} && $1 == *"$KNOT_MB_FAKES" ]] && kind=fakes
+    [[ -n ${KNOT_MB_DEBUG_ARGUMENT:-} && $1 == *"$KNOT_MB_DEBUG_ARGUMENT" ]] && kind=debug
+    cp "$KNOT_MB_BINARIES/$kind" "$1"
+}
+signed() { # signed <part> <group> [<profile>]: the group it is signed with, and a profile that allows it
+    printf '<string>%s</string>' "$2" >"$1.groups-signed"
+    local allowed=$2
+    [[ -n ${KNOT_MB_PROFILE_OTHER:-} && $1 == *"$KNOT_MB_PROFILE_OTHER" ]] && allowed="$KNOT_MB_TEAM.com.example.other"
+    [[ -n ${KNOT_MB_NO_PROFILE:-} && $1 == *"$KNOT_MB_NO_PROFILE" ]] && return 0
+    [[ -z ${3:-} ]] || printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Entitlements</key><dict><key>com.apple.security.application-groups</key><array><string>%s</string></array></dict></dict></plist>\n' "$allowed" >"$3"
+}
+if [[ $scheme == Knot-iOS ]]; then
+    app="$derived/Build/Products/Release-iphoneos/Knot.app"
+    info "$app" com.p3ob7o.knot
+    info "$app/PlugIns/Widgets-iOS.appex" com.p3ob7o.knot.widgets
+    info "$app/Watch/KnotWatch.app" com.p3ob7o.knot.watchkitapp
+    info "$app/Watch/KnotWatch.app/PlugIns/Widgets-watchOS.appex" com.p3ob7o.knot.watchkitapp.widgets
+    for part in "$app" "$app/PlugIns/Widgets-iOS.appex" "$app/Watch/KnotWatch.app" "$app/Watch/KnotWatch.app/PlugIns/Widgets-watchOS.appex"; do
+        signed "$part" group.com.p3ob7o.knot "$part/embedded.mobileprovision"
+        binary "$part/Knot"
+    done
+    mkdir -p "$app/Frameworks/Synthetic.framework"
+    binary "$app/Frameworks/Synthetic.framework/Synthetic"
+else
+    app="$derived/Build/Products/Release/Knot.app"
+    info "$app/Contents" com.p3ob7o.knot
+    mkdir -p "$app/Contents/MacOS"
+    binary "$app/Contents/MacOS/Knot"
+    binary "$app/Contents/MacOS/knot-cli"
+    signed "$app" "$KNOT_MB_TEAM.com.p3ob7o.knot" "$app/Contents/embedded.provisionprofile"
+    signed "$app/Contents/MacOS/knot-cli" "${KNOT_MB_TOOL_GROUP:-$KNOT_MB_TEAM.com.p3ob7o.knot}"
+fi
+# The three forms in which xcodebuild writes the signing identity, made up: its SHA-1, the
+# certificate's name, and the name in an exported setting, with its parentheses escaped.
+echo "    /usr/bin/codesign --force --sign 0123456789ABCDEF0123456789ABCDEF01234567 --timestamp=none $app"
+echo '    Signing Identity:     "Apple Development: Self Test Owner (QQ1WW2EE3R)"'
+echo '    export EXPANDED_CODE_SIGN_IDENTITY_NAME\=Apple\ Development:\ Self\ Test\ Owner\ \(QQ1WW2EE3R\)'
+echo '    export EXPANDED_CODE_SIGN_IDENTITY\=0123456789ABCDEF0123456789ABCDEF01234567'
+echo "    builtin-embeddedBinaryValidationUtility $app -signing-cert 0123456789ABCDEF0123456789ABCDEF01234567 -info-plist-path x"
+# A commit's hash, which no flag or key names, stays readable.
+echo "    a commit 0123456789abcdef0123456789abcdef01234567 of the tree"
+echo "** BUILD SUCCEEDED **"
+SH
+chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild" "$mb/stub/xcodegen" "$mb/stub/security"
+# Three small Mach-O files for the binary scan, which reads a file's sections: one plain, one
+# that names the fakes' module, and one that holds a debug launch argument.
+mkdir -p "$mb/bin"
+for kind in "plain " "fakes KnotFakes" "debug -KnotPreview"; do
+    printf 'int main(void) { return 0; }\n__attribute__((used)) static const char marker[] = "%s";\n' "${kind#* }" >"$mb/bin/${kind%% *}.c"
+    xcrun clang -o "$mb/bin/${kind%% *}" "$mb/bin/${kind%% *}.c" 2>>"$mb/bin/clang.log" || echo "the binary ${kind%% *} was not made" >>"$mb/bin/clang.log"
+done
+mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no derived data; prints its status
+    local name=$1 status=0
+    shift
+    rm -rf "$mb/tree/.build/milestone"
+    : >"$mb/$name.record"
+    env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
+        KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+        KNOT_LSREGISTER="${KNOT_MB_LSREGISTER:-$mb/stub/lsregister}" \
+        "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
+    echo "$status"
+}
+mb_builds() { grep -c -e '^xcodebuild .* build$' "$mb/$1.record" || true; }
+mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
+# A clean run of both products, with the install, and no provisioning flag. It keeps the
+# team's configuration, and removes the generated project, with a user scheme left in it, before
+# it generates it again.
+mkdir -p "$mb/tree/Knot.xcodeproj/xcuserdata/self-test.xcuserdatad/xcschemes"
+printf 'a scheme left behind\n' >"$mb/tree/Knot.xcodeproj/xcuserdata/self-test.xcuserdatad/xcschemes/Left.xcscheme"
+mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_kept="$( [[ -e $mb/tree/.build/config/Local.xcconfig ]] && echo kept || echo removed)"
+mb_project="$( [[ -e $mb/tree/Knot.xcodeproj ]] && echo left || echo removed)"
+# The Mac product leaves LaunchServices once its checks have run, and stays on disk.
+mb_unregistered="$(grep -c -e "^lsregister -u .*/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app$" "$mb/plain.record" || true)/$( [[ -d $mb/tree/.build/milestone/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app ]] && echo kept || echo gone)"
+# The app-group check's lines go into the build's log as well as to the terminal.
+mb_group_log="$( { grep -c -e 'milestone-build: ios: Knot.app: app group group.com.p3ob7o.knot, allowed by its profile' -e 'milestone-build: ios: the app group checked on 4 parts' \
+    "$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" || true; } )"
+# Its logs lie beside the derived data, and a verify run's set-aside of .build/logs/ leaves them.
+mb_log="$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
+mkdir -p "$mb/tree/.build/logs"
+(KNOT_TREE="$mb/tree" bash -c 'source "$1/lib/common.sh"; knot_set_logs_aside "$KNOT_LOGS"' _ "$mb/scripts")
+mb_logs="$( [[ -f $mb_log && -f ${mb_log%-ios.log}-mac.log && ! -e $mb/tree/.build/logs-earlier/$(basename "$mb_log") ]] && echo beside || echo moved)"
+# The signing identity leaves the build's log: its SHA-1 after --sign, after -signing-cert and as
+# EXPANDED_CODE_SIGN_IDENTITY, the certificate's name and its ID; a commit's hash stays.
+mb_identity="$( { grep -h -e '0123456789ABCDEF0123456789ABCDEF01234567' -e 'Self Test Owner' -e 'QQ1WW2EE3R' "$mb_log" ${mb_log%-ios.log}-mac.log || true; } | grep -c . || true)/$(grep -c -e '<IDENTITY>' -e '<NAME>' "$mb_log" || true)/$(grep -c -e 'a commit 0123456789abcdef0123456789abcdef01234567 of the tree' "$mb_log" || true)"
+# The app group: a profile that does not allow the iOS widget's group, and a Watch app signed
+# with no group, which its entitlements file gives one.
+mb_profile="$(KNOT_MB_PROFILE_OTHER=Widgets-iOS.appex mb_run profile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+# The detail it writes to the build's log passes the team filter: the group the profile allows
+# carries the made-up team prefix.
+mb_profile_log="$( { grep -h -e 'app group Knot.app/PlugIns/Widgets-iOS.appex' "$mb/tree/.build/milestone/"*.log || true; } | tr '\n' ' ')"
+mb_nogroup="$(KNOT_MB_NO_GROUP=Watch/KnotWatch.app mb_run nogroup M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_group_log="$mb_group_log/$( { grep -c -e 'is signed with no app group' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
+# Who signed each part: an ad hoc widget, and a Mac tool with another app group than the app's.
+mb_adhoc="$(KNOT_MB_ADHOC=Widgets-iOS.appex mb_run adhoc M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_tool_group="$(KNOT_MB_TOOL_GROUP=group.com.example.other mb_run tool-group M1 --commit "$mb_commit" --products mac --install --mac-folder "$mb/folder")"
+# An unregister that fails, and LaunchServices' tool missing: said as such, never claimed.
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_MB_RECORD"\nexit 1\n' >"$mb/stub/lsregister-fails"
+chmod +x "$mb/stub/lsregister-fails"
+mb_unregister_fails="$(KNOT_MB_LSREGISTER="$mb/stub/lsregister-fails" mb_run unregister-fails M1 --commit "$mb_commit" --products mac)"
+mb_unregister_missing="$(KNOT_MB_LSREGISTER="$mb/stub/no-such-tool" mb_run unregister-missing M1 --commit "$mb_commit" --products mac)"
+# A part signed with a group that holds no profile.
+mb_noprofile="$(KNOT_MB_NO_PROFILE=Widgets-iOS.appex mb_run noprofile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_group_log="$mb_group_log/$( { grep -c -e 'Widgets-iOS.appex is signed with an app group and holds no provisioning profile' "$mb/tree/.build/milestone/"*-ios.log || true; } )"
+# What the build reads beyond the commit: an ignored Swift file under Sources, an untracked
+# file, a key beyond its own in each of the two configurations the build includes, and a binary
+# that holds the fakes' module or a debug launch argument.
+mkdir -p "$mb/tree/Packages/KnotKit/Sources/KnotCore/build"
+printf '#error("hidden")\n' >"$mb/tree/Packages/KnotKit/Sources/KnotCore/build/Hidden.swift"
+mb_ignored="$(mb_run ignored M1 --commit "$mb_commit")"
+rm -r "$mb/tree/Packages/KnotKit/Sources"
+printf 'untracked\n' >"$mb/tree/Apps/Untracked.swift"
+mb_untracked="$(mb_run untracked M1 --commit "$mb_commit")"
+rm "$mb/tree/Apps/Untracked.swift"
+printf 'KNOT_WORKTREE = x\nSWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG KNOT_FAKES\n' >"$mb/tree/.build/config/Worktree.xcconfig"
+mb_worktree_config="$(mb_run worktree-config M1 --commit "$mb_commit")"
+rm "$mb/tree/.build/config/Worktree.xcconfig"
+cp "$mb/tree/.build/config/Local.xcconfig" "$mb/local.copy"
+printf '#include "elsewhere.xcconfig"\nOTHER_SWIFT_FLAGS = -DDEBUG\n' >>"$mb/tree/.build/config/Local.xcconfig"
+mb_local_config="$(mb_run local-config M1 --commit "$mb_commit")"
+cp "$mb/local.copy" "$mb/tree/.build/config/Local.xcconfig"
+# A line the key reader cannot parse, holding a value like the team's ID: named by its file and
+# its number, and never printed.
+printf 'DEVELOPMENT_TEAM %s_NO_EQUALS\n' "$mb_team" >>"$mb/tree/.build/config/Local.xcconfig"
+mb_unparsed_config="$(mb_run unparsed-config M1 --commit "$mb_commit")"
+cp "$mb/local.copy" "$mb/tree/.build/config/Local.xcconfig"
+mb_fakes="$(KNOT_MB_FAKES=Widgets-iOS.appex/Knot mb_run fakes M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_debug="$(KNOT_MB_DEBUG_ARGUMENT=MacOS/knot-cli mb_run debug M1 --commit "$mb_commit" --products mac --install --mac-folder "$mb/folder")"
+# A product that is not the build asked for: the app at another level, the app or an inner
+# part with another build number.
+mb_level="$(KNOT_MB_WRONG_LEVEL=Release-iphoneos/Knot.app mb_run level M1 --commit "$mb_commit" --products ios)"
+mb_app_build="$(KNOT_MB_WRONG_BUILD=Release-iphoneos/Knot.app mb_run app-build M1 --commit "$mb_commit" --products ios)"
+mb_inner_build="$(KNOT_MB_WRONG_BUILD=Widgets-iOS.appex mb_run inner-build M1 --commit "$mb_commit" --products ios)"
+# A log that an earlier build left, with no derived data beside it.
+rm -rf "$mb/tree/.build/milestone"
+mkdir -p "$mb/tree/.build/milestone"
+echo "an earlier build's log" >"$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log"
+mb_earlier_log=0
+: >"$mb/earlier-log.record"
+env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
+    KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/earlier-log.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+    KNOT_LSREGISTER="$mb/stub/lsregister" \
+    "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/earlier-log.out" 2>&1 || mb_earlier_log=$?
+# A package's checkout that was changed, and one at another revision than its pin.
+printf 'an edit\n' >>"$mb_pkg/Source.swift"
+mb_pkg_edited="$(mb_run pkg-edited M1 --commit "$mb_commit")"
+mb_pkg_git checkout -q -- Source.swift
+printf 'two\n' >"$mb_pkg/Other.swift"
+mb_pkg_git add Other.swift
+mb_pkg_git commit -q -m "a later revision"
+mb_pkg_moved="$(mb_run pkg-moved M1 --commit "$mb_commit")"
+mb_pkg_git reset -q --hard HEAD~1
+# An ignored Swift file in the checkout, under a folder the package's own ignore list names.
+printf 'build/\n' >>"$mb_pkg/.git/info/exclude"
+mkdir -p "$mb_pkg/build"
+printf '#error("hidden")\n' >"$mb_pkg/build/Hidden.swift"
+mb_pkg_ignored="$(mb_run pkg-ignored M1 --commit "$mb_commit")"
+rm -r "$mb_pkg/build"
+# A build that waits for its slot: both slots a build outside the gate may take are held for
+# 3 s, so the wait is said apart and the build's own time stays short.
+/usr/bin/lockf -k "$mb/slots/build-1.lock" sleep 3 &
+mb_hold_1=$!
+/usr/bin/lockf -k "$mb/slots/build-2.lock" sleep 3 &
+mb_hold_2=$!
+for _ in $(seq 1 50); do
+    /usr/bin/lockf -s -t 0 -k "$mb/slots/build-1.lock" true 2>/dev/null || /usr/bin/lockf -s -t 0 -k "$mb/slots/build-2.lock" true 2>/dev/null || break
+    sleep 0.1
+done
+mb_wait="$(mb_run wait M1 --commit "$mb_commit" --products ios)"
+wait "$mb_hold_1" "$mb_hold_2" 2>/dev/null || true
+mb_wait_line="$(grep -e '^milestone-build: ios: built in ' "$mb/wait.out" || true)"
+# An install that fails: the iPhone app's.
+mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
+mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
+# The Mac app's install fails, with the folder named relative to where the script was started:
+# the command names the absolute folder, and says to move a part of a copy away first.
+mb_mac_install="$(cd "$mb" && KNOT_MB_INSTALL_FAIL=mac mb_run mac-install M1 --commit "$mb_commit" --products mac --install --mac-folder folder)"
+# The same, with the provisioning updates the owner allowed.
+mb_allowed="$(mb_run allowed M1 --commit "$mb_commit" --allow-provisioning-updates --products ios)"
+# An option for the device's registration does not exist.
+mb_device="$(mb_run device M1 --commit "$mb_commit" --allow-provisioning-device-registration)"
+# The iOS widget unsigned: the run stops at it, and installs nothing.
+mb_unsigned="$(KNOT_MB_UNSIGNED=Widgets-iOS.appex mb_run unsigned M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+# Derived data that is not empty.
+mb_dd_status=0
+: >"$mb/derived.record"
+mkdir -p "$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios"
+echo earlier >"$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios/earlier"
+env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
+    KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+    KNOT_LSREGISTER="$mb/stub/lsregister" \
+    "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/derived.out" 2>&1 || mb_dd_status=$?
+# HEAD is not the commit named: a later commit is checked out.
+printf 'later\n' >"$mb/tree/later.txt"
+mb_git add later.txt
+mb_record "a later one"
+mb_head="$(mb_run head M1 --commit "$mb_commit")"
+# A dirty tree, at the commit named.
+printf 'changed\n' >>"$mb/tree/later.txt"
+mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
+printf 'later\n' >"$mb/tree/later.txt"
+# No saved account.
+mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
+mb_verdicts="wait $mb_wait unregister $mb_unregister_fails $mb_unregister_missing project $mb_project packages $mb_pkg_edited/$(mb_builds pkg-edited) $mb_pkg_moved/$(mb_builds pkg-moved) $mb_pkg_ignored/$(mb_builds pkg-ignored) unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_unparsed_config/$(mb_builds unparsed-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "wait 0 unregister 0 0 project removed packages 1/0 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/5/1 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+    ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
+    grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
+    ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
+    grep -e "^install .*/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app --mac-folder $mb/folder$" "$mb/plain.record" >/dev/null &&
+    grep -e 'codesign --verify --strict .*Knot.app/Contents/MacOS/knot-cli$' "$mb/plain.record" >/dev/null &&
+    ! grep -e 'codesign .*--deep' "$mb/plain.record" >/dev/null &&
+    grep -e 'failed on Knot.app/PlugIns/Widgets-iOS.appex' "$mb/unsigned.out" >/dev/null &&
+    grep -e 'not the commit named' "$mb/head.out" >/dev/null && grep -e "(tree " "$mb/head.out" >/dev/null &&
+    grep -e 'holds an earlier build' "$mb/derived.out" >/dev/null && grep -e 'uncommitted changes' "$mb/dirty.out" >/dev/null &&
+    grep -e 'saved list of accounts is empty' "$mb/none.out" >/dev/null &&
+    grep -e 'Xcode holds 1 saved account$' "$mb/plain.out" >/dev/null &&
+    grep -e 'Knot.app/PlugIns/Widgets-iOS.appex is signed with the app group group.com.p3ob7o.knot, which its provisioning profile does not allow' "$mb/profile.out" >/dev/null &&
+    grep -e 'Watch/KnotWatch.app is signed with no app group, and Apps/watchOS/Knot-watchOS-team.entitlements gives it one' "$mb/nogroup.out" >/dev/null &&
+    grep -e 'mac: Knot.app: app group <TEAM>.com.p3ob7o.knot, allowed by its profile' "$mb/plain.out" >/dev/null &&
+    grep -e 'mac: Knot.app/Contents/MacOS/knot-cli: signed with <TEAM>.com.p3ob7o.knot; a bare executable carries no profile' "$mb/plain.out" >/dev/null &&
+    grep -e 'ios: the app group checked on 4 parts' "$mb/plain.out" >/dev/null &&
+    ! grep -e "$mb_team" "$mb"/*.out >/dev/null &&
+    grep -e "its log .build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" "$mb/plain.out" >/dev/null &&
+    [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
+    grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
+    grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    [[ $mb_wait_line =~ built\ in\ ([0-9]+)s,\ after\ waiting\ ([0-9]+)s ]] && ((BASH_REMATCH[1] <= 1 && BASH_REMATCH[2] >= 2)) &&
+    grep -e 'mac: its products could not be unregistered from LaunchServices: lsregister -u failed on Knot.app' "$mb/unregister-fails.out" >/dev/null &&
+    grep -e "mac: its products could not be unregistered from LaunchServices: LaunchServices' tool is not at" "$mb/unregister-missing.out" >/dev/null &&
+    ! grep -e 'are unregistered from LaunchServices' "$mb/unregister-fails.out" "$mb/unregister-missing.out" >/dev/null &&
+    grep -e '^milestone-build: ios: built in [0-9]*s, after waiting [0-9]*s for a build slot$' "$mb/plain.out" >/dev/null &&
+    grep -e 'built in [0-9]*s (the wait for a slot apart), every part verified' "$mb/plain.out" >/dev/null &&
+    [[ -z "$(ls -A "$mb/tree/.build/milestone" | grep -e '^\.slot-time' || true)" ]] &&
+    grep -e 'The checkout of Synthetic in .build/SourcePackages is changed, in 1 of its paths' "$mb/pkg-edited.out" >/dev/null &&
+    grep -e 'The checkout of Synthetic in .build/SourcePackages is at [0-9a-f]*, not the pinned' "$mb/pkg-moved.out" >/dev/null &&
+    grep -e "the packages' checkouts stand at their pinned revisions, with no change (1 read)" "$mb/plain.out" >/dev/null &&
+    grep -e 'ios: Knot.app/PlugIns/Widgets-iOS.appex is signed with no team, ad hoc or not at all' "$mb/adhoc.out" >/dev/null &&
+    grep -e "mac: the tool's app groups, group.com.example.other, are not the app's, <TEAM>.com.p3ob7o.knot" "$mb/tool-group.out" >/dev/null &&
+    grep -e "ios: each of its 5 parts is signed by the app's own team" "$mb/plain.out" >/dev/null &&
+    grep -e "mac: the tool's app groups are the app's" "$mb/plain.out" >/dev/null &&
+    [[ $mb_mac_install == 1 ]] &&
+    grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app --mac-folder /[^ ]*/folder$" "$mb/mac-install.out" >/dev/null &&
+    grep -e 'move it away first' "$mb/mac-install.out" >/dev/null &&
+    grep -e 'git ignores under the folders the build reads, 1 of them, such as Packages/KnotKit/Sources/KnotCore/build/Hidden.swift' "$mb/ignored.out" >/dev/null &&
+    grep -e 'uncommitted changes' "$mb/untracked.out" >/dev/null &&
+    grep -e 'Worktree.xcconfig sets more than KNOT_WORKTREE and KNOT_WORKTREE_ID: SWIFT_ACTIVE_COMPILATION_CONDITIONS\.' "$mb/worktree-config.out" >/dev/null &&
+    ! grep -e 'DEBUG KNOT_FAKES' "$mb/worktree-config.out" >/dev/null &&
+    grep -e 'Local.xcconfig sets more than KNOT_SIGNING and DEVELOPMENT_TEAM: #include, OTHER_SWIFT_FLAGS\.' "$mb/local-config.out" >/dev/null &&
+    grep -e 'Local.xcconfig sets more than KNOT_SIGNING and DEVELOPMENT_TEAM: line 2 (not a setting; not printed)\.' "$mb/unparsed-config.out" >/dev/null &&
+    ! grep -e 'NO_EQUALS' -e "$mb_team" "$mb/unparsed-config.out" >/dev/null &&
+    grep -e 'ios: Knot.app/PlugIns/Widgets-iOS.appex/Knot holds what a milestone build may not: the module KnotFakes' "$mb/fakes.out" >/dev/null &&
+    grep -e 'mac: Knot.app/Contents/MacOS/knot-cli holds what a milestone build may not: -KnotPreview' "$mb/debug.out" >/dev/null &&
+    grep -e 'ios: no fakes and no debug launch argument in its 5 Mach-O files' "$mb/plain.out" >/dev/null &&
+    grep -e 'ios: codesign --verify --strict passed on each of its 5 parts, alone: .*Knot.app/Frameworks/Synthetic.framework' "$mb/plain.out" >/dev/null &&
+    grep -e 'level M2, not M1;' "$mb/level.out" >/dev/null && grep -e 'build number 2, not 1;' "$mb/app-build.out" >/dev/null &&
+    grep -e 'Knot.app/PlugIns/Widgets-iOS.appex is 0.3.0 (2);' "$mb/inner-build.out" >/dev/null &&
+    grep -e 'holds an earlier build' "$mb/earlier-log.out" >/dev/null &&
+    [[ $mb_profile_log == *"profile allows <TEAM>.com.example.other"* && $mb_profile_log != *"$mb_team"* ]] &&
+    grep -e "^install .*-mac/Build/Products/Release/Knot.app --mac-folder" "$mb/install.record" >/dev/null; then
+    pass "milestone-build.sh stops before the install at a part that fails its check or its app group, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration and its logs, prints its summary before an install that, failing, names how to install again, and passes a provisioning flag only when asked, the device's never"
+else
+    fail "milestone-build.sh: $mb_verdicts; order $mb_order; plain: $(grep -e 'app group' "$mb/plain.out" | tr '\n' '|'); profile: $(grep -e 'app group' "$mb/profile.out" | tail -n 1); install: $(grep -e 'again' "$mb/install.out" | tr '\n' '|')"
+fi
+
+# The gate's packaging check of the milestone flavour builds under the development identifiers
+# (B1): the build is given KNOT_BUNDLE_ID_milestone, KNOT_APP_GROUP_milestone and
+# KNOT_CLOUD_CONTAINER_milestone with their development values before it starts, and a product
+# that carries the milestone's bundle ID fails the check. The check's own function, from
+# verify.sh, with a stand-in xcodebuild that writes down its arguments and makes a product under
+# the bundle ID it is given (the milestone's when it is given none, as the project would), and a
+# stand-in lsregister; on a scratch tree that holds the identifiers.
+pk="$scratch/packaging-milestone"
+mkdir -p "$pk/tree/Apps/Config" "$pk/stub"
+cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$pk/tree/Apps/Config/"
+cat >"$pk/stub/xcodebuild" <<'SH'
+#!/bin/bash
+echo "xcodebuild $*" >>"$KNOT_PK_RECORD"
+derived="" bundle=com.p3ob7o.knot
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in
+        -derivedDataPath) derived=${!j} ;;
+        KNOT_BUNDLE_ID_milestone=*) bundle=${!i#KNOT_BUNDLE_ID_milestone=} ;;
+    esac
+done
+[[ -z ${KNOT_PK_FORCE_BUNDLE:-} ]] || bundle=$KNOT_PK_FORCE_BUNDLE
+app="$derived/Build/Products/Release/Knot.app"
+mkdir -p "$app/Contents/MacOS"
+echo app >"$app/Contents/MacOS/Knot"
+echo tool >"$app/Contents/MacOS/knot-cli"
+printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>Knot</string><key>KnotFlavour</key><string>milestone</string></dict></plist>\n' "$bundle" >"$app/Contents/Info.plist"
+echo "** BUILD SUCCEEDED **"
+SH
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_PK_RECORD"\n' >"$pk/stub/lsregister"
+chmod +x "$pk/stub/xcodebuild" "$pk/stub/lsregister"
+python3 -I - "$KNOT_SCRIPTS/verify.sh" "$pk/check.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+def function(name):
+    start = text.index(name + "() {")
+    return text[start:text.index("\n}\n", start) + 3]
+open(sys.argv[2], "w").write('source "$KNOT_SCRIPTS/lib/common.sh"\n' + function("plist_value") + function("packaging_milestone_mac") +
+                            'packaging_milestone_mac "$1"\n')
+PY
+pk_run() { # pk_run <name> <environment…>: the check's status
+    local name=$1 status=0
+    shift
+    : >"$pk/$name.record"
+    env PATH="$pk/stub:$PATH" KNOT_SCRIPTS="$KNOT_SCRIPTS" KNOT_TREE="$pk/tree" KNOT_TREE_NAMED=1 \
+        KNOT_LSREGISTER="$pk/stub/lsregister" KNOT_PK_RECORD="$pk/$name.record" "$@" \
+        bash "$pk/check.sh" "$pk/$name.log" >"$pk/$name.out" 2>&1 || status=$?
+    echo "$status"
+}
+pk_dev="$(pk_run dev)"
+pk_forced="$(pk_run forced KNOT_PK_FORCE_BUNDLE=com.p3ob7o.knot)"
+if [[ $pk_dev == 0 && $pk_forced == 1 ]] &&
+    grep -e '^xcodebuild .* KNOT_FLAVOUR=milestone .*KNOT_BUNDLE_ID_milestone=com.p3ob7o.knot.dev KNOT_APP_GROUP_milestone=group.com.p3ob7o.knot.dev KNOT_CLOUD_CONTAINER_milestone=iCloud.com.p3ob7o.knot.dev ' "$pk/dev.record" >/dev/null &&
+    grep -e '^lsregister -u .*/DerivedData-milestone/Build/Products/Release/Knot.app$' "$pk/dev.record" >/dev/null &&
+    [[ ! -e $pk/tree/.build/DerivedData-milestone ]] &&
+    grep -e 'carries com.p3ob7o.knot, not the development bundle ID com.p3ob7o.knot.dev' "$pk/forced.out" >/dev/null &&
+    grep -e '^lsregister -u ' "$pk/forced.record" >/dev/null; then
+    pass "the gate's milestone-flavour check builds under the development identifiers, and fails a product with the milestone's bundle ID, unregistering it"
+else
+    fail "the gate's milestone-flavour check: status $pk_dev, with the milestone's ID $pk_forced: $(head -n 1 "$pk/dev.record" | cut -c1-300) / $(tail -n 2 "$pk/forced.out" | tr '\n' ' ')"
 fi
 
 if ((FAILED)); then

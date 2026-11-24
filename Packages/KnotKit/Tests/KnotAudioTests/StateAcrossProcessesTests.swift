@@ -70,6 +70,13 @@ import Testing
         /// (measured on this Mac). So the later launch reads the dead launch's state from the
         /// suite the crash host wrote, as a store reads it, and carries it on in a suite of its
         /// own, where its recovery clears it and its new recording publishes.
+        ///
+        /// What this process's recorder publishes is read from the writes it made to its store,
+        /// not read back from the suite. Once, at the strict pass of a gate, the suite read back
+        /// the new recording's own "recording", written 63 ms before, though the stop, in the
+        /// recorder's order, had written "stopping" and then idle in this process before it
+        /// returned (WP-12b). The reads of what the crash host left stay reads of the suite: they
+        /// are what another process sees.
         @Test("press-while-saved-recording-state-is-stale", .tags(.named))
         func aPressWhileTheSavedStateIsStale() async throws {
             let host = try #require(CrashHost.executableURL(named: "KnotAudioCrashHost"))
@@ -94,7 +101,7 @@ import Testing
             let decision = RecordingPressRule.decide(Press(.tap, at: later), recorder: .idle, saved: saved)
             #expect(decision == .recoverOrphanThenStart(dead.capture))
 
-            let store = DefaultsRecordingStateStore(defaults: launchSuite.defaults)
+            let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: launchSuite.defaults))
             store.write(snapshot)
             let cues = RecordingCueEmitter()
             let live = LiveRecorder(
@@ -104,10 +111,10 @@ import Testing
             let orphans = try await live.recoverOrphans(currentLaunch: thisLaunch)
             let orphan = try #require(orphans.first { $0.captureID == dead.capture }, "\(orphans)")
             #expect(orphan.ending == .recovered && orphan.frames >= dead.durable, "\(orphan), \(dead.durable) durable")
-            #expect(store.read() == .idle, "Recovery cleared the dead launch's state.")
+            #expect(store.writes.last?.snapshot == .idle, "Recovery cleared the dead launch's state.")
             let started = request(thisLaunch)
             let session = try await live.start(started)
-            let now = store.read()
+            let now = try #require(store.writes.last?.snapshot)
             #expect(now.phase == .recording && now.captureID == started.captureID && now.ownerLaunch == thisLaunch)
             #expect(SavedRecordingState(now).map { !$0.isStale(at: Date()) } == true, "A fresh heartbeat: \(now)")
             _ = await session.stop()
@@ -127,11 +134,15 @@ import Testing
             let found = try await live.recoverOrphans(currentLaunch: nextLaunch)
             #expect(found.map(\.captureID) == [second.capture], "\(found)")
             #expect(found.first.map { $0.frames >= second.durable } == true)
-            #expect(store.read().captureID == next.captureID && store.read().phase == .recording)
+            let published = store.writes.last?.snapshot
+            #expect(
+                published?.captureID == next.captureID && published?.phase == .recording,
+                "Recovery left the live recording's state alone: \(store.phases)")
             await durable(atLeast: 1_600, of: running)
             let audio = await running.stop()
             #expect(audio.ending == .stopped && audio.frames >= 1_600, "The live recording was not touched: \(audio)")
-            #expect(store.read() == .idle)
+            // The stop wrote idle before it returned.
+            #expect(store.writes.last?.snapshot == .idle, "\(store.phases)")
             // Each start gave the live cue once: read once the recorder has handed over every cue.
             #expect(await cuesHandedOver(by: live, to: cues, refusing: next) == [.recordingLive, .recordingLive])
         }

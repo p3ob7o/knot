@@ -138,6 +138,15 @@ import Testing
         _ = try await recovery.run(ingest: next.ingest)
     }
 
+    /// Ingests every item, and returns once no run of `r.ingest` is in flight. The engine's own
+    /// run starts detached at its end, and removes an item before its working file: a wait that
+    /// returns once `Inbox/` is empty, on a run in flight, reads `Recording/` while that run still
+    /// removes from it (row 11e). `ingestAllInLaunchOrder` waits for a run in flight to end, then
+    /// runs its own.
+    static func ingestToTheEnd(_ r: Rig) async {
+        _ = await r.ingest.ingestAllInLaunchOrder()
+    }
+
     /// The files in `Recording/` and `Assets/` that no row names: every recording's file once
     /// its row has ended, and every asset no row's asset holds.
     private static func leftOver(_ r: Rig) throws -> [String] {
@@ -316,8 +325,8 @@ import Testing
         #expect(try await r.assets.find(AssetID(id), kind: .audio)?.sha256 == there.sha256, "The file stays.")
         #expect(try await r.notes.asset(AssetID(id))?.sha256 == there.sha256, "The row names the file there.")
         #expect(
-            await eventually("the end's item to be ingested") {
-                _ = await r.ingest.ingestAll()
+            await eventually("the end's item to be ingested, and its run ended") {
+                await Self.ingestToTheEnd(r)
                 return r.inboxFiles().isEmpty
             })
         #expect(try await r.notes.capture(id)?.outcome == .stored)
@@ -371,8 +380,8 @@ import Testing
         #expect(!r.logs.logged("recording_file_replaced", id))
         #expect(try await assets.find(AssetID(id), kind: .audio)?.sha256 == there.sha256, "The file stays.")
         #expect(
-            await eventually("the end's item to be ingested") {
-                _ = await r.ingest.ingestAll()
+            await eventually("the end's item to be ingested, and its run ended") {
+                await Self.ingestToTheEnd(r)
                 return r.inboxFiles().isEmpty
             })
         #expect(try await r.notes.capture(id)?.outcome == .stored)
