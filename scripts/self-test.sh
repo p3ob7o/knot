@@ -2407,6 +2407,8 @@ echo "install $*" >>"$KNOT_MB_RECORD"
 exit 0
 SH
 chmod +x "$mb/scripts/install.sh"
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_MB_RECORD"\n' >"$mb/stub/lsregister"
+chmod +x "$mb/stub/lsregister"
 cat >"$mb/stub/security" <<'SH'
 #!/bin/bash
 [[ "$1 $2 $3" == "cms -D -i" ]] || exec /usr/bin/security "$@"
@@ -2517,6 +2519,7 @@ mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no de
     : >"$mb/$name.record"
     env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
         KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+        KNOT_LSREGISTER="$mb/stub/lsregister" \
         "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
     echo "$status"
 }
@@ -2526,6 +2529,8 @@ mb_installs() { grep -c -e '^install ' "$mb/$1.record" || true; }
 # team's configuration.
 mb_plain="$(mb_run plain M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_kept="$( [[ -e $mb/tree/.build/config/Local.xcconfig ]] && echo kept || echo removed)"
+# The Mac product leaves LaunchServices once its checks have run, and stays on disk.
+mb_unregistered="$(grep -c -e "^lsregister -u .*/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app$" "$mb/plain.record" || true)/$( [[ -d $mb/tree/.build/milestone/M1-${mb_commit:0:12}-mac/Build/Products/Release/Knot.app ]] && echo kept || echo gone)"
 # The app-group check's lines go into the build's log as well as to the terminal.
 mb_group_log="$( { grep -c -e 'milestone-build: ios: Knot.app: app group group.com.p3ob7o.knot, allowed by its profile' -e 'milestone-build: ios: the app group checked on 4 parts' \
     "$mb/tree/.build/milestone/milestone-build-M1-${mb_commit:0:12}-ios.log" || true; } )"
@@ -2582,6 +2587,7 @@ mb_earlier_log=0
 : >"$mb/earlier-log.record"
 env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
     KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/earlier-log.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+    KNOT_LSREGISTER="$mb/stub/lsregister" \
     "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/earlier-log.out" 2>&1 || mb_earlier_log=$?
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
@@ -2602,6 +2608,7 @@ mkdir -p "$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios"
 echo earlier >"$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios/earlier"
 env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
     KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
+    KNOT_LSREGISTER="$mb/stub/lsregister" \
     "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/derived.out" 2>&1 || mb_dd_status=$?
 # HEAD is not the commit named: a later commit is checked out.
 printf 'later\n' >"$mb/tree/later.txt"
@@ -2614,8 +2621,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="unregistered $mb_unregistered/$(grep -c -e '^lsregister -u .*-mac/Build/Products/Release/Knot.app$' "$mb/tool-group.record" || true) signers $mb_adhoc/$(mb_installs adhoc) $mb_tool_group/$(mb_installs tool-group) group-log $mb_group_log noprofile $mb_noprofile/$(mb_installs noprofile) product $mb_level/$mb_app_build/$mb_inner_build/$mb_earlier_log/$(mb_builds earlier-log) read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "unregistered 1/kept/1 signers 1/0 1/0 group-log 2/1/1 noprofile 1/0 product 1/1/1/1/0 read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&

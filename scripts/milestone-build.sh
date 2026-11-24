@@ -452,7 +452,16 @@ for product in $WANTED; do
         "$KNOT_SCRIPTS/build-slot.sh" run --label "milestone-build $product" -- "$KNOT_SCRIPTS/milestone-build.sh" --in-build ||
         status=$?
     took="$(knot_duration $(($(knot_now) - started)))"
+    # Xcode registers the Mac app it builds with LaunchServices, where the owner's own Knot has
+    # the same bundle ID. Once the product's checks have run, pass or fail, or its build has
+    # failed, every app in its derived data leaves LaunchServices; the product stays on disk
+    # for the copy.
+    unregister() {
+        knot_unregister_apps "$derived"
+        say "$product: its products are unregistered from LaunchServices; they stay on disk"
+    }
     if ((status != 0)); then
+        unregister
         say "$product: the build failed after $took. The last lines of its log:"
         grep -E 'error:|BUILD FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
         knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is .build/milestone/$(basename "$log")." \
@@ -461,9 +470,13 @@ for product in $WANTED; do
     fi
     say "$product: built in $took"
     app="$derived/Build/Products/$folder/Knot.app"
-    if ! check_product "$product" "$app" "$log" || ! check_signers "$product" "$app" "$log" ||
-        ! check_groups "$product" "$app" "$log" ||
-        ! check_binaries "$product" "$app" "$log"; then
+    checked=0
+    if check_product "$product" "$app" "$log" && check_signers "$product" "$app" "$log" &&
+        check_groups "$product" "$app" "$log" && check_binaries "$product" "$app" "$log"; then
+        checked=1
+    fi
+    unregister
+    if ((checked == 0)); then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
             "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
