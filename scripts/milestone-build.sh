@@ -156,14 +156,24 @@ say "the team's configuration is linked into .build/config/"
 # .build/config/Worktree.xcconfig and Local.xcconfig, may set only their own keys: either could
 # otherwise set any setting the command line does not, such as compilation conditions that put
 # the fakes into the build. Read by their keys alone; no value is printed.
-config_keys() { # config_keys <file>: each key it sets, one a line, and "#include" for an include
-    sed -E -e 's|//.*$||' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' "$1" | grep -v -e '^$' |
-        sed -E -e 's/^(#include).*/\1/' -e 's/^([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])*[[:space:]]*=.*/\1/'
+# config_keys <file>: each key the file sets, one a line; "#include" for an include; and
+# "line <n>" for a line that is not a setting, named by its number and never printed, since its
+# value may be the team's ID.
+config_keys() {
+    awk '{
+        line = $0
+        sub(/\/\/.*$/, "", line); gsub(/^[ \t]+|[ \t]+$/, "", line)
+        if (line == "") next
+        if (line ~ /^#include/) { print "#include"; next }
+        if (line ~ /^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])*[ \t]*=/) { match(line, /^[A-Za-z_][A-Za-z0-9_]*/); print substr(line, RSTART, RLENGTH); next }
+        print "line " NR
+    }' "$1"
 }
 for entry in "Worktree.xcconfig KNOT_WORKTREE KNOT_WORKTREE_ID" "Local.xcconfig KNOT_SIGNING DEVELOPMENT_TEAM"; do
     read -r file first second <<<"$entry"
     [[ -e $KNOT_CONFIG/$file ]] || continue
-    extra="$(config_keys "$KNOT_CONFIG/$file" | grep -v -x -F -e "$first" -e "$second" | sort -u | tr '\n' ' ' | sed 's/ $//' || true)"
+    extra="$(config_keys "$KNOT_CONFIG/$file" | grep -v -x -F -e "$first" -e "$second" | sort -u |
+        sed -E 's/^(line [0-9]+)$/\1 (not a setting; not printed)/' | paste -s -d ',' - | sed 's/,/, /g' || true)"
     if [[ -n $extra ]]; then
         knot_fail "milestone-build-config" ".build/config/$file sets more than $first and $second: $extra. A milestone build takes its settings from the repository and the command line." \
             "Take those lines out of the file it names (bootstrap writes Worktree.xcconfig, and Local.xcconfig is the owner's), then rerun." "safe" "nothing"
