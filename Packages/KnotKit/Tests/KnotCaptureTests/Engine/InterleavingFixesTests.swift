@@ -202,8 +202,11 @@ import Testing
         #expect(await gate.untilHeld() == id, "The late answer's end as failed is held.")
         await engine.retryConversions()
         #expect(
-            await eventually("ingest to store the recording") {
-                (try? await r.notes.capture(id))?.outcome == .stored && r.inboxFiles().isEmpty
+            await eventually("ingest to store the recording, and its run to end") {
+                // The engine's run removes the item, then keeps the peaks, which touches the note:
+                // the snapshot below is taken once that run has ended (row 11e).
+                await RecoveredAssetTests.ingestToTheEnd(r)
+                return (try? await r.notes.capture(id))?.outcome == .stored && r.inboxFiles().isEmpty
             })
         let row = try await r.notes.capture(id)
         let notes = try await r.stream().notes
@@ -263,7 +266,10 @@ import Testing
         refusing.withLock { $0 = false }
         await engine.retryConversions()
         #expect(
-            await eventually("ingest to store both recordings") {
+            await eventually("ingest to store both recordings, and its run to end") {
+                // As in `staleFailedEndOfALateRowChangesNothing`: the snapshot below waits for the
+                // run's peaks (row 11e).
+                await RecoveredAssetTests.ingestToTheEnd(r)
                 var stored = r.inboxFiles().isEmpty
                 for id in ids where (try? await r.notes.capture(id))?.outcome != .stored { stored = false }
                 return stored
