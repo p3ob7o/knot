@@ -2357,7 +2357,7 @@ mb_entitlements=(Apps/iOS/Knot-iOS-team.entitlements Apps/macOS/Knot-macOS-team.
 for f in "${mb_entitlements[@]}"; do mkdir -p "$mb/tree/$(dirname "$f")" && cp "$KNOT_SELF/$f" "$mb/tree/$f"; done
 mb_team="ZZ9QX42K7T"
 cp "$KNOT_SELF/.xcode-version" "$mb/tree/"
-printf '.build/\n' >"$mb/tree/.gitignore"
+printf '.build/\nbuild/\n' >"$mb/tree/.gitignore"
 mb_git() { git -C "$mb/tree" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false "$@"; }
 mb_record() { # mb_record <message>: records the tree's staged files as a commit
     mb_git commit -q -m "$1"
@@ -2421,6 +2421,12 @@ info() { # info <folder> <bundle ID>
     mkdir -p "$1"
     printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleShortVersionString</key><string>0.3.0</string><key>CFBundleVersion</key><string>1</string><key>CFBundleExecutable</key><string>Knot</string><key>KnotFlavour</key><string>milestone</string><key>KnotMilestoneLevel</key><string>%s</string></dict></plist>\n' "$2" "$level" >"$1/Info.plist"
 }
+binary() { # binary <path>: a Mach-O file, which holds the fakes' module or a debug argument when asked
+    local kind=plain
+    [[ -n ${KNOT_MB_FAKES:-} && $1 == *"$KNOT_MB_FAKES" ]] && kind=fakes
+    [[ -n ${KNOT_MB_DEBUG_ARGUMENT:-} && $1 == *"$KNOT_MB_DEBUG_ARGUMENT" ]] && kind=debug
+    cp "$KNOT_MB_BINARIES/$kind" "$1"
+}
 signed() { # signed <part> <group> [<profile>]: the group it is signed with, and a profile that allows it
     printf '<string>%s</string>' "$2" >"$1.groups-signed"
     local allowed=$2
@@ -2435,13 +2441,14 @@ if [[ $scheme == Knot-iOS ]]; then
     info "$app/Watch/KnotWatch.app/PlugIns/Widgets-watchOS.appex" com.p3ob7o.knot.watchkitapp.widgets
     for part in "$app" "$app/PlugIns/Widgets-iOS.appex" "$app/Watch/KnotWatch.app" "$app/Watch/KnotWatch.app/PlugIns/Widgets-watchOS.appex"; do
         signed "$part" group.com.p3ob7o.knot "$part/embedded.mobileprovision"
+        binary "$part/Knot"
     done
 else
     app="$derived/Build/Products/Release/Knot.app"
     info "$app/Contents" com.p3ob7o.knot
     mkdir -p "$app/Contents/MacOS"
-    echo app >"$app/Contents/MacOS/Knot"
-    echo tool >"$app/Contents/MacOS/knot-cli"
+    binary "$app/Contents/MacOS/Knot"
+    binary "$app/Contents/MacOS/knot-cli"
     signed "$app" "$KNOT_MB_TEAM.com.p3ob7o.knot" "$app/Contents/embedded.provisionprofile"
     signed "$app/Contents/MacOS/knot-cli" "$KNOT_MB_TEAM.com.p3ob7o.knot"
 fi
@@ -2453,13 +2460,20 @@ echo '    export EXPANDED_CODE_SIGN_IDENTITY_NAME\=Apple\ Development:\ Self\ Te
 echo "** BUILD SUCCEEDED **"
 SH
 chmod +x "$mb/stub/defaults" "$mb/stub/codesign" "$mb/stub/xcodebuild" "$mb/stub/xcodegen" "$mb/stub/security"
+# Three small Mach-O files for the binary scan, which reads a file's sections: one plain, one
+# that names the fakes' module, and one that holds a debug launch argument.
+mkdir -p "$mb/bin"
+for kind in "plain " "fakes KnotFakes" "debug -KnotPreview"; do
+    printf 'int main(void) { return 0; }\n__attribute__((used)) static const char marker[] = "%s";\n' "${kind#* }" >"$mb/bin/${kind%% *}.c"
+    xcrun clang -o "$mb/bin/${kind%% *}" "$mb/bin/${kind%% *}.c" 2>>"$mb/bin/clang.log" || echo "the binary ${kind%% *} was not made" >>"$mb/bin/clang.log"
+done
 mb_run() { # mb_run <name> <arguments…>: runs it with a fresh record and no derived data; prints its status
     local name=$1 status=0
     shift
     rm -rf "$mb/tree/.build/milestone"
     : >"$mb/$name.record"
     env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
-        KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" KNOT_MB_TEAM="$mb_team" \
+        KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/$name.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
         "$mb/scripts/milestone-build.sh" "$@" >"$mb/$name.out" 2>&1 || status=$?
     echo "$status"
 }
@@ -2480,6 +2494,25 @@ mb_identity="$( { grep -h -e '0123456789ABCDEF0123456789ABCDEF01234567' -e 'Self
 # with no group, which its entitlements file gives one.
 mb_profile="$(KNOT_MB_PROFILE_OTHER=Widgets-iOS.appex mb_run profile M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
 mb_nogroup="$(KNOT_MB_NO_GROUP=Watch/KnotWatch.app mb_run nogroup M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+# What the build reads beyond the commit: an ignored Swift file under Sources, an untracked
+# file, a key beyond its own in each of the two configurations the build includes, and a binary
+# that holds the fakes' module or a debug launch argument.
+mkdir -p "$mb/tree/Packages/KnotKit/Sources/KnotCore/build"
+printf '#error("hidden")\n' >"$mb/tree/Packages/KnotKit/Sources/KnotCore/build/Hidden.swift"
+mb_ignored="$(mb_run ignored M1 --commit "$mb_commit")"
+rm -r "$mb/tree/Packages"
+printf 'untracked\n' >"$mb/tree/Apps/Untracked.swift"
+mb_untracked="$(mb_run untracked M1 --commit "$mb_commit")"
+rm "$mb/tree/Apps/Untracked.swift"
+printf 'KNOT_WORKTREE = x\nSWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG KNOT_FAKES\n' >"$mb/tree/.build/config/Worktree.xcconfig"
+mb_worktree_config="$(mb_run worktree-config M1 --commit "$mb_commit")"
+rm "$mb/tree/.build/config/Worktree.xcconfig"
+cp "$mb/tree/.build/config/Local.xcconfig" "$mb/local.copy"
+printf '#include "elsewhere.xcconfig"\nOTHER_SWIFT_FLAGS = -DDEBUG\n' >>"$mb/tree/.build/config/Local.xcconfig"
+mb_local_config="$(mb_run local-config M1 --commit "$mb_commit")"
+cp "$mb/local.copy" "$mb/tree/.build/config/Local.xcconfig"
+mb_fakes="$(KNOT_MB_FAKES=Widgets-iOS.appex/Knot mb_run fakes M1 --commit "$mb_commit" --install --mac-folder "$mb/folder")"
+mb_debug="$(KNOT_MB_DEBUG_ARGUMENT=MacOS/knot-cli mb_run debug M1 --commit "$mb_commit" --products mac --install --mac-folder "$mb/folder")"
 # An install that fails: the iPhone app's.
 mb_install="$(KNOT_MB_INSTALL_FAIL=ios mb_run install M1 --commit "$mb_commit" --install --device "Self-test iPhone" --mac-folder "$mb/folder")"
 mb_order="$( { grep -n -e 'summary, M1' -e ': scripts/install.sh$' "$mb/install.out" || true; } | cut -d: -f1 | tr '\n' ' ')"
@@ -2495,7 +2528,7 @@ mb_dd_status=0
 mkdir -p "$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios"
 echo earlier >"$mb/tree/.build/milestone/M1-${mb_commit:0:12}-ios/earlier"
 env -u KNOT_LOCAL_CONFIG PATH="$mb/stub:$PATH" KNOT_XCODEGEN="$mb/stub/xcodegen" KNOT_TREE="$mb/tree" \
-    KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" KNOT_MB_TEAM="$mb_team" \
+    KNOT_SLOT_DIR="$mb/slots" KNOT_MB_RECORD="$mb/derived.record" KNOT_MB_TEAM="$mb_team" KNOT_MB_BINARIES="$mb/bin" \
     "$mb/scripts/milestone-build.sh" M1 --commit "$mb_commit" >"$mb/derived.out" 2>&1 || mb_dd_status=$?
 # HEAD is not the commit named: a later commit is checked out.
 printf 'later\n' >"$mb/tree/later.txt"
@@ -2508,8 +2541,8 @@ mb_dirty="$(mb_run dirty M1 --commit "$(mb_git rev-parse HEAD)")"
 printf 'later\n' >"$mb/tree/later.txt"
 # No saved account.
 mb_none="$(KNOT_MB_ACCOUNTS=0 mb_run none M1 --commit "$(mb_git rev-parse HEAD)")"
-mb_verdicts="logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
-if [[ $mb_verdicts == "logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
+mb_verdicts="read $mb_ignored/$(mb_builds ignored) $mb_untracked/$(mb_builds untracked) $mb_worktree_config/$(mb_builds worktree-config) $mb_local_config/$(mb_builds local-config) $mb_fakes/$(mb_installs fakes) $mb_debug/$(mb_installs debug) logs $mb_logs identity $mb_identity profile $mb_profile/$(mb_installs profile) nogroup $mb_nogroup/$(mb_installs nogroup) install $mb_install/$(mb_installs install) plain $mb_plain/$mb_kept/$(mb_builds plain)/$(mb_installs plain) allowed $mb_allowed/$(mb_builds allowed) device $mb_device/$(mb_builds device) unsigned $mb_unsigned/$(mb_builds unsigned)/$(mb_installs unsigned) derived $mb_dd_status/$(mb_builds derived) head $mb_head/$(mb_builds head) dirty $mb_dirty/$(mb_builds dirty) none $mb_none/$(mb_builds none)"
+if [[ $mb_verdicts == "read 1/0 1/0 1/0 1/0 1/0 1/0 logs beside identity 0/3 profile 1/0 nogroup 1/0 install 1/2 plain 0/kept/2/2 allowed 0/1 device 1/0 unsigned 1/1/0 derived 1/0 head 1/0 dirty 1/0 none 1/0" ]] &&
     ! grep -e '-allowProvisioning' "$mb/plain.record" >/dev/null &&
     grep -e '^xcodebuild .*-allowProvisioningUpdates' "$mb/allowed.record" >/dev/null &&
     ! grep -e '-allowProvisioningDeviceRegistration' "$mb/plain.record" "$mb/allowed.record" >/dev/null &&
@@ -2531,6 +2564,14 @@ if [[ $mb_verdicts == "logs beside identity 0/3 profile 1/0 nogroup 1/0 install 
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from the worktree's root: scripts/install.sh .build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e 'git ignores under the folders the build reads, 1 of them, such as Packages/KnotKit/Sources/KnotCore/build/Hidden.swift' "$mb/ignored.out" >/dev/null &&
+    grep -e 'uncommitted changes' "$mb/untracked.out" >/dev/null &&
+    grep -e 'Worktree.xcconfig sets more than KNOT_WORKTREE and KNOT_WORKTREE_ID: SWIFT_ACTIVE_COMPILATION_CONDITIONS\.' "$mb/worktree-config.out" >/dev/null &&
+    ! grep -e 'DEBUG KNOT_FAKES' "$mb/worktree-config.out" >/dev/null &&
+    grep -e 'Local.xcconfig sets more than KNOT_SIGNING and DEVELOPMENT_TEAM: #include OTHER_SWIFT_FLAGS\.' "$mb/local-config.out" >/dev/null &&
+    grep -e 'ios: Knot.app/PlugIns/Widgets-iOS.appex/Knot holds what a milestone build may not: the module KnotFakes' "$mb/fakes.out" >/dev/null &&
+    grep -e 'mac: Knot.app/Contents/MacOS/knot-cli holds what a milestone build may not: -KnotPreview' "$mb/debug.out" >/dev/null &&
+    grep -e 'ios: no fakes and no debug launch argument in its 4 Mach-O files' "$mb/plain.out" >/dev/null &&
     grep -e "^install .*-mac/Build/Products/Release/Knot.app --mac-folder" "$mb/install.record" >/dev/null; then
     pass "milestone-build.sh stops before the install at a part that fails its check or its app group, refuses used derived data, another HEAD, a dirty tree and no account, keeps the team's configuration and its logs, prints its summary before an install that, failing, names how to install again, and passes a provisioning flag only when asked, the device's never"
 else

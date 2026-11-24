@@ -130,13 +130,41 @@ if [[ -n $dirty ]]; then
     knot_fail "milestone-build-dirty" "The worktree has uncommitted changes, in $(grep -c . <<<"$dirty") of its paths: a milestone build is made from a commit alone." \
         "Commit or move the changes away, then rerun: git status names them." "safe" "nothing"
 fi
-say "$LEVEL at ${head:0:12}, tree $(tree_of "$head" | cut -c1-12): HEAD is the commit named, and the worktree is clean"
+# An ignored file under a folder the build reads is compiled all the same: a Swift file in a
+# folder named build/ under Sources, which .gitignore ignores at any depth, is one. Finder's
+# .DS_Store files are not read.
+ignored="$(git -C "$KNOT_ROOT" ls-files --others --ignored --exclude-standard -- Apps Packages/KnotKit/Sources \
+    Packages/KnotKit/Package.swift project.yml | grep -v -e '\(^\|/\)\.DS_Store$' || true)"
+if [[ -n $ignored ]]; then
+    knot_fail "milestone-build-ignored" "The worktree holds files that git ignores under the folders the build reads, $(grep -c . <<<"$ignored") of them, such as $(head -n 1 <<<"$ignored"): the build would read them, and the commit named does not hold them." \
+        "Move them out of Apps/, Packages/KnotKit/Sources/ and the manifests (git ls-files --others --ignored --exclude-standard names them), then rerun." "safe" "nothing"
+fi
+say "$LEVEL at ${head:0:12}, tree $(tree_of "$head" | cut -c1-12): HEAD is the commit named, and the worktree is clean, ignored files included"
 
 if [[ ! -e $KNOT_CONFIG/Local.xcconfig ]]; then
     knot_fail "milestone-build-no-team" "The team's configuration is not linked into .build/config/Local.xcconfig, so the build would have no team." \
         "Run KNOT_LOCAL_CONFIG=<the owner's Local.xcconfig, outside the repository> scripts/bootstrap.sh, then rerun." "safe" "nothing"
 fi
 say "the team's configuration is linked into .build/config/"
+
+# The two configurations the build includes that the repository does not hold,
+# .build/config/Worktree.xcconfig and Local.xcconfig, may set only their own keys: either could
+# otherwise set any setting the command line does not, such as compilation conditions that put
+# the fakes into the build. Read by their keys alone; no value is printed.
+config_keys() { # config_keys <file>: each key it sets, one a line, and "#include" for an include
+    sed -E -e 's|//.*$||' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' "$1" | grep -v -e '^$' |
+        sed -E -e 's/^(#include).*/\1/' -e 's/^([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])*[[:space:]]*=.*/\1/'
+}
+for entry in "Worktree.xcconfig KNOT_WORKTREE KNOT_WORKTREE_ID" "Local.xcconfig KNOT_SIGNING DEVELOPMENT_TEAM"; do
+    read -r file first second <<<"$entry"
+    [[ -e $KNOT_CONFIG/$file ]] || continue
+    extra="$(config_keys "$KNOT_CONFIG/$file" | grep -v -x -F -e "$first" -e "$second" | sort -u | tr '\n' ' ' | sed 's/ $//' || true)"
+    if [[ -n $extra ]]; then
+        knot_fail "milestone-build-config" ".build/config/$file sets more than $first and $second: $extra. A milestone build takes its settings from the repository and the command line." \
+            "Take those lines out of the file it names (bootstrap writes Worktree.xcconfig, and Local.xcconfig is the owner's), then rerun." "safe" "nothing"
+    fi
+done
+say "the configurations the build includes set only their own keys"
 
 # Xcode's saved list of accounts, as a count and nothing else (docs/orchestrator.md): the
 # entries under IDE.Identifiers.Prod of DVTDeveloperAccountManagerAppleIDLists. Never the
@@ -332,6 +360,29 @@ check_groups() {
     say "$name: the app group checked on $count parts"
 }
 
+# The fakes and the debug launch arguments, in every Mach-O file of a product, as the packaging
+# step scans a development Release build: a build that compiled DEBUG or KNOT_FAKES in holds
+# them. It fails when it found no Mach-O file, so that it cannot pass by reading nothing.
+#   check_binaries <ios|mac> <app> <log>
+check_binaries() {
+    local name=$1 app=$2 log=$3 f held list scanned=0
+    list="$(python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments)"
+    while IFS= read -r -d '' f; do
+        file -b "$f" | grep -e Mach-O >/dev/null || continue
+        scanned=$((scanned + 1))
+        if held="$(knot_fakes_in "$f")" || held="$(knot_debug_arguments_in "$f" "$list")"; then
+            say "$name: ${f#"$(dirname "$app")"/} holds what a milestone build may not: $(tr '\n' ' ' <<<"$held" | cut -c1-200)"
+            printf 'binary scan %s: %s\n' "${f#"$(dirname "$app")"/}" "$(tr '\n' ' ' <<<"$held")" | knot_filter_team >>"$log"
+            return 1
+        fi
+    done < <(find "$app" -type f -print0)
+    if ((scanned == 0)); then
+        say "$name: no Mach-O file found in the product to scan"
+        return 1
+    fi
+    say "$name: no fakes and no debug launch argument in its $scanned Mach-O files"
+}
+
 SUMMARY=()
 APPS=()
 for product in $WANTED; do
@@ -366,7 +417,8 @@ for product in $WANTED; do
     fi
     say "$product: built in $took"
     app="$derived/Build/Products/$folder/Knot.app"
-    if ! check_product "$product" "$app" "$log" || ! check_groups "$product" "$app" "$log"; then
+    if ! check_product "$product" "$app" "$log" || ! check_groups "$product" "$app" "$log" ||
+        ! check_binaries "$product" "$app" "$log"; then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
             "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
