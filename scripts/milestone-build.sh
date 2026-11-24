@@ -25,18 +25,19 @@
 # folder under .build/milestone/, the Release configuration, through scripts/build-slot.sh.
 # After each build it reads the bundle ID, the version, the build number, the flavour and
 # the level from the product and compares them with the level asked for and with
-# Apps/Config/Identifiers.xcconfig, then runs codesign --verify --strict on every part, each
-# alone, innermost first. It stops at the first failure, naming the part, and installs
-# nothing. It prints the summary, with each product's path, before any install; an install
-# that fails leaves the build whole, and the script names the command that installs it again.
-# It never starts what it builds: a milestone build that runs opens the owner's own store. It
-# prints no team ID and no signing identity. Each build's log lies beside its derived data,
-# .build/milestone/milestone-build-<level>-<commit>-<product>.log, filtered for the team's ID
-# as it is written; a run of verify.sh does not move it.
+# Apps/Config/Identifiers.xcconfig, runs codesign --verify --strict on every part, each
+# alone, innermost first, and reads the app group each part is signed with against the groups
+# its provisioning profile allows. It stops at the first failure, naming the part, and
+# installs nothing. It prints the summary, with each product's path, before any install; an
+# install that fails leaves the build whole, and the script names the command that installs
+# it again. It never starts what it builds: a milestone build that runs opens the owner's own
+# store. It prints no team ID and no signing identity. Each build's log lies beside its
+# derived data, .build/milestone/milestone-build-<level>-<commit>-<product>.log, filtered for
+# the team's ID as it is written; a run of verify.sh does not move it.
 
 source "$(dirname "$0")/lib/common.sh"
 
-usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "milestone-build-usage" "$1" "Run scripts/milestone-build.sh --help." "safe" "nothing"; }
 say() { printf 'milestone-build: %s\n' "$1"; }
 
@@ -247,6 +248,90 @@ check_product() {
     say "$name: codesign --verify --strict passed on each of its $count parts, alone: $(parts_of "$app" | tr '\n' ' ' | sed 's/ $//')"
 }
 
+# The project's entitlements file of a part, by its bundle ID's suffix under the app's.
+entitlements_file() { # entitlements_file <ios|mac> <bundle ID>
+    case ${2#"$WANT_BUNDLE"} in
+        "") [[ $1 == ios ]] && echo Apps/iOS/Knot-iOS-team.entitlements || echo Apps/macOS/Knot-macOS-team.entitlements ;;
+        .widgets) echo Apps/Extensions/Widgets-iOS/Widgets-iOS-team.entitlements ;;
+        .watchkitapp) echo Apps/watchOS/Knot-watchOS-team.entitlements ;;
+        .watchkitapp.widgets) echo Apps/Extensions/Widgets-watchOS/Widgets-watchOS-team.entitlements ;;
+        .cli) echo Apps/macOS/Tool/knot-team.entitlements ;;
+    esac
+}
+
+# The app groups a plist names, one a line: an entitlements plist, or, with --profile, the
+# entitlements of a provisioning profile.
+groups_in() {
+    python3 -I -c '
+import plistlib, sys
+try:
+    plist = plistlib.loads(sys.stdin.buffer.read())
+except Exception:
+    sys.exit(0)
+if sys.argv[1:] == ["--profile"]:
+    plist = plist.get("Entitlements", {})
+for group in plist.get("com.apple.security.application-groups", []) or []:
+    print(group)
+' "$@" 2>/dev/null || true
+}
+
+# The app group, before any install (docs/orchestrator.md, "A milestone build"): for the app,
+# each app extension, the Watch app and what it embeds, and the Mac app's tool, the groups
+# each is signed with and the groups its embedded provisioning profile allows. It fails,
+# naming the part, when a part is signed with a group its profile does not allow, or when the
+# project's entitlements file gives a part the group and its signature names none. A bare
+# executable, the Mac app's tool, carries no profile: only its signature is read. Every name
+# it prints passes the team filter, since the Mac's group may carry the team's prefix.
+#   check_groups <ios|mac> <app> <log>
+check_groups() {
+    local name=$1 app=$2 log=$3 base part path bundle file signed allowed group profile count=0
+    base="$(dirname "$app")"
+    while IFS= read -r part; do
+        path="$base/$part"
+        case $part in
+            *.app | *.appex) bundle="$(plist "$(info_of "$path")" CFBundleIdentifier)" ;;
+            */Contents/MacOS/"$WANT_TOOL") bundle="$WANT_BUNDLE.cli" ;;
+            *) continue ;;
+        esac
+        file="$(entitlements_file "$name" "$bundle")"
+        signed="$(codesign -d --entitlements - --xml "$path" 2>/dev/null | groups_in)"
+        if [[ -z $signed ]]; then
+            if [[ -n $file && -n "$(groups_in <"$KNOT_ROOT/$file")" ]]; then
+                say "$name: $part is signed with no app group, and $file gives it one"
+                return 1
+            fi
+            say "$name: $part: no app group, as $file asks"
+            continue
+        fi
+        profile=""
+        for profile in "$path/embedded.mobileprovision" "$path/Contents/embedded.provisionprofile" ""; do
+            [[ -z $profile || -f $profile ]] && break
+        done
+        if [[ -z $profile ]]; then
+            if [[ $part == */Contents/MacOS/* ]]; then
+                say "$name: $part: signed with $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team); a bare executable carries no profile to compare"
+                count=$((count + 1))
+                continue
+            fi
+            say "$name: $part is signed with an app group and holds no provisioning profile"
+            return 1
+        fi
+        allowed="$(security cms -D -i "$profile" 2>/dev/null | groups_in --profile)"
+        while IFS= read -r group; do
+            [[ -n $group ]] || continue
+            if ! python3 -I -c 'import fnmatch, sys; sys.exit(0 if any(fnmatch.fnmatchcase(sys.argv[1], a) for a in sys.argv[2:]) else 1)' \
+                "$group" $allowed; then
+                say "$name: $part is signed with the app group $(knot_filter_team <<<"$group"), which its provisioning profile does not allow; it allows: $(tr '\n' ' ' <<<"${allowed:-none}" | sed 's/ $//' | knot_filter_team)"
+                printf 'app group %s: signed %s, profile allows %s\n' "$part" "$(tr '\n' ' ' <<<"$signed")" "$(tr '\n' ' ' <<<"$allowed")" | knot_filter_team >>"$log"
+                return 1
+            fi
+        done <<<"$signed"
+        say "$name: $part: app group $(tr '\n' ' ' <<<"$signed" | sed 's/ $//' | knot_filter_team), allowed by its profile"
+        count=$((count + 1))
+    done < <(parts_of "$app")
+    say "$name: the app group checked on $count parts"
+}
+
 SUMMARY=()
 APPS=()
 for product in $WANTED; do
@@ -281,7 +366,7 @@ for product in $WANTED; do
     fi
     say "$product: built in $took"
     app="$derived/Build/Products/$folder/Knot.app"
-    if ! check_product "$product" "$app" "$log"; then
+    if ! check_product "$product" "$app" "$log" || ! check_groups "$product" "$app" "$log"; then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
             "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
