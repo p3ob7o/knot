@@ -197,6 +197,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-06 | 06b | A kill point that never kills is held by a test of its own, on no fresh seed: the soak at a fresh seed was red by chance for a point its script did not bring about | WP-06 PR 2 |
 | WP-06 | 06c | Nothing is written after a launch's last line: a log line of the engine's work still in flight at the exit followed `done`, and the witness read the launch as unfinished | WP-06b |
 | WP-06 | 06d | The child drains the processing queue after recovery, the witness holds what its jobs leave, and WP-15's kill points of processing run under the soak | WP-06c; WP-15 PR 1 |
+| WP-06 | 06e | The soak's own tests fit their time box under Thread Sanitizer: on the hosted runner their runs were cut short, and the nightly run was red | WP-06d |
 | SP-1 | Notes | The code half, a minimal app on `spike/locked-recording`, and its short note | WP-01 PR 1; WP-04 |
 | SP-1 | 1 | The report, `docs/spikes/SP-1.md`, which ends with a decision | SP-1 notes |
 | SP-2 | Notes | The code half on `spike/watch-delivery`, and its short note | WP-01 PR 1; WP-04 |
