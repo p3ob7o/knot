@@ -1321,6 +1321,8 @@ SKIPPED_NAMES=""
 SKIPPED_CODE=3
 SKIPPABLE="team-id ownership"
 FAILED_STEP=""
+# A step whose wait for a build slot ran out did not run: no failure of the code, named apart.
+NO_SLOT_STEP=""
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
@@ -1420,6 +1422,13 @@ for step in $STEPS; do
         [[ " $COUNTED_STEPS " == *" $step "* && $runner != step_mac_ui_hosted ]] && count_tests "$log"
         # Doctor has checked the Xcode; every later step uses it.
         [[ $step == doctor ]] && knot_select_xcode
+    elif grep -e '^FAIL infra-slot-timeout' "$log" >/dev/null; then
+        NO_SLOT_STEP=$step
+        printf 'verify: NOT RUN %-20s %s, no build slot came free\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
+        grep -e '^  what:' "$log" | head -n 1 | sed 's/^  what: */        /' || true
+        knot_report "verify-$step-no-slot" "The step $step did not run: no build slot came free within its wait. That is no failure of the code. Its log is $log." \
+            "Rerun it when the slots are free: scripts/build-slot.sh status names their holders." "safe" "nothing" || true
+        break
     else
         FAILED_STEP=$step
         printf 'verify: FAIL  %-22s %s\n' "$step" "$(knot_duration $(($(knot_now) - step_start)))"
@@ -1445,6 +1454,12 @@ ALLOWED=${ALLOWED:-0}
 pending=$PENDING_COUNT
 status=ok
 [[ -n $FAILED_STEP ]] && status=FAILED
+# A step that did not run for want of a slot fails the gate, which needs every step, and makes
+# any other run NOT RUN, with an exit status of its own, 4, so that a caller such as the nightly
+# run tells it from a failure.
+if [[ -n $NO_SLOT_STEP && $status == ok ]]; then
+    if [[ $TIER == gate ]]; then status=FAILED; else status="NOT RUN"; fi
+fi
 # The gate refuses a partial run: a step that could not run here fails it. Every other tier
 # reports the step as skipped and ends ok.
 if [[ $TIER == gate && -z $FAILED_STEP && -n $SKIPPED_NAMES ]]; then
@@ -1464,7 +1479,7 @@ printf 'verify %s: %s · steps %d passed, %d failed, %d skipped, %d not run, %d 
 
 # The status line: the same facts in at most 140 characters, for a commit status, whose
 # description GitHub cuts at 140. scripts/verify.sh --status-line prints it again.
-short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}: $PASSED/$total steps, $TESTS_PASSED tests"
+short="${LABEL#--} $status${FAILED_STEP:+ at $FAILED_STEP}${NO_SLOT_STEP:+ at $NO_SLOT_STEP, no slot}: $PASSED/$total steps, $TESTS_PASSED tests"
 ((TESTS_FAILED)) && short="$short, $TESTS_FAILED failed"
 ((TESTS_SKIPPED)) && short="$short, $TESTS_SKIPPED skipped"
 ((SKIPPED_STEPS)) && short="$short, $SKIPPED_STEPS steps skipped"
@@ -1477,4 +1492,6 @@ candidate="$short · macOS $(sw_vers -buildVersion)"
 ((${#candidate} <= 140)) && short=$candidate
 short="${short:0:140}"
 printf '%s\n' "$short" >"$STATUS_FILE"
-[[ $status == ok ]]
+[[ $status == ok ]] && exit 0
+[[ $status == "NOT RUN" ]] && exit 4
+exit 1

@@ -18,7 +18,9 @@
 #      holding every build slot, so that a change that breaks that build shows the next
 #      morning and not at a milestone.
 # It prints each run's status line, and exits non-zero when any run failed. A red night
-# stops the merge queue (docs/orchestrator.md). Each run's logs, the files it wrote in
+# stops the merge queue (docs/orchestrator.md). A run that did not start for want of a build
+# slot, verify.sh's status 4, as --perf can on a busy night, is reported as not run, apart from
+# the failures, and does not make the night red. Each run's logs, the files it wrote in
 # .build/logs/, are kept in a folder of their own, .build/nightly/<run>/, cleared when the
 # night starts: one verify run's logs would otherwise go aside at the next whole run.
 
@@ -29,7 +31,7 @@ case ${1:-} in
     "") ;;
     --skip) [[ ${2:-} == mac-ui ]] || knot_fail "nightly-usage" "--skip takes mac-ui only." "Run scripts/nightly.sh --help." "safe" "nothing"
         FULL=(--full --skip mac-ui) ;;
-    -h | --help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) knot_fail "nightly-usage" "Unknown argument: $1" "Run scripts/nightly.sh --help." "safe" "nothing" ;;
 esac
 branch="$(git -C "$KNOT_ROOT" symbolic-ref --quiet --short HEAD || echo detached)"
@@ -40,6 +42,7 @@ NIGHTLY="$KNOT_BUILD/nightly"
 rm -rf "$NIGHTLY"
 mkdir -p "$NIGHTLY" "$KNOT_LOGS"
 failed=()
+not_run=()
 summary=()
 run() {
     local name=$1 marker
@@ -47,7 +50,13 @@ run() {
     echo "nightly: $name"
     marker="$NIGHTLY/.started-$name"
     : >"$marker"
-    if "$@"; then :; else failed+=("$name"); fi
+    local status=0
+    "$@" || status=$?
+    if ((status == 4)); then
+        not_run+=("$name")
+    elif ((status != 0)); then
+        failed+=("$name")
+    fi
     # The files the run wrote, kept in its own folder.
     mkdir -p "$NIGHTLY/$name"
     find "$KNOT_LOGS" -maxdepth 1 -type f -newer "$marker" -exec cp -p {} "$NIGHTLY/$name/" \;
@@ -64,9 +73,15 @@ grep -e 'changed since' "$NIGHTLY/models/verify-model-report.log" 2>/dev/null ||
 run perf "$KNOT_SCRIPTS/verify.sh" --perf
 
 printf 'nightly: %s\n' "${summary[@]}"
+((${#not_run[@]} == 0)) ||
+    echo "nightly: not run, for want of a build slot: ${not_run[*]}. No failure of the code; run each again when the slots are free."
 if ((${#failed[@]})); then
     knot_fail "nightly" "The nightly run failed in: ${failed[*]}." \
         "Read each run's logs in .build/nightly/<run>/. A red night stops the queue: bisect the squash merges and revert the cause." \
         "safe" "build products in .build/ only"
 fi
-echo "nightly: every run passed"
+if ((${#not_run[@]})); then
+    echo "nightly: every run that ran passed"
+else
+    echo "nightly: every run passed"
+fi

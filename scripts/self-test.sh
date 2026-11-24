@@ -1792,6 +1792,23 @@ if [[ $la_status == 0 && -z $la_old && -f $la/tree/.build/logs/verify-perf.log &
 else
     fail "the earlier run's logs at a run's start: status $la_status, older files left in logs/:${la_old:- none}, logs-earlier holds '$la_aside', the soak's time $la_soak_time; after --only doctor ($la_only_status): logs '$la_after_only', logs-earlier '$la_aside_after_only': $(tail -n 5 "$la/out")"
 fi
+# A step whose wait for a build slot runs out did not run, and is named apart from a failure:
+# --perf, which takes every slot, with one of them held and a wait of 2 s, ends NOT RUN with
+# its own status, 4.
+/usr/bin/lockf -k "$la/slots/build-1.lock" sleep 20 &
+la_holder=$!
+for _ in $(seq 1 50); do /usr/bin/lockf -s -t 0 -k "$la/slots/build-1.lock" true 2>/dev/null || break; sleep 0.1; done
+la_slot_status=0
+env KNOT_TREE="$la/tree" KNOT_SLOT_DIR="$la/slots" KNOT_SLOT_TIMEOUT=2 "$la/scripts/verify.sh" --perf >"$la/no-slot.out" 2>&1 || la_slot_status=$?
+kill "$la_holder" 2>/dev/null || true
+wait "$la_holder" 2>/dev/null || true
+if [[ $la_slot_status == 4 ]] && grep -e '^verify: NOT RUN perf .*no build slot came free' "$la/no-slot.out" >/dev/null &&
+    grep -e '^verify --perf: NOT RUN' "$la/no-slot.out" >/dev/null && ! grep -e '^verify: FAIL' "$la/no-slot.out" >/dev/null &&
+    grep -e 'perf NOT RUN at perf, no slot' "$la/tree/.build/logs/verify-status.txt" >/dev/null; then
+    pass "a step whose wait for a slot runs out is NOT RUN, with a status of its own, not a failure"
+else
+    fail "a step with no slot: status $la_slot_status: $(grep -e '^verify' "$la/no-slot.out" | tr '\n' '|')"
+fi
 
 # Four more forms that a signed build or codesign can print, and the ID wherever it stands
 # when the run names the owner's configuration and so knows it. The configuration here is
@@ -2361,6 +2378,8 @@ cp "$KNOT_SELF/.xcode-version" "$ng/tree/"
 cat >"$ng/scripts/verify.sh" <<'SH'
 #!/bin/bash
 [[ ${1:-} == --status-line ]] && { echo "stand-in status"; exit 0; }
+# The perf run finds no slot when asked: verify.sh's status 4.
+[[ ${1:-} == --perf && -n ${KNOT_NG_NO_SLOT:-} ]] && exit 4
 source "$(dirname "$0")/lib/common.sh"
 # A whole run sets the earlier logs aside, as verify.sh does; a run of one step does not.
 [[ ${1:-} == --only ]] || knot_set_logs_aside "$KNOT_LOGS"
@@ -2378,6 +2397,17 @@ if [[ $ng_status == 0 && $ng_folders == "full models oldest-runtime perf recorde
     pass "the nightly run keeps each run's logs in a folder of its own, and clears an earlier night's"
 else
     fail "the nightly's logs: status $ng_status, folders '$ng_folders', full's '$ng_full', tsan's '$ng_tsan': $(tail -n 3 "$ng/out")"
+fi
+
+# A run that found no build slot is reported as not run, apart from the failures, and leaves
+# the night green.
+ng_slot_status=0
+(cd "$ng/tree" && env KNOT_TREE="$ng/tree" KNOT_NG_NO_SLOT=1 "$ng/scripts/nightly.sh" >"$ng/no-slot.out" 2>&1) || ng_slot_status=$?
+if [[ $ng_slot_status == 0 ]] && grep -e '^nightly: not run, for want of a build slot: perf\.' "$ng/no-slot.out" >/dev/null &&
+    grep -e '^nightly: every run that ran passed$' "$ng/no-slot.out" >/dev/null; then
+    pass "the nightly reports a run with no slot as not run, apart from the failures"
+else
+    fail "the nightly with no slot for perf: status $ng_slot_status: $(tail -n 3 "$ng/no-slot.out")"
 fi
 
 # scripts/milestone-build.sh, with stand-ins for what it calls: an xcodebuild that writes
