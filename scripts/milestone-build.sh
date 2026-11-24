@@ -47,6 +47,8 @@ say() { printf 'milestone-build: %s\n' "$1"; }
 # its settings in the environment: KNOT_MB_SCHEME, KNOT_MB_DESTINATION, KNOT_MB_DERIVED,
 # KNOT_MB_LEVEL, KNOT_MB_LOG and KNOT_MB_PROVISIONING (1 or 0).
 if [[ ${1:-} == --in-build ]]; then
+    # The time the build got its slot, so that the build's own time is told from the wait.
+    knot_now >"$KNOT_MB_SLOT_TIME"
     knot_select_xcode
     build() {
         local flags=()
@@ -477,11 +479,18 @@ for product in $WANTED; do
     say "$product: building $scheme, Release, $LEVEL, in fresh derived data .build/milestone/$(basename "$derived")$( ((PROVISIONING)) && echo ', with -allowProvisioningUpdates')"
     started=$(knot_now)
     status=0
+    slot_time="$KNOT_BUILD/milestone/.slot-time-$product"
+    rm -f "$slot_time"
     KNOT_MB_SCHEME=$scheme KNOT_MB_DESTINATION=$destination KNOT_MB_DERIVED=$derived KNOT_MB_LEVEL=$LEVEL \
-        KNOT_MB_LOG=$log KNOT_MB_PROVISIONING=$PROVISIONING \
+        KNOT_MB_LOG=$log KNOT_MB_PROVISIONING=$PROVISIONING KNOT_MB_SLOT_TIME=$slot_time \
         "$KNOT_SCRIPTS/build-slot.sh" run --label "milestone-build $product" -- "$KNOT_SCRIPTS/milestone-build.sh" --in-build ||
         status=$?
-    took="$(knot_duration $(($(knot_now) - started)))"
+    # The build's own time, from the moment it held its slot; the wait for the slot apart.
+    ended=$(knot_now)
+    got_slot="$(cat "$slot_time" 2>/dev/null || echo "$ended")"
+    rm -f "$slot_time"
+    took="$(knot_duration $((ended - got_slot)))"
+    waited="$(knot_duration $((got_slot - started)))"
     # Xcode registers the Mac app it builds with LaunchServices, where the owner's own Knot has
     # the same bundle ID. Once the product's checks have run, pass or fail, or its build has
     # failed, every app in its derived data leaves LaunchServices; the product stays on disk
@@ -492,13 +501,13 @@ for product in $WANTED; do
     }
     if ((status != 0)); then
         unregister
-        say "$product: the build failed after $took. The last lines of its log:"
+        say "$product: the build failed after $took, after waiting $waited for a build slot. The last lines of its log:"
         grep -E 'error:|BUILD FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
         knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is .build/milestone/$(basename "$log")." \
             "Read the log. A signing error that names an account, a profile or a device needs the owner: say so, and do not pass a flag he has not allowed." \
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
     fi
-    say "$product: built in $took"
+    say "$product: built in $took, after waiting $waited for a build slot"
     app="$derived/Build/Products/$folder/Knot.app"
     checked=0
     if check_product "$product" "$app" "$log" && check_signers "$product" "$app" "$log" &&
@@ -512,7 +521,7 @@ for product in $WANTED; do
             "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
     fi
     APPS+=("$product=$app")
-    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took, every part verified, at ${app#"$KNOT_ROOT"/}, its log .build/milestone/$(basename "$log")")
+    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took (the wait for a slot apart), every part verified, at ${app#"$KNOT_ROOT"/}, its log .build/milestone/$(basename "$log")")
 done
 
 # The summary comes before any install, so that an install that fails leaves the build's

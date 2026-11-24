@@ -2713,6 +2713,9 @@ if [[ $mb_verdicts == "packages 1/0 1/0 unregistered 1/kept/1 signers 1/0 1/0 gr
     [[ $mb_order =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ $ ]] && ((BASH_REMATCH[1] < BASH_REMATCH[2])) &&
     grep -e "Install it again from there, from any folder: /[^ ]*/scripts/install.sh /[^ ]*/.build/milestone/M1-${mb_commit:0:12}-ios/Build/Products/Release-iphoneos/Knot.app --device Self-test\\\\ iPhone$" "$mb/install.out" >/dev/null &&
     grep -e 'would refuse the folder' "$mb/install.out" >/dev/null &&
+    grep -e '^milestone-build: ios: built in [0-9]*s, after waiting [0-9]*s for a build slot$' "$mb/plain.out" >/dev/null &&
+    grep -e 'built in [0-9]*s (the wait for a slot apart), every part verified' "$mb/plain.out" >/dev/null &&
+    [[ -z "$(ls -A "$mb/tree/.build/milestone" | grep -e '^\.slot-time' || true)" ]] &&
     grep -e 'The checkout of Synthetic in .build/SourcePackages is changed, in 1 of its paths' "$mb/pkg-edited.out" >/dev/null &&
     grep -e 'The checkout of Synthetic in .build/SourcePackages is at [0-9a-f]*, not the pinned' "$mb/pkg-moved.out" >/dev/null &&
     grep -e "the packages' checkouts stand at their pinned revisions, with no change (1 read)" "$mb/plain.out" >/dev/null &&
