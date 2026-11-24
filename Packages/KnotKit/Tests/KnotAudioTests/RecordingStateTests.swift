@@ -63,15 +63,14 @@ import Testing
             state: store)
         let request = request()
         let session = try await live.start(request)
-        let published = store.read()
+        let published = try #require(store.writes.last?.snapshot)
         #expect(published.phase == .recording && published.captureID == request.captureID)
         #expect(published.ownerLaunch == request.launchID && published.ownerPID == getpid())
         #expect(published.startedAt != nil && published.heartbeat != nil)
         let first = try #require(published.heartbeat)
-        #expect(await SuiteWait.until("a later heartbeat") { (store.read().heartbeat ?? first) > first })
-        #expect(store.read().phase == .recording, "A heartbeat keeps the phase.")
+        #expect(await SuiteWait.until("a later heartbeat") { (store.writes.last?.snapshot.heartbeat ?? first) > first })
+        #expect(store.writes.last?.snapshot.phase == .recording, "A heartbeat keeps the phase.")
         _ = await session.stop()
-        #expect(store.read() == .idle)
         #expect(store.phases == [.starting, .recording, .stopping, .idle], "\(store.phases)")
         // The heartbeats keep the phase they find, and none follows the idle state.
         let beats = store.writes.filter { $0.queue == "knot.audio.heartbeat" }
@@ -99,11 +98,11 @@ import Testing
             cues: cues, state: store)
         input.failNextOpen(with: .noInputDevice)
         await #expect(throws: KnotError.self) { _ = try await live.start(request()) }
-        #expect(store.read() == .idle && store.phases == [.starting, .idle], "\(store.phases)")
+        #expect(store.writes.last?.snapshot == .idle && store.phases == [.starting, .idle], "\(store.phases)")
         let session = try await live.start(request())
         _ = await allEvents(of: session)
         #expect(await SuiteWait.until("the stopped-early cue") { cues.cues.contains(.stoppedEarly) })
-        #expect(store.read() == .idle)
+        #expect(store.writes.last?.snapshot == .idle)
         #expect(store.phases.suffix(4) == [.starting, .recording, .stopping, .idle], "\(store.phases)")
     }
 
@@ -118,7 +117,7 @@ import Testing
         publisher.starting(request)
         publisher.stopping(request.captureID)
         publisher.recording(request.captureID, since: Date())
-        #expect(store.read().phase == .stopping)
+        #expect(store.writes.last?.snapshot.phase == .stopping)
         publisher.ended(request.captureID)
         #expect(store.phases == [.starting, .stopping, .idle], "\(store.phases)")
     }
@@ -143,16 +142,17 @@ import Testing
     @Test func aRefusedSecondStartLeavesTheStateAlone() async throws {
         let suite = try TestSuite()
         defer { suite.remove() }
-        let store = DefaultsRecordingStateStore(defaults: suite.defaults)
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
         let folder = try ScratchFolder()
         let live = LiveRecorder(locations: folder.locations, input: injected(), state: store)
         let request = request()
         let session = try await live.start(request)
-        let published = store.read()
+        let published = try #require(store.writes.last?.snapshot)
         await #expect(throws: KnotError.self) { _ = try await live.start(request) }
-        #expect(store.read().phase == .recording && store.read().captureID == published.captureID)
+        let after = store.writes.last?.snapshot
+        #expect(after?.phase == .recording && after?.captureID == published.captureID, "\(store.phases)")
         _ = await session.stop()
-        #expect(store.read() == .idle)
+        #expect(store.writes.last?.snapshot == .idle)
     }
 
     /// Recovery clears a state that an earlier launch left, as it finishes that launch's
@@ -160,7 +160,7 @@ import Testing
     @Test func recoveryClearsTheStateOfAnEarlierLaunchOnly() async throws {
         let suite = try TestSuite()
         defer { suite.remove() }
-        let store = DefaultsRecordingStateStore(defaults: suite.defaults)
+        let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
         let folder = try ScratchFolder()
         let live = LiveRecorder(locations: folder.locations, input: injected(), state: store)
         let current = LaunchID(uuid: UUID())
@@ -168,17 +168,17 @@ import Testing
             phase: .recording, captureID: CaptureID(uuid: UUID()), heartbeat: Date(), ownerLaunch: current, ownerPID: 1)
         store.write(ofThisLaunch)
         _ = try await live.recoverOrphans(currentLaunch: current)
-        #expect(store.read() == ofThisLaunch, "A state of the current launch stays.")
+        #expect(store.writes.last?.snapshot == ofThisLaunch, "A state of the current launch stays.")
         var earlier = ofThisLaunch
         earlier.ownerLaunch = LaunchID(uuid: UUID())
         store.write(earlier)
         _ = try await live.recoverOrphans(currentLaunch: current)
-        #expect(store.read() == .idle, "A state of an earlier launch is cleared.")
+        #expect(store.writes.last?.snapshot == .idle, "A state of an earlier launch is cleared.")
         var unowned = ofThisLaunch
         unowned.ownerLaunch = nil
         store.write(unowned)
         _ = try await live.recoverOrphans(currentLaunch: current)
-        #expect(store.read() == .idle, "A state that names no launch is no launch's that runs now.")
+        #expect(store.writes.last?.snapshot == .idle, "A state that names no launch is no launch's that runs now.")
     }
 }
 
@@ -224,6 +224,11 @@ final class TestSuite: Sendable {
 }
 
 /// A store that keeps every snapshot written, with the queue it was written on.
+///
+/// What the recorder publishes is checked by its writes here, not by reading the suite back in
+/// the process that wrote it: once, at a gate's strict pass, a suite named by a path read back
+/// the process's own write from 63 ms before, and not the two it made after (WP-12b). Reading
+/// the suite back is left to the store's own tests and to what another process sees.
 final class WatchedStateStore: RecordingStateStore {
     struct Write: Sendable {
         let snapshot: RecordingStateSnapshot
