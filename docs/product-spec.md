@@ -27,7 +27,7 @@ Three promises, in priority order:
 | Capture | One act of input: a typing session, a recording, or a drawing. |
 | Segment | What a capture becomes inside a note. There are three kinds: typed, voice and ink. |
 | Append window | A number of minutes, X, set by the user. It decides whether a capture joins the previous note or starts a new one. |
-| Pending | A segment whose processing is unfinished: still on the watch, not yet transcribed, or not yet cleaned up. |
+| Pending | A segment whose processing is unfinished: still on the watch, or not yet transcribed. A recording whose transcript is there is Ready while cleanup runs (§5). |
 
 ## 3. Notes and the append window
 
@@ -97,7 +97,7 @@ Until the "live" cue, nothing on any device implies that Knot is recording. The 
 | Recording started and the microphone is live | A haptic, with the Live Activity or the recording state in the app | A haptic, and the timer starts | The panel's listening state |
 | Stopped and saved | A haptic. The Live Activity shows saved, then ends. | A haptic and "Saved" | The panel shows saved |
 | Could not start | A different haptic, and the reason in the Live Activity or the app | A failure haptic and the reason | The panel with the reason |
-| Discarded, under one second | A light haptic, and the surface says nothing was kept | The same | Does not apply: a hold is exempt |
+| Discarded, under one second | A light haptic, and the surface says nothing was kept | The same | A recording held on the hotkey is exempt. One started by a click on the panel's microphone control, or from Siri or Shortcuts, is discarded like any other, and the panel says nothing was kept |
 | Stopped at the limit, by a call, or because it could not be saved further | The stop cue, and the segment says why | The stop cue and the reason | The stop cue and the reason |
 | Delivered to the iPhone | Nothing | The count of waiting recordings on the complication goes down | Nothing |
 
