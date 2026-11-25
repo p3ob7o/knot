@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>iPhone recording</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#000000}a:hover{color:#3C3C43}
+textarea::placeholder{color:rgba(60,60,67,0.3)}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; position: relative; overflow: hidden; border-radius: 44px; background: #FFFFFF; color: #000000; font-family: -apple-system, 'SF Pro Text', 'SF Pro', system-ui, sans-serif; -webkit-font-smoothing: antialiased;">
+
+  <div style="position: absolute; top: 62px; left: 16px; right: 16px; height: 44px; display: flex; justify-content: flex-end; align-items: center; gap: 8px;">
+    <button type="button" aria-label="Notes" style="width: 44px; height: 44px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.82); color: #000000; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 12px rgba(0,0,0,0.10); padding: 0;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"></circle></svg>
+    </button>
+  </div>
+
+  <div style="position: absolute; top: 130px; left: 16px; right: 16px; display: flex; flex-direction: column; gap: 24px;">
+    <sc-if value="{{saved}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 12px; height: 32px;">
+          <button type="button" aria-label="Play" style="width: 32px; height: 32px; border: none; background: transparent; color: #000000; padding: 0; display: flex; align-items: center; justify-content: center;">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7.5 5v14l11-7z" fill="currentColor"></path></svg>
+          </button>
+          <div aria-hidden="true" style="flex: 1 1 auto; display: flex; align-items: center; gap: 3px; height: 28px; overflow: hidden;">
+            <sc-for list="{{storedBars}}" as="bar" hint-placeholder-count="40">
+              <div style="flex: 0 0 3px; width: 3px; border-radius: 999px; background: rgba(60,60,67,0.18); height: {{bar.h}}px;"></div>
+            </sc-for>
+          </div>
+          <div style="font-size: 13px; line-height: 18px; color: rgba(60,60,67,0.6); font-variant-numeric: tabular-nums;">0:12</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="16" cy="12" r="1" fill="currentColor" stroke="none"></circle></svg>
+          <span>Saved, text on its way</span>
+        </div>
+      </div>
+    </sc-if>
+    <textarea aria-label="Capture field" rows="3" placeholder="Type a thought" disabled="{{live}}" style="display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; resize: none; background: transparent; color: #000000; font: 400 17px/22px -apple-system, 'SF Pro Text', system-ui, sans-serif; letter-spacing: -0.43px;"></textarea>
+  </div>
+
+  <div style="position: absolute; left: 16px; right: 16px; bottom: 34px; height: 64px; display: flex; align-items: center; gap: 12px;">
+    <div aria-hidden="true" style="flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 3px; height: 36px; overflow: hidden;">
+      <sc-if value="{{live}}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{liveBars}}" as="bar" hint-placeholder-count="30">
+          <div style="flex: 0 0 3px; width: 3px; border-radius: 999px; background: #FF3B30; height: {{bar.h}}px;"></div>
+        </sc-for>
+      </sc-if>
+    </div>
+    <sc-if value="{{showTimer}}" hint-placeholder-val="{{ true }}">
+      <div style="font-size: 17px; line-height: 22px; font-weight: 400; color: #000000; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right;">{{timer}}</div>
+    </sc-if>
+    <sc-if value="{{saved}}" hint-placeholder-val="{{ false }}">
+      <div style="font-size: 17px; line-height: 22px; color: #000000;">Saved</div>
+    </sc-if>
+    <sc-if value="{{redControl}}" hint-placeholder-val="{{ true }}">
+      <button type="button" aria-label="{{controlLabel}}" style="flex: 0 0 64px; width: 64px; height: 64px; border-radius: 999px; border: none; background: #FF3B30; color: #FFFFFF; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 14px rgba(255,59,48,0.28); padding: 0;">
+        <sc-if value="{{live}}" hint-placeholder-val="{{ true }}">
+          <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"></rect></svg>
+        </sc-if>
+        <sc-if value="{{starting}}" hint-placeholder-val="{{ false }}">
+          <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="9" y="3" width="6" height="11.5" rx="3" fill="currentColor"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+        </sc-if>
+      </button>
+    </sc-if>
+    <sc-if value="{{saved}}" hint-placeholder-val="{{ false }}">
+      <button type="button" aria-label="Record" style="flex: 0 0 64px; width: 64px; height: 64px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.82); color: #000000; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 14px rgba(0,0,0,0.12); padding: 0;">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+      </button>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"phase":{"editor":"enum","options":["Live","Starting","Saved"],"default":"Live"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const phase = this.props.phase ?? 'Live';
+    const live = phase === 'Live';
+    const starting = phase === 'Starting';
+    const saved = phase === 'Saved';
+    const liveLevels = [6,10,8,14,20,12,9,16,24,30,22,14,10,18,26,32,28,20,12,8,14,22,18,10,6,12,20,28,16,8];
+    const storedLevels = [6,10,14,20,12,8,16,22,26,18,10,8,14,20,24,16,10,6,12,18,22,14,8,10,16,20,12,8,6,10,14,18,12,8,6,10,8,6,4,4];
+    return {
+      live, starting, saved,
+      redControl: live || starting,
+      showTimer: live || starting,
+      timer: starting ? '0:00' : '0:12',
+      controlLabel: live ? 'Stop recording, 0:12' : 'Starting recording',
+      liveBars: liveLevels.map((h) => ({ h })),
+      storedBars: storedLevels.map((h) => ({ h })),
+    };
+  }
+}
+</script>
+</body>
+</html>

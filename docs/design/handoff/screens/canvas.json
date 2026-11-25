@@ -1,0 +1,43 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-25T11:23:08Z"},
+  "title": "Knot Apps",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 390, "h": 844, "title": "iPhone · Capture", "radius": 44},
+    "iPhone-Recording.dc.html": {"x": 470, "y": 0, "w": 390, "h": 844, "title": "iPhone · Recording", "radius": 44},
+    "iPhone-Stream.dc.html": {"x": 940, "y": 0, "w": 390, "h": 844, "title": "iPhone · Notes", "radius": 44},
+    "iPhone-Note.dc.html": {"x": 1410, "y": 0, "w": 390, "h": 844, "title": "iPhone · Open note", "radius": 44},
+    "iPhone-Settings.dc.html": {"x": 1880, "y": 0, "w": 390, "h": 844, "title": "iPhone · Settings", "radius": 44},
+    "Mac-Window.dc.html": {"x": 0, "y": 1184, "w": 1280, "h": 800, "title": "Mac · Main window", "expand": "fill"},
+    "States.dc.html": {"x": 1360, "y": 1184, "w": 910, "h": 800, "title": "Segment states and notices"},
+    "Watch.dc.html": {"x": 0, "y": 2324, "w": 1040, "h": 360, "title": "Apple Watch · Record"},
+    "Widgets.dc.html": {"x": 1120, "y": 2324, "w": 1150, "h": 360, "title": "Widgets and the mark"}
+  },
+  "order": [
+    "Main.dc.html",
+    "iPhone-Recording.dc.html",
+    "iPhone-Stream.dc.html",
+    "iPhone-Note.dc.html",
+    "iPhone-Settings.dc.html",
+    "Mac-Window.dc.html",
+    "States.dc.html",
+    "Watch.dc.html",
+    "Widgets.dc.html"
+  ],
+  "notes": {
+    "rowPhone": {"x": 0, "y": -300, "text": "iPhone", "kind": "title1", "maxW": 2270},
+    "rowMac": {"x": 0, "y": 884, "text": "Mac and the page", "kind": "title1", "maxW": 2270},
+    "rowWatch": {"x": 0, "y": 2024, "text": "Apple Watch and widgets", "kind": "title1", "maxW": 2270}
+  },
+  "designSystems": [
+    {
+      "title": "Knot",
+      "namespace": "knot",
+      "artifact": "",
+      "version": "1795598064-f94d",
+      "copiedAt": "2026-11-25T11:23:08Z"
+    }
+  ]
+}

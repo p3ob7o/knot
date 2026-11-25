@@ -1,0 +1,91 @@
+<!-- @dsCard height=300 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Knot</title>
+<style>
+  html, body { margin:0; height:100%; }
+  body { background:var(--background); color:var(--label); font-family:var(--font-sans); overflow:hidden; }
+  .cover { position:relative; height:300px; overflow:hidden; }
+  .art { position:absolute; top:0; left:480px; width:480px; height:300px; overflow:hidden; }
+  .art svg { display:block; width:480px; height:300px; }
+  .ink { fill:var(--label); }
+  .paper { fill:var(--background); }
+  .tint { fill:var(--background-secondary); }
+  .grey { fill:var(--label-secondary); }
+  .red { fill:var(--record); }
+  .blk { rx:var(--radius-xl); }
+  .bar { rx:1px; }
+  .words { position:absolute; left:var(--space-6); bottom:var(--space-6); max-width:440px; }
+  .name { margin:0; font-size:120px; line-height:.92; font-weight:600; letter-spacing:-0.03em; }
+  .tag { margin:var(--space-3) 0 0 6px; font-size:14px; line-height:20px; color:var(--label-secondary); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 300" width="480" height="300">
+<!--
+  blocks      label (ink) slab 232x320 bleeding off the top and bottom (the brand is ink); background-secondary 168x204 (paper's tint, relief); record disc 48 (the red dot, small: it only ever means live); label-secondary 64x112 graphite
+  arrangement one tall ink slab with satellites, as the mark is one stem with arms; tops and bottoms on space-6 lines, space-4 gutters
+  pattern     a literal motif: a voice waveform, 2px bars (waveform-bar) at a space-2 pitch, cut out of the ink slab in paper and running on over the tint in ink: what Knot records, drawn with its own player's bars
+  scales      gutters space-4, edges space-6, slab and tint corners radius-xl, disc rx = half its side, bars rx 1 (radius-full of a 2px bar)
+-->
+<rect class="tint blk" x="16" y="72" width="168" height="204" rx="26"/>
+<rect class="grey blk" x="16" y="-26" width="64" height="82" rx="26"/>
+<rect class="ink blk" x="200" y="-30" width="232" height="306" rx="26"/>
+<rect class="red" x="96" y="8" width="48" height="48" rx="24"/>
+<rect class="ink bar" x="40" y="159" width="2" height="31" rx="1"/>
+<rect class="ink bar" x="48" y="155" width="2" height="39" rx="1"/>
+<rect class="ink bar" x="56" y="152" width="2" height="45" rx="1"/>
+<rect class="ink bar" x="64" y="149" width="2" height="51" rx="1"/>
+<rect class="ink bar" x="72" y="146" width="2" height="56" rx="1"/>
+<rect class="ink bar" x="80" y="145" width="2" height="58" rx="1"/>
+<rect class="ink bar" x="88" y="145" width="2" height="59" rx="1"/>
+<rect class="ink bar" x="96" y="146" width="2" height="57" rx="1"/>
+<rect class="ink bar" x="104" y="148" width="2" height="53" rx="1"/>
+<rect class="ink bar" x="112" y="151" width="2" height="47" rx="1"/>
+<rect class="ink bar" x="120" y="155" width="2" height="38" rx="1"/>
+<rect class="ink bar" x="128" y="160" width="2" height="28" rx="1"/>
+<rect class="ink bar" x="136" y="166" width="2" height="17" rx="1"/>
+<rect class="ink bar" x="144" y="167" width="2" height="15" rx="1"/>
+<rect class="ink bar" x="152" y="160" width="2" height="28" rx="1"/>
+<rect class="ink bar" x="160" y="154" width="2" height="40" rx="1"/>
+<rect class="ink bar" x="168" y="148" width="2" height="52" rx="1"/>
+<rect class="ink bar" x="176" y="143" width="2" height="62" rx="1"/>
+<rect class="paper bar" x="216" y="137" width="2" height="75" rx="1"/>
+<rect class="paper bar" x="224" y="139" width="2" height="70" rx="1"/>
+<rect class="paper bar" x="232" y="144" width="2" height="61" rx="1"/>
+<rect class="paper bar" x="240" y="149" width="2" height="51" rx="1"/>
+<rect class="paper bar" x="248" y="155" width="2" height="38" rx="1"/>
+<rect class="paper bar" x="256" y="162" width="2" height="25" rx="1"/>
+<rect class="paper bar" x="264" y="169" width="2" height="11" rx="1"/>
+<rect class="paper bar" x="272" y="163" width="2" height="22" rx="1"/>
+<rect class="paper bar" x="280" y="157" width="2" height="35" rx="1"/>
+<rect class="paper bar" x="288" y="151" width="2" height="46" rx="1"/>
+<rect class="paper bar" x="296" y="146" width="2" height="56" rx="1"/>
+<rect class="paper bar" x="304" y="143" width="2" height="63" rx="1"/>
+<rect class="paper bar" x="312" y="140" width="2" height="68" rx="1"/>
+<rect class="paper bar" x="320" y="139" width="2" height="70" rx="1"/>
+<rect class="paper bar" x="328" y="139" width="2" height="70" rx="1"/>
+<rect class="paper bar" x="336" y="141" width="2" height="67" rx="1"/>
+<rect class="paper bar" x="344" y="143" width="2" height="62" rx="1"/>
+<rect class="paper bar" x="352" y="147" width="2" height="54" rx="1"/>
+<rect class="paper bar" x="360" y="151" width="2" height="46" rx="1"/>
+<rect class="paper bar" x="368" y="156" width="2" height="36" rx="1"/>
+<rect class="paper bar" x="376" y="161" width="2" height="26" rx="1"/>
+<rect class="paper bar" x="384" y="166" width="2" height="16" rx="1"/>
+<rect class="paper bar" x="392" y="168" width="2" height="13" rx="1"/>
+<rect class="paper bar" x="400" y="164" width="2" height="21" rx="1"/>
+<rect class="paper bar" x="408" y="160" width="2" height="29" rx="1"/>
+<rect class="paper bar" x="416" y="157" width="2" height="34" rx="1"/>
+</svg>
+</div>
+<div class="words">
+<h1 class="name">Knot</h1>
+<p class="tag">Ready before you are. Nothing lost. Nothing to manage.</p>
+</div>
+</div>
+</body>
+</html>

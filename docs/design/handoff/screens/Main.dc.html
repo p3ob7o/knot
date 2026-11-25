@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>iPhone capture surface</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#000000}a:hover{color:#3C3C43}
+textarea::placeholder{color:rgba(60,60,67,0.3)}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; position: relative; overflow: hidden; border-radius: 44px; background: #FFFFFF; color: #000000; font-family: -apple-system, 'SF Pro Text', 'SF Pro', system-ui, sans-serif; -webkit-font-smoothing: antialiased;">
+
+  <div style="position: absolute; top: 62px; left: 16px; right: 16px; height: 44px; display: flex; justify-content: flex-end; align-items: center; gap: 8px;">
+    <sc-if value="{{adding}}" hint-placeholder-val="{{ true }}">
+      <button type="button" style="height: 44px; padding: 0 20px; border: none; border-radius: 999px; background: #000000; color: #FFFFFF; font: 600 17px/22px -apple-system, 'SF Pro Text', system-ui, sans-serif; letter-spacing: -0.43px; box-shadow: 0 2px 10px rgba(0,0,0,0.12);">Done</button>
+    </sc-if>
+    <button type="button" aria-label="Notes" style="width: 44px; height: 44px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.82); color: #000000; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 12px rgba(0,0,0,0.10); padding: 0;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"></circle></svg>
+    </button>
+  </div>
+
+  <div style="position: absolute; top: 130px; left: 16px; right: 16px; display: flex; flex-direction: column; gap: 24px;">
+    <sc-if value="{{adding}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">Adding to the note from 9:38</div>
+        <div style="font-size: 17px; line-height: 22px; letter-spacing: -0.43px; color: rgba(60,60,67,0.6);">Ask Sam whether the Lisbon offsite moves to March. If it does, the venue hold needs to move with it.</div>
+      </div>
+      <textarea aria-label="Capture field" rows="3" style="display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; resize: none; background: transparent; color: #000000; caret-color: #000000; font: 400 17px/22px -apple-system, 'SF Pro Text', system-ui, sans-serif; letter-spacing: -0.43px;">Book the dentist before the 12th</textarea>
+    </sc-if>
+    <sc-if value="{{blank}}" hint-placeholder-val="{{ false }}">
+      <textarea aria-label="Capture field" rows="3" placeholder="Type a thought" style="display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 0; border: none; outline: none; resize: none; background: transparent; color: #000000; caret-color: #000000; font: 400 17px/22px -apple-system, 'SF Pro Text', system-ui, sans-serif; letter-spacing: -0.43px;"></textarea>
+    </sc-if>
+  </div>
+
+  <div style="position: absolute; left: 16px; right: 16px; bottom: 34px; height: 64px; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center;">
+      <sc-if value="{{adding}}" hint-placeholder-val="{{ true }}">
+        <button type="button" aria-label="New note" style="width: 44px; height: 44px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.82); color: #000000; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 12px rgba(0,0,0,0.10); padding: 0;">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V13"></path><path d="M17.6 3.6l2.8 2.8L12 14.8l-3.6.8.8-3.6z"></path></svg>
+        </button>
+      </sc-if>
+    </div>
+    <button type="button" aria-label="Record" style="width: 64px; height: 64px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.82); color: #000000; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 14px rgba(0,0,0,0.12); padding: 0;">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11.5" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"></path></svg>
+    </button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["Adding","Blank"],"default":"Adding"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const view = this.props.view ?? 'Adding';
+    return { adding: view === 'Adding', blank: view !== 'Adding' };
+  }
+}
+</script>
+</body>
+</html>
