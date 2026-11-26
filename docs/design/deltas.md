@@ -163,3 +163,8 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-21 PR 2 | What a conflict shows before “Keep mine” | The notice shows the changed text that the conditional write would replace. |
 | 2026-11-26 | WP-21 PR 2 | The append caption for a note from another day | Shows the time alone in the region’s clock, with no day period. |
 | 2026-11-26 | WP-21 PR 2 | The title of a note shown above the capture field | The capture surface shows the append caption and the segments. The title can be edited when the note is opened. |
+| 2026-11-26 | WP-40 PR 1 | The editable note heading has no text style in the handoff. | Use the system Title 2 in its emphasized weight. |
+| 2026-11-26 | WP-40 PR 1 | The Watch handoff gives no native equivalents for the phone's paper, tertiary and quaternary inks, fills and separator. | Leave the system ground visible. Shared view fallbacks use the system's secondary colour at reduced opacity. |
+| 2026-11-26 | WP-40 PR 1 | The handoff asks for Reduce Motion crossfades. It gives no token for their timing. | Keep the theme's existing `nil` for all motion kinds until the owner rules. |
+| 2026-11-26 | WP-40 PR 1 | The accent token says the person's Mac accent wins. | Knot draws `accent` and `arrived` in ink on every platform. Mac selection, focus and system controls keep the person's accent. |
+| 2026-11-26 | WP-40 PR 1 | `label-secondary` names the system's secondary label colour. | Keep the placeholder's translucent primary ink. The system secondary label and an opaque grey both failed the Mac accessibility audit on small text. |
