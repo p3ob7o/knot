@@ -1,15 +1,14 @@
 import SwiftUI
 
-/// The theme layer (docs/architecture.md §16): colour roles, the type ramp, spacing, radii and
-/// motion. Every value here is a placeholder until the design handoff arrives, and WP-40
-/// replaces them. Views read the theme from the environment and never name a colour, a font
-/// or a number of points themselves, so restyling touches this folder only.
+/// The theme layer (docs/architecture.md §16). Views read colour roles, text styles and
+/// metrics from the environment. DESIGN.md maps the designed values to the handoff.
 public struct Theme: Sendable {
     public var colors: ColorPalette
     public var type: TypeRamp
     public var spacing: Spacing
     public var radii: Radii
     public var motion: Motion
+    public var sizes = Sizes()
 
     public init(colors: ColorPalette, type: TypeRamp, spacing: Spacing, radii: Radii, motion: Motion) {
         self.colors = colors
@@ -19,6 +18,9 @@ public struct Theme: Sendable {
         self.motion = motion
     }
 
+    public static let designed = Theme(
+        colors: .designed, type: .designed, spacing: .designed, radii: .designed, motion: .designed)
+
     /// The placeholder theme: the system's own colours, text styles and spacing. It assumes no
     /// design direction.
     public static let placeholder = Theme(
@@ -27,5 +29,5 @@ public struct Theme: Sendable {
 
 extension EnvironmentValues {
     /// The theme every KnotUI view draws with.
-    @Entry public var knotTheme: Theme = .placeholder
+    @Entry public var knotTheme: Theme = .designed
 }
