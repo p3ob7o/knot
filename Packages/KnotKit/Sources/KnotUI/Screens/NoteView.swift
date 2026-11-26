@@ -65,8 +65,10 @@
                     if !showsLiveControls {
                         if fieldFocused {
                             ToolbarItemGroup(placement: .keyboard) { captureActions }
+                            .sharedBackgroundVisibility(.hidden)
                         } else {
                             ToolbarItemGroup(placement: .bottomBar) { captureActions }
+                            .sharedBackgroundVisibility(.hidden)
                         }
                     }
                 }
@@ -206,6 +208,7 @@
                     #endif
                 }
                 #if os(iOS)
+                    .buttonStyle(.glass)
                     .accessibilityShowsLargeContentViewer {
                         Label {
                             Text("New note", bundle: .module)
@@ -229,7 +232,7 @@
         private func recordControl(elapsed: Duration?) -> some View {
             HStack(spacing: theme.spacing.regular) {
                 if let elapsed {
-                    elapsedText(elapsed)
+                    Text(ClockText.of(elapsed))
                         .font(theme.type[.recordingTime])
                         .foregroundStyle(theme.colors[.textPrimary])
                         .monospacedDigit()
@@ -249,17 +252,6 @@
                     model.toggleRecording()
                 }
             }
-        }
-
-        private func elapsedText(_ elapsed: Duration) -> Text {
-            #if os(iOS)
-                if model.recording.isRecording {
-                    let value = elapsed.components
-                    let seconds = Double(value.seconds) + Double(value.attoseconds) / 1e18
-                    return Text(Date.now.addingTimeInterval(-seconds), style: .timer)
-                }
-            #endif
-            return Text(ClockText.of(elapsed))
         }
 
         @ViewBuilder private var banners: some View {

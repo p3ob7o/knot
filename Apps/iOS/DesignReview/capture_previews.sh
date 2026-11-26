@@ -12,9 +12,18 @@ trap '"$repo/scripts/sim.sh" shutdown' EXIT
 udid=$("$repo/scripts/sim.sh" udid iphone)
 id=app.knot.design-review
 simctl() { knot_limit 120 xcrun simctl "$@"; }
+original_appearance=$(simctl ui "$udid" appearance)
+original_size=$(simctl ui "$udid" content_size)
+restore_simulator() {
+    simctl ui "$udid" appearance "$original_appearance" >/dev/null 2>&1 || true
+    simctl ui "$udid" content_size "$original_size" >/dev/null 2>&1 || true
+    "$repo/scripts/sim.sh" shutdown
+}
+trap restore_simulator EXIT
 simctl install "$udid" "$scratch/DerivedData/Build/Products/Debug-iphonesimulator/KnotDesignReview.app"
 container=$(simctl get_app_container "$udid" "$id" data)
 preview_rows="$scratch/rows.tsv"
+render_id=$(basename "$scratch")
 python3 - "$scratch/catalog.json" > "$preview_rows" <<'PY'
 import json
 import sys
@@ -27,10 +36,16 @@ for combination in light-default dark-default light-ax5; do
     appearance=${combination%%-*}
     size=${combination#*-}
     simctl ui "$udid" appearance "$appearance"
+    if [[ $size == ax5 ]]; then
+        simctl ui "$udid" content_size accessibility-extra-extra-extra-large
+    else
+        simctl ui "$udid" content_size large
+    fi
     while IFS=$'\t' read -r index slug; do
         image="$output/$slug-$combination.png"
-        simctl launch --terminate-running-process "$udid" "$id" "$index" "$size" "$combination" >/dev/null
-        marker="$container/tmp/$index-$combination.ready"
+        variant="$render_id-$combination"
+        simctl launch --terminate-running-process "$udid" "$id" "$index" "$size" "$variant" >/dev/null
+        marker="$container/tmp/$index-$variant.ready"
         for ((attempt = 0; attempt < 600; attempt++)); do
             [[ ! -f $marker ]] || break
             sleep 1

@@ -214,10 +214,15 @@ public struct FirstRunView: View {
                 case .lockScreenControl: "lock"
                 case .watchComplication: "applewatch"
                 }
-            return Label(row.title, systemImage: icon)
-                .font(theme.type[.body])
-                .foregroundStyle(theme.colors[.textPrimary])
-                .fixedSize(horizontal: false, vertical: true)
+            return HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
+                Image(systemName: icon)
+                    .accessibilityHidden(true)
+                Text(row.title)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(theme.type[.body])
+            .foregroundStyle(theme.colors[.textPrimary])
         }
 
         private func openLabel(_ row: SetupRow) -> Text {
