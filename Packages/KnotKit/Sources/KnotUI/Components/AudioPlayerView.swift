@@ -36,6 +36,10 @@ public struct AudioPlayerView: View {
         HStack(spacing: theme.spacing.regular) {
             Button(action: onToggle) {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    #if os(iOS)
+                        .padding(theme.spacing.loose)
+                        .contentShape(.rect)
+                    #endif
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isPlaying ? Text("Pause", bundle: .module) : Text("Play", bundle: .module))
