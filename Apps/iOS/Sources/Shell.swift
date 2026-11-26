@@ -142,8 +142,7 @@ final class Shell {
     }
 
     func connect(_ destination: SurfaceDestination?) async {
-        let pending = Self.surfaces.takePending()
-        prepareLaunch(destination ?? pending)
+        prepareLaunch(destination ?? Self.surfaces.takePending())
         if !presentsCaptureAtLaunch { startLaunchSequence() }
         await Self.surfaces.attach { [weak self] destination in await self?.navigate(destination) }
     }
@@ -351,7 +350,7 @@ struct ShellView: View {
             await shell.connect(connection.destination)
         }
         .task { await shell.observeSync() }
-        .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in pulse?.feedback }
+        .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in Shell.cues.feedback(for: pulse) }
     }
 }
 

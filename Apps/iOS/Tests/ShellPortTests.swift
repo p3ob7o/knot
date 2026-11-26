@@ -1,5 +1,6 @@
 import Foundation
 import KnotCore
+import KnotTestSupport
 import Testing
 
 @testable import Knot
@@ -48,4 +49,39 @@ import Testing
     capture.prepareLaunch(nil)
     #expect(capture.sheet == .capture)
     #expect(capture.presentsCaptureAtLaunch)
+}
+
+@Test @MainActor func theIOSSurfaceRouterRunsItsContract() async throws {
+    let router = IOSSurfaceRouter()
+    let arrivals = SurfaceArrivals()
+    await router.attach { arrivals.destinations.append($0) }
+    try await SurfaceRouterContract.run(router) { await arrivals.snapshot() }
+}
+
+@MainActor
+private final class SurfaceArrivals {
+    var destinations: [SurfaceDestination] = []
+    func snapshot() -> [SurfaceDestination] { destinations }
+}
+
+@Test @MainActor func theIOSCueEmitterRunsItsContract() async throws {
+    let emitter = IOSCueEmitter()
+    try await CueEmitterContract.run(emitter) { await playPendingCues(emitter) }
+}
+
+@MainActor
+private func playPendingCues(_ emitter: IOSCueEmitter) async -> [Cue] {
+    var played: [Cue] = []
+    await mainQueueTurn()
+    while let pulse = emitter.pulse, emitter.feedback(for: pulse) != nil {
+        played.append(pulse.cue)
+        await mainQueueTurn()
+    }
+    return played
+}
+
+private func mainQueueTurn() async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
+    }
 }

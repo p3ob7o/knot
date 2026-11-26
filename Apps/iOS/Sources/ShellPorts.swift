@@ -7,24 +7,22 @@ import SwiftUI
 /// SwiftUI has attached the window.
 @MainActor
 final class IOSSurfaceRouter: SurfaceRouter {
-    private var pending: SurfaceDestination?
+    private var pending: [SurfaceDestination] = []
     private var navigate: ((SurfaceDestination) async -> Void)?
 
     func takePending() -> SurfaceDestination? {
-        defer { pending = nil }
-        return pending
+        pending.isEmpty ? nil : pending.removeFirst()
     }
 
     func attach(_ navigate: @escaping (SurfaceDestination) async -> Void) async {
         self.navigate = navigate
-        if let pending {
-            self.pending = nil
-            await navigate(pending)
+        while let destination = takePending() {
+            await navigate(destination)
         }
     }
 
     func open(_ destination: SurfaceDestination) async {
-        if let navigate { await navigate(destination) } else { pending = destination }
+        if let navigate { await navigate(destination) } else { pending.append(destination) }
     }
 }
 
@@ -66,8 +64,29 @@ final class IOSCueEmitter: CueEmitter {
     }
 
     private(set) var pulse: Pulse?
+    @ObservationIgnored private var queued: [Pulse] = []
+    @ObservationIgnored private var acknowledged: UUID?
 
     nonisolated func emit(_ cue: Cue) {
-        Task { @MainActor in pulse = Pulse(cue: cue) }
+        DispatchQueue.main.async {
+            self.queued.append(Pulse(cue: cue))
+            self.presentNextPulse()
+        }
+    }
+
+    /// SwiftUI calls this for each trigger change. Advance on the next main-queue turn so
+    /// consecutive emissions cannot replace each other in the same render.
+    func feedback(for pulse: Pulse?) -> SensoryFeedback? {
+        guard let pulse, self.pulse?.id == pulse.id, acknowledged != pulse.id else { return nil }
+        acknowledged = pulse.id
+        DispatchQueue.main.async {
+            self.pulse = nil
+            self.presentNextPulse()
+        }
+        return pulse.feedback
+    }
+
+    private func presentNextPulse() {
+        if pulse == nil, !queued.isEmpty { pulse = queued.removeFirst() }
     }
 }
