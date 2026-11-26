@@ -104,15 +104,13 @@
                             bundle: .module
                         )
                         .font(theme.type[appendCaptionRole])
+                        .foregroundStyle(theme.colors[.textSecondary])
                         if model.surface != .macPanel {
                             ForEach(earlier) { item in
-                                let text = model.displayedText(of: item)
-                                Text(text.isEmpty ? item.kind.holding(duration: item.duration) : text)
-                                    .font(theme.type[.body])
+                                segment(item, secondaryText: true)
                             }
                         }
                     }
-                    .foregroundStyle(theme.colors[.textSecondary])
                 }
                 if let item = model.items.first(where: { $0.id == justSaved }) {
                     segment(item)
@@ -295,13 +293,13 @@
             return "\(conflict.message)\n\(comparison)"
         }
 
-        private func segment(_ item: SegmentItem) -> some View {
+        private func segment(_ item: SegmentItem, secondaryText: Bool = false) -> some View {
             SegmentView(
                 item,
                 text: model.editConflict(for: .segment(item.id))?.draft ?? model.displayedText(of: item),
                 isShowingOriginal: model.showingOriginal.contains(item.id),
                 playback: playing == item.id ? player.state : .empty,
-                handlers: handlers(for: item))
+                secondaryText: secondaryText, handlers: handlers(for: item))
         }
 
         private func handlers(for item: SegmentItem) -> SegmentHandlers {
