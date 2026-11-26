@@ -1,37 +1,28 @@
 import KnotCore
+import KnotUI
 import SwiftUI
 
-struct SyncPresentation: ViewModifier {
-    let shell: Shell
-    let isFront: Bool
+struct SyncPresentation: View {
+    let question: SyncQuestion
+    let answer: (SyncAnswer) -> Void
 
-    func body(content: Content) -> some View {
-        let question = shell.syncQuestion
-        content.alert(
-            question?.title ?? "iCloud sync",
-            isPresented: Binding(
-                get: { isFront && shell.showsSyncQuestion },
-                set: { _ in }),
-            presenting: question
-        ) { question in
-            Button("Keep sync paused", role: .cancel) { shell.answer(question, .keepPaused) }
-            Button("Upload local notes") { shell.answer(question, .upload) }
-        } message: { _ in
-            Text("Your notes stay on this device. Choose whether to upload them to iCloud.")
+    var body: some View {
+        Banner(message, symbol: symbol) {
+            VStack {
+                Button("Keep sync paused") { answer(.keepPaused) }
+                Button("Upload local notes") { answer(.upload) }
+            }
+            .buttonStyle(.borderless)
         }
     }
-}
 
-extension SyncQuestion {
-    fileprivate var title: LocalizedStringKey {
-        switch self {
-        case .accountChanged: "Your iCloud account changed"
-        case .zoneRemoved: "Notes were removed from iCloud"
-        case .signedOut: "You signed out of iCloud"
-        case .largeDelete: "Many notes were removed from iCloud"
-        case .restoredStore: "Knot restored a kept copy"
-        case .environmentChanged: "The iCloud environment changed"
-        case .recordTooLarge: "Some notes are too large for iCloud"
-        }
+    private var message: String {
+        if case .accountChanged = question { return String(localized: "The iCloud account changed.") }
+        return String(localized: "Notes were removed from iCloud.")
+    }
+
+    private var symbol: String {
+        if case .accountChanged = question { return "person.crop.circle" }
+        return "icloud.slash"
     }
 }

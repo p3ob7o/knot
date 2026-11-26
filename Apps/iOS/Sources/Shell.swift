@@ -30,7 +30,6 @@ final class Shell {
     private(set) var presentsCaptureAtLaunch = true
     private(set) var deletedNote: NoteViewModel?
     private(set) var syncStatus: SyncStatus = .off
-    private var answeredSyncQuestion: SyncQuestion?
     private var preparedLaunch = false
 
     enum Screen: Hashable {
@@ -105,21 +104,18 @@ final class Shell {
     }
 
     var syncQuestion: SyncQuestion? {
-        if case .paused(let question) = syncStatus { return question }
-        return nil
-    }
-
-    var showsSyncQuestion: Bool { syncQuestion != nil && syncQuestion != answeredSyncQuestion }
-
-    func observeSync() async {
-        for await status in environment.sync.statusUpdates() {
-            syncStatus = status
-            if syncQuestion != answeredSyncQuestion { answeredSyncQuestion = nil }
+        switch syncStatus {
+        case .paused(.accountChanged): return .accountChanged
+        case .paused(.zoneRemoved(let reason)): return .zoneRemoved(reason)
+        default: return nil
         }
     }
 
+    func observeSync() async {
+        for await status in environment.sync.statusUpdates() { syncStatus = status }
+    }
+
     func answer(_ question: SyncQuestion, _ answer: SyncAnswer) {
-        answeredSyncQuestion = question
         Task { await environment.sync.answer(question, answer) }
     }
 
@@ -244,6 +240,9 @@ struct ShellView: View {
             .navigationBarTitleDisplayMode(.large)
             .listStyle(.plain)
             .safeAreaInset(edge: .top) {
+                if let question = shell.syncQuestion {
+                    SyncPresentation(question: question) { shell.answer(question, $0) }
+                }
                 if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
                     ProgressView("Syncing notes…")
                 }
@@ -311,7 +310,6 @@ struct ShellView: View {
                 }
                 .presentationDetents([.large])
                 .interactiveDismissDisabled(shell.capture.isEnding)
-                .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == .capture))
                 .onAppear(perform: shell.captureAppeared)
                 .onDisappear(perform: shell.captureDismissed)
             case .settings:
@@ -319,7 +317,6 @@ struct ShellView: View {
                     model: shell.settingsModel(), app: shell.app, close: { shell.sheet = nil },
                     recentlyDeleted: shell.showRecentlyDeleted
                 )
-                .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == .settings))
             }
         }
         .transaction { transaction in
@@ -336,7 +333,6 @@ struct ShellView: View {
             await shell.connect(connection.destination)
         }
         .task { await shell.observeSync() }
-        .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == nil))
         .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in pulse?.feedback }
     }
 }
