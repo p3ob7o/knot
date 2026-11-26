@@ -1,6 +1,7 @@
 import Foundation
-@testable import KnotUI
 import Testing
+
+@testable import KnotUI
 
 @Test func appendCaptionUsesTheRegionalClockWithoutTheDayPeriod() throws {
     var calendar = Calendar(identifier: .gregorian)
