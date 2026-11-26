@@ -27,11 +27,16 @@
         }
 
         private let initialFocus: InitialFocus
+        private let shareSegment: ((SegmentID) -> Void)?
 
-        public init(model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture) {
+        public init(
+            model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
+            shareSegment: ((SegmentID) -> Void)? = nil
+        ) {
             self.model = model
             self.player = player
             self.initialFocus = initialFocus
+            self.shareSegment = shareSegment
         }
 
         public var body: some View {
@@ -306,16 +311,21 @@
                 isShowingOriginal: model.showingOriginal.contains(item.id),
                 playback: player.segment == item.id ? player.state : .empty,
                 secondaryText: secondaryText, initiallyEditing: initialFocus == .segment(item.id),
+                playbackAllowed: model.recording == .idle,
                 handlers: handlers(for: item))
         }
 
         private func handlers(for item: SegmentItem) -> SegmentHandlers {
             SegmentHandlers(
                 edit: { text in model.editText(of: item.id, to: text) },
-                action: { action in model.perform(action, on: item.id) },
+                action: { action in
+                    if action == .shareFile { shareSegment?(item.id) } else { model.perform(action, on: item.id) }
+                },
                 togglePlay: {
                     Task {
-                        guard let file = await model.file(of: item) else { return }
+                        guard model.recording == .idle, let file = await model.file(of: item),
+                            model.recording == .idle
+                        else { return }
                         await player.toggle(file, segment: item.id)
                     }
                 },

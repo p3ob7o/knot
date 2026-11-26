@@ -23,6 +23,7 @@ final class Shell {
     var sheet: Sheet? = .capture
     var isSearching = false
     private(set) var presentsCaptureAtLaunch = true
+    private(set) var deletedNote: NoteViewModel?
 
     enum Screen: Hashable {
         case note(NoteID)
@@ -100,6 +101,20 @@ final class Shell {
         path = [.recentlyDeleted]
     }
 
+    func noteDeleted(_ model: NoteViewModel) {
+        deletedNote = model
+        path = []
+    }
+
+    func undoNoteDeletion() {
+        guard let deletedNote else { return }
+        deletedNote.undo()
+        Task {
+            await deletedNote.settle()
+            if self.deletedNote === deletedNote, !deletedNote.isClosed { self.deletedNote = nil }
+        }
+    }
+
     /// A model for a note opened from the stream. Its field appends to that note (rule 5).
     func noteModel(_ id: NoteID) -> NoteViewModel {
         NoteViewModel(
@@ -119,6 +134,17 @@ struct ShellView: View {
             .navigationTitle("Notes")
             .navigationBarTitleDisplayMode(.large)
             .listStyle(.plain)
+            .safeAreaInset(edge: .bottom) {
+                if let deleted = shell.deletedNote {
+                    if let offer = deleted.undoOffer {
+                        Banner(offer.label, symbol: "arrow.uturn.backward") {
+                            Button("Undo", action: shell.undoNoteDeletion).buttonStyle(.borderless)
+                        }
+                    } else if let problem = deleted.problem {
+                        Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed)
+                    }
+                }
+            }
             .searchable(
                 text: Binding(get: { shell.search.query }, set: shell.search.setQuery),
                 isPresented: $shell.isSearching
@@ -145,7 +171,9 @@ struct ShellView: View {
             .navigationDestination(for: Shell.Screen.self) { screen in
                 switch screen {
                 case .note(let id):
-                    OpenNoteScreen(model: shell.noteModel(id), player: shell.player)
+                    OpenNoteScreen(
+                        model: shell.noteModel(id), player: shell.player, environment: shell.environment,
+                        onDelete: shell.noteDeleted)
                 case .recentlyDeleted:
                     ContentUnavailableView(
                         SettingsRow.recentlyDeleted.title, systemImage: "trash")
@@ -156,7 +184,7 @@ struct ShellView: View {
             switch sheet {
             case .capture:
                 NavigationStack {
-                    NoteScreen(model: shell.capture, player: shell.player)
+                    NoteScreen(model: shell.capture, player: shell.player, environment: shell.environment)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button(action: shell.dismissCapture) {
@@ -206,21 +234,6 @@ private struct SettingsScreen: View {
     }
 }
 
-/// An open note. It keeps the model it was made with for as long as it is on the stack.
-struct OpenNoteScreen: View {
-    @State private var model: NoteViewModel
-    let player: PlayerViewModel
-
-    init(model: NoteViewModel, player: PlayerViewModel) {
-        _model = State(initialValue: model)
-        self.player = player
-    }
-
-    var body: some View {
-        NoteScreen(model: model, player: player)
-    }
-}
-
 /// A note view, the capture surface among them, whose text is flushed when the app goes to
 /// the background and when it ends (docs/product-spec.md §4.1). The flush goes through the
 /// model: leaving the app ends the typed capture, and the model saves what the field holds
@@ -230,15 +243,41 @@ struct NoteScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     let model: NoteViewModel
     let player: PlayerViewModel
+    let environment: AppEnvironment
+    @State private var share: SegmentShare?
+    @State private var shareUnavailable = false
+    @Environment(\.timeZone) private var timeZone
+
+    init(model: NoteViewModel, player: PlayerViewModel, environment: AppEnvironment) {
+        self.model = model
+        self.player = player
+        self.environment = environment
+    }
 
     var body: some View {
-        NoteView(model: model, player: player)
+        NoteView(model: model, player: player, shareSegment: shareSegment)
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { Flush.run(model) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                 Flush.run(model)
             }
+            .sheet(item: $share) { share in SegmentShareSheet(share: share) }
+            .alert("Couldn’t share the file", isPresented: $shareUnavailable) {
+                Button("OK", role: .cancel) {}
+            }
+    }
+
+    private func shareSegment(_ id: SegmentID) {
+        guard let segment = model.record?.liveSegments.first(where: { $0.id == id }) else { return }
+        Task {
+            do {
+                share = try await SegmentShare.make(segment, environment: environment, timeZone: timeZone)
+                shareUnavailable = share == nil
+            } catch {
+                shareUnavailable = true
+            }
+        }
     }
 }
 
