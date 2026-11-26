@@ -99,7 +99,7 @@ public actor StandardCaptureEngine: CaptureEngine {
         /// recording ended (`CaptureState.recordingEnding`).
         var stopEnding: RecordingEnding?
         /// When the recorder's `start` returned, by the engine's clock: when the recording went live
-        /// (`CaptureState.liveSince`).
+        /// (`CaptureState.liveSince`). Cleared once the recorder's stop has returned.
         var liveSince: Date?
     }
 
@@ -554,7 +554,15 @@ public actor StandardCaptureEngine: CaptureEngine {
             try await saveTyped(capture, ending: endedAt ?? clock.now())
             await reach(.afterTypedEnd, capture)
         default:
-            try await endRecording(capture, at: endedAt)
+            do throws(KnotError) {
+                try await endRecording(capture, at: endedAt)
+            } catch {
+                // The recorder has stopped, and the capture stays open: a write of its item failed.
+                // Its state says so, without the time it went live, so that a surface that did not
+                // start the recording learns that the microphone is no longer live.
+                if entries[capture]?.outcome == .open, entries[capture]?.stopEnding != nil { publish(capture) }
+                throw error
+            }
         }
         return publish(capture)
     }
@@ -858,6 +866,9 @@ public actor StandardCaptureEngine: CaptureEngine {
         }
         let audio = await session.stop()
         entries[id]?.stopEnding = audio.ending
+        // The microphone is no longer live: a state published or returned from here has no
+        // `liveSince`, also one an event or a failed write publishes while the capture is open.
+        entries[id]?.liveSince = nil
         let endedAt = time ?? clock.now()
         entries[id]?.durableRevision = max(entry.durableRevision, audio.frames)
         if audio.frames == 0 {
@@ -932,13 +943,9 @@ public actor StandardCaptureEngine: CaptureEngine {
                 entries[id]?.session = nil
                 await reach(.afterRecordingEnded, id)
                 // The row points to the stored asset: its peaks and why it ended are kept, and the
-                // working file can go with the peaks and the manifest beside it. Each call races the
-                // deadline and never fails the end. Across their awaits only `audio`, the stop's own
-                // value, is read, and nothing of the entry after them.
-                if receipt.outcome == .stored {
-                    await peaks.keep(peaks.fromFile(id, frames: audio.frames), of: id, deadline: deadline)
-                    await endings.keep(RecordingEndReason(audio.ending), of: id, deadline: deadline)
-                }
+                // working file can go with the peaks and the manifest beside it. Across the await
+                // only `audio`, the stop's own value, is read, and nothing of the entry after it.
+                if receipt.outcome == .stored { await keepBesideTheStoredEnd(id, audio: audio) }
                 try? await recorder.removeWorkingFile(of: id)
                 try? await queue.enqueue(SegmentID(id))
                 log.capture(id, "recording_ended", .flag("store_path", true), .duration("length", duration))
@@ -968,6 +975,22 @@ public actor StandardCaptureEngine: CaptureEngine {
         await reach(.afterRecordingEnded, id)
         log.capture(id, "recording_ended", .flag("store_path", false), .duration("length", duration))
         runIngest(id)
+    }
+
+    /// Keeps a stored recording's peaks and why it ended, together and under one deadline, before
+    /// its working file goes: after the store has answered the end, the end waits one deadline at
+    /// most, as it did before either was kept (the review of pull request 130, F1). Each call is
+    /// logged as it ends, and a refusal or a miss never fails, ends or holds the capture.
+    private func keepBesideTheStoredEnd(_ id: CaptureID, audio: RecordedAudio) async {
+        let data = peaks.fromFile(id, frames: audio.frames)
+        let reason = RecordingEndReason(audio.ending)
+        guard data != nil || reason != nil else { return }
+        let shared = SharedDeadline(deadline)
+        defer { shared.end() }
+        let (peaks, endings, deadline) = (self.peaks, self.endings, shared.deadline)
+        async let peaksKept: Void = peaks.keep(data, of: id, deadline: deadline)
+        async let endingKept: Void = endings.keep(reason, of: id, deadline: deadline)
+        _ = await (peaksKept, endingKept)
     }
 
     /// A recording whose file could not be made into its stored asset. On the store path its
@@ -1293,10 +1316,11 @@ public actor StandardCaptureEngine: CaptureEngine {
         CaptureOrigin(source: .device(deviceID), surface: surface)
     }
 
-    /// A capture's state. A recording's carries when it went live while it is open, and why it
-    /// ended once it is not: stored, or failed, with the reason its stop gave. A recording stopped at
-    /// its control has none, and neither has one discarded, by `discard` or as empty, which leaves
-    /// no segment to say it.
+    /// A capture's state. A recording's carries when it went live while it is open and its recorder
+    /// has not stopped, and why it ended once it is not open: stored, or failed, with the reason
+    /// its stop gave. A recording stopped at its control has none, and neither has one discarded,
+    /// by `discard` or as empty, also one that ended by itself before its first frame: it leaves no
+    /// segment to say it.
     private func state(of id: CaptureID) -> CaptureState {
         let entry = entries[id]
         let outcome = entry?.outcome ?? .open

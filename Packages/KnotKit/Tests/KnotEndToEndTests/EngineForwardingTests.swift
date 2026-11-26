@@ -173,9 +173,10 @@ struct EngineForwardingTests {
             return
         }
         #expect(ended.recordingEnding == .limitReached)
-        // On the store path the reason is set before the state is published, so it is read once. A
-        // loaded machine can miss the store's deadline, and then ingest stores the recording from
-        // its item and sets the reason after, so the test waits for it.
+        // On the store path the reason is set before the state is published, so it is read once.
+        // The seam's deadline is not the app's 100 ms: it is long enough that the recording takes
+        // `Inbox/` only when the store refused its row or its end. Then ingest stores it from its
+        // item and sets the reason after the state was published, so the test waits for it.
         let held: RecordingEndReason?
         if ended.path == .store {
             held = try await notes.segment(SegmentID(id))?.segment.recordingEnding

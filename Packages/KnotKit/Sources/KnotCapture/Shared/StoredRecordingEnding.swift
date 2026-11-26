@@ -11,6 +11,11 @@ import KnotCore
 /// discarded, has no reason, and nothing is set. A reason never fails, ends or holds a capture: a
 /// store that refuses it is logged by its code, and the capture goes on. No log line names the
 /// reason itself: it is not content, but a line has no field for it, and its capture ID finds it.
+///
+/// Known, and best effort by the brief (the review of pull request 130, K1): a set that is
+/// refused, or that misses its deadline and then fails, loses the reason for good, since the
+/// recorder's manifest goes with the working file and the item goes after ingest. Unlike the
+/// peaks, which the stored audio holds, nothing can make the reason again.
 struct StoredRecordingEnding: Sendable {
     let notes: any NoteStore
     let log: KnotLog

@@ -164,6 +164,8 @@ public struct LaunchRecovery: Sendable {
         let id = recording.captureID
         do throws(KnotError) {
             let row = try await notes.capture(id)
+            // Why it ended, as recovery keeps it: decided once, from the row as the launch found it.
+            let reason = Self.reason(of: recording, row: row)
             switch row?.outcome {
             case .stored? where row?.awaitsItsFile != true, .discardedEmpty?:
                 // Ingest, or the end before the death, stored it: only the working file is left.
@@ -173,7 +175,7 @@ public struct LaunchRecovery: Sendable {
                 // the recorder's manifest: they are kept now. Kept again, they change nothing.
                 if row?.outcome == .stored {
                     await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id)
-                    await keepEndingUnlessHeld(recording)
+                    await keepEndingUnlessHeld(reason, of: id)
                 }
                 try await recorder.removeWorkingFile(of: id)
                 return .workingFileRemoved
@@ -250,9 +252,9 @@ public struct LaunchRecovery: Sendable {
                     item.payloadByteCount = stored.byteCount
                     item.payloadSHA256 = stored.sha256
                     item.peaks = peaks.fromFile(id, frames: recording.frames)
-                    // The reason the recorder's manifest kept, or `recovered` for one a death cut
-                    // short, which that manifest does not say.
-                    item.recordingEnding = RecordingEndReason(recording.ending)
+                    // No row: the reason the recorder's manifest kept, or `recovered` for one a
+                    // death cut short.
+                    item.recordingEnding = reason
                     try items.writeRecording(item)
                     try await recorder.removeWorkingFile(of: id)
                     log.capture(id, "recording_handed_to_inbox", .code(code))
@@ -267,11 +269,10 @@ public struct LaunchRecovery: Sendable {
                 outcome = result.receipt.outcome
             }
             // The row points to the asset: its peaks and why it ended are kept before the working
-            // file goes. The reason is the one the recorder's manifest kept, or `recovered` for a
-            // recording a death cut short (`Recorder.recoverOrphans`).
+            // file goes (`reason(of:row:)`).
             if outcome == .stored {
                 await peaks.keep(peaks.fromFile(id, frames: recording.frames), of: id)
-                await endings.keep(RecordingEndReason(recording.ending), of: id)
+                await endings.keep(reason, of: id)
             }
             try await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
@@ -283,15 +284,28 @@ public struct LaunchRecovery: Sendable {
         }
     }
 
-    /// Keeps why a stored recording ended, from its orphan, unless its segment holds a reason
-    /// already. The end that stored it knew the reason first-hand, and the orphan's can only be
-    /// the same or poorer: `recovered` when the recorder could not mark its manifest at the end
-    /// (`recording_manifest_not_marked`), though the recording ended alive. A segment that holds
-    /// none takes the orphan's: a death came between the end and the set, and the reason is kept
-    /// now. A read that fails sets nothing, and the working file goes as before.
-    private func keepEndingUnlessHeld(_ recording: RecordedAudio) async {
-        guard let reason = RecordingEndReason(recording.ending) else { return }
-        let id = recording.captureID
+    /// Why a recording that recovery finds ended, as recovery keeps it (the orchestrator's ruling on
+    /// pull request 130, B2). `recovered` is the reason of a recording whose capture had no end in
+    /// the store when the launch found it: no row, or an open one. A row that shows an end,
+    /// stored, failed, or ended with its file not yet stored, says the end ran alive. Then the
+    /// reason is the one the recorder's manifest carries, and none when it carries none or was
+    /// never marked: an unmarked manifest (`recording_manifest_not_marked`) reads as `recovered`
+    /// through the recorder's port, and says nothing of how a recording that ended alive ended.
+    ///
+    /// A reason that a newer build wrote reads as a stop through the recorder's port, as pull
+    /// request 128 ruled, so recovery keeps none for it.
+    private static func reason(of recording: RecordedAudio, row: Capture?) -> RecordingEndReason? {
+        guard let reason = RecordingEndReason(recording.ending) else { return nil }
+        if reason == .recovered, let row, row.outcome != .open { return nil }
+        return reason
+    }
+
+    /// Keeps why a stored recording ended, unless its segment holds a reason already: a death came
+    /// between the end and its set, and the reason the recorder's manifest carries is kept now. A
+    /// read that fails sets nothing, and the working file goes as before. The guard is a read and
+    /// then a write: one process's launch has no second writer of the segment.
+    private func keepEndingUnlessHeld(_ reason: RecordingEndReason?, of id: CaptureID) async {
+        guard let reason else { return }
         do throws(KnotError) {
             guard try await notes.segment(SegmentID(id))?.segment.recordingEnding == nil else { return }
         } catch {

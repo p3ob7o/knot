@@ -10,13 +10,18 @@ import Testing
 /// A recording that ends by itself has a reason, and its voice segment keeps it on every path the
 /// recording takes to the store: the engine's end (`NoteStore.setRecordingEnding(_:of:)`), its
 /// `Inbox/` item (`CaptureManifest.recordingEnding`), ingest of that item, and launch recovery,
-/// which gives one a death cut short `recovered`. The engine's state carries the reason once the
-/// capture is no longer open (`CaptureState.recordingEnding`), and the time the recorder's start
-/// returned while it is open and live (`CaptureState.liveSince`). A stop at the control and a
-/// discard have no reason, and set none. The reason never fails, ends or holds a capture.
+/// which gives `recovered` only to a recording whose capture had no end in the store. The engine's
+/// state carries the reason once the capture is no longer open (`CaptureState.recordingEnding`),
+/// and the time the recorder's start returned while the recording is open and the recorder has
+/// not stopped (`CaptureState.liveSince`). A stop at the control and a discard have no reason,
+/// and set none. The reason never fails, ends or holds a capture.
 ///
 /// The scripted recorder ends a recording by itself after its buffers, with the ending a test
 /// scripts, and writes the reason into its own manifest as the live recorder does.
+///
+/// Every wait ends through `SuiteWait`, every direct call a test relies on is bounded by it, a
+/// precondition is required before a test waits on what depends on it, and every gate and kill
+/// switch is released by a `defer`.
 @Suite struct RecordingEndingTests {
     /// The two endings by itself that M2 asks of first: the 30-minute limit and a call.
     static let endings: [(RecordingEnding, RecordingEndReason)] = [
@@ -30,7 +35,7 @@ import Testing
 
     /// The first state the engine publishes for `capture` that is no longer open.
     private static func ended(_ states: AsyncStream<CaptureState>, _ capture: CaptureID) async -> CaptureState? {
-        await SuiteWait.value("the recording to end by itself") { () async -> CaptureState? in
+        await SuiteWait.value("the recording to end") { () async -> CaptureState? in
             for await state in states where state.captureID == capture && state.outcome != .open { return state }
             return nil
         } ?? nil
@@ -41,18 +46,46 @@ import Testing
         (try? r.layer.read(r.locations.recordingManifest(capture))).flatMap { try? CaptureManifest.decode($0) }
     }
 
+    /// Writes the recorder's manifest back as its start wrote it, with no end's time and no reason:
+    /// a recorder that could not mark it at the end (`recording_manifest_not_marked`).
+    private static func unmark(_ r: Rig, _ capture: CaptureID) throws {
+        var unmarked = try #require(recorderManifest(r, capture))
+        unmarked.endedAt = nil
+        unmarked.duration = nil
+        unmarked.recordingEnding = nil
+        try r.layer.write(try unmarked.encoded(), to: r.locations.recordingManifest(capture))
+        try r.layer.syncFile(r.locations.recordingManifest(capture))
+    }
+
+    /// Runs the next launch's recovery, and its ingest, within `SuiteWait`'s limit.
+    @discardableResult
+    private static func recover(_ next: Rig) async throws -> [CaptureID: LaunchRecovery.Outcome] {
+        let (recovery, ingest) = (next.recovery, next.ingest)
+        return try await within("the next launch's recovery") { try await recovery.run(ingest: ingest) }
+    }
+
     // MARK: The store path
 
     /// A recording that ends by itself on the store path: the state the engine publishes carries
-    /// the reason, and the stored segment holds it, set before the working file went.
+    /// the reason, and the stored segment holds it, set before the working file goes.
     @Test(arguments: endings)
     func anEndByItselfOnTheStorePathKeepsItsReason(_ ending: RecordingEnding, _ reason: RecordingEndReason)
         async throws
     {
         let r = Rig()
         r.recorder.setScript(.init(buffers: 3, endsBySelf: ending))
-        let states = r.engine.states()
-        let begun = try await r.engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let recorder = SteeredRecorder(r.recorder)
+        let atRemoval = Mutex<RecordingEndReason??>(nil)
+        let notes = r.notes
+        recorder.beforeRemoval.withLock {
+            $0 = { capture in
+                let held = try? await notes.segment(SegmentID(capture))?.segment.recordingEnding
+                atRemoval.withLock { $0 = .some(held) }
+            }
+        }
+        let engine = r.engine(recorder: recorder)
+        let states = engine.states()
+        let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
         let id = begun.captureID
         #expect(begun.path == .store)
         let state = try #require(await Self.ended(states, id))
@@ -61,10 +94,7 @@ import Testing
         #expect(state.liveSince == nil, "Not live once it ended.")
         #expect(try await Self.held(r, id) == reason)
         #expect(r.logs.logged("recording_ending_kept", id))
-        #expect(
-            await eventually("the working file to go") {
-                !r.layer.exists(r.locations.recordingAudio(id, format: .caf))
-            })
+        #expect(atRemoval.withLock { $0 } == .some(reason), "The reason was held when the working file went.")
     }
 
     /// A stop at the control and a discard have no reason: the state carries none, the store is
@@ -83,6 +113,23 @@ import Testing
         #expect(!r.logs.lines.contains { $0.contains("recording_ending") })
     }
 
+    /// An end by itself before the first frame, by an interruption or a lost input: the capture is
+    /// discarded as empty, and it leaves no segment, so nothing says why. No reason in the state,
+    /// no `liveSince`, no reason in the store, and no line of the reason's in the log.
+    @Test(arguments: [RecordingEnding.interrupted, .inputLost])
+    func anEndByItselfWithNoFrameIsDiscardedWithNoReason(_ ending: RecordingEnding) async throws {
+        let r = Rig()
+        r.recorder.setScript(.init(buffers: 0, endsBySelf: ending))
+        let states = r.engine.states()
+        let begun = try await r.engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let state = try #require(await Self.ended(states, begun.captureID))
+        #expect(state.outcome == .discardedEmpty)
+        #expect(state.recordingEnding == nil)
+        #expect(state.liveSince == nil)
+        #expect(try await Self.held(r, begun.captureID) == nil)
+        #expect(!r.logs.lines.contains { $0.contains("recording_ending") })
+    }
+
     /// The state a press returns carries the reason too. The recording ended by itself, and the
     /// press that stops it comes before the engine heard of the end, so the stop the press makes
     /// is the one that meets it.
@@ -97,7 +144,7 @@ import Testing
         let id = started.captureID
         #expect(started.liveSince == r.clock.now())
         #expect(started.recordingEnding == nil)
-        #expect(
+        try #require(
             await eventually("the recording to end by itself") {
                 Self.recorderManifest(r, id)?.recordingEnding == .limitReached
             })
@@ -160,6 +207,7 @@ import Testing
         r.recorder.setScript(.init(buffers: 3, endsBySelf: .interrupted))
         let gate = Gate()
         gate.close()
+        defer { gate.open() }
         var store = ChaosStore(store: r.notes) {}
         store.holdRecordingEnding = { await gate.pass() }
         let manual = ManualDeadline()
@@ -171,16 +219,20 @@ import Testing
         let states = engine.states()
         let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
         let id = begun.captureID
-        #expect(await eventually("the set of the reason to be held") { gate.isHolding })
-        await manual.expireNext()
+        let workingFile = r.locations.recordingAudio(id, format: .caf)
+        // An end that never asks for the set removes the working file at once: the wait ends then.
+        try #require(
+            await eventually("the set of the reason to be held, or the end to go on without it") {
+                gate.isHolding || !r.layer.exists(workingFile)
+            })
+        try #require(gate.isHolding, "The engine did not ask the store for the reason.")
+        try #require(await eventually("the set's deadline to wait") { manual.waitingCount > 0 })
+        manual.expire()
         let state = try #require(await Self.ended(states, id))
         #expect(state.outcome == .stored)
         #expect(state.recordingEnding == .interrupted)
         #expect(try await r.notes.capture(id)?.outcome == .stored)
-        #expect(
-            await eventually("the working file to go") {
-                !r.layer.exists(r.locations.recordingAudio(id, format: .caf))
-            })
+        #expect(!r.layer.exists(workingFile), "The working file went before the end returned.")
         #expect(r.logs.lines.contains("recording_ending_not_kept capture=\(id) code=store_not_open"))
         gate.open()
         #expect(await eventually("the held call to land") { (try? await Self.held(r, id)) == .interrupted })
@@ -208,7 +260,8 @@ import Testing
         let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(id)))
         #expect(item.recordingEnding == reason, "The item carries the reason.")
         #expect(try await Self.held(r, id) == nil, "Nothing is stored before ingest.")
-        _ = await r.ingest.ingestAll()
+        let ingest = r.ingest
+        _ = try await within("ingest") { await ingest.ingestAll() }
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(try await Self.held(r, id) == reason)
         #expect(r.logs.logged("recording_ending_kept", id))
@@ -225,9 +278,78 @@ import Testing
         #expect(state.recordingEnding == nil)
         let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(begun.captureID)))
         #expect(item.recordingEnding == nil)
-        _ = await r.ingest.ingestAll()
+        let ingest = r.ingest
+        _ = try await within("ingest") { await ingest.ingestAll() }
         #expect(try await r.notes.capture(begun.captureID)?.outcome == .stored)
         #expect(try await Self.held(r, begun.captureID) == nil)
+    }
+
+    /// Ingest keeps the reason before the item goes: when the store is asked for it, the item is
+    /// still in `Inbox/`.
+    @Test func ingestSetsTheReasonBeforeTheItemGoes() async throws {
+        let r = Rig(engineIngests: false)
+        r.recorder.setScript(.init(buffers: 3, endsBySelf: .limitReached))
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        let states = r.engine.states()
+        let begun = try await r.engine.begin(CaptureRequest(kind: .voice, surface: .app))
+        let id = begun.captureID
+        _ = try #require(await Self.ended(states, id))
+        let item = r.locations.inboxManifest(id)
+        try #require(r.layer.exists(item))
+        let itemAtTheSet = Mutex<Bool?>(nil)
+        let layer = r.layer
+        var store = ChaosStore(store: r.notes) {}
+        store.holdRecordingEnding = { itemAtTheSet.withLock { $0 = layer.exists(item) } }
+        let ingest = InboxIngest(
+            notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock,
+            launchID: r.launchID, locations: r.locations, layer: r.layer, log: KnotLog(.capture, sink: r.logs))
+        _ = try await within("ingest") { await ingest.ingestAll() }
+        #expect(itemAtTheSet.withLock { $0 } == true, "The item was gone when the reason was set.")
+        #expect(try await Self.held(r, id) == .limitReached)
+        #expect(!r.layer.exists(item))
+    }
+
+    /// The review of pull request 130, B1. An item that recovery handed to `Inbox/` is the only
+    /// copy of its reason on a drive: the working file and the recorder's manifest went. Ingest
+    /// stores the row, and dies while the store holds the set of the reason. The item is still
+    /// there, and the next launch's ingest stores it again and sets the reason.
+    @Test func aDeathBeforeIngestSetsTheReasonLeavesTheItem() async throws {
+        let r = Rig(engineIngests: false)
+        await r.notes.setWindow(.off)
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        _ = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .macPanel, text: "draft"))
+        r.clock.advance(by: 1)
+        let recording = try await r.beginRecording()
+        let id = recording.captureID
+        try #require(recording.path == .inbox(KnotError.storeBusy.code))
+        // The process dies here, mid-recording.
+        r.clock.advance(by: 5)
+        let next = r.relaunch()
+        await next.notes.failNextCaptureWrites(with: .writeFailed)
+        let outcomes = try await Self.recover(next)
+        try #require(outcomes[id] == .movedToInbox(KnotError.writeFailed.code))
+        try #require(!r.layer.exists(r.locations.recordingManifest(id)), "The item is the reason's only copy.")
+        // The next launch's ingest, over a store that holds the set of the reason: it dies there.
+        let gate = Gate()
+        gate.close()
+        defer { gate.open() }
+        var store = ChaosStore(store: r.notes) {}
+        store.holdRecordingEnding = { await gate.pass() }
+        let dying = InboxIngest(
+            notes: store, assets: r.assets, recorder: r.recorder, queue: next.queue, clock: r.clock,
+            launchID: next.launchID, locations: r.locations, layer: r.layer, log: KnotLog(.capture, sink: r.logs))
+        let run = Task { await dying.ingestAll() }
+        try #require(await eventually("the set of the reason to be held") { gate.isHolding })
+        #expect(try await r.notes.capture(id)?.outcome == .stored, "The row is stored.")
+        #expect(r.layer.exists(r.locations.inboxManifest(id)), "The item is still there.")
+        // The launch after it.
+        let third = next.relaunch()
+        let ingest = third.ingest
+        _ = try await within("the next ingest") { await ingest.ingestAll() }
+        #expect(try await Self.held(r, id) == .recovered)
+        #expect(!r.layer.exists(r.locations.inboxManifest(id)))
+        gate.open()
+        _ = try await within("the dead launch's ingest") { await run.value }
     }
 
     // MARK: Launch recovery
@@ -243,48 +365,98 @@ import Testing
         r.recorder.setScript(.init(buffers: 3, endsBySelf: ending))
         let kill = KillSwitch()
         kill.arm(.afterRecordingEnded)
-        let engine = r.engine(killPoint: kill.hook, ingests: false)
+        defer { kill.release() }
+        let engine = BoundedEngine(r.engine(killPoint: kill.hook, ingests: false))
         let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
         let id = begun.captureID
-        #expect(try #require(await kill.untilKilled()) == id)
+        try #require(try #require(await kill.untilKilled()) == id)
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(try await Self.held(r, id) == nil, "The end came, not the set.")
         #expect(Self.recorderManifest(r, id)?.recordingEnding == reason, "The recorder's manifest keeps it.")
-        let next = r.relaunch()
-        _ = try await next.recovery.run(ingest: next.ingest)
+        try await Self.recover(r.relaunch())
         #expect(try await Self.held(r, id) == reason)
         #expect(!r.layer.exists(r.locations.recordingAudio(id, format: .caf)), "The working file went after.")
         kill.release()
         #expect(await eventually("the dead launch's end") { r.logs.logged("recording_ended", id) })
     }
 
-    /// A recording whose recorder could not mark its manifest at the end, so that its orphan reads
-    /// as cut short by a death, though it ended alive. Recovery finds the row stored: a reason the
-    /// end set stays, and a segment that holds none takes `recovered`, all its orphan can say.
-    @Test(arguments: [false, true])
-    func anUnmarkedManifestNeverReplacesAReasonTheEndSet(setBeforeTheDeath: Bool) async throws {
+    /// The orchestrator's ruling on pull request 130, B2. A recording whose recorder could not mark
+    /// its manifest at the end, though it ended alive: its orphan reads as `recovered` through the
+    /// recorder's port. Recovery finds the row stored, an end that ran alive, and keeps no
+    /// `recovered`: a reason the end set stays, and a segment that holds none keeps none, for a
+    /// recording that ended by itself as for one stopped at its control.
+    @Test(arguments: [(RecordingEnding?.some(.limitReached), false), (.limitReached, true), (nil, false)])
+    func anUnmarkedManifestOfARecordingThatEndedAliveIsNotRecovered(
+        _ ending: RecordingEnding?, setBeforeTheDeath: Bool
+    ) async throws {
         let r = Rig(engineIngests: false)
-        r.recorder.setScript(.init(buffers: 3, endsBySelf: .limitReached))
+        if let ending { r.recorder.setScript(.init(buffers: 3, endsBySelf: ending)) }
         let kill = KillSwitch()
         kill.arm(.afterRecordingEnded)
-        let engine = r.engine(killPoint: kill.hook, ingests: false)
-        let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
-        let id = begun.captureID
-        #expect(try #require(await kill.untilKilled()) == id)
+        defer { kill.release() }
+        let engine = BoundedEngine(r.engine(killPoint: kill.hook, ingests: false))
+        let id: CaptureID
+        var stopping: Task<CaptureState?, Never>?
+        if ending == nil {
+            id = try await r.beginRecording(on: engine).captureID
+            r.clock.advance(by: 2)
+            stopping = Task { try? await engine.end(id) }
+        } else {
+            id = try await engine.begin(CaptureRequest(kind: .voice, surface: .app)).captureID
+        }
+        try #require(try #require(await kill.untilKilled()) == id)
         if setBeforeTheDeath { try await r.notes.setRecordingEnding(.limitReached, of: SegmentID(id)) }
-        // The manifest as the start wrote it: no end's time, no reason.
-        var unmarked = try #require(Self.recorderManifest(r, id))
-        unmarked.endedAt = nil
-        unmarked.duration = nil
-        unmarked.recordingEnding = nil
-        try r.layer.write(try unmarked.encoded(), to: r.locations.recordingManifest(id))
-        try r.layer.syncFile(r.locations.recordingManifest(id))
-        let next = r.relaunch()
-        _ = try await next.recovery.run(ingest: next.ingest)
-        #expect(try await Self.held(r, id) == (setBeforeTheDeath ? .limitReached : .recovered))
+        try Self.unmark(r, id)
+        try await Self.recover(r.relaunch())
+        #expect(try await Self.held(r, id) == (setBeforeTheDeath ? .limitReached : nil))
         #expect(!r.layer.exists(r.locations.recordingAudio(id, format: .caf)))
         kill.release()
-        #expect(await eventually("the dead launch's end") { r.logs.logged("recording_ended", id) })
+        if let stopping { _ = try await within("the dead launch's stop") { await stopping.value } }
+    }
+
+    /// A recording stopped at its control whose conversion failed: its row ends failed, an end
+    /// that ran alive. Its manifest was not marked, and at the next launch recovery converts it and
+    /// stores the row: it keeps no reason, not `recovered`.
+    @Test func aFailedRowWithAnUnmarkedManifestIsNotRecovered() async throws {
+        let r = Rig(engineIngests: false)
+        r.recorder.failNextConversions(with: .conversionFailed)
+        let begun = try await r.beginRecording()
+        r.clock.advance(by: 2)
+        let ended = try await r.engine.end(begun.captureID)
+        try #require(ended.outcome == .failed(KnotError.conversionFailed.code))
+        try Self.unmark(r, begun.captureID)
+        let outcomes = try await Self.recover(r.relaunch())
+        #expect(outcomes[begun.captureID] == .ended(.stored))
+        #expect(try await Self.held(r, begun.captureID) == nil)
+    }
+
+    /// The orphan's own reason. A recording killed before its conversion, its row open: one that
+    /// ended by itself comes back with the reason its recorder's manifest kept, and one stopped at
+    /// its control with none.
+    @Test(arguments: [RecordingEnding?.some(.limitReached), .interrupted, nil])
+    func aRecordingKilledBeforeItsConversionKeepsItsOwnReason(_ ending: RecordingEnding?) async throws {
+        let r = Rig(engineIngests: false)
+        if let ending { r.recorder.setScript(.init(buffers: 3, endsBySelf: ending)) }
+        let kill = KillSwitch()
+        kill.arm(.beforeConversion)
+        defer { kill.release() }
+        let engine = BoundedEngine(r.engine(killPoint: kill.hook, ingests: false))
+        let id: CaptureID
+        var stopping: Task<CaptureState?, Never>?
+        if ending == nil {
+            id = try await r.beginRecording(on: engine).captureID
+            r.clock.advance(by: 2)
+            stopping = Task { try? await engine.end(id) }
+        } else {
+            id = try await engine.begin(CaptureRequest(kind: .voice, surface: .app)).captureID
+        }
+        try #require(try #require(await kill.untilKilled()) == id)
+        try #require(try await r.notes.capture(id)?.outcome == .open)
+        let outcomes = try await Self.recover(r.relaunch())
+        #expect(outcomes[id] == .ended(.stored))
+        #expect(try await Self.held(r, id) == ending.flatMap { RecordingEndReason($0) })
+        kill.release()
+        if let stopping { _ = try await within("the dead launch's stop") { await stopping.value } }
     }
 
     /// A recording that a death cut short, its row open: recovery stores it, and its segment says
@@ -296,8 +468,7 @@ import Testing
         #expect(recording.path == .store)
         // The process dies here, mid-recording.
         r.clock.advance(by: 5)
-        let next = r.relaunch()
-        let outcomes = try await next.recovery.run(ingest: next.ingest)
+        let outcomes = try await Self.recover(r.relaunch())
         #expect(outcomes[id] == .ended(.stored))
         #expect(try await Self.held(r, id) == .recovered)
     }
@@ -318,12 +489,13 @@ import Testing
         r.clock.advance(by: 5)
         let next = r.relaunch()
         await next.notes.failNextCaptureWrites(with: .writeFailed)
-        let outcomes = try await next.recovery.run(ingest: next.ingest)
-        #expect(outcomes[id] == .movedToInbox(KnotError.writeFailed.code))
+        let outcomes = try await Self.recover(next)
+        try #require(outcomes[id] == .movedToInbox(KnotError.writeFailed.code))
         let item = try CaptureManifest.decode(try r.layer.read(r.locations.inboxManifest(id)))
         #expect(item.recordingEnding == .recovered)
         #expect(!r.layer.exists(r.locations.recordingManifest(id)), "The recorder's manifest went.")
-        _ = await next.ingest.ingestAll()
+        let ingest = next.ingest
+        _ = try await within("ingest") { await ingest.ingestAll() }
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(try await Self.held(r, id) == .recovered)
     }
@@ -340,6 +512,10 @@ import Testing
         let recorder = SteeredRecorder(r.recorder)
         recorder.startGate.close()
         recorder.eventsGate.close()
+        defer {
+            recorder.startGate.open()
+            recorder.eventsGate.open()
+        }
         let engine = r.engine(recorder: recorder)
         let seen = Mutex<[CaptureState]>([])
         let states = engine.states()
@@ -348,7 +524,7 @@ import Testing
         }
         defer { watcher.cancel() }
         let beginning = Task { try await engine.begin(CaptureRequest(kind: .voice, surface: .app)) }
-        #expect(await eventually("the recorder's start to be held") { recorder.startGate.isHolding })
+        try #require(await eventually("the recorder's start to be held") { recorder.startGate.isHolding })
         #expect(seen.withLock { $0.isEmpty }, "Nothing of the recording is published before it is live.")
         r.clock.advance(by: 3)
         let live = r.clock.now()
@@ -358,7 +534,7 @@ import Testing
         #expect(begun.liveSince == live)
         r.clock.advance(by: 7)
         recorder.eventsGate.open()
-        #expect(
+        try #require(
             await eventually("a durable state") {
                 seen.withLock { $0.contains { $0.captureID == id && $0.durableRevision > 0 } }
             })
@@ -367,7 +543,7 @@ import Testing
         let ended = try await engine.end(id)
         #expect(ended.outcome == .stored)
         #expect(ended.liveSince == nil)
-        #expect(
+        try #require(
             await eventually("the ended state to be seen") {
                 seen.withLock { $0.contains { $0.captureID == id && $0.outcome != .open } }
             })
@@ -378,37 +554,148 @@ import Testing
         #expect(mine.filter { $0.outcome != .open }.allSatisfy { $0.liveSince == nil })
     }
 
-    /// A typed capture is never live and has no reason.
+    /// The review of pull request 130, F2. Once the recorder's stop has returned, the microphone is
+    /// no longer live, though the capture is open while its recording converts and is stored. A
+    /// state published then has no `liveSince`. The test holds the conversion, and gives the
+    /// engine a durable report while it is held, as the recorder's last one can reach it after the
+    /// stop returned.
+    @Test func liveSinceGoesWhenTheRecorderHasStopped() async throws {
+        let r = Rig()
+        let recorder = SteeredRecorder(r.recorder)
+        let engine = r.engine(recorder: recorder)
+        let begun = try await r.beginRecording(on: engine)
+        let id = begun.captureID
+        try #require(begun.liveSince != nil)
+        let states = engine.states()
+        // The session's own events wait, its end among them, so that its stream is still open
+        // when the test gives the engine the late report.
+        recorder.eventsGate.close()
+        recorder.conversionGate.close()
+        defer {
+            recorder.conversionGate.open()
+            recorder.eventsGate.open()
+        }
+        let returned = Mutex<String?>(nil)
+        let ending = Task { () throws -> CaptureState in
+            let result: Result<CaptureState, KnotError>
+            do throws(KnotError) {
+                result = .success(try await engine.end(id))
+            } catch {
+                result = .failure(error)
+            }
+            returned.withLock { $0 = String(describing: result) }
+            return try result.get()
+        }
+        // An end that never converts returns: the wait ends then.
+        try #require(
+            await eventually("the conversion to be held, or the end to return") {
+                recorder.conversionGate.isHolding || returned.withLock { $0 } != nil
+            })
+        try #require(
+            recorder.conversionGate.isHolding,
+            "The end returned before its conversion: \(returned.withLock { $0 } ?? "nothing").")
+        let session = try #require(recorder.session(id))
+        let frames: Int64 = 1_000_000
+        session.inject(.durable(frames: frames))
+        let during = await SuiteWait.value("the state of the late report") { () async -> CaptureState? in
+            for await state in states where state.captureID == id && state.durableRevision == frames { return state }
+            return nil
+        }
+        let state = try #require(during ?? nil)
+        #expect(state.outcome == .open)
+        #expect(state.liveSince == nil, "The recorder has stopped: the microphone is not live.")
+        recorder.conversionGate.open()
+        let ended = try await ending.value
+        #expect(ended.outcome == .stored)
+        #expect(ended.liveSince == nil)
+    }
+
+    /// The review of pull request 130, F2. An end whose write of its `Inbox/` item fails leaves the
+    /// capture open, with its recording on the drive. The engine publishes its state as it throws,
+    /// without `liveSince`, so that a surface that did not start the recording learns that the
+    /// microphone is no longer live. The next end stores it.
+    @Test func aFailedWriteOfTheItemPublishesAStateThatIsNotLive() async throws {
+        let r = Rig()
+        let recorder = DiskFillsAfterConversion(r.recorder, layer: r.layer)
+        let engine = r.engine(recorder: recorder)
+        let begun = try await r.beginRecording(on: engine)
+        let id = begun.captureID
+        let states = engine.states()
+        await r.notes.failNextCaptureWrites(with: .storeBusy)
+        recorder.armed.withLock { $0 = true }
+        try #require(await expectError(.diskFull) { try await engine.end(id) } != nil)
+        let stored = try await engine.end(id)
+        try #require(stored.outcome == .stored)
+        // The states in the order the engine published them, up to the stored one.
+        let published = await SuiteWait.value("the states up to the stored one") { () async -> [CaptureState] in
+            var mine: [CaptureState] = []
+            for await state in states where state.captureID == id {
+                mine.append(state)
+                if state.outcome != .open { break }
+            }
+            return mine
+        }
+        let mine = try #require(published)
+        let lastOpen = try #require(mine.last { $0.outcome == .open }, "No open state was published.")
+        #expect(lastOpen.liveSince == nil, "The state published as the end threw says it is still live.")
+    }
+
+    /// A typed capture is never live and has no reason, open or ended.
     @Test func aTypedCaptureHasNeither() async throws {
         let r = Rig()
         let begun = try await r.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "synthetic"))
         #expect(begun.liveSince == nil)
+        #expect(begun.recordingEnding == nil)
         let ended = try await r.engine.end(begun.captureID)
         #expect(ended.liveSince == nil)
         #expect(ended.recordingEnding == nil)
     }
 }
 
+/// Runs `body`, a direct call whose return a test relies on, within `SuiteWait`'s limit. After
+/// it, records that it waited for `what`, and throws.
+private func within<T: Sendable>(
+    _ what: String, sourceLocation: SourceLocation = #_sourceLocation,
+    _ body: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    let answer = await SuiteWait.value(what, sourceLocation: sourceLocation) { () async -> Result<T, any Error> in
+        do {
+            return .success(try await body())
+        } catch {
+            return .failure(error)
+        }
+    }
+    guard let answer else { throw KnotError.unexpected }
+    return try answer.get()
+}
+
 /// The scripted recorder, steered by the test. While `startGate` is closed, a start waits at it
 /// once the recorder's own start has returned, before it returns to the engine. While
-/// `eventsGate` is closed, a session's events wait at it before they reach the engine. With
-/// `quietEnd`, a session never tells the engine that it ended: a test then stops a recording
-/// that ended by itself before the engine heard of it.
+/// `eventsGate` is closed, a session's events wait at it before they reach the engine. While
+/// `conversionGate` is closed, a conversion waits at it. `beforeRemoval` runs as a removal of a
+/// working file begins. With `quietEnd`, a session never tells the engine that it ended: a test
+/// then stops a recording that ended by itself before the engine heard of it.
 final class SteeredRecorder: Recorder, Sendable {
     let base: ScriptedRecorder
     let quietEnd: Bool
     let startGate = Gate()
     let eventsGate = Gate()
+    let conversionGate = Gate()
+    let beforeRemoval = Mutex<(@Sendable (CaptureID) async -> Void)?>(nil)
+    private let sessions = Mutex<[CaptureID: SteeredSession]>([:])
 
     init(_ base: ScriptedRecorder, quietEnd: Bool = false) {
         self.base = base
         self.quietEnd = quietEnd
     }
 
+    func session(_ capture: CaptureID) -> SteeredSession? { sessions.withLock { $0[capture] } }
+
     func prepare() async { await base.prepare() }
 
     func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         let session = SteeredSession(try await base.start(request), gate: eventsGate, quietEnd: quietEnd)
+        sessions.withLock { $0[request.captureID] = session }
         await startGate.pass()
         return session
     }
@@ -418,37 +705,43 @@ final class SteeredRecorder: Recorder, Sendable {
     }
 
     func convert(_ recording: RecordedAudio) async throws(KnotError) -> ConvertedRecording {
-        try await base.convert(recording)
+        await conversionGate.pass()
+        return try await base.convert(recording)
     }
 
     func removeWorkingFile(of capture: CaptureID) async throws(KnotError) {
+        if let hook = beforeRemoval.withLock({ $0 }) { await hook(capture) }
         try await base.removeWorkingFile(of: capture)
     }
 }
 
-/// A session whose events pass a gate, and leave out its end when it is quiet.
+/// A session whose events pass a gate, and leave out its end when it is quiet. A test may give
+/// the engine an event of its own, past the gate.
 final class SteeredSession: RecordingSession, Sendable {
     private let base: any RecordingSession
     let events: AsyncStream<RecordingEvent>
+    private let continuation: AsyncStream<RecordingEvent>.Continuation
 
     init(_ base: any RecordingSession, gate: Gate, quietEnd: Bool) {
         self.base = base
+        (events, continuation) = AsyncStream.makeStream(of: RecordingEvent.self)
         let baseEvents = base.events
-        events = AsyncStream { continuation in
-            let task = Task {
-                for await event in baseEvents {
-                    await gate.pass()
-                    if quietEnd, case .ended = event { continue }
-                    continuation.yield(event)
-                }
-                continuation.finish()
+        let task = Task { [continuation] in
+            for await event in baseEvents {
+                await gate.pass()
+                if quietEnd, case .ended = event { continue }
+                continuation.yield(event)
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.finish()
         }
+        continuation.onTermination = { _ in task.cancel() }
     }
 
     var captureID: CaptureID { base.captureID }
     var liveAudio: AsyncStream<AudioChunk> { base.liveAudio }
+
+    /// Gives the engine `event` at once, past the gate.
+    func inject(_ event: RecordingEvent) { continuation.yield(event) }
 
     func stop() async -> RecordedAudio { await base.stop() }
 
