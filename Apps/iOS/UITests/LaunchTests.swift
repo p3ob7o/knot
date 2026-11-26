@@ -247,6 +247,15 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(about.isEnabled)
         try app.auditAccessibility()
 
+        let variant = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "English variant")).firstMatch
+        XCTAssertTrue(variant.waitForExistence(timeout: limit))
+        XCTAssertEqual(variant.value as? String, "Follow the region")
+        variant.tap()
+        let choices = app.navigationBars["English variant"]
+        XCTAssertTrue(choices.waitForExistence(timeout: limit))
+        try app.auditAccessibility()
+        choices.buttons["Settings"].tap()
+
         about.tap()
         let aboutPage = app.navigationBars["About Knot"]
         XCTAssertTrue(aboutPage.waitForExistence(timeout: limit))
@@ -277,7 +286,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         let about = app.buttons["About"]
         XCTAssertTrue(about.waitForExistence(timeout: limit))
         XCTAssertTrue(about.isEnabled)
-        app.buttons["settings.actionButtonSetup"].tap()
+        app.buttons["Action Button setup"].tap()
         XCTAssertTrue(app.navigationBars["Record with the Action Button"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }

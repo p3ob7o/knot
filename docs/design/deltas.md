@@ -172,4 +172,5 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-30 PR 2 | The first speech-model download | The capture sheet uses a system progress view while the model is missing or installing. |
 | 2026-11-26 | WP-30 PR 2 | The chooser before sharing an attachment | A system sheet offers Share file and opens the system share sheet. |
 | 2026-11-26 | WP-30 PR 2 | An attachment that could not be shared | A system alert says the file could not be shared. |
+| 2026-11-26 | WP-30 PR 2 | The English variant setting at the largest text sizes | The iOS system navigation-link picker stacks the label and value at accessibility sizes and shows the full option names on the next screen. |
 | 2026-11-26 | WP-30 PR 2 | Notes while the capture sheet is down and the microphone is live | A notice shows Recording, elapsed time when known, and Show to reopen the sheet. |
