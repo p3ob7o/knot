@@ -35,7 +35,7 @@
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
                     }
                     if let arrival = stream.arrival {
-                        Banner(arrival.message, symbol: "tray.and.arrow.down", role: .arrived) {
+                        Banner(arrival.message, symbol: "tray.and.arrow.down", role: .textPrimary) {
                             Button {
                                 if let first = arrival.notes.first { open(first) }
                                 stream.dismissArrivalNotice()
@@ -43,22 +43,21 @@
                                 Text("Show", bundle: .module)
                                     #if os(iOS)
                                         .foregroundStyle(theme.colors[.textPrimary])
-                                        .padding(theme.spacing.loose)
-                                        .contentShape(.rect)
                                     #endif
                             }
+                            .modifier(NoticeActionStyle())
                             Button {
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Image(systemName: "xmark")
                                     #if os(iOS)
-                                        .padding(theme.spacing.loose)
+                                        .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
                                         .contentShape(.rect)
                                     #endif
                             }
+                            .buttonStyle(.plain)
                             .accessibilityLabel(Text("Dismiss", bundle: .module))
                         }
-                        .buttonStyle(.borderless)
                     }
                 }
                 if let results = search.results {

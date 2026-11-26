@@ -72,6 +72,9 @@
                 }
                 .safeAreaInset(edge: .bottom) {
                     // The timer can grow here. A toolbar item constrains its Dynamic Type size.
+                    if let offer = model.undoOffer {
+                        UndoCapsule(offer, undo: model.undo)
+                    }
                     if showsLiveControls {
                         HStack { captureActions }
                         .padding(.horizontal)
@@ -263,14 +266,14 @@
             if model.isDeletedElsewhere {
                 Banner(
                     String(localized: "This note was deleted on another device.", bundle: .module), symbol: "trash",
-                    role: .failed
+                    role: .textPrimary
                 ) {
                     Button {
                         model.restoreDeletedNote()
                     } label: {
                         Text("Restore", bundle: .module)
                     }
-                    .buttonStyle(.borderless)
+                    .modifier(NoticeActionStyle())
                 }
             }
             if model.recordingOutcome == .discarded {
@@ -291,9 +294,10 @@
                 }
             }
             if let problem = model.problem {
-                Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed) {
+                let permission = problem == .couldNotStartRecording(KnotError.microphonePermissionRefused.code)
+                Banner(problem.message, symbol: permission ? "mic.slash" : "exclamationmark.triangle", role: .failed) {
                     #if os(iOS)
-                        if problem == .couldNotStartRecording(KnotError.microphonePermissionRefused.code),
+                        if permission,
                             let settings = URL(string: UIApplication.openSettingsURLString)
                         {
                             Button {
@@ -301,22 +305,26 @@
                             } label: {
                                 Text("Open Settings", bundle: .module)
                             }
-                            .buttonStyle(.borderless)
+                            .modifier(NoticeActionStyle())
                         }
                     #endif
                     Button {
                         model.dismissProblem()
                     } label: {
                         Image(systemName: "xmark")
+                            #if os(iOS)
+                                .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
+                                .contentShape(.rect)
+                            #endif
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .accessibilityLabel(Text("Dismiss", bundle: .module))
                 }
             }
             // Each conflict keeps its own draft until the person decides it. How this looks is
             // the design round's.
             ForEach(Array(model.editConflicts.values), id: \.target) { conflict in
-                Banner(conflictMessage(conflict), symbol: "arrow.triangle.2.circlepath", role: .failed) {
+                Banner(conflictMessage(conflict), symbol: "arrow.triangle.2.circlepath", role: .textPrimary) {
                     Button {
                         model.keepMyEdit(conflict.target)
                     } label: {
@@ -329,19 +337,21 @@
                         Text("Keep the new text", bundle: .module)
                     }
                 }
-                .buttonStyle(.borderless)
+                .modifier(NoticeActionStyle())
             }
-            if let offer = model.undoOffer {
-                Banner(offer.label, symbol: "arrow.uturn.backward") {
-                    Button {
-                        model.undo()
-                    } label: {
-                        Text("Undo", bundle: .module)
+            #if !os(iOS)
+                if let offer = model.undoOffer {
+                    Banner(offer.label, symbol: "arrow.uturn.backward") {
+                        Button {
+                            model.undo()
+                        } label: {
+                            Text("Undo", bundle: .module)
+                        }
+                        .modifier(NoticeActionStyle())
+                        .keyboardShortcut("z", modifiers: .command)
                     }
-                    .buttonStyle(.borderless)
-                    .keyboardShortcut("z", modifiers: .command)
                 }
-            }
+            #endif
         }
 
         private func conflictMessage(_ conflict: EditConflict) -> String {
@@ -382,6 +392,7 @@
                 drawing: { scale throws(KnotError) in try await model.drawing(of: item, scale: scale) })
         }
     }
+
     /// Edits the title in place and keeps its original revision until focus leaves the field.
     private struct NoteTitleEditor: View {
         @Environment(\.knotTheme) private var theme

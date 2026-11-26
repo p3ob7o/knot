@@ -266,15 +266,7 @@ struct ShellView: View {
             .safeAreaInset(edge: .bottom) {
                 if let deleted = shell.deletedNote {
                     if let offer = deleted.undoOffer {
-                        Banner(offer.label, symbol: "arrow.uturn.backward") {
-                            Button(action: shell.undoNoteDeletion) {
-                                Text("Undo")
-                                    .foregroundStyle(theme.colors[.textPrimary])
-                                    .padding(theme.spacing.loose)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.borderless)
-                        }
+                        UndoCapsule(offer, undo: shell.undoNoteDeletion)
                     } else if let problem = deleted.problem {
                         Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed)
                     }
@@ -384,7 +376,7 @@ private struct RecordingNotice: View {
                         .foregroundStyle(theme.colors[.textPrimary])
                 }
                 .monospacedDigit()
-                .frame(minHeight: 44)
+                .frame(minHeight: theme.sizes.hitTarget)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
