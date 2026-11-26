@@ -59,7 +59,16 @@ say() { printf 'milestone-build: %s\n' "$1"; }
 # its settings in the environment: KNOT_MB_SCHEME, KNOT_MB_DESTINATION, KNOT_MB_DERIVED,
 # KNOT_MB_LEVEL, KNOT_MB_LOG and KNOT_MB_PROVISIONING (1 or 0); for an archive, KNOT_MB_ARCHIVE,
 # its path, and KNOT_MB_BUILD_NUMBER, the build number given, when one was.
+# XCODE_XCCONFIG_FILE names settings that override even those given on xcodebuild's command line
+# (man xcodebuild, ENVIRONMENT): no build of this script starts while it is set, the worker's
+# included, which a caller may start alone.
+refuse_xcconfig_override() {
+    [[ -z ${XCODE_XCCONFIG_FILE+set} ]] ||
+        knot_fail "milestone-build-xcconfig-override" "XCODE_XCCONFIG_FILE is set: its settings would override the ones the milestone build gives on the command line." \
+            "Unset XCODE_XCCONFIG_FILE, then rerun." "safe" "nothing"
+}
 if [[ ${1:-} == --in-build ]]; then
+    refuse_xcconfig_override
     # The time the build got its slot, so that the build's own time is told from the wait.
     knot_now >"$KNOT_MB_SLOT_TIME"
     knot_select_xcode
@@ -116,6 +125,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n $LEVEL ]] || usage_fail "Name the level, M1 to M7."
+refuse_xcconfig_override
 [[ -n $COMMIT ]] || usage_fail "Name the commit the build is made from: --commit <sha>."
 if ((INSTALL == 0)); then
     [[ -z $MAC_FOLDER && ${#DEVICES[@]} == 0 && $AGAIN == 0 ]] ||
@@ -137,10 +147,20 @@ fi
 # command it prints to install again is right wherever it is run.
 [[ -z $MAC_FOLDER || $MAC_FOLDER == /* ]] || MAC_FOLDER="$PWD/$MAC_FOLDER"
 [[ -z $ARCHIVE_DIR || $ARCHIVE_DIR == /* ]] || ARCHIVE_DIR="$PWD/$ARCHIVE_DIR"
-# An archive is never made into a folder that holds anything: no run picks up an earlier one's.
-if [[ -n $ARCHIVE_DIR && -e $ARCHIVE_DIR ]] && [[ ! -d $ARCHIVE_DIR || -n "$(ls -A "$ARCHIVE_DIR" 2>/dev/null)" ]]; then
-    knot_fail "milestone-build-archive-folder" "The archive's folder $(knot_home_path "$ARCHIVE_DIR") is not a new or empty folder: an archive is never made over an earlier one." \
-        "Name a new folder with --archive. Keep what the old one holds if it is evidence, then remove it by its path." "safe" "nothing"
+# An archive is never made into a folder that holds anything: no run picks up an earlier one's. A
+# folder that cannot be read is not an empty one. The folder is claimed before the build, by a
+# file only one run can create, so that two runs never share it.
+if [[ -n $ARCHIVE_DIR ]]; then
+    archive_listing=""
+    if [[ -e $ARCHIVE_DIR || -L $ARCHIVE_DIR ]]; then
+        if [[ ! -d $ARCHIVE_DIR || -L $ARCHIVE_DIR ]] || ! archive_listing="$(ls -A "$ARCHIVE_DIR" 2>/dev/null)" || [[ -n $archive_listing ]]; then
+            knot_fail "milestone-build-archive-folder" "The archive's folder $(knot_home_path "$ARCHIVE_DIR") is not a new or empty folder that can be read: an archive is never made over an earlier one." \
+                "Name a new folder with --archive. Keep what the old one holds if it is evidence, then remove it by its path." "safe" "nothing"
+        fi
+    fi
+    mkdir -p "$ARCHIVE_DIR" 2>/dev/null && (set -o noclobber && : >"$ARCHIVE_DIR/.claimed") 2>/dev/null ||
+        knot_fail "milestone-build-archive-folder" "The archive's folder $(knot_home_path "$ARCHIVE_DIR") could not be claimed: another run holds it, or it cannot be written." \
+            "Name a new folder with --archive." "safe" "nothing"
 fi
 WANTED="ios mac"
 [[ $PRODUCTS == both ]] || WANTED=$PRODUCTS
@@ -304,6 +324,7 @@ check_product() {
     local name=$1 app=$2 info bundle version build flavour level part count=0 out
     info="$(info_of "$app")"
     [[ -f $info ]] || { say "$name: no app at ${app#"$KNOT_ROOT"/}"; return 1; }
+    parts_of "$app" >/dev/null || { say "$name: its parts cannot be listed: find could not read the product whole"; return 1; }
     bundle="$(plist "$info" CFBundleIdentifier)"
     version="$(plist "$info" CFBundleShortVersionString)"
     build="$(plist "$info" CFBundleVersion)"
@@ -490,7 +511,8 @@ check_binaries() {
             printf 'binary scan %s: %s\n' "$KNOT_SCAN_FILE" "$(tr '\n' ' ' <<<"$KNOT_SCAN_HELD")" | knot_filter_team >>"$log"
             return 1 ;;
         *)
-            say "$name: no Mach-O file found in the product to scan"
+            say "$name: $KNOT_SCAN_WHY"
+            printf 'binary scan: %s\n' "$KNOT_SCAN_WHY" | knot_filter_team >>"$log"
             return 1 ;;
     esac
 }
@@ -516,7 +538,8 @@ for product in $WANTED; do
         log="$ARCHIVE_DIR/milestone-build-$LEVEL-${head:0:12}-$product.log"
         archive="$ARCHIVE_DIR/Knot-$product.xcarchive"
     fi
-    if [[ -d $derived && -n "$(ls -A "$derived" 2>/dev/null)" ]] || [[ -s $log ]]; then
+    listing=""
+    if [[ -e $derived && ! -d $derived ]] || { [[ -d $derived ]] && { ! listing="$(ls -A "$derived" 2>/dev/null)" || [[ -n $listing ]]; }; } || [[ -s $log ]]; then
         knot_fail "milestone-build-derived-data" "The derived data folder .build/milestone/$(basename "$derived"), or its log, .build/milestone/$(basename "$log"), holds an earlier build: a milestone build is never incremental." \
             "Keep the log if it is evidence, by copying it out; then remove both by their paths, and rerun." "safe" "nothing"
     fi
@@ -543,19 +566,23 @@ for product in $WANTED; do
     # failed, every app in its derived data leaves LaunchServices; the product stays on disk
     # for the copy.
     unregister() {
-        local status=0
-        knot_unregister_apps "$derived" || status=1
-        [[ -z $archive ]] || knot_unregister_apps "$archive" || status=1
+        local status=0 why=""
+        knot_unregister_apps "$derived" || { status=1; why=$KNOT_UNREGISTER_WHY; }
+        if [[ -n $archive ]] && ! knot_unregister_apps "$archive"; then
+            status=1
+            why="${why:+$why; }$KNOT_UNREGISTER_WHY"
+        fi
         if ((status == 0)); then
             say "$product: its products are unregistered from LaunchServices; they stay on disk"
         else
-            say "$product: its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY. Unregister each by hand with lsregister -u <app>; they stay on disk"
+            KNOT_UNREGISTER_WHY=$why
+            say "$product: $(knot_unregister_report "${ARCHIVE_DIR:-$derived}"); they stay on disk"
         fi
     }
     if ((status != 0)); then
         unregister
         say "$product: the build failed after $took, after waiting $waited for a build slot. The last lines of its log:"
-        grep -E 'error:|BUILD FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
+        grep -E 'error:|BUILD FAILED|ARCHIVE FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
         knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is $(where "$log")." \
             "Read the log. A signing error that names an account, a profile or a device needs the owner: say so, and do not pass a flag he has not allowed." \
             "safe" "derived data in $(where "$derived"); nothing installed"
