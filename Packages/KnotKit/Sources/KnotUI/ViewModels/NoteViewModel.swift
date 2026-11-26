@@ -2,6 +2,10 @@ import Foundation
 import KnotCore
 import Observation
 
+#if !os(watchOS)
+    import KnotExport
+#endif
+
 /// Where the record control stands on a surface.
 public enum RecordingPhase: Hashable, Sendable {
     case idle
@@ -335,6 +339,17 @@ public final class NoteViewModel {
         }
     }
 
+    /// The Notes compose button opens the capture sheet as at launch. An unused force-new
+    /// choice belongs to the sheet that was dismissed.
+    public func followWindowOnPresentation() {
+        enqueue { model in
+            guard model.mode == .capture, model.draft == nil, model.fieldText.isEmpty, model.recording == .idle
+            else { return }
+            model.isNewNote = false
+            await model.refresh()
+        }
+    }
+
     /// "New note": forces a new note inside the window (rule 4). The text typed so far stays in
     /// its own note, and the surface shows a blank note until the next capture makes it.
     public func newNote() {
@@ -543,18 +558,18 @@ public final class NoteViewModel {
     }
 
     /// A surface learns about recordings started by another entry point at the next engine state.
-    public func observeRecordings() async {
+    public func observeRecordings(announceStart: Bool = true) async {
         for await state in environment.engine.states() where state.kind == .voice {
             if state.outcome == .open {
                 guard recording == .idle, !pressInFlight else { continue }
-                await adoptRecording(state, startedHere: nil)
+                await adoptRecording(state, startedHere: nil, announceStart: announceStart)
             } else {
                 acceptRecordingEnd(state)
             }
         }
     }
 
-    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?) async {
+    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?, announceStart: Bool = true) async {
         guard state.outcome == .open else {
             await finishRecording(state)
             return
@@ -570,7 +585,7 @@ public final class NoteViewModel {
         isNewNote = false
         if case .couldNotStartRecording = problem { problem = nil }
         followLiveRecording(state.captureID)
-        announcer.announce(.recordingStarted)
+        if announceStart { announcer.announce(.recordingStarted) }
         if mode == .capture, let id = state.noteID { await show(id) }
     }
 
@@ -932,6 +947,46 @@ public final class NoteViewModel {
         guard case .here(let asset) = item.attachment else { return nil }
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url
     }
+
+    public var remoteAttachmentIDs: [AssetID] {
+        items.compactMap {
+            if case .onAnotherDevice(let asset) = $0.attachment { return asset.id }
+            return nil
+        }
+    }
+
+    public func fetchAttachments() async {
+        for id in remoteAttachmentIDs {
+            guard !Task.isCancelled else { return }
+            guard let asset = try? await environment.notes.asset(id) else { continue }
+            _ = try? await environment.fetcher.fetch(asset) { _ in }
+        }
+        if !Task.isCancelled { await refresh() }
+    }
+
+    public private(set) var speechDownloading = false
+
+    public func observeSpeechReadiness() async {
+        guard mode == .capture else { return }
+        while !Task.isCancelled {
+            let status = await environment.transcriber.readiness()
+            speechDownloading = status == .notInstalled || status == .installing
+            guard speechDownloading else { return }
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        }
+    }
+
+    #if !os(watchOS)
+        public func shareFile(_ id: SegmentID, timeZone: TimeZone) async throws(KnotError) -> ShareItem? {
+            guard let segment = record?.liveSegments.first(where: { $0.id == id }) else { return nil }
+            switch segment.kind {
+            case .voice:
+                return try await ShareItems.recording(of: segment, assets: environment.assets, timeZone: timeZone)
+            case .ink: return try await ShareItems.drawing(of: segment, assets: environment.assets, timeZone: timeZone)
+            default: return nil
+            }
+        }
+    #endif
 
     /// Reads the stored drawing through the asset and rendering ports.
     public func drawing(of item: SegmentItem, scale: Double) async throws(KnotError) -> RenderedDrawing? {

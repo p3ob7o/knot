@@ -9,19 +9,29 @@
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         let stream: StreamViewModel
         let search: SearchViewModel
+        let showsInlineSearch: Bool
+        let openSetupRow: ((SetupRow) -> Void)?
         let open: (NoteID) -> Void
 
-        public init(stream: StreamViewModel, search: SearchViewModel, open: @escaping (NoteID) -> Void) {
+        public init(
+            stream: StreamViewModel, search: SearchViewModel, showsInlineSearch: Bool = true,
+            openSetupRow: ((SetupRow) -> Void)? = nil,
+            open: @escaping (NoteID) -> Void
+        ) {
             self.stream = stream
             self.search = search
+            self.showsInlineSearch = showsInlineSearch
+            self.openSetupRow = openSetupRow
             self.open = open
         }
 
         public var body: some View {
             List {
                 Section {
-                    SearchField(text: search.query, onChange: search.setQuery)
-                    if let problem = stream.problem {
+                    if showsInlineSearch {
+                        SearchField(text: search.query, onChange: search.setQuery)
+                    }
+                    if let problem = search.displayedProblem(streamProblem: stream.problem) {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
                     }
                     if let arrival = stream.arrival {
@@ -31,11 +41,20 @@
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Text("Show", bundle: .module)
+                                    #if os(iOS)
+                                        .foregroundStyle(theme.colors[.textPrimary])
+                                        .padding(theme.spacing.loose)
+                                        .contentShape(.rect)
+                                    #endif
                             }
                             Button {
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Image(systemName: "xmark")
+                                    #if os(iOS)
+                                        .padding(theme.spacing.loose)
+                                        .contentShape(.rect)
+                                    #endif
                             }
                             .accessibilityLabel(Text("Dismiss", bundle: .module))
                         }
@@ -43,9 +62,13 @@
                     }
                 }
                 if let results = search.results {
-                    ForEach(results) { row in rowButton(row) }
+                    if let query = search.emptyResultsQuery, !showsInlineSearch {
+                        ContentUnavailableView.search(text: query)
+                    } else {
+                        ForEach(results) { row in rowButton(row) }
+                    }
                 } else if let firstRun = stream.firstRun {
-                    FirstRunView(firstRun, onDismiss: stream.dismissSetupRow)
+                    FirstRunView(firstRun, onOpen: openSetupRow, onDismiss: stream.dismissSetupRow)
                 } else {
                     ForEach(stream.rows) { row in rowButton(row) }
                     if stream.hasMore {

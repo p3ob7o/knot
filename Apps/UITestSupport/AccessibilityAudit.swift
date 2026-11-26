@@ -137,10 +137,21 @@ enum AccessibilityAudit {
         element.inSystemKeyboard
     }
 
+    /// The system draws a 20-point-square clear button inside its search field. The hit-region
+    /// audit reports "Hit area is too small". SwiftUI's searchable modifier gives Knot the
+    /// system's field, and Knot cannot enlarge its clear button. WP-41 revisits this exclusion.
+    static let systemSearchFieldClearButton = StructuralExclusion(
+        reason:
+            "Only the hit-region audit is excluded for the system search field’s 20-point clear button, which Knot cannot enlarge.",
+        type: .hitRegion
+    ) { element in
+        element.kind == .button && element.identifier.isEmpty && element.ancestry.last == .searchField
+    }
+
     #if os(macOS)
         static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn, windowTitle]
     #elseif os(iOS)
-        static let structuralExclusions: [StructuralExclusion] = [systemKeyboard]
+        static let structuralExclusions: [StructuralExclusion] = [systemKeyboard, systemSearchFieldClearButton]
     #else
         static let structuralExclusions: [StructuralExclusion] = []
     #endif
@@ -559,6 +570,37 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
         XCTAssertTrue(AccessibilityAudit.systemKeyboard.applies(cell))
         XCTAssertTrue(cell.description.contains("in the system keyboard"))
     }
+
+    #if os(iOS)
+        private func systemSearchClearButton() -> AccessibilityAudit.Element {
+            AccessibilityAudit.Element(
+                kind: .button, identifier: "", label: "", frame: CGRect(x: 0, y: 0, width: 20, height: 20),
+                parentKind: .searchField, parentFrame: nil, ancestry: [.application, .window, .searchField])
+        }
+
+        func testTheSystemSearchClearButtonIsExcludedForHitRegion() {
+            XCTAssertTrue(AccessibilityAudit.isExcluded(.hitRegion, on: systemSearchClearButton()))
+        }
+
+        func testTheSystemSearchClearButtonStillFailsOtherAudits() {
+            let button = systemSearchClearButton()
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: button))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.sufficientElementDescription, on: button))
+        }
+
+        func testAButtonIdentifiedByTheAppInASearchFieldStillFailsHitRegion() {
+            var button = systemSearchClearButton()
+            button.identifier = "test.button"
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.hitRegion, on: button))
+        }
+
+        func testAnUnidentifiedButtonOutsideASearchFieldStillFailsHitRegion() {
+            var button = systemSearchClearButton()
+            button.parentKind = .other
+            button.ancestry = [.application, .window, .searchField, .other]
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.hitRegion, on: button))
+        }
+    #endif
 
     func testAnElementOfTheAppWithNoDescriptionStillFailsWhileTheKeyboardIsUp() {
         // The same kind of element, with the same empty name, drawn by the app above the keyboard.

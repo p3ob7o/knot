@@ -7,14 +7,19 @@ public struct Banner<Actions: View>: View {
     let message: String
     let symbol: String
     let role: ColorRole
+    let open: (() -> Void)?
+    let openAccessibilityLabel: String?
     let actions: Actions
 
     public init(
-        _ message: String, symbol: String, role: ColorRole = .textSecondary, @ViewBuilder actions: () -> Actions
+        _ message: String, symbol: String, role: ColorRole = .textSecondary,
+        open: (() -> Void)? = nil, openAccessibilityLabel: String? = nil, @ViewBuilder actions: () -> Actions
     ) {
         self.message = message
         self.symbol = symbol
         self.role = role
+        self.open = open
+        self.openAccessibilityLabel = openAccessibilityLabel
         self.actions = actions()
     }
 
@@ -23,10 +28,24 @@ public struct Banner<Actions: View>: View {
             Image(systemName: symbol)
                 .foregroundStyle(theme.colors[role])
                 .accessibilityHidden(true)
-            Text(message)
-                .font(theme.type[.banner])
-                .foregroundStyle(theme.colors[.textPrimary])
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if let open {
+                    Button(action: open) {
+                        Text(message)
+                            #if os(iOS)
+                                .padding(.vertical, theme.spacing.loose)
+                                .contentShape(.rect)
+                            #endif
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(openAccessibilityLabel ?? message)
+                } else {
+                    Text(message)
+                }
+            }
+            .font(theme.type[.banner])
+            .foregroundStyle(theme.colors[.textPrimary])
+            .frame(maxWidth: .infinity, alignment: .leading)
             actions
         }
         .padding(theme.spacing.regular)
@@ -47,10 +66,14 @@ public struct FirstRunView: View {
     @Environment(\.knotTheme) private var theme
     let content: FirstRunContent
     let onDismiss: (SetupRow) -> Void
+    let onOpen: ((SetupRow) -> Void)?
 
-    public init(_ content: FirstRunContent, onDismiss: @escaping (SetupRow) -> Void) {
+    public init(
+        _ content: FirstRunContent, onOpen: ((SetupRow) -> Void)? = nil, onDismiss: @escaping (SetupRow) -> Void
+    ) {
         self.content = content
         self.onDismiss = onDismiss
+        self.onOpen = onOpen
     }
 
     public var body: some View {
@@ -63,16 +86,35 @@ public struct FirstRunView: View {
                     .foregroundStyle(theme.colors[.textSecondary])
             }
             ForEach(content.setupRows) { row in
-                Banner(row.title, symbol: "sparkles") {
-                    Button {
-                        onDismiss(row)
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Dismiss", bundle: .module))
+                Banner(
+                    row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } },
+                    openAccessibilityLabel: row == .actionButton
+                        ? String(localized: "Set up Action Button recording", bundle: .module) : nil
+                ) {
+                    dismiss(row)
                 }
             }
         }
+    }
+
+    private func dismiss(_ row: SetupRow) -> some View {
+        Button {
+            onDismiss(row)
+        } label: {
+            Image(systemName: "xmark")
+                #if os(iOS)
+                    .padding(theme.spacing.loose)
+                    .contentShape(.rect)
+                #endif
+        }
+        .buttonStyle(.plain)
+        #if os(iOS)
+            .accessibilityLabel(
+                row == .actionButton
+                    ? Text("Dismiss Action Button setup", bundle: .module)
+                    : Text("Dismiss \(row.title)", bundle: .module))
+        #else
+            .accessibilityLabel(Text("Dismiss \(row.title)", bundle: .module))
+        #endif
     }
 }

@@ -1,0 +1,9 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Capture" : {
+      "comment" : "Opens the capture sheet from Notes and follows the append window."
+    }
+  },
+  "version" : "1.0"
+}
