@@ -328,7 +328,7 @@
                 let events = base.live(capture)
                 return AsyncStream(bufferingPolicy: .bufferingNewest(32)) { continuation in
                     continuation.yield(
-                        .transcript(LiveTranscript(final: "Ask about the roof", volatile: "estimate.")))
+                        .transcript(LiveTranscript(final: "Ask about the roof ", volatile: "estimate.")))
                     let task = Task {
                         for await event in events { continuation.yield(event) }
                         continuation.finish()
