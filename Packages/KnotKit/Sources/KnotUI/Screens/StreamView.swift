@@ -10,17 +10,19 @@
         let stream: StreamViewModel
         let search: SearchViewModel
         let showsInlineSearch: Bool
+        let isRestoring: Bool
         let openSetupRow: ((SetupRow) -> Void)?
         let open: (NoteID) -> Void
 
         public init(
             stream: StreamViewModel, search: SearchViewModel, showsInlineSearch: Bool = true,
-            openSetupRow: ((SetupRow) -> Void)? = nil,
+            isRestoring: Bool = false, openSetupRow: ((SetupRow) -> Void)? = nil,
             open: @escaping (NoteID) -> Void
         ) {
             self.stream = stream
             self.search = search
             self.showsInlineSearch = showsInlineSearch
+            self.isRestoring = isRestoring
             self.openSetupRow = openSetupRow
             self.open = open
         }
@@ -33,6 +35,7 @@
                     }
                     if let problem = search.displayedProblem(streamProblem: stream.problem) {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
+                            .listRowSeparator(.hidden)
                     }
                     if let arrival = stream.arrival {
                         Banner(arrival.message, symbol: "tray.and.arrow.down", role: .textPrimary) {
@@ -50,6 +53,9 @@
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Image(systemName: "xmark")
+                                    .font(theme.type[.stateLine])
+                                    .imageScale(.small)
+                                    .foregroundStyle(theme.colors[.textSecondary])
                                     #if os(iOS)
                                         .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
                                         .contentShape(.rect)
@@ -58,14 +64,17 @@
                             .buttonStyle(.plain)
                             .accessibilityLabel(Text("Dismiss", bundle: .module))
                         }
+                        .listRowSeparator(.hidden)
                     }
                 }
                 if let results = search.results {
-                    if let query = search.emptyResultsQuery, !showsInlineSearch {
-                        ContentUnavailableView.search(text: query)
-                    } else {
-                        ForEach(results) { row in rowButton(row) }
+                    ForEach(results) { row in rowButton(row) }
+                } else if isRestoring, stream.rows.isEmpty {
+                    ProgressView {
+                        Text("Syncing notes…", bundle: .module)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .listRowSeparator(.hidden)
                 } else if let firstRun = stream.firstRun {
                     FirstRunView(firstRun, onOpen: openSetupRow, onDismiss: stream.dismissSetupRow)
                 } else {
@@ -90,6 +99,23 @@
             #if os(iOS)
                 .listStyle(.plain)
             #endif
+            .overlay {
+                if let query = search.emptyResultsQuery, !showsInlineSearch {
+                    GeometryReader { geometry in
+                        ScrollView {
+                            ContentUnavailableView {
+                                Label {
+                                    Text("No Results for “\(query)”", bundle: .module)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } icon: {
+                                    Image(systemName: "magnifyingglass")
+                                }
+                            }
+                            .frame(minHeight: geometry.size.height)
+                        }
+                    }
+                }
+            }
             .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: stream.rows)
             .task { await stream.load() }
             .task { await stream.observeChanges() }

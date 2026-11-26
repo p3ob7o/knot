@@ -88,6 +88,9 @@ final class Shell {
                 if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_LATE_CAPTURE"] == "1" {
                     await injectPreviewArrival(into: app.environment)
                 }
+                if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_SCROLL_RECORDING"] == "1" {
+                    try? await injectPreviewRecordingNote(into: app.environment)
+                }
             #endif
             _ = await app.runLaunchSequence()
         }
@@ -243,7 +246,7 @@ struct ShellView: View {
         NavigationStack(path: $shell.path) {
             StreamView(
                 stream: shell.stream, search: shell.search, showsInlineSearch: false,
-                openSetupRow: { shell.setupRow = $0 }
+                isRestoring: shell.syncStatus == .fetching, openSetupRow: { shell.setupRow = $0 }
             ) { id in
                 shell.path.append(.note(id))
             }
@@ -257,9 +260,6 @@ struct ShellView: View {
                     }
                     if let question = shell.syncQuestion {
                         SyncPresentation(question: question) { shell.answer(question, $0) }
-                    }
-                    if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
-                        ProgressView("Syncing notes…")
                     }
                 }
             }
@@ -364,6 +364,32 @@ private struct RecordingNotice: View {
 }
 
 #if DEBUG
+    private func injectPreviewRecordingNote(into environment: AppEnvironment) async throws {
+        let recording: CaptureID = environment.ids.make()
+        let assetID: AssetID = environment.ids.make()
+        let stored = try await environment.assets.place(Data([1, 2, 3]), as: assetID, kind: .audio)
+        let asset = Asset(
+            id: assetID, segmentID: SegmentID(recording), kind: .audio, byteCount: stored.byteCount,
+            sha256: stored.sha256, availability: .local)
+        let start = environment.clock.now().addingTimeInterval(-120)
+        let origin = CaptureOrigin(source: .device(environment.ids.make()), surface: .app)
+        let launch: LaunchID = environment.ids.make()
+        let note = try await environment.notes.record(
+            NewCapture(
+                id: recording, kind: .voice, origin: origin, launchID: launch, placement: .newNote,
+                startedAt: start, endedAt: start.addingTimeInterval(42), body: .file(asset, duration: .seconds(42)))
+        ).noteID
+        _ = try await environment.notes.setState(.voice(.ready), of: SegmentID(recording))
+        for index in 1...20 {
+            let date = start.addingTimeInterval(Double(42 + index))
+            _ = try await environment.notes.record(
+                NewCapture(
+                    id: environment.ids.make(), kind: .typed, origin: origin, launchID: launch,
+                    placement: .named(note), startedAt: date, endedAt: date,
+                    body: .text("Synthetic speech follow-up \(index).")))
+        }
+    }
+
     private func injectPreviewArrival(into environment: AppEnvironment) async {
         let end = environment.clock.now().addingTimeInterval(-3600)
         let capture = NewCapture(

@@ -71,10 +71,7 @@ struct ExportScreen: View {
         if model.isExporting { return .exporting }
         if model.failed { return .failed }
         guard let report = model.report else { return .idle }
-        let missing = report.leftOut.filter(\.isMissing).map {
-            ExportResultRows.MissingFile(id: $0.asset, kind: $0.kind)
-        }
-        return .complete(notes: report.notes, missing: missing)
+        return .complete(notes: report.notes, missing: model.missingFiles)
     }
 
 }
@@ -86,16 +83,42 @@ final class NotesExport {
     private(set) var isExporting = false
     var failed = false
     private(set) var report: ExportReport?
+    private(set) var missingFiles: [ExportResultRows.MissingFile] = []
 
     init(environment: AppEnvironment) { self.environment = environment }
 
     func export(to parent: URL, timeZone: TimeZone) async {
         guard !isExporting else { return }
         report = nil
+        missingFiles = []
         failed = false
         isExporting = true
         defer { isExporting = false }
-        do { report = try await run(in: parent, timeZone: timeZone) } catch { failed = true }
+        do {
+            let result = try await run(in: parent, timeZone: timeZone)
+            missingFiles = await describeMissingFiles(in: result, timeZone: timeZone)
+            report = result
+        } catch { failed = true }
+    }
+
+    private func describeMissingFiles(in report: ExportReport, timeZone: TimeZone) async
+        -> [ExportResultRows.MissingFile]
+    {
+        let missing = report.leftOut.filter(\.isMissing)
+        var labels: [NoteID: String] = [:]
+        var format = Date.FormatStyle(date: .abbreviated, time: .shortened)
+        format.timeZone = timeZone
+        for id in Set(missing.map(\.note)) {
+            guard let record = try? await environment.notes.note(id) else { continue }
+            if let title = record.note.title, !CaptureText.isEmpty(title) {
+                labels[id] = title
+            } else {
+                labels[id] = record.note.createdAt.formatted(format)
+            }
+        }
+        return missing.map {
+            ExportResultRows.MissingFile(id: $0.asset, kind: $0.kind, noteLabel: labels[$0.note])
+        }
     }
 
     private func run(in parent: URL, timeZone: TimeZone) async throws -> ExportReport {

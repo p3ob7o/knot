@@ -19,38 +19,49 @@
         let model: NoteViewModel
         let player: PlayerViewModel
         @State private var restoreFieldFocus = false
+        @State private var titleFocused = false
+        @State private var focusedSegments: Set<SegmentID> = []
 
         public enum InitialFocus: Equatable, Sendable {
             case capture
+            case none
             case title
             case segment(SegmentID)
         }
 
-        private let initialFocus: InitialFocus
+        private let initialFocus: InitialFocus?
         private let shareSegment: ((SegmentID) -> Void)?
         private let observesRecordings: Bool
-        private let usesKeyboardToolbar: Bool
 
         private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
-        private var showsInsetControls: Bool { showsLiveControls || (!usesKeyboardToolbar && fieldFocused) }
+        private var showsInsetControls: Bool { showsLiveControls }
+        private var editsExistingText: Bool { titleFocused || !focusedSegments.isEmpty }
+        private var focusOnAppear: InitialFocus {
+            initialFocus ?? (model.mode == .capture || model.surface != .app ? .capture : .none)
+        }
+        private var showsDone: Bool {
+            model.mode == .capture || model.typedCapture != nil || !model.fieldText.isEmpty
+        }
 
         public init(
-            model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
-            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true,
-            usesKeyboardToolbar: Bool = true
+            model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus? = nil,
+            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true
         ) {
             self.model = model
             self.player = player
             self.initialFocus = initialFocus
             self.shareSegment = shareSegment
             self.observesRecordings = observesRecordings
-            self.usesKeyboardToolbar = usesKeyboardToolbar
         }
 
         public var body: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.spacing.betweenSegments) {
-                    banners
+                    #if os(iOS)
+                        if model.mode != .capture { banners }
+                    #else
+                        banners
+                    #endif
                     page
                 }
                 #if os(iOS)
@@ -63,28 +74,37 @@
                 .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: model.items)
             }
             #if os(iOS)
-                .defaultFocus($fieldFocused, initialFocus == .capture, priority: .userInitiated)
+                .defaultFocus($fieldFocused, focusOnAppear == .capture, priority: .userInitiated)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { done }
-                    if !showsInsetControls {
-                        if usesKeyboardToolbar {
-                            ToolbarItemGroup(placement: .keyboard) { captureActions }
-                        }
+                    if showsDone {
+                        ToolbarItem(placement: .topBarTrailing) { done }
+                    }
+                    if !showsInsetControls, !editsExistingText {
+                        ToolbarItemGroup(placement: .keyboard) { captureActions }
                         if !fieldFocused {
                             ToolbarItemGroup(placement: .bottomBar) { captureActions }
                         }
                     }
                 }
-                .safeAreaInset(edge: .bottom) {
-                    // The timer can grow here. A toolbar item constrains its Dynamic Type size.
-                    if let offer = model.undoOffer {
-                        UndoCapsule(offer, undo: model.undo)
-                    }
-                    if showsInsetControls {
-                        HStack { captureActions }
-                        .buttonStyle(.glass)
+                .toolbarVisibility(editsExistingText ? .hidden : .automatic, for: .bottomBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if model.mode == .capture {
+                        VStack(alignment: .leading, spacing: theme.spacing.space2) { banners }
                         .padding(.horizontal)
-                        .padding(.vertical, theme.spacing.space2)
+                        .background(theme.colors[.surface])
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    VStack(spacing: theme.spacing.space2) {
+                        if let offer = model.undoOffer {
+                            UndoCapsule(offer, undo: model.undo)
+                        }
+                        if showsInsetControls {
+                            HStack { captureActions }
+                            .buttonStyle(.glass)
+                            .padding(.horizontal)
+                            .padding(.vertical, theme.spacing.space2)
+                        }
                     }
                 }
             #else
@@ -106,7 +126,7 @@
                     .padding(theme.spacing.surfaceMargin)
                 }
             #endif
-            .onAppear { fieldFocused = initialFocus == .capture }
+            .onAppear { fieldFocused = focusOnAppear == .capture }
             .onChange(of: model.recording) { _, phase in
                 if phase == .idle, restoreFieldFocus {
                     fieldFocused = true
@@ -155,7 +175,9 @@
                     segment(item)
                 }
             } else {
-                NoteTitleEditor(model: model, initiallyEditing: initialFocus == .title)
+                NoteTitleEditor(model: model, initiallyEditing: focusOnAppear == .title) {
+                    titleFocused = $0
+                }
                 ForEach(model.items) { item in
                     if item.id != model.activeRecording.map(SegmentID.init) {
                         segment(item)
@@ -209,6 +231,10 @@
                     }
                     #if os(iOS)
                         .labelStyle(.iconOnly)
+                        .font(theme.type[.rowTitle])
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                        .contentShape(.rect)
                     #endif
                 }
                 #if os(iOS)
@@ -243,7 +269,7 @@
                 }
                 if model.recordingOutcome == .saved {
                     Text("Saved", bundle: .module)
-                        .font(theme.type[.outcomeBody])
+                        .font(theme.type[.body])
                         .foregroundStyle(theme.colors[.textPrimary])
                         .accessibilityHidden(true)
                 }
@@ -273,8 +299,7 @@
             }
             if model.recordingOutcome == .discarded {
                 Banner(
-                    String(localized: "Too short. Nothing was kept.", bundle: .module), symbol: "mic",
-                    role: .textSecondary)
+                    String(localized: "Too short. Nothing was kept.", bundle: .module), symbol: "mic")
             }
             if model.recordingOutcome == .saveFailed {
                 Banner(
@@ -307,6 +332,9 @@
                         model.dismissProblem()
                     } label: {
                         Image(systemName: "xmark")
+                            .font(theme.type[.stateLine])
+                            .imageScale(.small)
+                            .foregroundStyle(theme.colors[.textSecondary])
                             #if os(iOS)
                                 .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
                                 .contentShape(.rect)
@@ -325,14 +353,15 @@
                     } label: {
                         Text("Keep mine", bundle: .module)
                     }
+                    .modifier(NoticeActionStyle())
                     .disabled(!model.canKeepEdit(conflict.target))
                     Button {
                         model.dropMyEdit(conflict.target)
                     } label: {
                         Text("Keep the new text", bundle: .module)
                     }
+                    .modifier(NoticeActionStyle())
                 }
-                .modifier(NoticeActionStyle())
             }
             #if !os(iOS)
                 if let offer = model.undoOffer {
@@ -361,7 +390,7 @@
                 text: model.editConflict(for: .segment(item.id))?.draft ?? model.displayedText(of: item),
                 isShowingOriginal: model.showingOriginal.contains(item.id),
                 playback: player.segment == item.id ? player.state : .empty,
-                secondaryText: secondaryText, initiallyEditing: initialFocus == .segment(item.id),
+                secondaryText: secondaryText, initiallyEditing: focusOnAppear == .segment(item.id),
                 playbackAllowed: model.recording == .idle,
                 handlers: handlers(for: item))
         }
@@ -380,9 +409,17 @@
                         await player.toggle(file, segment: item.id)
                     }
                 },
-                seek: { position in Task { await player.seek(to: position) } },
+                seek: { position in
+                    Task {
+                        guard player.segment == item.id, model.recording == .idle else { return }
+                        await player.seek(to: position)
+                    }
+                },
                 beginEdit: { model.beginEditing(item.id) },
                 endEdit: { model.endEditing(item.id) },
+                editingChanged: { editing in
+                    if editing { focusedSegments.insert(item.id) } else { focusedSegments.remove(item.id) }
+                },
                 recordingPeaks: { await model.recordingPeaks(of: item) },
                 drawing: { scale throws(KnotError) in try await model.drawing(of: item, scale: scale) })
         }
@@ -396,6 +433,7 @@
         @State private var original = ""
         let model: NoteViewModel
         let initiallyEditing: Bool
+        let editingChanged: (Bool) -> Void
 
         private var title: String { model.title ?? "" }
 
@@ -415,6 +453,7 @@
                 if !editing { draft = new }
             }
             .onChange(of: editing) { _, focused in
+                editingChanged(focused)
                 if focused {
                     original = draft
                     model.beginEditingTitle()
@@ -424,7 +463,10 @@
             }
             .onSubmit { editing = false }
             .onDisappear {
-                if editing { finishEdit() }
+                if editing {
+                    editingChanged(false)
+                    finishEdit()
+                }
             }
         }
 

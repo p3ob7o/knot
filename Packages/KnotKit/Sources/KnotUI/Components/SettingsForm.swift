@@ -97,12 +97,24 @@
                 row == .about || row == .recentlyDeleted || row == .exportAll
             }
 
-            private func navigationRow(_ title: String, action: @escaping () -> Void) -> some View {
+            private func navigationRow(
+                _ title: String, showsDisclosure: Bool = true, action: @escaping () -> Void
+            ) -> some View {
                 Button(action: action) {
-                    Text(title)
-                        .foregroundStyle(theme.colors[.textPrimary])
-                        .frame(maxWidth: .infinity, minHeight: theme.sizes.hitTarget, alignment: .leading)
-                        .contentShape(.rect)
+                    HStack {
+                        Text(title)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        if showsDisclosure {
+                            Image(systemName: "chevron.right")
+                                .font(theme.type[.stateLine])
+                                .foregroundStyle(theme.colors[.textSecondary])
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .foregroundStyle(theme.colors[.textPrimary])
+                    .frame(maxWidth: .infinity, minHeight: theme.sizes.hitTarget, alignment: .leading)
+                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -191,7 +203,7 @@
                         set: { on in Task { await model.setCommandLineAccess(on) } }))
             case .exportAll, .recentlyDeleted, .about:
                 #if os(iOS)
-                    navigationRow(row.title) { open(row) }
+                    navigationRow(row.title, showsDisclosure: row != .exportAll) { open(row) }
                 #else
                     Button(row.title) { open(row) }
                 #endif

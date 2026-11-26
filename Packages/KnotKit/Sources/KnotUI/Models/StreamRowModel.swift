@@ -103,8 +103,8 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             hasArrived: record.liveSegments.contains { $0.arrivedAt != nil })
     }
 
-    /// The parts the row shows at `size`. At large text sizes the preview gives way first,
-    /// then the kinds. The title or first line, the time and a failed marker always stay
+    /// The parts the row shows at `size`. At large text sizes the preview gives way.
+    /// The title or first line, time, kinds and state marks stay
     /// (docs/product-spec.md §7).
     public func visibleParts(at size: RowTextSize) -> Set<RowPart> {
         var parts: Set<RowPart> = [.title, .time]
@@ -112,10 +112,9 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             parts.insert(.failedMarker)
         } else if hasPending {
             parts.insert(.pendingMarker)
-        } else if hasArrived {
-            parts.insert(.arrivedMarker)
         }
-        if size < .largest, !kinds.isEmpty { parts.insert(.kinds) }
+        if hasArrived { parts.insert(.arrivedMarker) }
+        if !kinds.isEmpty { parts.insert(.kinds) }
         if size < .large, preview != nil { parts.insert(.preview) }
         return parts
     }
@@ -126,8 +125,11 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
         if let preview { parts.append(preview) }
         parts.append(timeText)
         if !kinds.isEmpty { parts.append(kinds.map(\.label).joined(separator: ", ")) }
-        if hasFailed { parts.append(localized("Needs you")) }
-        if hasPending { parts.append(localized("Text on its way")) }
+        if hasFailed {
+            parts.append(localized("Needs you"))
+        } else if hasPending {
+            parts.append(localized("Text on its way"))
+        }
         if hasArrived { parts.append(localized("Arrived")) }
         return parts.joined(separator: ". ")
     }

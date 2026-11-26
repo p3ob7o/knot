@@ -28,28 +28,21 @@ struct OpenNoteScreen: View {
             .task(id: model.remoteAttachmentIDs) { await model.fetchAttachments() }
             .toolbar {
                 if let record = model.record, !model.isClosed {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button("Copy note", systemImage: "document.on.document") {
-                                UIPasteboard.general.string = NoteMarkdown.plainText(record)
-                            }
-                            Menu("Share note…", systemImage: "square.and.arrow.up") {
-                                ShareLink(item: NoteMarkdown.plainText(record)) { Text("Plain text") }
-                                ShareLink(
-                                    item: SharedMarkdown(ShareItems.markdown(of: record, timeZone: timeZone)),
-                                    preview: SharePreview("Markdown")
-                                ) {
-                                    Text("Markdown")
-                                }
-                            }
-                            Button("Delete note", systemImage: "trash", role: .destructive, action: delete)
-                                .disabled(model.recording != .idle || model.isEnding)
-                        } label: {
-                            Label("Note actions", systemImage: "ellipsis")
+                    PhoneNoteToolbar {
+                        Button("Copy note", systemImage: "document.on.document") {
+                            UIPasteboard.general.string = NoteMarkdown.plainText(record)
                         }
-                        .accessibilityShowsLargeContentViewer {
-                            Label("Note actions", systemImage: "ellipsis")
+                        Menu("Share note…", systemImage: "square.and.arrow.up") {
+                            ShareLink(item: NoteMarkdown.plainText(record)) { Text("Plain text") }
+                            ShareLink(
+                                item: SharedMarkdown(ShareItems.markdown(of: record, timeZone: timeZone)),
+                                preview: SharePreview("Markdown")
+                            ) {
+                                Text("Markdown")
+                            }
                         }
+                        Button("Delete note", systemImage: "trash", role: .destructive, action: delete)
+                            .disabled(model.recording != .idle || model.isEnding)
                     }
                 }
             }

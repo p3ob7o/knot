@@ -14,6 +14,7 @@
         let example: StreamExample
         @Environment(\.dynamicTypeSize) private var typeSize
         var query: String? = nil
+        var syncQuestion: SyncQuestion? = nil
         @State private var loaded: Loaded?
 
         struct Loaded {
@@ -42,7 +43,7 @@
                 if surface == .phone {
                     StreamView(
                         stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
-                        openSetupRow: { _ in }, open: { _ in }
+                        isRestoring: example == .restoring, openSetupRow: { _ in }, open: { _ in }
                     )
                     .searchable(text: Binding(get: { loaded.search.query }, set: loaded.search.setQuery))
                     .toolbar(removing: .search)
@@ -50,7 +51,10 @@
                         PhoneNotesToolbar(openSettings: {}, showRecentlyDeleted: {}, showCapture: {})
                     }
                     .safeAreaInset(edge: .top) {
-                        if example == .restoring { ProgressView("Syncing notes…") }
+                        if let syncQuestion {
+                            SyncPresentation(question: syncQuestion) { _ in }
+                                .padding(.horizontal)
+                        }
                     }
                 } else {
                     StreamView(stream: loaded.stream, search: loaded.search, open: { _ in })
@@ -88,7 +92,6 @@
             case .unavailable:
                 environment.notes = UnavailableNoteStore()
             case .restoring:
-                // KnotUI has no first-restore status. This is the real empty stream before notes arrive.
                 break
             case .empty:
                 break
@@ -114,7 +117,10 @@
         let example: NoteExample
         var titleOrigin: TitleOrigin = .none
         var editingTitle = false
+        var voiceState: VisibleState? = nil
+        var inkState: VisibleState? = nil
         @State private var loaded: Loaded?
+        @State private var isNotePushed = true
 
         struct Loaded {
             let note: NoteViewModel
@@ -123,25 +129,50 @@
 
         var body: some View {
             matrixFrame(surface) {
-                NavigationStack {
-                    if let loaded {
-                        NoteView(
-                            model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note),
-                            usesKeyboardToolbar: surface != .phone
-                        )
-                        .modifier(MatrixReady())
+                #if os(iOS)
+                    if surface == .phone {
+                        NavigationStack {
+                            Color.clear
+                                .navigationTitle("Notes")
+                                .navigationDestination(isPresented: $isNotePushed) {
+                                    notePage
+                                        .navigationBarTitleDisplayMode(.inline)
+                                        .toolbar {
+                                            PhoneNoteToolbar {
+                                                Button("Copy note", systemImage: "document.on.document") {}
+                                                ShareLink(
+                                                    item: loaded?.note.items.map(\.text).joined(separator: "\n") ?? ""
+                                                ) {
+                                                    Label("Share note…", systemImage: "square.and.arrow.up")
+                                                }
+                                                Button("Delete note", systemImage: "trash", role: .destructive) {}
+                                            }
+                                        }
+                                }
+                        }
                     } else {
-                        ProgressView()
+                        NavigationStack { notePage }
                     }
-                }
-                .task { await load() }
+                #else
+                    NavigationStack { notePage }
+                #endif
+            }
+            .task { await load() }
+        }
+
+        @ViewBuilder private var notePage: some View {
+            if let loaded {
+                NoteView(model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note))
+                    .modifier(MatrixReady())
+            } else {
+                ProgressView()
             }
         }
 
         private func focus(for note: NoteViewModel) -> NoteView.InitialFocus {
             if editingTitle { return .title }
             if example == .editing, let first = note.items.first { return .segment(first.id) }
-            return .capture
+            return .none
         }
 
         private func load() async {
@@ -196,7 +227,8 @@
                 let states: [InkState] = [
                     .ready, .recognising, .failed(KnotError.recognitionFailed.code), .ready,
                 ]
-                for (index, state) in states.enumerated() {
+                let labels: [VisibleState] = [.ready, .savedTextOnItsWay, .needsYou, .keptNoText]
+                for (index, state) in states.enumerated() where inkState == nil || labels[index] == inkState {
                     let drawing = try await fixture.recordFile(kind: .ink, note: note)
                     if index == 0 {
                         _ = try await environment.notes.replaceText(
@@ -226,15 +258,26 @@
 
         private func seedVoiceStates(in note: NoteID, fixture: MatrixFixture) async throws {
             let notes = fixture.environment.notes
-            let watch = try await fixture.recordFile(kind: .voice, note: note)
-            _ = try await notes.setState(.voice(.onWatch), of: watch)
-            _ = try await fixture.recordFile(kind: .voice, note: note)
-            let ready = try await fixture.recordFile(kind: .voice, note: note)
-            try await fixture.readyVoice(ready, text: "Call the roofer.")
-            let failed = try await fixture.recordFile(kind: .voice, note: note)
-            _ = try await notes.setState(.voice(.failed(.transcribe, KnotError.transcriptionFailed.code)), of: failed)
-            let kept = try await fixture.recordFile(kind: .voice, note: note)
-            _ = try await notes.setState(.voice(.ready), of: kept)
+            if voiceState == nil || voiceState == .savedOnWatch {
+                let watch = try await fixture.recordFile(kind: .voice, note: note)
+                _ = try await notes.setState(.voice(.onWatch), of: watch)
+            }
+            if voiceState == nil || voiceState == .savedTextOnItsWay {
+                _ = try await fixture.recordFile(kind: .voice, note: note)
+            }
+            if voiceState == nil || voiceState == .ready {
+                let ready = try await fixture.recordFile(kind: .voice, note: note)
+                try await fixture.readyVoice(ready, text: "Call the roofer.")
+            }
+            if voiceState == nil || voiceState == .needsYou {
+                let failed = try await fixture.recordFile(kind: .voice, note: note)
+                _ = try await notes.setState(
+                    .voice(.failed(.transcribe, KnotError.transcriptionFailed.code)), of: failed)
+            }
+            if voiceState == nil || voiceState == .keptNoText {
+                let kept = try await fixture.recordFile(kind: .voice, note: note)
+                _ = try await notes.setState(.voice(.ready), of: kept)
+            }
         }
 
         private func seededFixture(in previewRoot: URL) throws -> MatrixFixture {
@@ -249,16 +292,28 @@
             if example == .conflict {
                 segments.append(try Build.conflictCopy(of: first, losingDevice: ids.make(), text: "Ask on Thursday."))
             } else if example == .marked {
-                segments.append(
-                    try Build.typed(ids.make(), in: note, from: date, text: "Added a follow-up.", origin: .cli))
-                var newer = first
-                newer.id = ids.make()
+                segments = [
+                    try Build.typed(ids.make(), in: note, from: date, text: "Added a follow-up.", origin: .cli)
+                ]
+                var newer = try Build.typed(
+                    ids.make(), in: note, from: date.addingTimeInterval(1), text: "Ask about the roof estimate.",
+                    origin: origin)
                 newer.state = .unknown("preview.newer")
                 segments.append(newer)
+                var unreadable = try Build.typed(
+                    ids.make(), in: note, from: date.addingTimeInterval(2), text: "Unreadable example",
+                    origin: origin)
+                unreadable.text = ""
+                unreadable.state = .unknown("preview.newer")
+                segments.append(unreadable)
             } else if example == .voiceStates {
-                var elsewhere = try Build.voice(ids.make(), in: note, from: date, transcript: "", device: ids.make())
-                elsewhere.state = .voice(.recorded)
-                segments.append(elsewhere)
+                if voiceState != nil { segments = [] }
+                if voiceState == nil || voiceState == .savedTextBeingMadeElsewhere {
+                    var elsewhere = try Build.voice(
+                        ids.make(), in: note, from: date, transcript: "", device: ids.make())
+                    elsewhere.state = .voice(.recorded)
+                    segments.append(elsewhere)
+                }
             } else if example == .attachments {
                 var missing = try Build.voice(
                     ids.make(), in: note, from: date, transcript: "Audio unavailable.", device: base.context.thisDevice)

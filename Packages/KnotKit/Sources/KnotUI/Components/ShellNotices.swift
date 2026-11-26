@@ -4,6 +4,7 @@
 
     /// The app shows a decision inline while iCloud sync is paused.
     public struct SyncPresentation: View {
+        @Environment(\.knotTheme) private var theme
         let question: SyncQuestion
         let answer: (SyncAnswer) -> Void
 
@@ -19,19 +20,31 @@
                     ? localized("The iCloud account changed.") : localized("Notes were removed from iCloud."),
                 symbol: accountChanged ? "person.crop.circle" : "icloud.slash"
             ) {
-                VStack(alignment: .leading) {
-                    Button {
-                        answer(.keepPaused)
-                    } label: {
-                        Text("Keep sync paused", bundle: .module)
-                    }
-                    Button {
-                        answer(.upload)
-                    } label: {
-                        Text("Upload local notes", bundle: .module)
-                    }
+                if accountChanged {
+                    keepPaused.modifier(NoticeActionStyle())
+                } else {
+                    keepPaused
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .tint(theme.colors[.textPrimary])
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                Button {
+                    answer(.upload)
+                } label: {
+                    Text("Upload local notes", bundle: .module)
                 }
                 .modifier(NoticeActionStyle())
+            }
+        }
+
+        private var keepPaused: some View {
+            Button {
+                answer(.keepPaused)
+            } label: {
+                Text("Keep sync paused", bundle: .module)
             }
         }
     }
@@ -42,6 +55,7 @@
         public var body: some View {
             ProgressView {
                 Text("Downloading the speech model…", bundle: .module)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -51,10 +65,12 @@
         public struct MissingFile: Identifiable, Sendable {
             public let id: AssetID
             public let kind: AssetKind
+            public let noteLabel: String?
 
-            public init(id: AssetID, kind: AssetKind) {
+            public init(id: AssetID, kind: AssetKind, noteLabel: String? = nil) {
                 self.id = id
                 self.kind = kind
+                self.noteLabel = noteLabel
             }
         }
 
@@ -88,10 +104,16 @@
                 if !missing.isEmpty {
                     Section {
                         ForEach(missing) { file in
-                            LabeledContent {
-                                Text(file.id.description)
-                            } label: {
-                                Text(file.kind == .audio ? "Recording" : "Drawing", bundle: .module)
+                            let kind =
+                                switch file.kind {
+                                case .audio: localized("Recording")
+                                case .ink: localized("Drawing")
+                                case .unknown: localized("Attachment")
+                                }
+                            if let noteLabel = file.noteLabel {
+                                Text("\(kind) in \(noteLabel)", bundle: .module)
+                            } else {
+                                Text(kind)
                             }
                         }
                     } header: {

@@ -38,6 +38,8 @@ public struct ArrivedMarker: View {
         Circle()
             .fill(theme.colors[.arrived])
             .frame(width: theme.sizes.arrivalDot, height: theme.sizes.arrivalDot)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isImage)
             .accessibilityLabel(Text("Arrived", bundle: .module))
     }
 }
@@ -66,9 +68,11 @@ public struct OriginMarkView: View {
 public struct SegmentStateLabel: View {
     @Environment(\.knotTheme) private var theme
     let state: VisibleState
+    let label: String
 
-    public init(_ state: VisibleState) {
+    public init(_ state: VisibleState, label: String? = nil) {
         self.state = state
+        self.label = label ?? state.label
     }
 
     public var body: some View {
@@ -79,7 +83,7 @@ public struct SegmentStateLabel: View {
                         .foregroundStyle(theme.colors[state == .needsYou ? .attention : .textSecondary])
                         .accessibilityHidden(true)
                 }
-                Text(state.label)
+                Text(label)
                     .foregroundStyle(theme.colors[.textSecondary])
             }
             .font(theme.type[state == .needsYou ? .emphasizedStateLine : .stateLine])

@@ -6,11 +6,11 @@
     import SwiftUI
 
     enum PreviewSurface {
-        case phone, pad, panel, window, watch
+        case phone, compactPad, pad, panel, compactWindow, window, watch
 
         var size: CGSize {
             switch self {
-            case .phone: CGSize(width: 390, height: 844)
+            case .phone, .compactPad, .compactWindow: CGSize(width: 390, height: 844)
             case .pad: CGSize(width: 700, height: 900)
             case .panel: CGSize(width: 640, height: 280)
             case .window: CGSize(width: 1024, height: 700)
@@ -21,15 +21,15 @@
         var captureSurface: CaptureSurface {
             switch self {
             case .panel: .macPanel
-            case .window: .macWindow
+            case .window, .compactWindow: .macWindow
             default: .app
             }
         }
 
         var settingsPlatform: SettingsPlatform {
             switch self {
-            case .pad: .iPad
-            case .panel, .window: .mac
+            case .pad, .compactPad: .iPad
+            case .panel, .compactWindow, .window: .mac
             default: .iPhone
             }
         }
@@ -151,6 +151,7 @@
             let example: CaptureExample
             @State private var loaded: Loaded?
             @State private var presentsCapture = true
+            var showsSpeechDownload = false
 
             private struct Loaded {
                 let model: NoteViewModel
@@ -196,13 +197,23 @@
             }
 
             private func note(_ loaded: Loaded) -> some View {
-                // The standalone preview host does not get SwiftUI's keyboard accessory bar.
-                NoteView(model: loaded.model, player: loaded.player, usesKeyboardToolbar: surface != .phone)
+                NoteView(model: loaded.model, player: loaded.player, initialFocus: focusForPreview)
+                    .safeAreaInset(edge: .top) {
+                        if showsSpeechDownload { SpeechDownloadNotice() }
+                    }
                     .modifier(MatrixReady())
                     .onDisappear {
                         loaded.releaseStart?.finish()
                         if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
                     }
+            }
+
+            private var focusForPreview: NoteView.InitialFocus? {
+                switch example {
+                case .older: .capture
+                case .permission, .saveFailure, .saved, .discarded: .some(.none)
+                default: nil
+                }
             }
 
             private func load() async {
@@ -231,6 +242,8 @@
                 if example == .discarded { environment.clock = pressClock }
                 if example == .saved {
                     (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.notInstalled)
+                    (environment.recorder as? ScriptedRecorder)?.setScript(
+                        .init(framesPerBuffer: 192_000, buffers: 1))
                 }
                 if example == .live || example == .blocked {
                     (environment.recorder as? ScriptedRecorder)?.setScript(
@@ -268,9 +281,20 @@
                     loaded = Loaded(model: model, player: player, releaseStart: pendingStart?.continuation)
                     return
                 case .saved:
+                    let states = engine.states()
                     model.press(.holdStart)
                     await model.settle()
-                    model.press(.holdRelease)
+                    if let id = model.activeRecording {
+                        for await state in states where state.captureID == id {
+                            if state.durableRevision >= 192_000 || state.outcome != .open { break }
+                        }
+                        model.press(.holdRelease)
+                        await model.settle()
+                        let values = PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                        let peaks = RecordingPeaks.header(framesPerValue: 4_000) + Data(values)
+                        try? await environment.notes.setPeaks(peaks, of: SegmentID(id))
+                        await model.refresh()
+                    }
                 case .discarded:
                     model.toggleRecording()
                     await model.settle()
@@ -330,7 +354,17 @@
                     continuation.yield(
                         .transcript(LiveTranscript(final: "Ask about the roof ", volatile: "estimate.")))
                     let task = Task {
-                        for await event in events { continuation.yield(event) }
+                        let levels = PreviewSamples.levels
+                        var index = 0
+                        for await event in events {
+                            if case .level = event, !levels.isEmpty {
+                                let peak = levels[index % levels.count]
+                                continuation.yield(.level(peak: peak, average: peak * 0.7))
+                                index += 1
+                            } else {
+                                continuation.yield(event)
+                            }
+                        }
                         continuation.finish()
                     }
                     continuation.onTermination = { _ in task.cancel() }
@@ -338,11 +372,13 @@
             }
         }
 
-        // WP-33 owns the panel’s capture destination. The limit notice waits for the recording contract.
+        // WP-33 owns the panel’s capture destination. The limit notice is a stand-in until WP-21 wires it.
         struct RecordingMatrixPreview: View {
             let surface: PreviewSurface
             let example: RecordingExample
             @FocusState private var focused: Bool
+            @State private var showsLimitNotice = true
+            @Environment(\.knotTheme) private var theme
 
             var body: some View {
                 matrixFrame(surface) {
@@ -372,11 +408,30 @@
 
             private var page: some View {
                 VStack(alignment: .leading) {
-                    if example == .limit {
-                        Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill")
+                    if example == .limit, showsLimitNotice {
+                        Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill") {
+                            Button {
+                                showsLimitNotice = false
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(theme.type[.stateLine])
+                                    .imageScale(.small)
+                                    .foregroundStyle(theme.colors[.textSecondary])
+                                    .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                                    .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss")
+                        }
                     }
                     if example.outcome == .saved {
-                        SegmentView(PreviewSamples.pendingRecording, handlers: .none)
+                        SegmentView(
+                            savedSample,
+                            handlers: SegmentHandlers(
+                                edit: { _ in }, action: { _ in },
+                                recordingPeaks: {
+                                    PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                                }))
                     }
                     if example.phase.isRecording {
                         if example == .destination || example == .newDestination, let message = example.notice {
@@ -395,6 +450,12 @@
                 .padding()
             }
 
+            private var savedSample: SegmentItem {
+                var sample = PreviewSamples.pendingRecording
+                if example == .limit { sample.duration = .seconds(1_800) }
+                return sample
+            }
+
             private var controls: some View {
                 HStack {
                     if surface == .panel {
@@ -406,14 +467,15 @@
                     if example.outcome == .saved { Text("Saved") }
                     if let duration = example.duration { Text(ClockText.of(duration)).monospacedDigit() }
                     RecordButton(
-                        phase: example.phase, elapsed: example.duration, outcome: example.outcome
+                        phase: example.phase, elapsed: example.duration, outcome: example.outcome,
+                        toolbar: surface != .panel
                     ) {}
                 }
             }
         }
 
         enum SettingsExample {
-            case full, sync, prompts, export, firstRun
+            case full, sync, export
         }
 
         struct SettingsMatrixPreview: View {
@@ -441,35 +503,18 @@
                             ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
                         }
                         .modifier(MatrixReady())
-                    case .prompts:
-                        Form {
-                            SyncPresentation(question: .accountChanged) { _ in }
-                            SyncPresentation(question: .zoneRemoved(.purged)) { _ in }
-                        }
-                        .modifier(MatrixReady())
                     case .export:
                         List {
                             ExportResultRows(.exporting)
                             ExportResultRows(
                                 .complete(
                                     notes: 2,
-                                    missing: [.init(id: PreviewSamples.ids.make(), kind: .audio)]))
+                                    missing: [
+                                        .init(id: PreviewSamples.ids.make(), kind: .audio, noteLabel: "Roof repair")
+                                    ]))
                         }
                         .modifier(MatrixReady())
-                    case .firstRun:
-                        // WP-30 owns first-run routing and the model download states.
-                        FirstRunView(FirstRunContent(syncLine: nil, setupRows: [.actionButton])) { _ in }
-                            .modifier(MatrixReady())
-                            .safeAreaInset(edge: .bottom) {
-                                VStack {
-                                    Banner(
-                                        SurfaceProblem.couldNotStartRecording(
-                                            KnotError.microphonePermissionRefused.code
-                                        ).message,
-                                        symbol: "mic.slash")
-                                    SpeechDownloadNotice()
-                                }
-                            }
+
                     }
                 }
             }

@@ -200,6 +200,7 @@ import Testing
         #expect(theme.sizes.readableWidth == 672)
         #expect(theme.sizes.macPanelWidth == 640)
         #expect(theme.sizes.waveformBar == 2)
+        #expect(theme.sizes.arrivalDot == 8)
     }
 
     @Test func theEnvironmentCarriesCustomMetrics() {

@@ -11,6 +11,19 @@ output="${1:?Name an output folder for the PNGs and index}"
 mkdir -p "$output"
 output="$(cd "$output" && pwd -P)"
 scratch="$(mktemp -d)"
+cleanup_build() {
+    local status=$?
+    # The generated project and its logs can be inspected after rendering. The
+    # scratch build is specific to this run and does not need to stay on disk.
+    (
+        cd -- "$scratch"
+        if [[ -d ./DerivedData ]]; then /usr/bin/find ./DerivedData -depth -delete; fi
+    ) || status=1
+    exit "$status"
+}
+trap cleanup_build EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 mkdir "$scratch/Sources"
 preview_sources="$repo/Packages/KnotKit/Sources/KnotUIPreviews"
 cp "$preview_sources/"*.swift "$scratch/Sources/"

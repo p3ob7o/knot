@@ -51,21 +51,15 @@ public struct StreamRowView: View {
                     .foregroundStyle(theme.colors[.textSecondary])
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: theme.spacing.space1) {
-                // The time always stays on the row (docs/product-spec.md §7): it wraps rather
-                // than being clipped at large text sizes.
-                Text(time)
-                    .fixedSize(horizontal: false, vertical: true)
-                if parts.contains(.kinds) {
-                    ForEach(row.kinds, id: \.rawValue) { kind in
-                        Image(systemName: kind.symbol)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: theme.spacing.space1) {
+                    Text(time)
+                    markers(parts, size: size)
                 }
-                if size != .regular {
-                    Spacer(minLength: theme.spacing.space1)
-                    if parts.contains(.failedMarker) { FailedMarker() }
-                    if parts.contains(.pendingMarker) { PendingMarker() }
-                    if parts.contains(.arrivedMarker) { ArrivedMarker() }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: theme.spacing.space1) {
+                    Text(time)
+                    markers(parts, size: size)
                 }
             }
             .font(theme.type[.metaLine])
@@ -73,6 +67,20 @@ public struct StreamRowView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.accessibilityLabel(time: time))
+    }
+    private func markers(_ parts: Set<RowPart>, size: RowTextSize) -> some View {
+        HStack(spacing: theme.spacing.space1) {
+            if parts.contains(.kinds) {
+                ForEach(row.kinds, id: \.rawValue) { kind in
+                    Image(systemName: kind.symbol)
+                }
+            }
+            if size != .regular {
+                if parts.contains(.failedMarker) { FailedMarker() }
+                if parts.contains(.pendingMarker) { PendingMarker() }
+                if parts.contains(.arrivedMarker) { ArrivedMarker() }
+            }
+        }
     }
 }
 

@@ -942,7 +942,6 @@ public final class NoteViewModel {
         return parts.joined(separator: "\n\n")
     }
 
-    /// The file of a segment's recording or drawing on this device, for the player and Share.
     /// The stored peaks for the waveform. Older recordings or recordings from other devices
     /// can have no peaks. Playback remains available in either case.
     public func recordingPeaks(of item: SegmentItem) async -> [UInt8] {
@@ -952,6 +951,7 @@ public final class NoteViewModel {
         return RecordingPeaks(reading: data)?.values ?? []
     }
 
+    /// The file of a segment's recording or drawing on this device, for the player and Share.
     public func file(of item: SegmentItem) async -> URL? {
         guard case .here(let asset) = item.attachment else { return nil }
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url

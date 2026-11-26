@@ -1,4 +1,4 @@
-"""Index the rendered PNGs against the iPhone handoff inventory."""
+"""Index rendered PNGs by matrix cell and the handoff check's iPhone evidence."""
 
 import json
 import re
@@ -6,59 +6,77 @@ import sys
 from pathlib import Path
 
 
-def handoff_references(repo):
-    references = {}
-    check = (repo / "docs/design/handoff-check.md").read_text()
-    has_design = {}
-    for line in check.split("## The list for the designer", 1)[0].splitlines():
+HANDOFF = Path("docs/design/handoff")
+
+# The matrix gives these complete cells a verdict but does not repeat their file names
+# in the gap or rule tables. These are the corresponding artboards and components.
+DRAWINGS = {
+    "Capture, typing": "screens/Main.dc.html",
+    "Capture inside an older note": "screens/iPhone-Note.dc.html",
+    "Recording, live": "screens/iPhone-Recording.dc.html",
+    "Stream, populated": "screens/iPhone-Stream.dc.html",
+    "Stream, rows pending and failed": "screens/iPhone-Stream.dc.html",
+    "Stream, captures arrived late": "screens/iPhone-Stream.dc.html",
+    "Stream, notes could not be opened": "system/components/Notice/preview.html",
+    "Note, mixed segments": "system/components/Segment/preview.html",
+    "Voice segment, each of its six states": "system/components/VoiceStates/preview.html",
+    "Segment from the command line; from a newer Knot": "screens/States.dc.html",
+    "Delete with undo; share": "system/components/SegmentMenu/preview.html",
+}
+
+
+def table(section):
+    for line in section.splitlines():
         if line.startswith("| "):
-            columns = [item.strip() for item in line.strip("|").split("|")]
-            if len(columns) == 7:
-                has_design[columns[0]] = columns[1]
-    iphone = check.split("## The list for the designer", 1)[1]
-    iphone = iphone.split("### iPhone", 1)[1].split("\n### ", 1)[0]
-    for line in iphone.splitlines():
-        columns = [item.strip() for item in line.strip("|").split("|")]
-        if not line.startswith("| ") or len(columns) != 3:
+            yield [
+                value.strip().replace(r"\|", "|")
+                for value in re.split(r"(?<!\\)\|", line.strip("|"))
+            ]
+
+
+def cited_files(evidence, repo):
+    names = re.findall(r"[\w./-]+\.(?:html|md)\b", evidence)
+    candidates = [file.relative_to(repo / HANDOFF).as_posix() for file in (repo / HANDOFF).rglob("*")]
+    paths = []
+    for name in names:
+        name = name.split("handoff/")[-1]
+        matches = [path for path in candidates if path == name or path.endswith("/" + name)]
+        if len(matches) == 1 and matches[0] not in paths:
+            paths.append(matches[0])
+    return paths
+
+
+def section(check, start, end):
+    return check.split(start, 1)[1].split(end, 1)[0]
+
+
+def handoff_references(repo):
+    check = (repo / "docs/design/handoff-check.md").read_text()
+    matrix = section(check, "## The matrix, filled in", "## The list for the designer")
+    gap = section(check, "\n### iPhone\n", "\n### iPad\n")
+    rules = section(check, "## Cells with a rule and no picture", "## What the draft brief changes")
+    evidence = {row[0]: row[1] for row in table(gap) if len(row) == 3}
+    evidence.update({row[0]: row[2] for row in table(rules) if len(row) == 3 and row[1] == "iPhone"})
+    files = {}
+    for row in table(matrix):
+        if len(row) != 7 or row[0] == "State" or row[1] == "–":
             continue
-        cell, designed, _ = columns
-        if designed == "Nothing" or "Not designed" in has_design.get(cell, ""):
-            references[cell] = []
+        cell, status = row[:2]
+        status = status.strip("*")
+        if status == "Not designed":
+            paths = []
+        elif cell in evidence:
+            paths = cited_files(evidence[cell], repo)
+            if status != "Stated":
+                paths.sort(key=lambda path: not path.endswith(".html"))
         else:
-            references[cell] = re.findall(
-                r"(?:screens|system|components)/[\w./-]+\.(?:html|md)", designed
-            )
-    return references
-
-
-def file_for(cell, references):
-    if cell in references and not references[cell]:
-        return "not designed"
-    if cell in references:
-        path = references[cell][0]
-    elif cell.startswith("Capture,"):
-        path = "screens/Main.dc.html"
-    elif cell.startswith("Recording,"):
-        path = "screens/iPhone-Recording.dc.html"
-    elif cell.startswith("Stream,"):
-        path = "screens/iPhone-Stream.dc.html"
-    elif cell.startswith("Voice segment"):
-        path = "components/VoiceStates/preview.html"
-    elif cell.startswith(("Note,", "Capture inside")):
-        path = "screens/iPhone-Note.dc.html"
-    elif cell.startswith("Delete with undo"):
-        path = "components/SegmentMenu/preview.html"
-    elif cell.startswith("Segment from"):
-        path = "system/02-states.md"
-    elif cell.startswith("Short recording"):
-        path = "system/02-states.md"
-    elif cell.startswith("First run:"):
-        path = "components/FirstRun/preview.html"
-    else:
-        return "not designed"
-    if path.startswith("components/"):
-        path = "system/" + path
-    return "docs/design/handoff/" + path
+            paths = [DRAWINGS[cell]]
+        if status != "Not designed" and not paths:
+            raise ValueError(f"No handoff evidence for {cell} ({status})")
+        files[cell] = (status, paths)
+    if any(files[cell][0] not in ("Drawn", "Component") for cell in DRAWINGS):
+        raise ValueError("A drawing's handoff verdict has changed")
+    return files
 
 
 def write_index(catalog, output, repo):
@@ -66,18 +84,35 @@ def write_index(catalog, output, repo):
     lines = [
         "# WP-40a iPhone preview renders",
         "",
+        "The standalone host renders the keyboard-up capture cells (empty, typing, adding,",
+        "and capture inside an older note) without the app's native keyboard accessory bar.",
+        "",
+        "The stopped-at-the-limit cell is a dismissible stand-in until WP-21 wires the engine reason.",
+        "",
         "| Image | Preview and matrix cell | Handoff |",
         "|---|---|---|",
     ]
+    coverage = {}
     for _, name, cell, slug in json.loads(catalog.read_text()):
-        handoff = file_for(cell, references)
+        status, paths = references[cell]
+        if cell == "First run: microphone, model downloading, Action Button":
+            component = "FirstRun" if name.endswith("(1)") else "Notice"
+            primary = next(path for path in paths if path.endswith(f"/{component}/preview.html"))
+        else:
+            primary = paths[0] if paths else None
+        handoff = str(HANDOFF / primary) if primary else "not designed"
+        if primary and not (repo / handoff).is_file():
+            raise FileNotFoundError(handoff)
+        coverage[cell] = (status, paths)
         for appearance in ("light-default", "dark-default", "light-ax5"):
             filename = f"{slug}-{appearance}.png"
             if not (output / filename).is_file():
                 raise FileNotFoundError(filename)
-            if handoff != "not designed" and not (repo / handoff).is_file():
-                raise FileNotFoundError(handoff)
             lines.append(f"| [{filename}]({filename}) | {name} | {handoff} |")
+    lines.extend(["", "## Coverage recorded in the handoff check", ""])
+    for cell, (status, paths) in coverage.items():
+        evidence = ", ".join(f"`{HANDOFF / path}`" for path in paths)
+        lines.append(f"- {cell}. {status}." + (f" {evidence}" if evidence else ""))
     (output / "index.md").write_text("\n".join(lines) + "\n")
 
 

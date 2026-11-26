@@ -101,6 +101,31 @@ final class KnotIOSLaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testOpeningANoteKeepsItsKeyboardDownAndItsRecordingTrackAllowsScrolling() throws {
+        let app = KnotLauncher.application(.preview)
+        app.launchEnvironment["KNOT_PREVIEW_SCROLL_RECORDING"] = "1"
+        app.launch()
+        try assertStreamShows("Synthetic speech follow-up", in: app)
+        let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Synthetic speech follow-up"))
+            .firstMatch
+        note.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: limit))
+
+        let track = app.descendants(matching: .any).matching(identifier: "recording.position").firstMatch
+        XCTAssertTrue(track.waitForExistence(timeout: limit))
+        XCTAssertTrue(track.isHittable)
+        let trackY = track.frame.midY
+        let initialPosition = track.value as? String
+        let start = track.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+        let earlier = start.withOffset(CGVector(dx: 0, dy: -160))
+        start.press(forDuration: 0.1, thenDragTo: earlier)
+
+        XCTAssertTrue(!track.isHittable || track.frame.midY < trackY - 20)
+        if track.exists { XCTAssertEqual(track.value as? String, initialPosition) }
+        try app.auditAccessibility()
+    }
+
+    @MainActor
     func testNotesShowsLiveRecordingAfterClosingCapture() throws {
         let app = KnotLauncher.launch(.preview)
         let record = app.buttons["Record"]

@@ -2,9 +2,10 @@ import Foundation
 import KnotCore
 import KnotFakes
 import KnotTestSupport
-import KnotUI
 import Synchronization
 import Testing
+
+@testable import KnotUI
 
 /// The stream and its rows (docs/product-spec.md §7 and §12).
 @MainActor
@@ -71,16 +72,31 @@ import Testing
     }
 
     @Test(arguments: RowTextSize.allCases)
-    func onlyTheMostUrgentMarkIsVisible(at size: RowTextSize) {
+    func arrivalStaysBesideTheMostUrgentProcessingMark(at size: RowTextSize) {
         var row = StreamRowModel(
             id: ids.make(), title: "Synthetic note", preview: nil, kinds: [], time: clock.now(),
             hasPending: true, hasFailed: true, hasArrived: true)
         let marks: Set<RowPart> = [.failedMarker, .pendingMarker, .arrivedMarker]
-        #expect(row.visibleParts(at: size).intersection(marks) == [.failedMarker])
+        #expect(row.visibleParts(at: size).intersection(marks) == [.failedMarker, .arrivedMarker])
         row.hasFailed = false
-        #expect(row.visibleParts(at: size).intersection(marks) == [.pendingMarker])
+        #expect(row.visibleParts(at: size).intersection(marks) == [.pendingMarker, .arrivedMarker])
         row.hasPending = false
         #expect(row.visibleParts(at: size).intersection(marks) == [.arrivedMarker])
+    }
+
+    @Test(arguments: [
+        (6, "09:41"), (5, "Yesterday"), (4, "Wed"), (2, "Mon"), (1, "1 Nov"), (7, "7 Nov"),
+    ])
+    func compactTimeDistinguishesTheDayAndWeek(day: Int, expected: String) throws {
+        let locale = Locale(identifier: "en_GB")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = 2
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 6, hour: 12)))
+        let date = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: 9, minute: 41)))
+        #expect(compactStreamTime(date, now: now, calendar: calendar, locale: locale) == expected)
     }
 
     @Test func aTitleWinsOverTheFirstLine() throws {
@@ -115,7 +131,7 @@ import Testing
         #expect(row(record([sketch], in: note)).title == "Sketch")
     }
 
-    @Test func atLargeSizesThePreviewGivesWayFirstThenTheKinds() throws {
+    @Test func atLargeSizesThePreviewGivesWayAndTheKindsStay() throws {
         let note: NoteID = ids.make()
         let first = try Build.typed(ids.make(), in: note, from: clock.now(), text: "first", origin: .device(device))
         var failed = try Build.voice(
@@ -131,9 +147,7 @@ import Testing
         #expect(large.isSuperset(of: [.title, .time, .failedMarker, .kinds]))
         let largest = model.visibleParts(at: .largest)
         #expect(!largest.contains(.preview))
-        #expect(!largest.contains(.kinds))
-        // The title or first line, the time and a failed marker always stay.
-        #expect(largest.isSuperset(of: [.title, .time, .failedMarker]))
+        #expect(largest.isSuperset(of: [.title, .time, .failedMarker, .kinds]))
         // VoiceOver reads every part, whatever the size.
         let label = model.accessibilityLabel(time: "now")
         #expect(label.contains("second"))

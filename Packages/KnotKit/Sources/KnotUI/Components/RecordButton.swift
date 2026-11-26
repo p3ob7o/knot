@@ -88,6 +88,8 @@ public struct RecordButton: View {
                 .font(theme.type[.rowTitle])
                 #if os(iOS)
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                    .contentShape(.rect)
                 #else
                     .frame(
                         minWidth: toolbar ? theme.sizes.hitTarget : nil,

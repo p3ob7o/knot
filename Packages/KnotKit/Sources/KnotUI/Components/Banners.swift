@@ -4,7 +4,6 @@ import SwiftUI
 /// A line across the top of a surface: what is wrong, or what can be undone.
 public struct Banner<Actions: View>: View {
     @Environment(\.knotTheme) private var theme
-    @Environment(\.dynamicTypeSize) private var typeSize
     let message: String
     let symbol: String
     let role: ColorRole
@@ -13,7 +12,7 @@ public struct Banner<Actions: View>: View {
     let actions: Actions
 
     public init(
-        _ message: String, symbol: String, role: ColorRole = .textSecondary,
+        _ message: String, symbol: String, role: ColorRole = .textPrimary,
         open: (() -> Void)? = nil, openAccessibilityLabel: String? = nil, @ViewBuilder actions: () -> Actions
     ) {
         self.message = message
@@ -26,13 +25,21 @@ public struct Banner<Actions: View>: View {
 
     public var body: some View {
         #if os(iOS)
-            let layout =
-                typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: theme.spacing.space2))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: theme.spacing.space3))
-            layout {
-                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
-                layout { actions }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) {
+                    HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
+                        .fixedSize(horizontal: true, vertical: false)
+                    HStack(spacing: theme.spacing.space2) { actions }
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                VStack(alignment: .leading, spacing: theme.spacing.space2) {
+                    HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: theme.spacing.space2) { actions }
+                            .fixedSize(horizontal: true, vertical: false)
+                        VStack(alignment: .leading, spacing: theme.spacing.space2) { actions }
+                    }
+                }
             }
             .padding(.horizontal, theme.spacing.space4)
             .padding(.vertical, theme.spacing.space3)
@@ -76,7 +83,7 @@ public struct Banner<Actions: View>: View {
 }
 
 extension Banner where Actions == EmptyView {
-    public init(_ message: String, symbol: String, role: ColorRole = .textSecondary) {
+    public init(_ message: String, symbol: String, role: ColorRole = .textPrimary) {
         self.init(message, symbol: symbol, role: role) { EmptyView() }
     }
 }
@@ -90,6 +97,8 @@ public struct NoticeActionStyle: ViewModifier {
     public func body(content: Content) -> some View {
         #if os(iOS)
             content
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .fixedSize(horizontal: true, vertical: false)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
@@ -119,7 +128,7 @@ public struct NoticeActionStyle: ViewModifier {
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: theme.spacing.space1))
                 : AnyLayout(HStackLayout(spacing: theme.spacing.space3))
             layout {
-                Text(offer.label)
+                Label(offer.label, systemImage: "arrow.uturn.backward")
                     .font(theme.type[.notice])
                     .fixedSize(horizontal: false, vertical: true)
                 Button(action: undo) {
@@ -165,6 +174,7 @@ public struct FirstRunView: View {
                         .foregroundStyle(theme.colors[.textSecondary])
                 }
             }
+            .listRowSeparator(.hidden)
             ForEach(content.setupRows) { row in
                 HStack(spacing: theme.spacing.space2) {
                     if let onOpen {
@@ -239,6 +249,9 @@ public struct FirstRunView: View {
             onDismiss(row)
         } label: {
             Image(systemName: "xmark")
+                .font(theme.type[.stateLine])
+                .imageScale(.small)
+                .foregroundStyle(theme.colors[.textSecondary])
                 #if os(iOS)
                     .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
                     .contentShape(.rect)

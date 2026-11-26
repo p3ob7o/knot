@@ -76,4 +76,31 @@
             }
         }
     }
+    /// The pushed note uses the same menu label and toolbar placement in the app and previews.
+    public struct PhoneNoteToolbar<Items: View>: ToolbarContent {
+        let items: Items
+
+        public init(@ViewBuilder items: () -> Items) {
+            self.items = items()
+        }
+
+        public var body: some ToolbarContent {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    items
+                } label: {
+                    label
+                }
+                .accessibilityShowsLargeContentViewer { label }
+            }
+        }
+
+        private var label: some View {
+            Label {
+                Text("Note actions", bundle: .module)
+            } icon: {
+                Image(systemName: "ellipsis")
+            }
+        }
+    }
 #endif

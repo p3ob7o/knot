@@ -9,6 +9,7 @@ public struct AudioPlayerView: View {
     let peaks: [UInt8]
     let onToggle: () -> Void
     let onSeek: (Duration) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     public init(
         state: PlaybackState, length: Duration?, peaks: [UInt8] = [],
@@ -36,34 +37,55 @@ public struct AudioPlayerView: View {
 
     public var body: some View {
         let (at, of) = position
-        HStack(spacing: theme.spacing.regular) {
-            Button(action: onToggle) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    #if os(iOS)
-                        .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
-                        .contentShape(.rect)
-                    #endif
+        #if os(iOS)
+            let layout =
+                typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: theme.spacing.space1))
+                : AnyLayout(HStackLayout(spacing: theme.spacing.regular))
+            layout {
+                HStack(spacing: theme.spacing.regular) {
+                    playButton
+                    playbackTrack(at: at, length: of)
+                }
+                time(at: at, of: of)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isPlaying ? Text("Pause", bundle: .module) : Text("Play", bundle: .module))
-            #if os(iOS)
-                playbackTrack(at: at, length: of)
-            #elseif !os(watchOS) && !os(tvOS)
-                Slider(
-                    value: Binding(
-                        get: { seconds(at) },
-                        set: { onSeek(.milliseconds(Int64($0 * 1000))) }),
-                    in: 0...max(seconds(of), 0.001)
-                )
-                .accessibilityLabel(Text("Position", bundle: .module))
-                .accessibilityValue(Text(ClockText.of(at)))
-            #endif
-            Text("\(ClockText.of(at)) / \(ClockText.of(of))")
-                .font(theme.type[.playerTime])
-                .monospacedDigit()
-                .foregroundStyle(theme.colors[.textSecondary])
-                .accessibilityHidden(true)
+        #else
+            HStack(spacing: theme.spacing.regular) {
+                playButton
+                #if !os(watchOS) && !os(tvOS)
+                    Slider(
+                        value: Binding(
+                            get: { seconds(at) },
+                            set: { onSeek(.milliseconds(Int64($0 * 1000))) }),
+                        in: 0...max(seconds(of), 0.001)
+                    )
+                    .accessibilityLabel(Text("Position", bundle: .module))
+                    .accessibilityValue(Text(ClockText.of(at)))
+                #endif
+                time(at: at, of: of)
+            }
+        #endif
+    }
+
+    private var playButton: some View {
+        Button(action: onToggle) {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                #if os(iOS)
+                    .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
+                    .contentShape(.rect)
+                #endif
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isPlaying ? Text("Pause", bundle: .module) : Text("Play", bundle: .module))
+    }
+
+    private func time(at: Duration, of: Duration) -> some View {
+        Text(state == .empty ? ClockText.of(of) : "\(ClockText.of(at)) / \(ClockText.of(of))")
+            .font(theme.type[.playerTime])
+            .monospacedDigit()
+            .foregroundStyle(theme.colors[.textSecondary])
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityHidden(true)
     }
 
     #if os(iOS)
@@ -87,16 +109,23 @@ public struct AudioPlayerView: View {
                 .frame(maxHeight: .infinity)
                 .contentShape(.rect)
                 .gesture(
-                    DragGesture(minimumDistance: 0).onEnded { drag in
-                        guard total > 0, geometry.size.width > 0 else { return }
-                        let fraction = min(max(drag.location.x / geometry.size.width, 0), 1)
-                        onSeek(.seconds(total * fraction))
+                    SpatialTapGesture().onEnded { tap in
+                        seek(at: tap.location.x, width: geometry.size.width, total: total)
+                    }
+                )
+                .simultaneousGesture(
+                    DragGesture().onEnded { drag in
+                        guard abs(drag.translation.width) > abs(drag.translation.height) else { return }
+                        seek(at: drag.location.x, width: geometry.size.width, total: total)
                     })
             }
             .frame(height: theme.sizes.hitTarget)
             .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("recording.position")
             .accessibilityLabel(Text("Position", bundle: .module))
-            .accessibilityValue(Text("\(ClockText.of(position)) / \(ClockText.of(length))"))
+            .accessibilityValue(
+                Text(state == .empty ? ClockText.of(length) : "\(ClockText.of(position)) / \(ClockText.of(length))")
+            )
             .accessibilityAdjustableAction { direction in
                 let target: Double
                 switch direction {
@@ -107,6 +136,11 @@ public struct AudioPlayerView: View {
                 guard total > 0 else { return }
                 onSeek(.seconds(min(max(target, 0), total)))
             }
+        }
+        private func seek(at x: CGFloat, width: CGFloat, total: Double) {
+            guard total > 0, width > 0 else { return }
+            let fraction = min(max(x / width, 0), 1)
+            onSeek(.seconds(total * fraction))
         }
     #endif
 

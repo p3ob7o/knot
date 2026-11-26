@@ -111,7 +111,13 @@ public struct SegmentItem: Hashable, Sendable, Identifiable {
     }
 
     /// The state's label, or `nil` for a ready segment, which needs none.
-    public var stateLabel: String? { state == .ready ? nil : state.label }
+    public var stateLabel: String? {
+        if state == .ready { return nil }
+        if state == .madeByNewerKnot, !CaptureText.isEmpty(text) {
+            return localized("Made by a newer Knot.")
+        }
+        return state.label
+    }
 
     /// What VoiceOver reads for the segment.
     public var accessibilityLabel: String {
