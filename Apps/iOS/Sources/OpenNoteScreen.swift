@@ -11,23 +11,21 @@ struct OpenNoteScreen: View {
     @Environment(\.timeZone) private var timeZone
     @State private var model: NoteViewModel
     let player: PlayerViewModel
-    let environment: AppEnvironment
     let onDelete: (NoteViewModel) -> Void
 
     init(
-        model: NoteViewModel, player: PlayerViewModel, environment: AppEnvironment,
+        model: NoteViewModel, player: PlayerViewModel,
         onDelete: @escaping (NoteViewModel) -> Void
     ) {
         _model = State(initialValue: model)
         self.player = player
-        self.environment = environment
         self.onDelete = onDelete
     }
 
     var body: some View {
-        NoteScreen(model: model, player: player, environment: environment)
+        NoteScreen(model: model, player: player)
             .navigationBarTitleDisplayMode(.inline)
-            .task(id: remoteAttachments) { await fetchAttachments() }
+            .task(id: model.remoteAttachmentIDs) { await model.fetchAttachments() }
             .toolbar {
                 if let record = model.record, !model.isClosed {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -52,22 +50,6 @@ struct OpenNoteScreen: View {
                     }
                 }
             }
-    }
-
-    private var remoteAttachments: [AssetID] {
-        model.items.compactMap {
-            if case .onAnotherDevice(let asset) = $0.attachment { return asset.id }
-            return nil
-        }
-    }
-
-    private func fetchAttachments() async {
-        for id in remoteAttachments {
-            guard !Task.isCancelled else { return }
-            guard let asset = try? await environment.notes.asset(id) else { continue }
-            _ = try? await environment.fetcher.fetch(asset) { _ in }
-        }
-        await model.refresh()
     }
 
     private func delete() {
@@ -100,19 +82,6 @@ struct SegmentShare: Identifiable {
     let id: SegmentID
     let item: ShareItem
 
-    static func make(_ segment: Segment, environment: AppEnvironment, timeZone: TimeZone) async throws -> Self? {
-        let item =
-            switch segment.kind {
-            case .voice:
-                try await ShareItems.recording(of: segment, assets: environment.assets, timeZone: timeZone)
-            case .ink:
-                try await ShareItems.drawing(
-                    of: segment, assets: environment.assets, drawings: IOSDrawingImages(environment: environment),
-                    timeZone: timeZone)
-            default: nil as ShareItem?
-            }
-        return item.map { Self(id: segment.id, item: $0) }
-    }
 }
 
 struct SegmentShareSheet: View {
@@ -152,19 +121,5 @@ private struct SharedAttachment: Transferable {
         }
         .suggestedFileName { $0.item.suggestedName }
         .exportingCondition { if case .data = $0.item.content { true } else { false } }
-    }
-}
-
-struct IOSDrawingImages: DrawingImageSource {
-    let environment: AppEnvironment
-
-    func image(of asset: AssetID, segment: SegmentID) async -> DrawingImage? {
-        guard let file = try? await environment.assets.find(asset, kind: .ink),
-            let bytes = try? await Task.detached(operation: {
-                try Data(contentsOf: file.url, options: .mappedIfSafe)
-            }).value,
-            let rendered = try? await environment.drawingImages.image(of: InkDrawingData(bytes: bytes), scale: 1)
-        else { return nil }
-        return DrawingImage(png: rendered.png)
     }
 }

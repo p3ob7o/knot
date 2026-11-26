@@ -2,6 +2,10 @@ import Foundation
 import KnotCore
 import Observation
 
+#if !os(watchOS)
+    import KnotExport
+#endif
+
 /// Where the record control stands on a surface.
 public enum RecordingPhase: Hashable, Sendable {
     case idle
@@ -943,6 +947,46 @@ public final class NoteViewModel {
         guard case .here(let asset) = item.attachment else { return nil }
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url
     }
+
+    public var remoteAttachmentIDs: [AssetID] {
+        items.compactMap {
+            if case .onAnotherDevice(let asset) = $0.attachment { return asset.id }
+            return nil
+        }
+    }
+
+    public func fetchAttachments() async {
+        for id in remoteAttachmentIDs {
+            guard !Task.isCancelled else { return }
+            guard let asset = try? await environment.notes.asset(id) else { continue }
+            _ = try? await environment.fetcher.fetch(asset) { _ in }
+        }
+        if !Task.isCancelled { await refresh() }
+    }
+
+    public private(set) var speechDownloading = false
+
+    public func observeSpeechReadiness() async {
+        guard mode == .capture else { return }
+        while !Task.isCancelled {
+            let status = await environment.transcriber.readiness()
+            speechDownloading = status == .notInstalled || status == .installing
+            guard speechDownloading else { return }
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        }
+    }
+
+    #if !os(watchOS)
+        public func shareFile(_ id: SegmentID, timeZone: TimeZone) async throws(KnotError) -> ShareItem? {
+            guard let segment = record?.liveSegments.first(where: { $0.id == id }) else { return nil }
+            switch segment.kind {
+            case .voice:
+                return try await ShareItems.recording(of: segment, assets: environment.assets, timeZone: timeZone)
+            case .ink: return try await ShareItems.drawing(of: segment, assets: environment.assets, timeZone: timeZone)
+            default: return nil
+            }
+        }
+    #endif
 
     /// Reads the stored drawing through the asset and rendering ports.
     public func drawing(of item: SegmentItem, scale: Double) async throws(KnotError) -> RenderedDrawing? {

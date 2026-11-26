@@ -263,7 +263,7 @@ struct ShellView: View {
                 switch screen {
                 case .note(let id):
                     OpenNoteScreen(
-                        model: shell.noteModel(id), player: shell.player, environment: shell.environment,
+                        model: shell.noteModel(id), player: shell.player,
                         onDelete: shell.noteDeleted)
                 case .recentlyDeleted:
                     ContentUnavailableView(
@@ -276,7 +276,7 @@ struct ShellView: View {
             switch sheet {
             case .capture:
                 NavigationStack {
-                    NoteScreen(model: shell.capture, player: shell.player, environment: shell.environment)
+                    NoteScreen(model: shell.capture, player: shell.player)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button(action: shell.dismissCapture) {
@@ -356,7 +356,7 @@ struct SettingsScreen: View {
             .navigationDestination(item: $detail) { row in
                 switch row {
                 case .about: AboutScreen(app: app)
-                case .exportAll: ExportScreen(environment: app.environment)
+                case .exportAll: ExportScreen(model: NotesExport(environment: app.environment))
                 default: EmptyView()
                 }
             }
@@ -373,26 +373,23 @@ struct NoteScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     let model: NoteViewModel
     let player: PlayerViewModel
-    let environment: AppEnvironment
     @State private var share: SegmentShare?
     @State private var shareUnavailable = false
-    @State private var speechDownloading = false
     @Environment(\.timeZone) private var timeZone
 
-    init(model: NoteViewModel, player: PlayerViewModel, environment: AppEnvironment) {
+    init(model: NoteViewModel, player: PlayerViewModel) {
         self.model = model
         self.player = player
-        self.environment = environment
     }
 
     var body: some View {
         NoteView(model: model, player: player, shareSegment: shareSegment)
             .safeAreaInset(edge: .top) {
-                if speechDownloading, model.mode == .capture {
+                if model.speechDownloading, model.mode == .capture {
                     ProgressView("Downloading the speech model…")
                 }
             }
-            .task { await observeSpeechReadiness() }
+            .task { await model.observeSpeechReadiness() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { Flush.run(model) }
             }
@@ -405,20 +402,10 @@ struct NoteScreen: View {
             }
     }
 
-    private func observeSpeechReadiness() async {
-        while !Task.isCancelled {
-            let status = await environment.transcriber.readiness()
-            speechDownloading = status == .notInstalled || status == .installing
-            guard speechDownloading else { return }
-            do { try await Task.sleep(for: .seconds(1)) } catch { return }
-        }
-    }
-
     private func shareSegment(_ id: SegmentID) {
-        guard let segment = model.record?.liveSegments.first(where: { $0.id == id }) else { return }
         Task {
             do {
-                share = try await SegmentShare.make(segment, environment: environment, timeZone: timeZone)
+                share = try await model.shareFile(id, timeZone: timeZone).map { SegmentShare(id: id, item: $0) }
                 shareUnavailable = share == nil
             } catch {
                 shareUnavailable = true

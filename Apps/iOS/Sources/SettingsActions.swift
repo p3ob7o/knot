@@ -2,6 +2,7 @@ import KnotApp
 import KnotCore
 import KnotExport
 import KnotUI
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -40,19 +41,16 @@ struct SetupInstructions: View {
 
 struct ExportScreen: View {
     @Environment(\.timeZone) private var timeZone
-    let environment: AppEnvironment
+    @State var model: NotesExport
     @State private var choosingFolder = false
-    @State private var isExporting = false
-    @State private var failed = false
-    @State private var report: ExportReport?
 
     var body: some View {
         List {
             Button("Choose a folder…") { choosingFolder = true }
-                .disabled(isExporting)
-            if isExporting { ProgressView("Exporting notes…") }
-            if failed { Text("Couldn’t complete the export.") }
-            if let report {
+                .disabled(model.isExporting)
+            if model.isExporting { ProgressView("Exporting notes…") }
+            if model.failed { Text("Couldn’t complete the export.") }
+            if let report = model.report {
                 Section("Export complete") {
                     Text("\(report.notes) notes exported.")
                 }
@@ -70,28 +68,32 @@ struct ExportScreen: View {
         }
         .navigationTitle("Export all notes")
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
-            if case .success(let parent) = result { export(to: parent) }
-            if case .failure = result { failed = true }
-        }
-    }
-
-    private func export(to parent: URL) {
-        report = nil
-        failed = false
-        isExporting = true
-        let work = NotesExport(environment: environment, timeZone: timeZone)
-        Task {
-            defer { isExporting = false }
-            do { report = try await work.run(in: parent) } catch { failed = true }
+            if case .success(let parent) = result { Task { await model.export(to: parent, timeZone: timeZone) } }
+            if case .failure = result { model.failed = true }
         }
     }
 }
 
-private struct NotesExport: Sendable {
-    let environment: AppEnvironment
-    let timeZone: TimeZone
+@MainActor
+@Observable
+final class NotesExport {
+    private let environment: AppEnvironment
+    private(set) var isExporting = false
+    var failed = false
+    private(set) var report: ExportReport?
 
-    func run(in parent: URL) async throws -> ExportReport {
+    init(environment: AppEnvironment) { self.environment = environment }
+
+    func export(to parent: URL, timeZone: TimeZone) async {
+        guard !isExporting else { return }
+        report = nil
+        failed = false
+        isExporting = true
+        defer { isExporting = false }
+        do { report = try await run(in: parent, timeZone: timeZone) } catch { failed = true }
+    }
+
+    private func run(in parent: URL, timeZone: TimeZone) async throws -> ExportReport {
         let accessed = parent.startAccessingSecurityScopedResource()
         defer { if accessed { parent.stopAccessingSecurityScopedResource() } }
         try await fetchAttachments()
@@ -101,7 +103,7 @@ private struct NotesExport: Sendable {
         }
         .value
         let exporter = Exporter(
-            notes: environment.notes, assets: environment.assets, drawings: IOSDrawingImages(environment: environment),
+            notes: environment.notes, assets: environment.assets,
             timeZone: timeZone)
         return try await exporter.export(to: FolderExportSink(root: root))
     }
