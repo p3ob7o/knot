@@ -14,10 +14,19 @@ id=app.knot.design-review
 simctl() { knot_limit 120 xcrun simctl "$@"; }
 original_appearance=$(simctl ui "$udid" appearance)
 original_size=$(simctl ui "$udid" content_size)
+case $original_appearance in light|dark) ;; *) original_appearance=light ;; esac
+case $original_size in unknown|unsupported|'') original_size=large ;; esac
 restore_simulator() {
-    simctl ui "$udid" appearance "$original_appearance" >/dev/null 2>&1 || true
-    simctl ui "$udid" content_size "$original_size" >/dev/null 2>&1 || true
-    "$repo/scripts/sim.sh" shutdown
+    local result=$?
+    simctl ui "$udid" appearance "$original_appearance" || result=1
+    simctl ui "$udid" content_size "$original_size" || result=1
+    if [[ $(simctl ui "$udid" appearance) != "$original_appearance" ||
+          $(simctl ui "$udid" content_size) != "$original_size" ]]; then
+        echo "Could not restore the preview simulator's appearance and text size." >&2
+        result=1
+    fi
+    "$repo/scripts/sim.sh" shutdown || result=1
+    exit "$result"
 }
 trap restore_simulator EXIT
 simctl install "$udid" "$scratch/DerivedData/Build/Products/Debug-iphonesimulator/KnotDesignReview.app"
