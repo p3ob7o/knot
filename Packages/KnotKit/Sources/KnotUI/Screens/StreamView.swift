@@ -70,13 +70,27 @@
                 } else if let firstRun = stream.firstRun {
                     FirstRunView(firstRun, onOpen: openSetupRow, onDismiss: stream.dismissSetupRow)
                 } else {
-                    ForEach(stream.rows) { row in rowButton(row) }
-                    if stream.hasMore {
-                        ProgressView()
-                            .task { await stream.loadMore() }
-                    }
+                    #if os(iOS)
+                        ForEach(stream.rows) { row in
+                            rowButton(row)
+                                .task(id: row.id == stream.rows.last?.id && stream.hasMore) {
+                                    if row.id == stream.rows.last?.id, stream.hasMore {
+                                        await stream.loadMore()
+                                    }
+                                }
+                        }
+                    #else
+                        ForEach(stream.rows) { row in rowButton(row) }
+                        if stream.hasMore {
+                            ProgressView()
+                                .task { await stream.loadMore() }
+                        }
+                    #endif
                 }
             }
+            #if os(iOS)
+                .listStyle(.plain)
+            #endif
             .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: stream.rows)
             .task { await stream.load() }
             .task { await stream.observeChanges() }

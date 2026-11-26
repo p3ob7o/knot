@@ -59,6 +59,30 @@ import Testing
         #expect(row(record([short], in: note)).preview == "line two line three")
     }
 
+    @Test func kindGlyphsFollowFirstUseWithoutRepeats() throws {
+        let note: NoteID = ids.make()
+        let now = clock.now()
+        let voice = try Build.voice(ids.make(), in: note, from: now, transcript: "first", device: device)
+        let typed = try Build.typed(
+            ids.make(), in: note, from: now.addingTimeInterval(30), text: "second", origin: .device(device))
+        let again = try Build.voice(
+            ids.make(), in: note, from: now.addingTimeInterval(60), transcript: "third", device: device)
+        #expect(row(record([voice, typed, again], in: note)).kinds == [.voice, .typed])
+    }
+
+    @Test(arguments: RowTextSize.allCases)
+    func onlyTheMostUrgentMarkIsVisible(at size: RowTextSize) {
+        var row = StreamRowModel(
+            id: ids.make(), title: "Synthetic note", preview: nil, kinds: [], time: clock.now(),
+            hasPending: true, hasFailed: true, hasArrived: true)
+        let marks: Set<RowPart> = [.failedMarker, .pendingMarker, .arrivedMarker]
+        #expect(row.visibleParts(at: size).intersection(marks) == [.failedMarker])
+        row.hasFailed = false
+        #expect(row.visibleParts(at: size).intersection(marks) == [.pendingMarker])
+        row.hasPending = false
+        #expect(row.visibleParts(at: size).intersection(marks) == [.arrivedMarker])
+    }
+
     @Test func aTitleWinsOverTheFirstLine() throws {
         let note: NoteID = ids.make()
         let only = try Build.typed(ids.make(), in: note, from: clock.now(), text: "one line", origin: .device(device))

@@ -74,3 +74,20 @@ func appendCaptionTime(_ date: Date, calendar: Calendar, locale: Locale) -> Stri
     formatter.setLocalizedDateFormatFromTemplate("Jm")
     return formatter.string(from: date)
 }
+
+/// Today uses the local clock. Earlier days use the shortest calendar label that distinguishes them.
+func compactStreamTime(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+    if calendar.isDate(date, inSameDayAs: now) {
+        return appendCaptionTime(date, calendar: calendar, locale: locale)
+    }
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+        calendar.isDate(date, inSameDayAs: yesterday)
+    {
+        return localized("Yesterday")
+    }
+    let format = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+    if date < now, let week = calendar.dateInterval(of: .weekOfYear, for: now), week.contains(date) {
+        return date.formatted(format.weekday(.abbreviated))
+    }
+    return date.formatted(format.day().month(.abbreviated))
+}

@@ -77,6 +77,7 @@ public struct Sizes: Sendable {
     public let readableWidth: CGFloat
     public let macPanelWidth: CGFloat
     public let waveformBar: CGFloat
+    public let arrivalDot: CGFloat
 
     public init(
         hitTarget: CGFloat = 44,
@@ -84,7 +85,8 @@ public struct Sizes: Sendable {
         recordControlWatch: CGFloat = 88,
         readableWidth: CGFloat = 672,
         macPanelWidth: CGFloat = 640,
-        waveformBar: CGFloat = 2
+        waveformBar: CGFloat = 2,
+        arrivalDot: CGFloat = 8
     ) {
         self.hitTarget = hitTarget
         self.hitTargetMac = hitTargetMac
@@ -92,6 +94,7 @@ public struct Sizes: Sendable {
         self.readableWidth = readableWidth
         self.macPanelWidth = macPanelWidth
         self.waveformBar = waveformBar
+        self.arrivalDot = arrivalDot
     }
 }
 

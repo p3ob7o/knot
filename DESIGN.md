@@ -99,6 +99,7 @@ Use system text styles at every Dynamic Type size. Use the style's emphasized we
 | `sizes.readableWidth` | `readable-width` | 672 | iPad and Mac text column fallback at default type size |
 | `sizes.macPanelWidth` | `mac-panel-width` | 640 | Floating Mac panel width |
 | `sizes.waveformBar` | `waveform-bar` | 2 | Waveform bar width and gap |
+| `sizes.arrivalDot` | Arrived glyph from the brand book | 8 | Arrived mark in the stream and on a segment |
 
 Use the safe area and system layout margins. Use the system's readable width so the text column can grow with Dynamic Type. Keep nested corners concentric. Use system shapes for system controls.
 

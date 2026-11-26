@@ -34,7 +34,7 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
     /// The text of the note's latest segment, or what that segment holds when it has no text
     /// yet. `nil` when it would only repeat the title.
     public var preview: String?
-    /// The kinds of segment the note holds, in the order typed, voice, ink.
+    /// The kinds of segment the note holds, in order of first use.
     public var kinds: [SegmentKind]
     /// The time of the note's latest capture, which orders the stream (rule 9).
     public var time: Date
@@ -93,10 +93,9 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             }
         }
 
-        let order: [SegmentKind] = [.typed, .voice, .ink]
-        let present = Set(shown.map(\.kind))
-        var kinds = order.filter(present.contains)
-        if shown.contains(where: { $0.kind.isUnknown }) { kinds.append(.unknown("")) }
+        var seenKinds: Set<SegmentKind> = []
+        let kinds = shown.map { $0.kind.isUnknown ? .unknown("") : $0.kind }
+            .filter { seenKinds.insert($0).inserted }
 
         self.init(
             id: record.note.id, title: title, preview: preview, kinds: kinds, time: record.note.lastCaptureEndedAt,
@@ -109,12 +108,14 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
     /// (docs/product-spec.md §7).
     public func visibleParts(at size: RowTextSize) -> Set<RowPart> {
         var parts: Set<RowPart> = [.title, .time]
-        if hasFailed { parts.insert(.failedMarker) }
-        if hasArrived { parts.insert(.arrivedMarker) }
-        if size < .largest {
-            if !kinds.isEmpty { parts.insert(.kinds) }
-            if hasPending { parts.insert(.pendingMarker) }
+        if hasFailed {
+            parts.insert(.failedMarker)
+        } else if hasPending {
+            parts.insert(.pendingMarker)
+        } else if hasArrived {
+            parts.insert(.arrivedMarker)
         }
+        if size < .largest, !kinds.isEmpty { parts.insert(.kinds) }
         if size < .large, preview != nil { parts.insert(.preview) }
         return parts
     }

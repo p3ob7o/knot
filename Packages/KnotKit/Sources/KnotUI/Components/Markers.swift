@@ -35,9 +35,9 @@ public struct ArrivedMarker: View {
     public init() {}
 
     public var body: some View {
-        Image(systemName: "circle.fill")
-            .imageScale(.small)
-            .foregroundStyle(theme.colors[.arrived])
+        Circle()
+            .fill(theme.colors[.arrived])
+            .frame(width: theme.sizes.arrivalDot, height: theme.sizes.arrivalDot)
             .accessibilityLabel(Text("Arrived", bundle: .module))
     }
 }
