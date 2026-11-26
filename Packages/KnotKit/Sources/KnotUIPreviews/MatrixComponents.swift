@@ -451,10 +451,14 @@
                     guard model == nil else { return }
                     var environment = KnotUIPreviews.environment
                     environment.gates = ScriptedFeatureGates()
+                    var settings = Settings.defaults
+                    settings.syncEnabled = true
+                    environment.settings = InMemorySettingsStore(settings)
                     var context = KnotUIPreviews.context(for: environment)
                     context.sync = .available(signedInToICloud: true)
                     let model = SettingsViewModel(
-                        environment: environment, context: context, platform: surface.settingsPlatform)
+                        environment: environment, context: context, platform: surface.settingsPlatform,
+                        liveActivitiesEnabled: surface == .phone ? false : nil)
                     await model.load()
                     self.model = model
                 }
