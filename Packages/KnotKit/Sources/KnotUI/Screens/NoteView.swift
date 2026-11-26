@@ -27,11 +27,20 @@
         }
 
         private let initialFocus: InitialFocus
+        private let shareSegment: ((SegmentID) -> Void)?
+        private let observesRecordings: Bool
 
-        public init(model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture) {
+        private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
+
+        public init(
+            model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
+            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true
+        ) {
             self.model = model
             self.player = player
             self.initialFocus = initialFocus
+            self.shareSegment = shareSegment
+            self.observesRecordings = observesRecordings
         }
 
         public var body: some View {
@@ -44,12 +53,22 @@
                 .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: model.items)
             }
             #if os(iOS)
+                .defaultFocus($fieldFocused, initialFocus == .capture, priority: .userInitiated)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { done }
-                    if fieldFocused {
-                        ToolbarItemGroup(placement: .keyboard) { captureActions }
-                    } else {
-                        ToolbarItemGroup(placement: .bottomBar) { captureActions }
+                    if !showsLiveControls {
+                        if fieldFocused {
+                            ToolbarItemGroup(placement: .keyboard) { captureActions }
+                        } else {
+                            ToolbarItemGroup(placement: .bottomBar) { captureActions }
+                        }
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // The timer can grow here. A toolbar item constrains its Dynamic Type size.
+                    if showsLiveControls {
+                        HStack { captureActions }
+                        .padding(theme.spacing.surfaceMargin)
                     }
                 }
             #else
@@ -81,7 +100,9 @@
             .onDisappear { model.endCapture() }
             .task { await model.refresh() }
             .task { await model.observeStore() }
-            .task { await model.observeRecordings() }
+            .task {
+                if observesRecordings { await model.observeRecordings() }
+            }
             .task { await model.followWindow(every: .seconds(5)) }
             .task { await player.observe() }
         }
@@ -189,7 +210,7 @@
         private func recordControl(elapsed: Duration?) -> some View {
             HStack(spacing: theme.spacing.regular) {
                 if let elapsed {
-                    Text(ClockText.of(elapsed))
+                    elapsedText(elapsed)
                         .font(theme.type[.body])
                         .foregroundStyle(theme.colors[.textPrimary])
                         .monospacedDigit()
@@ -206,6 +227,17 @@
                     model.toggleRecording()
                 }
             }
+        }
+
+        private func elapsedText(_ elapsed: Duration) -> Text {
+            #if os(iOS)
+                if model.recording.isRecording {
+                    let value = elapsed.components
+                    let seconds = Double(value.seconds) + Double(value.attoseconds) / 1e18
+                    return Text(Date.now.addingTimeInterval(-seconds), style: .timer)
+                }
+            #endif
+            return Text(ClockText.of(elapsed))
         }
 
         @ViewBuilder private var banners: some View {
@@ -306,16 +338,21 @@
                 isShowingOriginal: model.showingOriginal.contains(item.id),
                 playback: player.segment == item.id ? player.state : .empty,
                 secondaryText: secondaryText, initiallyEditing: initialFocus == .segment(item.id),
+                playbackAllowed: model.recording == .idle,
                 handlers: handlers(for: item))
         }
 
         private func handlers(for item: SegmentItem) -> SegmentHandlers {
             SegmentHandlers(
                 edit: { text in model.editText(of: item.id, to: text) },
-                action: { action in model.perform(action, on: item.id) },
+                action: { action in
+                    if action == .shareFile { shareSegment?(item.id) } else { model.perform(action, on: item.id) }
+                },
                 togglePlay: {
                     Task {
-                        guard let file = await model.file(of: item) else { return }
+                        guard model.recording == .idle, let file = await model.file(of: item),
+                            model.recording == .idle
+                        else { return }
                         await player.toggle(file, segment: item.id)
                     }
                 },

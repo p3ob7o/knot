@@ -168,3 +168,14 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-40 PR 1 | The handoff asks for Reduce Motion crossfades. It gives no token for their timing. | Keep the theme's existing `nil` for all motion kinds until the owner rules. |
 | 2026-11-26 | WP-40 PR 1 | The accent token says the person's Mac accent wins. | Knot draws `accent` and `arrived` in ink on every platform. Mac selection, focus and system controls keep the person's accent. |
 | 2026-11-26 | WP-40 PR 1 | `label-secondary` names the system's secondary label colour. | Keep the placeholder's translucent primary ink. The system secondary label and an opaque grey both failed the Mac accessibility audit on small text. |
+| 2026-11-26 | WP-30a | The Recently deleted page | Both routes open a system unavailable view titled “Recently deleted” while the listing and its store query are pending. |
+| 2026-11-26 | WP-30a | Empty search results | The Notes list shows the system search unavailable view for the query. |
+| 2026-11-26 | WP-30a | Export progress, completion and missing attachments | The export page uses a system progress view and list sections for the report and missing files. |
+| 2026-11-26 | WP-30a | About contents and test-build actions | About uses a system list, a file picker and a confirmation alert for restore. |
+| 2026-11-26 | WP-30a | The instructions inside the first-run setup sheets | Each sheet uses a system list with the setup steps and a close control. |
+| 2026-11-26 | WP-30a | A first iCloud restore | Notes uses a system progress indicator while the first fetch is filling it. |
+| 2026-11-26 | WP-30a | The first speech-model download | The capture sheet uses a system progress view while the model is missing or installing. |
+| 2026-11-26 | WP-30a | The chooser before sharing an attachment | A system sheet offers Share file and opens the system share sheet. |
+| 2026-11-26 | WP-30a | An attachment that could not be shared | A system alert says the file could not be shared. |
+| 2026-11-26 | WP-30a | The English variant setting at the largest text sizes | The iOS system navigation-link picker stacks the label and value at accessibility sizes and shows the full option names on the next screen. |
+| 2026-11-26 | WP-30a | Notes while the capture sheet is down and the microphone is live | A notice shows Recording, elapsed time when known, and Show to reopen the sheet. |

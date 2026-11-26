@@ -9,6 +9,24 @@ import Testing
 /// store decides where a capture lands (docs/product-spec.md §4.1, docs/plan/WP-21.md).
 @MainActor
 @Suite struct CaptureSurfaceTests {
+    @Test func reopeningCaptureFollowsTheAppendWindowAgain() async throws {
+        let rig = StoreRig()
+        let earlier = try await rig.typed("Earlier thought", at: rig.clock.now().addingTimeInterval(-10))
+        let model = rig.capture()
+        await model.refresh()
+        #expect(model.noteID == earlier.noteID)
+
+        model.newNote()
+        await model.settle()
+        #expect(model.isNewNote)
+        #expect(model.noteID == nil)
+
+        model.followWindowOnPresentation()
+        await model.settle()
+        #expect(!model.isNewNote)
+        #expect(model.noteID == earlier.noteID)
+    }
+
     @Test("capture-window-runs-out-while-field-empty", .tags(.named))
     func windowRunsOutWhileFieldEmpty() async throws {
         let rig = StoreRig(window: try AppendWindow(minutes: 5))

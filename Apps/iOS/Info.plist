@@ -4,6 +4,17 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>$(KNOT_DISPLAY_NAME)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(KNOT_TOOL_NAME)</string>
+			</array>
+		</dict>
+	</array>
 	<key>KnotAppGroup</key>
 	<string>$(KNOT_APP_GROUP)</string>
 	<key>KnotCloudContainer</key>
@@ -12,6 +23,8 @@
 	<string>$(KNOT_FLAVOUR)</string>
 	<key>KnotMilestoneLevel</key>
 	<string>$(KNOT_MILESTONE_LEVEL)</string>
+	<key>KnotSourceURL</key>
+	<string>https://github.com/p3ob7o/knot</string>
 	<key>KnotSyncAvailable</key>
 	<string>$(KNOT_SYNC_AVAILABLE)</string>
 	<key>KnotWorktree</key>

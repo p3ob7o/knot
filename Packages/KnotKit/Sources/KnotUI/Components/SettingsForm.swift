@@ -6,14 +6,22 @@
     /// capture device only.
     public struct SettingsForm: View {
         @Environment(\.knotTheme) private var theme
+        #if os(iOS)
+            @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+        #endif
         let model: SettingsViewModel
         let open: (SettingsRow) -> Void
+        let actionButtonSetup: (() -> Void)?
 
         /// - Parameter open: opens a row that leads elsewhere: export, recently deleted, about,
         ///   and the Mac's hotkey chooser, which the app shell owns.
-        public init(_ model: SettingsViewModel, open: @escaping (SettingsRow) -> Void = { _ in }) {
+        public init(
+            _ model: SettingsViewModel, actionButtonSetup: (() -> Void)? = nil,
+            open: @escaping (SettingsRow) -> Void = { _ in }
+        ) {
             self.model = model
             self.open = open
+            self.actionButtonSetup = actionButtonSetup
         }
 
         public var body: some View {
@@ -25,6 +33,12 @@
                 if model.saveProblem != nil {
                     Text("That change couldn't be saved.", bundle: .module)
                         .foregroundStyle(theme.colors[.failed])
+                }
+                if let actionButtonSetup {
+                    Section {
+                        Button(String(localized: "Action Button setup", bundle: .module), action: actionButtonSetup)
+                            .tint(theme.colors[.textPrimary])
+                    }
                 }
                 ForEach(model.rows) { row in
                     rowView(row)
@@ -42,14 +56,28 @@
         @ViewBuilder private func rowView(_ row: SettingsRow) -> some View {
             switch row {
             case .appendWindow:
-                Stepper(
-                    value: Binding(
-                        get: { model.settings.appendWindow.minutes },
-                        set: { minutes in Task { await model.setAppendWindow(minutes: minutes) } }),
-                    in: 0...AppendWindow.maximumMinutes
-                ) {
-                    LabeledContent(row.title, value: model.appendWindowText)
-                }
+                let minutes = Binding(
+                    get: { model.settings.appendWindow.minutes },
+                    set: { minutes in Task { await model.setAppendWindow(minutes: minutes) } })
+                #if os(iOS)
+                    HStack {
+                        let layout =
+                            dynamicTypeSize.isAccessibilitySize
+                            ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())
+                        layout {
+                            Text(row.title)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(model.appendWindowText)
+                        }
+                        Stepper(row.title, value: minutes, in: 0...AppendWindow.maximumMinutes)
+                            .labelsHidden()
+                            .accessibilityValue(Text(model.appendWindowText))
+                    }
+                #else
+                    Stepper(value: minutes, in: 0...AppendWindow.maximumMinutes) {
+                        LabeledContent(row.title, value: model.appendWindowText)
+                    }
+                #endif
             case .cleanup:
                 VStack(alignment: .leading) {
                     Toggle(
@@ -69,9 +97,16 @@
                         set: { raw in Task { await model.setEnglishVariant(EnglishVariant(rawValue: raw)) } })
                 ) {
                     ForEach(SettingsViewModel.englishVariants, id: \.rawValue) { variant in
-                        Text(SettingsViewModel.label(of: variant)).tag(variant.rawValue)
+                        Text(SettingsViewModel.label(of: variant))
+                            #if os(iOS)
+                                .foregroundStyle(theme.colors[.textPrimary])
+                            #endif
+                            .tag(variant.rawValue)
                     }
                 }
+                #if os(iOS)
+                    .pickerStyle(.navigationLink)
+                #endif
             case .sync:
                 VStack(alignment: .leading) {
                     Toggle(
@@ -100,7 +135,19 @@
                         get: { model.settings.commandLineAccess },
                         set: { on in Task { await model.setCommandLineAccess(on) } }))
             case .exportAll, .recentlyDeleted, .about:
-                Button(row.title) { open(row) }
+                #if os(iOS)
+                    Button {
+                        open(row)
+                    } label: {
+                        Text(row.title)
+                            .foregroundStyle(theme.colors[.textPrimary])
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                #else
+                    Button(row.title) { open(row) }
+                #endif
             }
         }
     }

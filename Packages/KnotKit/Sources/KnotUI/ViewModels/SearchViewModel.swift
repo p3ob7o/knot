@@ -14,6 +14,15 @@ public final class SearchViewModel {
     public private(set) var results: [StreamRowModel]?
     public private(set) var problem: StoreProblem?
 
+    var emptyResultsQuery: String? {
+        guard problem == nil, results?.isEmpty == true else { return nil }
+        return query
+    }
+
+    func displayedProblem(streamProblem: StoreProblem?) -> StoreProblem? {
+        problem ?? streamProblem
+    }
+
     public let limit: Int
     private let environment: AppEnvironment
     private let context: UIContext

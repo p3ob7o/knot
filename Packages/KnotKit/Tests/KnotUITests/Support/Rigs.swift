@@ -123,11 +123,13 @@ final class StoreRig {
 
     /// Records a finished recording of 42 seconds, with its file, that started `at`.
     @discardableResult
-    func recording(at start: Date, placement: CapturePlacement = .window) async throws -> CaptureReceipt {
+    func recording(at start: Date, placement: CapturePlacement = .window, availability: AssetAvailability = .local)
+        async throws -> CaptureReceipt
+    {
         let id: CaptureID = ids.make()
         let asset = Asset(
             id: ids.make(), segmentID: SegmentID(id), kind: .audio, byteCount: 1024,
-            sha256: String(repeating: "ab", count: 32))
+            sha256: String(repeating: "ab", count: 32), availability: availability)
         return try await notes.record(
             NewCapture(
                 id: id, kind: .voice, origin: CaptureOrigin(source: .device(device), surface: .app), launchID: launch,

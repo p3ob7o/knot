@@ -47,6 +47,7 @@ public struct SegmentView: View {
     let playback: PlaybackState
     let secondaryText: Bool
     let initiallyEditing: Bool
+    let playbackAllowed: Bool
     let handlers: SegmentHandlers
 
     /// - Parameters:
@@ -54,7 +55,8 @@ public struct SegmentView: View {
     ///   - playback: the player's state while this segment's recording is loaded.
     public init(
         _ item: SegmentItem, text: String? = nil, isShowingOriginal: Bool = false, playback: PlaybackState = .empty,
-        secondaryText: Bool = false, initiallyEditing: Bool = false, handlers: SegmentHandlers
+        secondaryText: Bool = false, initiallyEditing: Bool = false, playbackAllowed: Bool = true,
+        handlers: SegmentHandlers
     ) {
         self.item = item
         self.text = text ?? item.text
@@ -62,6 +64,7 @@ public struct SegmentView: View {
         self.playback = playback
         self.secondaryText = secondaryText
         self.initiallyEditing = initiallyEditing
+        self.playbackAllowed = playbackAllowed
         self.handlers = handlers
     }
 
@@ -70,7 +73,7 @@ public struct SegmentView: View {
             header
             switch item.kind {
             case .voice:
-                VoiceSegmentBody(item: item, playback: playback, handlers: handlers)
+                VoiceSegmentBody(item: item, playback: playback, handlers: handlers, playbackAllowed: playbackAllowed)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
                     secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
@@ -112,7 +115,7 @@ public struct SegmentView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityActions {
-            ForEach(item.actions) { action in
+            ForEach(availableActions) { action in
                 Button(actionLabel(action)) { perform(action) }
             }
         }
@@ -140,13 +143,17 @@ public struct SegmentView: View {
             }
             Spacer(minLength: 0)
             #if !os(watchOS)
-                if !item.actions.isEmpty {
+                if !availableActions.isEmpty {
                     // Every segment action is reachable from the keyboard: the menu is a control
                     // in the focus order, on the Mac and the iPad.
                     Menu {
                         actionButtons
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            #if os(iOS)
+                                .padding(theme.spacing.loose)
+                                .contentShape(.rect)
+                            #endif
                     }
                     .menuStyle(.button)
                     .buttonStyle(.plain)
@@ -158,7 +165,7 @@ public struct SegmentView: View {
     }
 
     @ViewBuilder private var actionButtons: some View {
-        ForEach(item.actions) { action in
+        ForEach(availableActions) { action in
             Button(role: action == .delete ? .destructive : nil) {
                 perform(action)
             } label: {
@@ -166,6 +173,8 @@ public struct SegmentView: View {
             }
         }
     }
+
+    var availableActions: [SegmentAction] { item.actions.filter { playbackAllowed || $0 != .play } }
 
     private func actionLabel(_ action: SegmentAction) -> String {
         if action == .showOriginal, isShowingOriginal { return localized("Show cleaned text") }
@@ -231,12 +240,15 @@ struct VoiceSegmentBody: View {
     let item: SegmentItem
     let playback: PlaybackState
     let handlers: SegmentHandlers
+    let playbackAllowed: Bool
 
     var body: some View {
         switch item.attachment {
         case .here:
-            AudioPlayerView(
-                state: playback, length: item.duration, onToggle: handlers.togglePlay, onSeek: handlers.seek)
+            if playbackAllowed {
+                AudioPlayerView(
+                    state: playback, length: item.duration, onToggle: handlers.togglePlay, onSeek: handlers.seek)
+            }
         case .onAnotherDevice(let asset):
             if asset.availability == .downloading {
                 notice(Text("Downloading recording…", bundle: .module), symbol: "icloud.and.arrow.down")
