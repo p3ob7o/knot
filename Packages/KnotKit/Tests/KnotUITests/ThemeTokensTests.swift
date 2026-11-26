@@ -12,6 +12,7 @@ import Testing
         #expect(theme.spacing.betweenSegments == theme.spacing.space6)
         #expect(theme.radii.regular == theme.radii.radiusMd)
         #expect(theme.sizes.hitTarget == 44)
+        #expect(theme.sizes.insetGlassLabel == 30)
         #expect(theme.motion.animation(for: .recordingPhase, reduceMotion: false) == .snappy)
     }
 
@@ -222,6 +223,7 @@ import Testing
         #expect(theme.radii.radiusLg == 21)
         #expect(theme.radii.control == 3)
         #expect(theme.sizes.hitTarget == 52)
+        #expect(theme.sizes.insetGlassLabel == 38)
         #expect(theme.sizes.waveformBar == 3)
         #expect(theme.sizes.hitTargetMac == 28)
     }

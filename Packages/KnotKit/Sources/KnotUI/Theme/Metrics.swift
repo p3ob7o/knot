@@ -71,6 +71,8 @@ public struct Radii: Sendable {
 /// Control and layout sizes, in points.
 public struct Sizes: Sendable {
     public let hitTarget: CGFloat
+    /// The label box inside an inset glass button. The system adds the glass padding.
+    var insetGlassLabel: CGFloat { max(0, hitTarget - 14) }
     public let hitTargetMac: CGFloat
     public let recordControlWatch: CGFloat
     /// Fallback at the default text size. Prefer the system's scalable readable width.

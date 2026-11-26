@@ -83,12 +83,15 @@ public struct RecordButton: View {
     }
 
     private var button: some View {
-        Button(action: action) {
+        #if os(iOS)
+            let labelSize = toolbar ? theme.sizes.hitTarget : theme.sizes.insetGlassLabel
+        #endif
+        return Button(action: action) {
             Image(systemName: symbol)
                 .font(theme.type[.rowTitle])
                 #if os(iOS)
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                    .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                    .frame(width: labelSize, height: labelSize)
                     .contentShape(.rect)
                 #else
                     .frame(

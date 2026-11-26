@@ -94,6 +94,7 @@ Use system text styles at every Dynamic Type size. Use the style's emphasized we
 | `radii.radiusXl` | `radius-xl` | 26 | Floating Mac panel |
 | `radii.radiusFull`, `radii.control` | `radius-full` | 999 | Capsule fallback. Use the system capsule shape. |
 | `sizes.hitTarget` | `hit-target` | 44 | Minimum tap size and the iPhone and iPad record control |
+| `sizes.insetGlassLabel` | `hit-target` less system glass padding | 30 | Label box inside the inset iOS glass record control |
 | `sizes.hitTargetMac` | `hit-target-mac` | 28 | Minimum click size and the Mac panel record control |
 | `sizes.recordControlWatch` | `record-control-watch` | 88 | Watch record control diameter |
 | `sizes.readableWidth` | `readable-width` | 672 | iPad and Mac text column fallback at default type size |

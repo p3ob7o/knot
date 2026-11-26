@@ -34,6 +34,8 @@ trap restore_simulator EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 reset_appearance
+# Keep a new simulator's keyboard tutorial out of the capture-state screenshots.
+simctl spawn "$udid" defaults write com.apple.keyboard.preferences DidShowContinuousPathIntroduction -bool true
 simctl install "$udid" "$scratch/DerivedData/Build/Products/Debug-iphonesimulator/KnotDesignReview.app"
 container=$(simctl get_app_container "$udid" "$id" data)
 preview_rows="$scratch/rows.tsv"

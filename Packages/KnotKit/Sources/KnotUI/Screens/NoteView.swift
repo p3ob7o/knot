@@ -40,7 +40,11 @@
             initialFocus ?? (model.mode == .capture || model.surface != .app ? .capture : .none)
         }
         private var showsDone: Bool {
-            model.mode == .capture || model.typedCapture != nil || !model.fieldText.isEmpty
+            model.mode == .capture || showsLiveControls || model.typedCapture != nil || !model.fieldText.isEmpty
+        }
+        private var hasBanners: Bool {
+            model.isDeletedElsewhere || model.recordingOutcome == .discarded || model.recordingOutcome == .saveFailed
+                || model.problem != nil || !model.editConflicts.isEmpty
         }
 
         public init(
@@ -88,7 +92,7 @@
                 }
                 .toolbarVisibility(editsExistingText ? .hidden : .automatic, for: .bottomBar)
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    if model.mode == .capture {
+                    if model.mode == .capture, hasBanners {
                         VStack(alignment: .leading, spacing: theme.spacing.space2) { banners }
                         .padding(.horizontal)
                         .background(theme.colors[.surface])
