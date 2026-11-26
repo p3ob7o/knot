@@ -278,28 +278,10 @@ struct ShellView: View {
             )
             .toolbar(removing: .search)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Settings") { shell.sheet = .settings }
-                        Button(SettingsRow.recentlyDeleted.title, action: shell.showRecentlyDeleted)
-                    } label: {
-                        Label("More", systemImage: "ellipsis")
-                    }
-                    .accessibilityShowsLargeContentViewer {
-                        Label("More", systemImage: "ellipsis")
-                    }
-                }
-                DefaultToolbarItem(kind: .search, placement: .bottomBar)
-                ToolbarSpacer(.fixed, placement: .bottomBar)
-                ToolbarItem(placement: .bottomBar) {
-                    Button(action: shell.showCapture) {
-                        Label("Capture", systemImage: "square.and.pencil")
-                    }
-                    .accessibilityShowsLargeContentViewer {
-                        Label("Capture", systemImage: "square.and.pencil")
-                    }
-                    .accessibilityIdentifier("shell.compose")
-                }
+                PhoneNotesToolbar(
+                    openSettings: { shell.sheet = .settings },
+                    showRecentlyDeleted: shell.showRecentlyDeleted,
+                    showCapture: shell.showCapture)
             }
             .navigationDestination(for: Shell.Screen.self) { screen in
                 switch screen {
@@ -319,17 +301,7 @@ struct ShellView: View {
             case .capture:
                 NavigationStack {
                     NoteScreen(model: shell.capture, player: shell.player)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button(action: shell.dismissCapture) {
-                                    Label("Notes", systemImage: "list.bullet")
-                                }
-                                .accessibilityShowsLargeContentViewer {
-                                    Label("Notes", systemImage: "list.bullet")
-                                }
-                                .accessibilityIdentifier("shell.notes")
-                            }
-                        }
+                        .toolbar { CaptureSheetToolbar(showNotes: shell.dismissCapture) }
                 }
                 .presentationDetents([.large])
                 .interactiveDismissDisabled(shell.capture.isEnding)
@@ -464,7 +436,7 @@ struct NoteScreen: View {
         NoteView(model: model, player: player, shareSegment: shareSegment, observesRecordings: model.mode != .capture)
             .safeAreaInset(edge: .top) {
                 if model.speechDownloading, model.mode == .capture {
-                    ProgressView("Downloading the speech model…")
+                    SpeechDownloadNotice()
                 }
             }
             .task { await model.observeSpeechReadiness() }

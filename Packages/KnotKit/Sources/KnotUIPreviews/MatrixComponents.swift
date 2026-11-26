@@ -35,9 +35,40 @@
         }
     }
 
-    @MainActor
+    extension EnvironmentValues {
+        @Entry var matrixReadyFile: URL?
+    }
+
+    struct MatrixReady: ViewModifier {
+        @Environment(\.matrixReadyFile) private var readyFile
+
+        func body(content: Content) -> some View {
+            content.task {
+                guard let readyFile else { return }
+                do {
+                    // Wait for the native sheet or keyboard transition after the model appears.
+                    try await Task.sleep(for: .seconds(1))
+                    try Data().write(to: readyFile, options: .atomic)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    assertionFailure("Could not mark the preview as ready")
+                }
+            }
+        }
+    }
+
+    @MainActor @ViewBuilder
     func matrixFrame(_ surface: PreviewSurface, @ViewBuilder contents: () -> some View) -> some View {
-        contents().frame(width: surface.size.width, height: surface.size.height)
+        #if os(iOS)
+            if surface == .phone {
+                contents().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                contents().frame(width: surface.size.width, height: surface.size.height)
+            }
+        #else
+            contents().frame(width: surface.size.width, height: surface.size.height)
+        #endif
     }
 
     enum RecordingExample {
@@ -119,6 +150,7 @@
             let surface: PreviewSurface
             let example: CaptureExample
             @State private var loaded: Loaded?
+            @State private var presentsCapture = true
 
             private struct Loaded {
                 let model: NoteViewModel
@@ -130,11 +162,31 @@
                 matrixFrame(surface) {
                     Group {
                         if let loaded {
-                            if surface == .panel {
-                                note(loaded)
-                            } else {
-                                NavigationStack { note(loaded) }
-                            }
+                            #if os(iOS)
+                                if surface == .phone, example != .older {
+                                    NavigationStack {
+                                        Color.clear
+                                            .navigationTitle("Notes")
+                                    }
+                                    .sheet(isPresented: $presentsCapture) {
+                                        NavigationStack {
+                                            note(loaded)
+                                                .toolbar {
+                                                    CaptureSheetToolbar { presentsCapture = false }
+                                                }
+                                        }
+                                        .presentationDetents([.large])
+                                    }
+                                } else {
+                                    NavigationStack { note(loaded) }
+                                }
+                            #else
+                                if surface == .panel {
+                                    note(loaded)
+                                } else {
+                                    NavigationStack { note(loaded) }
+                                }
+                            #endif
                         } else {
                             ProgressView()
                         }
@@ -145,6 +197,7 @@
 
             private func note(_ loaded: Loaded) -> some View {
                 NoteView(model: loaded.model, player: loaded.player)
+                    .modifier(MatrixReady())
                     .onDisappear {
                         loaded.releaseStart?.finish()
                         if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
@@ -272,6 +325,7 @@
                         }
                     }
                 }
+                .modifier(MatrixReady())
             }
 
             private var page: some View {
@@ -329,31 +383,42 @@
                 matrixFrame(surface) {
                     switch example {
                     case .full:
-                        SettingsMatrixForm(surface: surface)
+                        NavigationStack {
+                            SettingsMatrixForm(surface: surface)
+                                .navigationTitle("Settings")
+                                #if os(iOS)
+                                    .navigationBarTitleDisplayMode(.inline)
+                                    .toolbar {
+                                        ToolbarItem(placement: .cancellationAction) {
+                                            Button("Close", systemImage: "xmark") {}
+                                        }
+                                    }
+                                #endif
+                        }
                     case .sync:
                         Form {
                             ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
                         }
+                        .modifier(MatrixReady())
                     case .prompts:
-                        // WP-16 owns sync prompts. These are examples of their shared notice.
                         Form {
-                            Banner("The iCloud account changed.", symbol: "person.crop.circle") {
-                                Button("Keep sync paused") {}
-                            }
-                            Banner("Notes were removed from iCloud.", symbol: "icloud.slash") {
-                                Button("Keep sync paused") {}
-                            }
+                            SyncPresentation(question: .accountChanged) { _ in }
+                            SyncPresentation(question: .zoneRemoved(.purged)) { _ in }
                         }
+                        .modifier(MatrixReady())
                     case .export:
-                        // WP-20 owns the export flow. This shows the shared notice and progress controls.
-                        Form {
-                            ProgressView("Exporting notes…")
-                            Banner("Export complete", symbol: "checkmark")
-                            Banner("One recording could not be fetched.", symbol: "icloud.slash")
+                        List {
+                            ExportResultRows(.exporting)
+                            ExportResultRows(
+                                .complete(
+                                    notes: 2,
+                                    missing: [.init(id: PreviewSamples.ids.make(), kind: .audio)]))
                         }
+                        .modifier(MatrixReady())
                     case .firstRun:
                         // WP-30 owns first-run routing and the model download states.
                         FirstRunView(FirstRunContent(syncLine: nil, setupRows: [.actionButton])) { _ in }
+                            .modifier(MatrixReady())
                             .safeAreaInset(edge: .bottom) {
                                 VStack {
                                     Banner(
@@ -361,7 +426,7 @@
                                             KnotError.microphonePermissionRefused.code
                                         ).message,
                                         symbol: "mic.slash")
-                                    ProgressView("Downloading the speech model…")
+                                    SpeechDownloadNotice()
                                 }
                             }
                     }
@@ -375,7 +440,10 @@
 
             var body: some View {
                 Group {
-                    if let model { SettingsForm(model) }
+                    if let model {
+                        SettingsForm(model, actionButtonSetup: surface == .phone ? {} : nil)
+                            .modifier(MatrixReady())
+                    }
                 }
                 .task {
                     guard model == nil else { return }

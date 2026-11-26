@@ -58,23 +58,7 @@ struct ExportScreen: View {
                 Text("Choose a folder…").foregroundStyle(theme.colors[.textPrimary])
             }
             .disabled(model.isExporting)
-            if model.isExporting { ProgressView("Exporting notes…") }
-            if model.failed { Text("Couldn’t complete the export.") }
-            if let report = model.report {
-                Section("Export complete") {
-                    Text("\(report.notes) notes exported.")
-                }
-                let missing = report.leftOut.filter(\.isMissing)
-                if !missing.isEmpty {
-                    Section("Files that couldn’t be exported") {
-                        ForEach(missing, id: \.asset) { file in
-                            LabeledContent(
-                                file.kind == .audio ? "Recording" : "Drawing",
-                                value: file.asset.description)
-                        }
-                    }
-                }
-            }
+            ExportResultRows(exportState)
         }
         .navigationTitle("Export all notes")
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
@@ -82,6 +66,17 @@ struct ExportScreen: View {
             if case .failure = result { model.failed = true }
         }
     }
+
+    private var exportState: ExportResultRows.State {
+        if model.isExporting { return .exporting }
+        if model.failed { return .failed }
+        guard let report = model.report else { return .idle }
+        let missing = report.leftOut.filter(\.isMissing).map {
+            ExportResultRows.MissingFile(id: $0.asset, kind: $0.kind)
+        }
+        return .complete(notes: report.notes, missing: missing)
+    }
+
 }
 
 @MainActor

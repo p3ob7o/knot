@@ -12,6 +12,7 @@
     struct StreamMatrixPreview: View {
         let surface: PreviewSurface
         let example: StreamExample
+        @Environment(\.dynamicTypeSize) private var typeSize
         var query: String? = nil
         @State private var loaded: Loaded?
 
@@ -24,15 +25,39 @@
             matrixFrame(surface) {
                 NavigationStack {
                     if let loaded {
-                        StreamView(stream: loaded.stream, search: loaded.search, open: { _ in })
+                        stream(loaded)
                             .navigationTitle("Notes")
+                            .modifier(MatrixReady())
                     } else {
                         ProgressView()
                     }
                 }
-                .dynamicTypeSize(example == .largest ? .accessibility5 : .large)
+                .dynamicTypeSize(example == .largest ? .accessibility5 : typeSize)
                 .task { await load() }
             }
+        }
+
+        @ViewBuilder private func stream(_ loaded: Loaded) -> some View {
+            #if os(iOS)
+                if surface == .phone {
+                    StreamView(
+                        stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
+                        openSetupRow: { _ in }, open: { _ in }
+                    )
+                    .searchable(text: Binding(get: { loaded.search.query }, set: loaded.search.setQuery))
+                    .toolbar(removing: .search)
+                    .toolbar {
+                        PhoneNotesToolbar(openSettings: {}, showRecentlyDeleted: {}, showCapture: {})
+                    }
+                    .safeAreaInset(edge: .top) {
+                        if example == .restoring { ProgressView("Syncing notes…") }
+                    }
+                } else {
+                    StreamView(stream: loaded.stream, search: loaded.search, open: { _ in })
+                }
+            #else
+                StreamView(stream: loaded.stream, search: loaded.search, open: { _ in })
+            #endif
         }
 
         private func load() async {
@@ -101,6 +126,7 @@
                 NavigationStack {
                     if let loaded {
                         NoteView(model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note))
+                            .modifier(MatrixReady())
                     } else {
                         ProgressView()
                     }

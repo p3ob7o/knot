@@ -179,3 +179,6 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-30a | An attachment that could not be shared | A system alert says the file could not be shared. |
 | 2026-11-26 | WP-30a | The English variant setting at the largest text sizes | The iOS system navigation-link picker stacks the label and value at accessibility sizes and shows the full option names on the next screen. |
 | 2026-11-26 | WP-30a | Notes while the capture sheet is down and the microphone is live | A notice shows Recording, elapsed time when known, and Show to reopen the sheet. |
+| 2026-11-26 | WP-40a | Existing and remote recordings that have audio but no stored waveform peaks | The player shows a seekable progress track and keeps its play control and time. |
+| 2026-11-26 | WP-40a | Which glyph represents work on another device when its type is unknown | Overlapping rectangles represent another device until the source identifies the device type. |
+| 2026-11-26 | WP-40a | The small player and inline notice arrangements at the largest Dynamic Type sizes | The notice puts actions below the message. Playback keeps the native text styles and gives the track a full-height touch target. |
