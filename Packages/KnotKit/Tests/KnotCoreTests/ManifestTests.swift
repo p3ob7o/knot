@@ -101,7 +101,7 @@ import Testing
 
     @Test(arguments: [
         ("follows_capture_id", #""not-an-id""#), ("follows_capture_id", "7"), ("last_saved_at", #""yesterday""#),
-        ("last_saved_at", "1795000031"), ("peaks", "7"), ("peaks", #""not base64!""#), ("recording_ending", "7"),
+        ("last_saved_at", "1795000031"), ("peaks", "7"), ("peaks", #""not base64!""#),
     ])
     func aNewFieldThatIsNotWhatItSaysIsUnreadable(key: String, value: String) {
         #expect(throws: KnotError.inboxItemUnreadable.about(capture: Self.capture)) {
@@ -123,6 +123,27 @@ import Testing
         #expect(read.recordingEnding == .unknown("thermal_shutdown"), "A reason this build does not know is kept.")
         #expect(read.unknownFields.isEmpty, "As the member it knows.")
         #expect(String(decoding: try read.encoded(), as: UTF8.self) == newer, "And written back as it was.")
+    }
+
+    /// A `recording_ending` of the wrong JSON type does not make a good manifest unreadable: the
+    /// manifest is read with no reason, the member is kept as a field this build does not know and
+    /// written back exactly, and a reason set later replaces it, written once.
+    @Test(arguments: ["7", "1.5", "true", "null", #"{"code":"limit_reached"}"#, #"["interrupted"]"#])
+    func aReasonOfTheWrongTypeIsReadAsNoneAndKept(value: String) throws {
+        let data = Self.golden(replacing: "recording_ending", with: value)
+        var manifest = try CaptureManifest.decode(data)
+        #expect(manifest.recordingEnding == nil, "It is read as no reason.")
+        #expect(manifest.unknownFields == ["recording_ending": value], "And kept as it came.")
+        var expected = Self.manifest
+        expected.recordingEnding = nil
+        #expect(manifest.captureID == expected.captureID && manifest.endedAt == expected.endedAt)
+        #expect(manifest.payloadSHA256 == expected.payloadSHA256, "The rest is read as it was.")
+        #expect(try manifest.encoded() == data, "It is written back byte for byte.")
+        manifest.recordingEnding = .interrupted
+        let written = String(decoding: try manifest.encoded(), as: UTF8.self)
+        #expect(written.components(separatedBy: #""recording_ending""#).count == 2, "Written once: \(written)")
+        let again = try CaptureManifest.decode(Data(written.utf8))
+        #expect(again.recordingEnding == .interrupted && again.unknownFields.isEmpty)
     }
 
     @Test func everyPlacementAndAnOpenCaptureRoundTrip() throws {

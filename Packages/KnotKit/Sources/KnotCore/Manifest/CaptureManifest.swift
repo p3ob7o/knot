@@ -62,7 +62,16 @@ public struct CaptureManifest: Hashable, Sendable {
     /// reason this build does not know is kept as `unknown` and written back. A reader that does
     /// not know the member keeps it as a field it does not know. Absent from the bytes when nil,
     /// so that every manifest written before keeps its bytes.
-    public var recordingEnding: RecordingEndReason?
+    ///
+    /// It is read leniently, so that a manifest is never refused for it: a member that is not a
+    /// string, `null` among them, is read as no reason, and kept as a field this build does not
+    /// know and written back exactly, until a reason is set. Every other member is read strictly.
+    public var recordingEnding: RecordingEndReason? {
+        didSet {
+            // A reason set replaces a member that could not be read, so no key is written twice.
+            if recordingEnding != nil { unknownFields[Key.recordingEnding.rawValue] = nil }
+        }
+    }
     /// The fields this build does not know, by key, each as its original JSON text.
     public private(set) var unknownFields: [String: String]
 
@@ -154,7 +163,10 @@ public struct CaptureManifest: Hashable, Sendable {
             throw KnotError.inboxItemUnreadable.with(context)
         }
         let known = Set(Key.allCases.map(\.rawValue))
-        for member in members where !known.contains(member.key) {
+        // A member read leniently that gave no value is kept as written, as a field this build does
+        // not know is.
+        let unread: Set = manifest.recordingEnding == nil ? [Key.recordingEnding.rawValue] : []
+        for member in members where !known.contains(member.key) || unread.contains(member.key) {
             // Kept exactly as written. The scanner has refused a document that is not UTF-8,
             // and a member that is not is refused here too, never repaired.
             guard let raw = String(validating: member.raw, as: UTF8.self) else {
@@ -315,7 +327,9 @@ extension CaptureManifest {
             try Self.date($0, key: .lastSavedAt)
         }
         peaks = try container.decodeIfPresent(Data.self, forKey: AnyKey(.peaks))
-        recordingEnding = try container.decodeIfPresent(RecordingEndReason.self, forKey: AnyKey(.recordingEnding))
+        // Leniently: a value that is not a string is no reason, and `decode(_:)` keeps the member.
+        recordingEnding = (try? container.decodeIfPresent(String.self, forKey: AnyKey(.recordingEnding)))
+            .flatMap { $0 }.map(RecordingEndReason.init(rawValue:))
     }
 
     fileprivate func encodeFields(to encoder: any Encoder) throws {

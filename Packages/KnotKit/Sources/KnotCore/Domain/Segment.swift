@@ -76,7 +76,8 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     /// (docs/product-spec.md §4.2 and §4.5), set by `NoteStore.setRecordingEnding(_:of:)` once
     /// the capture is no longer open. `nil` for a recording stopped at its control or discarded,
     /// and for every other kind. It is kept on a capture's first piece, and a conflict copy, which
-    /// holds text only, has none. "Remove recording" keeps it, since it says why the text stops.
+    /// holds text only, has none: the store refuses it for either. "Remove recording" keeps it,
+    /// since it says why the text stops.
     /// A stored property with a default, as `recognition` is.
     public var recordingEnding: RecordingEndReason? = nil
     /// Voice only, synced: the device that runs the segment's jobs.

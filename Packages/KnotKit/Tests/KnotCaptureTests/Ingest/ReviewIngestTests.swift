@@ -43,6 +43,26 @@ import Testing
         #expect(r.inboxFiles().isEmpty)
     }
 
+    /// A delivery whose `recording_ending` is of the wrong JSON type, as a faulty build might write
+    /// it, is stored as a good one is: its manifest is read with no reason, and its voice segment
+    /// has none (pull request 128's review).
+    @Test func deliveryWithAReasonOfTheWrongTypeIsStored() async throws {
+        let r = Rig()
+        let id: CaptureID = r.ids.make()
+        let audio = Data([4, 3, 2, 1])
+        try Self.deliver(r, id, file: audio, digestOf: audio)
+        let url = r.locations.inboxManifest(id)
+        var object = try JSONSerialization.jsonObject(with: r.layer.read(url)) as? [String: Any] ?? [:]
+        object["recording_ending"] = 7
+        try r.locations.durableFiles(layer: r.layer).place(
+            JSONSerialization.data(withJSONObject: object, options: .sortedKeys), at: url)
+        #expect(await r.ingest.ingest(id) == .stored(revision: 1), "It is stored, not kept as unreadable.")
+        let segment = try #require(try await r.notes.segment(SegmentID(id)))
+        #expect(segment.kind == .voice && segment.assetID != nil, "As a voice segment with its recording.")
+        #expect(segment.recordingEnding == nil, "With no reason.")
+        #expect(r.inboxFiles().isEmpty, "Its files go once it is stored.")
+    }
+
     /// Finding 3. A damaged copy that an earlier build left under the asset's ID is replaced by
     /// an intact delivery.
     @Test func intactDeliveryReplacesADamagedAsset() async throws {

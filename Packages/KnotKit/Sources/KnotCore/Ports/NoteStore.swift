@@ -257,9 +257,11 @@ public protocol NoteStore: Sendable {
     /// in its 30 days, takes it as a live one does, and "Remove recording" keeps it.
     ///
     /// Refused, with nothing written: `not_found` for no segment; `illegal_transition` for a
-    /// segment that is not a voice segment, or whose capture is open. A caller never fails, ends
-    /// or waits a capture on it, and calls it before `Recorder.removeWorkingFile(of:)`, so that a
-    /// death between the two leaves the manifest that keeps the reason.
+    /// segment that is not a voice segment, for a later piece of its capture and for a conflict
+    /// copy, since the reason is kept on a capture's first piece, and for a segment whose capture
+    /// is open. A caller never fails, ends or waits a capture on it, and calls it before
+    /// `Recorder.removeWorkingFile(of:)`, so that a death between the two leaves the manifest that
+    /// keeps the reason.
     ///
     /// It came after the second pull request merged, so it has a default implementation that
     /// answers `port_unavailable`.

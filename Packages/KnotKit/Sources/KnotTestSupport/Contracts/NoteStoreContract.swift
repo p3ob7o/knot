@@ -2941,11 +2941,27 @@ public enum NoteStoreContract {
     }
 
     /// What cannot hold why a recording ended refuses it, and nothing is written: no segment is
-    /// `not_found`; a segment that is not a voice segment, a typed one or a drawing, and a voice
-    /// segment whose capture is open are `illegal_transition`. Once that capture has ended, it takes
-    /// the reason.
+    /// `not_found`; a segment that is not a voice segment, a typed one or a drawing, a later piece
+    /// of a voice capture, a voice segment's conflict copy, and a voice segment whose capture is
+    /// open are `illegal_transition`. The piece and the copy are seeded, as sync could bring them:
+    /// the stores make neither of a voice capture. The capture's first piece takes the reason, and
+    /// so does the open recording once it has ended.
     public static func whyARecordingEndedIsRefusedWhereItCannotBeKept(_ make: NoteStoreFactory) async throws {
-        let h = await Harness(make, window: .off)
+        let device: DeviceID = Harness.fixedID(40)
+        let note: NoteID = Harness.fixedID(41)
+        let first = try Build.voice(
+            Harness.fixedID(42), in: note, from: Harness.base.addingTimeInterval(-3_600), transcript: "synthetic words",
+            device: device)
+        var later = try Build.voice(
+            Harness.fixedID(43), in: note, from: first.startedAt, transcript: "more synthetic words", device: device)
+        later.piece = 1
+        later.pieceOf = first.id
+        var copy = try Build.voice(
+            Harness.fixedID(44), in: note, from: first.startedAt, transcript: "synthetic words, elsewhere",
+            device: device)
+        copy.conflictOf = first.id
+        let h = await Harness(
+            make, window: .off, seed: [Harness.seed(Build.note(note, at: first.startedAt), [first, later, copy])])
         let typed = try await h.store.record(h.typed("Synthetic words", from: 0, to: 1))
         let drawing = h.drawingStart(at: 2)
         _ = try await h.store.record(drawing)
@@ -2968,10 +2984,20 @@ public enum NoteStoreContract {
         await refuses(.illegalTransition, "A recording in progress.") {
             try await h.store.setRecordingEnding(.limitReached, of: SegmentID(open.id))
         }
-        for segment in [typed.segmentIDs[0], SegmentID(drawing.id), SegmentID(open.id)] {
+        await refuses(.illegalTransition, "A later piece.") {
+            try await h.store.setRecordingEnding(.limitReached, of: later.id)
+        }
+        await refuses(.illegalTransition, "A conflict copy.") {
+            try await h.store.setRecordingEnding(.limitReached, of: copy.id)
+        }
+        for segment in [typed.segmentIDs[0], SegmentID(drawing.id), SegmentID(open.id), later.id, copy.id] {
             #expect(try await recordingEnding(h, segment) == nil, "Nothing was written.")
         }
         #expect(try await h.store.cursor() == cursor, "The cursor did not move.")
+
+        // The capture's first piece takes the reason.
+        try await h.store.setRecordingEnding(.limitReached, of: first.id)
+        #expect(try await recordingEnding(h, first.id) == .limitReached)
 
         // Once the recording has ended, its segment takes the reason.
         _ = try await h.store.end(

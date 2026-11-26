@@ -493,8 +493,11 @@ public final class NoteRepository: NoteStore {
                 throw KnotError.notFound.with(.init(segmentID: segmentID))
             }
             // A voice segment whose capture is no longer open: a recording still being made has
-            // not ended.
-            guard segment.kind == .voice, !segment.state.isCapturing, try !tx.isOpen(segmentID) else {
+            // not ended. The reason is kept on a capture's first piece, and a conflict copy, which
+            // holds text only, has none.
+            guard segment.kind == .voice, segment.piece == 0, segment.pieceOf == nil, segment.conflictOf == nil,
+                !segment.state.isCapturing, try !tx.isOpen(segmentID)
+            else {
                 throw KnotError.illegalTransition.with(.init(segmentID: segmentID))
             }
             // The same reason again changes nothing. Another is a change of the segment, which

@@ -544,6 +544,45 @@ public enum RecorderContract {
     }
 }
 
+/// An orphan's ending as its manifest gives it, the rule of `Recorder.recoverOrphans`, case by
+/// case: the reason the manifest keeps, as the ending it names; `stopped` for the end's time with
+/// no reason, and for a reason this build does not know, with or without the end's time, since the
+/// recording ended and this build cannot say why; `recovered` with neither, and with no manifest
+/// that can be read. Each recorder's own reading of its manifest is tested against these.
+public enum OrphanEndingCases {
+    public struct Case: Sendable {
+        public let manifest: CaptureManifest?
+        public let ending: RecordingEnding
+        public let why: String
+    }
+
+    public static var all: [Case] {
+        let start = Date(timeIntervalSince1970: 1_795_000_000)
+        let request = RecordingRequest(
+            captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID()),
+            origin: CaptureOrigin(source: .device(Identifier(uuid: UUID())), surface: .control))
+        func manifest(_ reason: RecordingEndReason?, ended: Bool) -> CaptureManifest {
+            var manifest = request.manifest(startedAt: start)
+            manifest.endedAt = ended ? start.addingTimeInterval(60) : nil
+            manifest.recordingEnding = reason
+            return manifest
+        }
+        let newer = RecordingEndReason.unknown("thermal_shutdown")
+        var cases = [
+            Case(manifest: manifest(newer, ended: true), ending: .stopped, why: "a newer reason, with the end"),
+            Case(manifest: manifest(newer, ended: false), ending: .stopped, why: "a newer reason, with no end"),
+            Case(manifest: manifest(nil, ended: true), ending: .stopped, why: "the end's time alone"),
+            Case(manifest: manifest(nil, ended: false), ending: .recovered, why: "neither"),
+            Case(manifest: nil, ending: .recovered, why: "no manifest"),
+        ]
+        for reason in RecordingEndReason.allCases {
+            guard let ending = RecordingEnding(reason) else { continue }
+            cases.append(Case(manifest: manifest(reason, ended: true), ending: ending, why: reason.rawValue))
+        }
+        return cases
+    }
+}
+
 /// What one of two stops at once saw: its result, and the working file's size as it returned.
 struct StopSeen: Sendable {
     let audio: RecordedAudio
