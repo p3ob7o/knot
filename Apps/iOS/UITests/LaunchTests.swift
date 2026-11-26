@@ -222,6 +222,31 @@ final class KnotIOSLaunchTests: XCTestCase {
         try app.auditAccessibility()
     }
 
+    @MainActor
+    func testFirstRunSetupRowOpensItsSheet() throws {
+        let app = KnotLauncher.launch(.preview)
+        app.buttons["shell.notes"].tap()
+        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        app.buttons["Add a Lock Screen control"].tap()
+        XCTAssertTrue(app.navigationBars["Add a Lock Screen control"].waitForExistence(timeout: limit))
+        try app.auditAccessibility()
+    }
+
+    @MainActor
+    func testSettingsActionButtonRowOpensItsSheet() throws {
+        let app = KnotLauncher.launch(.preview)
+        app.buttons["shell.notes"].tap()
+        app.buttons["More"].tap()
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: limit))
+        let about = app.buttons["About"]
+        XCTAssertTrue(about.waitForExistence(timeout: limit))
+        XCTAssertTrue(about.isEnabled)
+        app.buttons["Set up Action Button recording"].tap()
+        XCTAssertTrue(app.navigationBars["Record with the Action Button"].waitForExistence(timeout: limit))
+        try app.auditAccessibility()
+    }
+
     // MARK: Helpers
 
     @MainActor

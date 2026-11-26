@@ -8,16 +8,18 @@ public struct Banner<Actions: View>: View {
     let symbol: String
     let role: ColorRole
     let open: (() -> Void)?
+    let openAccessibilityLabel: String?
     let actions: Actions
 
     public init(
         _ message: String, symbol: String, role: ColorRole = .textSecondary,
-        open: (() -> Void)? = nil, @ViewBuilder actions: () -> Actions
+        open: (() -> Void)? = nil, openAccessibilityLabel: String? = nil, @ViewBuilder actions: () -> Actions
     ) {
         self.message = message
         self.symbol = symbol
         self.role = role
         self.open = open
+        self.openAccessibilityLabel = openAccessibilityLabel
         self.actions = actions()
     }
 
@@ -36,6 +38,7 @@ public struct Banner<Actions: View>: View {
                             #endif
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(openAccessibilityLabel ?? message)
                 } else {
                     Text(message)
                 }
@@ -83,7 +86,11 @@ public struct FirstRunView: View {
                     .foregroundStyle(theme.colors[.textSecondary])
             }
             ForEach(content.setupRows) { row in
-                Banner(row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } }) {
+                Banner(
+                    row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } },
+                    openAccessibilityLabel: row == .actionButton
+                        ? String(localized: "Set up Action Button recording", bundle: .module) : nil
+                ) {
                     dismiss(row)
                 }
             }
@@ -101,6 +108,13 @@ public struct FirstRunView: View {
                 #endif
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("Dismiss \(row.title)", bundle: .module))
+        #if os(iOS)
+            .accessibilityLabel(
+                row == .actionButton
+                    ? Text("Dismiss Action Button setup", bundle: .module)
+                    : Text("Dismiss \(row.title)", bundle: .module))
+        #else
+            .accessibilityLabel(Text("Dismiss \(row.title)", bundle: .module))
+        #endif
     }
 }

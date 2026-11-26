@@ -1,31 +1,35 @@
+import KnotCore
 import Testing
 
 @testable import KnotUI
 
-@Test @MainActor func theShellCanProvideItsOwnSearchControl() {
+@Test @MainActor func theSearchProblemTakesPrecedenceUntilTheQueryClears() async {
     let rig = StoreRig()
-    let stream = StreamViewModel(environment: rig.environment, context: rig.context())
-    let search = SearchViewModel(environment: rig.environment, context: rig.context())
+    let search = SearchViewModel(environment: .unavailable, context: rig.context())
+    let streamProblem = StoreProblem(.storeDamaged)
+    search.setQuery("Synthetic query")
+    await search.settle()
+    #expect(search.displayedProblem(streamProblem: streamProblem) == StoreProblem(.portUnavailable))
 
-    #expect(StreamView(stream: stream, search: search) { _ in }.showsInlineSearch)
-    #expect(!StreamView(stream: stream, search: search, showsInlineSearch: false) { _ in }.showsInlineSearch)
+    search.clear()
+    await search.settle()
+    #expect(search.displayedProblem(streamProblem: streamProblem) == streamProblem)
 }
 
-@Test @MainActor func setupRowsCanOpenFromTheStreamAndSettings() {
+@Test @MainActor func theEmptySearchViewUsesOnlyACompletedUnmatchedQuery() async throws {
     let rig = StoreRig()
-    let stream = StreamViewModel(environment: rig.environment, context: rig.context())
+    try await rig.typed("A synthetic note", at: rig.clock.now())
     let search = SearchViewModel(environment: rig.environment, context: rig.context())
-    let settings = SettingsViewModel(environment: rig.environment, context: rig.context(), platform: .iPhone)
-    var opened: [SetupRow] = []
-    let streamView = StreamView(
-        stream: stream, search: search, openSetupRow: { opened.append($0) }, open: { _ in })
-    let firstRun = FirstRunView(
-        FirstRunContent(syncLine: nil, setupRows: [.actionButton]), onOpen: streamView.openSetupRow, onDismiss: { _ in }
-    )
-    let form = SettingsForm(settings, actionButtonSetup: { opened.append(.actionButton) })
-    firstRun.onOpen?(.lockScreenControl)
-    form.actionButtonSetup?()
-    #expect(opened == [.lockScreenControl, .actionButton])
+    #expect(search.emptyResultsQuery == nil)
+
+    search.setQuery("no match")
+    await search.settle()
+    #expect(search.emptyResultsQuery == "no match")
+
+    search.setQuery("synthetic")
+    await search.settle()
+    #expect(search.results?.count == 1)
+    #expect(search.emptyResultsQuery == nil)
 }
 
 @Test @MainActor func playingIsRemovedFromARecordedSegmentsActionsDuringCapture() {

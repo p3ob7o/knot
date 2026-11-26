@@ -31,7 +31,7 @@
                     if showsInlineSearch {
                         SearchField(text: search.query, onChange: search.setQuery)
                     }
-                    if let problem = search.problem ?? stream.problem {
+                    if let problem = search.displayedProblem(streamProblem: stream.problem) {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
                     }
                     if let arrival = stream.arrival {
@@ -62,8 +62,8 @@
                     }
                 }
                 if let results = search.results {
-                    if results.isEmpty, !showsInlineSearch {
-                        ContentUnavailableView.search(text: search.query)
+                    if let query = search.emptyResultsQuery, !showsInlineSearch {
+                        ContentUnavailableView.search(text: query)
                     } else {
                         ForEach(results) { row in rowButton(row) }
                     }

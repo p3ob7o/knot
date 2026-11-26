@@ -36,6 +36,7 @@
                 }
                 if let actionButtonSetup {
                     Button(SetupRow.actionButton.title, action: actionButtonSetup)
+                        .accessibilityLabel(Text("Set up Action Button recording", bundle: .module))
                 }
                 if let note = model.lockScreenNote {
                     Text(note)
