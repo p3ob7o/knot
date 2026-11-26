@@ -106,6 +106,8 @@ Every cell marked "Yes" on `main` that has no design or a design in part, with w
 | Export: in progress, done, with what it could not fetch | Nothing | In progress, done, and the list of what could not be fetched. |
 | First run: microphone, model downloading, Action Button | Microphone, by rule: 02-states.md "the microphone permission is asked the first time someone records"; the refusal notice is in Notice/preview.html ("Knot can’t use the microphone. You can allow it in Settings."). Action Button: the setup row "Record with the Action Button" in FirstRun/preview.html (FirstRun/README.md: "tapping explains the system steps in a sheet"). | The speech model still downloading: nothing in either folder (no match for 'model' or 'download'). The sheet that explains the Action Button. The Action Button row in Settings, which the draft requires. |
 
+One more iPhone state goes to the designer. It is not a cell of the matrix and is not counted above: Notes while a recording is live and the capture surface is dismissed. The handoff has nothing for it. The owner asked on 2026-11-26 that Notes show the recording. Until the designer returns it, the built form is the orchestrator's ruling in `direction.md`: a notice with the word "Recording", the elapsed time and Show, which brings the sheet back.
+
 ### iPad
 
 | State | The handoff has | Missing |

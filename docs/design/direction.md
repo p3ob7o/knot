@@ -61,6 +61,8 @@ Navigation: Notes is the root, and the capture surface is a sheet over it. At la
 
 Notes itself has the `ellipsis` menu in its top trailing corner, with Settings and Recently deleted, and a bottom toolbar with search and, beside it, the button that brings the capture surface back (`square.and.pencil`). Settings opens from the menu as a sheet with a close button. An open note is a pushed page with the back button and the note's own `ellipsis` menu: Copy note, Share note… and Delete note.
 
+With the capture surface dismissed while a recording is live, Notes shows it: a notice at the top with the word "Recording", the elapsed time and one action, Show, which brings the sheet back. Nothing shows before the microphone is live. The owner asked for it on 2026-11-26. The form is the orchestrator's ruling, and his to overturn. The handoff draws nothing for it, and it is on the list for the designer in `handoff-check.md`.
+
 The component in each state:
 
 | State | Top bar | Page | Above the keyboard, or the bottom toolbar |
