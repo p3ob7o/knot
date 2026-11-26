@@ -110,7 +110,7 @@ Each milestone is something Paolo can do on a device. Hardware checks come from 
 
 M1 adds no playback on the Watch, and delivery to the iPhone belongs to M3.
 
-M2 to M5 are functional gates. WP-40 applies the design to each platform after the keep-gate ruling (§6), and M6 repeats the core rows of the M2 to M5 checklists after the design is applied.
+M2 to M5 are functional gates. WP-40 applies the design to each platform after the keep-gate ruling (§6), except its first PR, the theme, and WP-40a, the iPhone's screens, which the owner let go ahead of it (§6). M6 repeats the core rows of the M2 to M5 checklists after the design is applied.
 
 ### Milestone builds
 
@@ -142,7 +142,7 @@ If M5 is cut, the second PR of WP-31 loses the Sketch control and M6 needs it. M
 
 ### The keep gate
 
-M2 is a keep gate (D32). When the M2 checklist has passed, the owner uses the M2 milestone build as his only capture tool on the iPhone for seven days. The week runs on that build as it is, in the system look and with the structure of the chosen direction. A fix found during the week ships as a new M2 build with a tested migration, because his iPhone notes are real from M2 on.
+M2 is a keep gate (D32). When the M2 checklist has passed, the owner uses the M2 milestone build as his only capture tool on the iPhone for seven days. The week runs on that build as it is: with the structure of the chosen direction, the theme of WP-40's first PR, which merged ahead of the ruling on the owner's word (§6), and the iPhone's screens of WP-40a if they merged before that build was made. A fix found during the week ships as a new M2 build with a tested migration, because his iPhone notes are real from M2 on.
 
 The week ends with the keep-gate sitting, about 30 minutes. The owner brings the diagnostics export from About, which gives the week's counts without any note text: captures a day by kind, captures that failed or stayed pending, uses of "New note", and segments moved to their own note. He answers five questions in writing: did he reach for Knot, was anything lost or stuck, was the grouping right, did the notes get used, and would he go back to what he used before. He then rules one of four ways: continue as planned, continue with cuts, revise the spec first, or stop the build. Cuts follow the cut order of §4.
 
@@ -271,8 +271,8 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-34 | 2 | The other commands | WP-10 PR 2; WP-20; the contract pull request for what the tool shows that KnotCore gives no source for |
 | WP-34 | 3 | The MCP server, and the embedding of the tool in the Mac app | WP-34 PR 2; SP-3 for the embedding |
 | WP-35 | 1 | The whole package, built from the direction's structure sheet for the iPad. Held until the keep-gate ruling. | the ruling; WP-18 PR 1; WP-11 PR 4; WP-21 PR 2; WP-30 PR 2 |
-| WP-40 | 1 | The theme: the tokens translated from the handoff, and `DESIGN.md` | the ruling; the accepted handoff |
-| WP-40 | 40a | The iPhone's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-30 PR 2 |
+| WP-40 | 1 | The theme: the tokens translated from the handoff, and `DESIGN.md` | the accepted handoff |
+| WP-40 | 40a | The iPhone's screens matched to the handoff | the accepted handoff; WP-40 PR 1; WP-30a |
 | WP-40 | 40b | The iPad's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-35 |
 | WP-40 | 40c | The Mac's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-33 PR 2 |
 | WP-40 | 40d | The Watch's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-32 PR 3 |
@@ -298,6 +298,8 @@ These rules sit beside the table:
 
 Until the keep-gate ruling, nothing that the cut order names is built, and wave 4 does not start. That holds back WP-35; everything in WP-18 after its proof step; the fourth PR of WP-11, which runs drawings through the engine; the Sketch control of WP-31 and the OpenSketch intent of WP-19; the Home Screen and Lock Screen widgets of WP-31; WP-32's complication families beyond the first and its Smart Stack widget; and WP-40, WP-41, WP-42 and WP-43.
 
+Two parts of WP-40 go ahead of the ruling, on the owner's word of 2026-11-26. Of its first PR, the theme, he said "Yes, the theme can merge ahead of the keep gate", and it merged that day as pull request 126. Of the iPhone's screens he said "Yes, the iPhone design package can start after 129", so WP-40a starts after WP-30a, which pull request 129 made. WP-40b, WP-40c and WP-40d keep the hold until he says otherwise.
+
 The hold names PRs, so that no milestone waits for a held part. Each held part of WP-11, WP-19, WP-31 and WP-32 is that package's last PR:
 
 - WP-11 ships in four PRs. The first runs typed and voice captures through the engine. The second makes the engine the one applier of a press, publishes live words and levels, keeps a stored recording's peaks, takes KnotCore's real-path code for KnotCapture's copy, gives the engine its missing kill seams and restates the follower's two tests as limits. The third adds its kill points to the soak. The fourth, held, runs drawings through the engine, and waits for WP-18's first PR, which settles where an open drawing's saves go.
@@ -317,7 +319,7 @@ The first PRs of WP-21, WP-30, WP-32 and WP-33 are skeletons that do not depend 
 
 The full design round follows the direction, and its handoff is committed to `docs/design/handoff/`. The round does not wait for the spikes, because the brief asks for both branches of the three surfaces a spike still decides.
 
-Before WP-40 starts, the orchestrator checks the handoff against the state matrix of docs/design/brief.md §6. Gaps go back to the designer as a list, not as a second round. The handoff that has passed this check is the accepted handoff of the start conditions. WP-40a to WP-40d each start after their platform's app package has merged, and own that platform's views from then on. Where the design changes structure, the orchestrator lists each difference in `docs/design/deltas.md` and assigns it. docs/architecture.md §16 holds these rules in full.
+Before WP-40 starts, the orchestrator checks the handoff against the state matrix of docs/design/brief.md §6. Gaps go back to the designer as a list, not as a second round. The handoff that has passed this check is the accepted handoff of the start conditions. WP-40b to WP-40d each start after their platform's app package has merged, and own that platform's views from then on. WP-40a starts after WP-30a, the iPhone's structure, and from then on matches the iPhone's views to the handoff beside WP-30's second PR, as docs/plan/WP-40.md says. Where the design changes structure, the orchestrator lists each difference in `docs/design/deltas.md` and assigns it. docs/architecture.md §16 holds these rules in full.
 
 ## 7. Work packages
 
