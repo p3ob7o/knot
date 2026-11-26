@@ -116,11 +116,7 @@
                     segment(item)
                 }
             } else {
-                if let title = model.title {
-                    Text(title)
-                        .font(theme.type[.noteTitle])
-                        .accessibilityAddTraits(.isHeader)
-                }
+                NoteTitleEditor(model: model)
                 ForEach(model.items) { item in
                     if item.id != model.activeRecording.map(SegmentID.init) {
                         segment(item)
@@ -316,6 +312,51 @@
                 beginEdit: { model.beginEditing(item.id) },
                 endEdit: { model.endEditing(item.id) },
                 drawing: { scale throws(KnotError) in try await model.drawing(of: item, scale: scale) })
+        }
+    }
+    /// Edits the title in place and keeps its original revision until focus leaves the field.
+    private struct NoteTitleEditor: View {
+        @Environment(\.knotTheme) private var theme
+        @FocusState private var editing: Bool
+        @State private var draft = ""
+        @State private var original = ""
+        let model: NoteViewModel
+
+        private var title: String { model.title ?? "" }
+
+        var body: some View {
+            TextField(text: $draft) {
+                Text("Title", bundle: .module)
+            }
+            .textFieldStyle(.plain)
+            .font(theme.type[.noteTitle])
+            .focused($editing)
+            .accessibilityAddTraits(.isHeader)
+            .onAppear { draft = title }
+            .onChange(of: title) { _, new in
+                if !editing { draft = new }
+            }
+            .onChange(of: editing) { _, focused in
+                if focused {
+                    original = draft
+                    model.beginEditingTitle()
+                } else {
+                    finishEdit()
+                }
+            }
+            .onSubmit { editing = false }
+            .onDisappear {
+                if editing { finishEdit() }
+            }
+        }
+
+        private func finishEdit() {
+            if draft != original {
+                model.setTitle(draft)
+            } else {
+                model.endEditingTitle()
+                draft = title
+            }
         }
     }
 #endif
