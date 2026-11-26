@@ -29,18 +29,22 @@
         private let initialFocus: InitialFocus
         private let shareSegment: ((SegmentID) -> Void)?
         private let observesRecordings: Bool
+        private let usesKeyboardToolbar: Bool
 
         private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
+        private var showsInsetControls: Bool { showsLiveControls || (!usesKeyboardToolbar && fieldFocused) }
 
         public init(
             model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
-            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true
+            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true,
+            usesKeyboardToolbar: Bool = true
         ) {
             self.model = model
             self.player = player
             self.initialFocus = initialFocus
             self.shareSegment = shareSegment
             self.observesRecordings = observesRecordings
+            self.usesKeyboardToolbar = usesKeyboardToolbar
         }
 
         public var body: some View {
@@ -62,13 +66,12 @@
                 .defaultFocus($fieldFocused, initialFocus == .capture, priority: .userInitiated)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { done }
-                    if !showsLiveControls {
-                        if fieldFocused {
+                    if !showsInsetControls {
+                        if usesKeyboardToolbar {
                             ToolbarItemGroup(placement: .keyboard) { captureActions }
-                            .sharedBackgroundVisibility(.hidden)
-                        } else {
+                        }
+                        if !fieldFocused {
                             ToolbarItemGroup(placement: .bottomBar) { captureActions }
-                            .sharedBackgroundVisibility(.hidden)
                         }
                     }
                 }
@@ -77,8 +80,9 @@
                     if let offer = model.undoOffer {
                         UndoCapsule(offer, undo: model.undo)
                     }
-                    if showsLiveControls {
+                    if showsInsetControls {
                         HStack { captureActions }
+                        .buttonStyle(.glass)
                         .padding(.horizontal)
                         .padding(.vertical, theme.spacing.space2)
                     }
@@ -208,7 +212,6 @@
                     #endif
                 }
                 #if os(iOS)
-                    .buttonStyle(.glass)
                     .accessibilityShowsLargeContentViewer {
                         Label {
                             Text("New note", bundle: .module)
@@ -246,7 +249,7 @@
                 }
                 RecordButton(
                     phase: model.recording, elapsed: elapsed, outcome: model.recordingOutcome,
-                    toolbar: model.surface == .app
+                    toolbar: model.surface == .app && !showsInsetControls
                 ) {
                     if model.recording == .idle { restoreFieldFocus = fieldFocused }
                     model.toggleRecording()

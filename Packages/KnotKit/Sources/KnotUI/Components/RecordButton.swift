@@ -57,11 +57,21 @@ public struct RecordButton: View {
                 .buttonStyle(.glassProminent)
                 .tint(theme.colors[.recording])
         } else {
-            button
-                .buttonStyle(.glass)
-                .foregroundStyle(
-                    theme.colors[phase == .idle && outcome == .couldNotStart ? .textSecondary : .textPrimary])
+            #if os(iOS)
+                if toolbar {
+                    // The keyboard and bottom toolbars already supply the glass behind the control.
+                    button.foregroundStyle(idleInk)
+                } else {
+                    button.buttonStyle(.glass).foregroundStyle(idleInk)
+                }
+            #else
+                button.buttonStyle(.glass).foregroundStyle(idleInk)
+            #endif
         }
+    }
+
+    private var idleInk: Color {
+        theme.colors[phase == .idle && outcome == .couldNotStart ? .textSecondary : .textPrimary]
     }
 
     private var usesRecordingTint: Bool {

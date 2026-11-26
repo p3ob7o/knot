@@ -125,8 +125,11 @@
             matrixFrame(surface) {
                 NavigationStack {
                     if let loaded {
-                        NoteView(model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note))
-                            .modifier(MatrixReady())
+                        NoteView(
+                            model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note),
+                            usesKeyboardToolbar: surface != .phone
+                        )
+                        .modifier(MatrixReady())
                     } else {
                         ProgressView()
                     }

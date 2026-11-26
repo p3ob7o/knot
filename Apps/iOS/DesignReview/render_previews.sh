@@ -43,6 +43,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.knot.design-review
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     dependencies:
       - package: KnotKit
@@ -55,7 +56,7 @@ available=$(df -g /System/Volumes/Data | awk 'NR == 2 {print $4}')
 echo "Preview build log: $scratch/build.log"
 "$repo/scripts/build-slot.sh" run --label phone-previews -- xcodebuild \
     -project "$scratch/KnotDesignReview.xcodeproj" -scheme KnotDesignReview -configuration Debug \
-    -destination 'generic/platform=iOS Simulator' -derivedDataPath "$scratch/DerivedData" \
+    -destination 'generic/platform=iOS Simulator' -derivedDataPath "$scratch/DerivedData" "ARCHS=$(uname -m)" \
     -clonedSourcePackagesDirPath "$KNOT_SOURCE_PACKAGES" build 2>&1 | knot_filter_team > "$scratch/build.log"
 df -g / /System/Volumes/Data
 "$repo/scripts/build-slot.sh" run --simulators --label render-phone-previews -- \

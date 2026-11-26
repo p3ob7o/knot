@@ -196,7 +196,8 @@
             }
 
             private func note(_ loaded: Loaded) -> some View {
-                NoteView(model: loaded.model, player: loaded.player)
+                // The standalone preview host does not get SwiftUI's keyboard accessory bar.
+                NoteView(model: loaded.model, player: loaded.player, usesKeyboardToolbar: surface != .phone)
                     .modifier(MatrixReady())
                     .onDisappear {
                         loaded.releaseStart?.finish()
@@ -364,8 +365,7 @@
                     if example.outcome == .saved { Text("Saved") }
                     if let duration = example.duration { Text(ClockText.of(duration)).monospacedDigit() }
                     RecordButton(
-                        phase: example.phase, elapsed: example.duration, outcome: example.outcome,
-                        toolbar: surface != .panel
+                        phase: example.phase, elapsed: example.duration, outcome: example.outcome
                     ) {}
                 }
             }

@@ -51,6 +51,10 @@ for combination in light-default dark-default light-ax5; do
             sleep 1
         done
         [[ -f $marker ]] || { echo "Preview did not appear: $slug ($combination)" >&2; exit 1; }
-        simctl io "$udid" screenshot "$image" >/dev/null
+        if ! simctl io "$udid" screenshot "$image" >"$scratch/screenshot.log" 2>&1; then
+            cat "$scratch/screenshot.log" >&2
+            exit 1
+        fi
     done < "$preview_rows"
+    echo "Rendered $combination"
 done
