@@ -158,9 +158,19 @@ if [[ -n $ARCHIVE_DIR ]]; then
                 "Name a new folder with --archive. Keep what the old one holds if it is evidence, then remove it by its path." "safe" "nothing"
         fi
     fi
+    archive_created=0
+    [[ -e $ARCHIVE_DIR ]] || archive_created=1
     mkdir -p "$ARCHIVE_DIR" 2>/dev/null && (set -o noclobber && : >"$ARCHIVE_DIR/.claimed") 2>/dev/null ||
         knot_fail "milestone-build-archive-folder" "The archive's folder $(knot_home_path "$ARCHIVE_DIR") could not be claimed: another run holds it, or it cannot be written." \
             "Name a new folder with --archive." "safe" "nothing"
+    # A refusal before the first build releases the claim, and the folder if this run made it.
+    claim_unused=1
+    release_claim() {
+        ((claim_unused)) || return 0
+        rm -f "$ARCHIVE_DIR/.claimed"
+        ((archive_created == 0)) || rmdir "$ARCHIVE_DIR" 2>/dev/null || true
+    }
+    trap release_claim EXIT
 fi
 WANTED="ios mac"
 [[ $PRODUCTS == both ]] || WANTED=$PRODUCTS
@@ -543,6 +553,7 @@ for product in $WANTED; do
         knot_fail "milestone-build-derived-data" "The derived data folder .build/milestone/$(basename "$derived"), or its log, .build/milestone/$(basename "$log"), holds an earlier build: a milestone build is never incremental." \
             "Keep the log if it is evidence, by copying it out; then remove both by their paths, and rerun." "safe" "nothing"
     fi
+    claim_unused=0
     mkdir -p "$derived"
     : >"$log"
     say "$product: $( [[ -n $archive ]] && echo "archiving" || echo "building") $scheme, Release, $LEVEL$( [[ -n $BUILD_NUMBER ]] && echo ", build number $BUILD_NUMBER"), in fresh derived data $(where "$derived")$( ((PROVISIONING)) && echo ', with -allowProvisioningUpdates')"

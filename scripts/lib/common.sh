@@ -70,7 +70,7 @@ knot_check_xcodegen() {
     local version where
     knot_resolve_xcodegen
     where="the build folder's tools/xcodegen-$KNOT_XCODEGEN_VERSION/ ($KNOT_BUILD_FOLDER/tools/xcodegen-$KNOT_XCODEGEN_VERSION/xcodegen/bin/xcodegen)"
-    KNOT_XCODEGEN_FIX="Unpack the XcodeGen $KNOT_XCODEGEN_VERSION release, checked against its SHA-256 in docs/dev-setup.md, under $where, or name a copy with KNOT_XCODEGEN. Do not change Homebrew for the project."
+    KNOT_XCODEGEN_FIX="Unpack the XcodeGen $KNOT_XCODEGEN_VERSION release, checked against its SHA-256 in docs/dev-setup.md, under $where, where a release takes it from. A development run may name another copy with KNOT_XCODEGEN, which a release refuses. Do not change Homebrew for the project."
     if [[ -z $KNOT_XCODEGEN_PATH ]]; then
         KNOT_XCODEGEN_CODE="infra-xcodegen-missing"
         if [[ $KNOT_XCODEGEN_FROM == KNOT_XCODEGEN ]]; then
@@ -402,27 +402,41 @@ knot_swift_test_limited() {
 # above all, or keep its bare name with no module, which this scan does not count; the lint
 # is what catches a fake whose guard was lost (fake-unguarded).
 #
-# An inspection that fails is a finding, never a clean file: when nm, strings or swift-demangle
-# fails on the file, it prints "the inspection failed: …" and returns 0, so that every caller,
-# which reads a 0 as a file that holds what it may not, fails on it.
+# An inspection that fails is neither a clean file nor a find: when nm, strings, swift-demangle,
+# grep or sort fails, it prints "the inspection failed: …" and returns 2, which every caller
+# reads as a check that could not look.
 #   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
-    local file=$1 symbols strings demangled found
+    local file=$1 symbols strings demangled matches found status=0
     if ! symbols="$(nm -a "$file" 2>/dev/null)"; then
         echo "the inspection failed: nm could not read the file"
-        return 0
+        return 2
     fi
     if ! strings="$(strings -a "$file" 2>/dev/null)"; then
         echo "the inspection failed: strings could not read the file"
-        return 0
+        return 2
     fi
     if ! demangled="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle 2>/dev/null)"; then
         echo "the inspection failed: swift-demangle failed on the file's names"
-        return 0
+        return 2
     fi
-    found="$(grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' <<<"$demangled" |
-        sort -u || true)"
-    if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
+    matches="$(grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' <<<"$demangled" 2>/dev/null)" ||
+        status=$?
+    if ((status > 1)) || ! found="$(sort -u <<<"$matches" 2>/dev/null)"; then
+        echo "the inspection failed: grep or sort failed on the file's names"
+        return 2
+    fi
+    status=0
+    grep -e 9KnotFakes <<<"$symbols" >/dev/null 2>&1 || status=$?
+    if ((status == 1)); then
+        status=0
+        grep -e KnotFakes <<<"$strings" >/dev/null 2>&1 || status=$?
+    fi
+    if ((status > 1)); then
+        echo "the inspection failed: grep failed on the file's names"
+        return 2
+    fi
+    if ((status == 0)); then
         found="${found:+$found$'\n'}the module KnotFakes"
     fi
     [[ -n $found ]] || return 1
@@ -433,20 +447,24 @@ knot_fakes_in() {
 # when it holds any (item 99): the packaging step looks for them in every Release binary,
 # since a release build must ignore them. The names are matched whole, as strings of the file.
 # An optimised build can keep a string of 15 bytes or fewer inside the code, where this
-# cannot see it. As knot_fakes_in does, it prints "the inspection failed: …" and returns 0 when
-# strings fails on the file, or when the list is empty, which would match nothing.
+# cannot see it. As knot_fakes_in does, it prints "the inspection failed: …" and returns 2 when
+# strings, grep or sort fails, or when the list is empty, which would match nothing.
 #   knot_debug_arguments_in <file> <list, one name a line>
 knot_debug_arguments_in() {
-    local found strings
+    local found strings matches status=0
     if [[ -z "$(tr -d '[:space:]' <<<"$2")" ]]; then
         echo "the inspection failed: the list of debug launch arguments is empty"
-        return 0
+        return 2
     fi
     if ! strings="$(strings -a "$1" 2>/dev/null)"; then
         echo "the inspection failed: strings could not read the file"
-        return 0
+        return 2
     fi
-    found="$(grep -x -F -f <(printf '%s\n' "$2") <<<"$strings" | sort -u || true)"
+    matches="$(grep -x -F -f <(printf '%s\n' "$2") <<<"$strings" 2>/dev/null)" || status=$?
+    if ((status > 1)) || ! found="$(sort -u <<<"$matches" 2>/dev/null)"; then
+        echo "the inspection failed: grep or sort failed on the file's strings"
+        return 2
+    fi
     [[ -n $found ]] || return 1
     printf '%s\n' "$found"
 }
@@ -688,6 +706,7 @@ knot_start_tool() {
 #   … | knot_filter_team
 KNOT_TEAM_FILTER='
     BEGIN {
+        $| = 1;
         my $config = $ENV{KNOT_FILTER_CONFIG} || "";
         if ($config ne "" && open(my $file, "<", $config)) {
             local $/;

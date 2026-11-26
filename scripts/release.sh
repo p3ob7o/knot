@@ -28,75 +28,89 @@
 #   --allow-provisioning-updates
 #                passed to scripts/milestone-build.sh, on the owner's word only
 #
-# The App Store Connect key, for --validate and --upload, in three environment variables:
-# KNOT_ASC_KEY_PATH, the path of the key's .p8 file, KNOT_ASC_KEY_ID, ten capitals and digits,
-# and KNOT_ASC_ISSUER_ID, a UUID. The script turns tracing off before it reads any of them,
-# takes them out of its environment at once, and hands them to nothing but the two commands
-# that authenticate, xcodebuild -exportArchive and altool, in their arguments. Every line it
-# prints or writes passes a filter that masks their values, the key file's path as given, made
-# absolute and resolved, and the team's ID (knot_filter_team). Known: while those two tools run,
-# the path and the two IDs are in their arguments, which the owner's own processes can read.
+# What it defends against is an accident: a variable left in a shell, a stand-in left on a path, a
+# stale file, a tool that fails, a run cut short. It does not defend against someone who controls
+# the operator's shell or files, who could replace the script itself.
 #
-# A validation and an upload refuse every stand-in the self-test uses: KNOT_ALTOOL,
-# KNOT_ASSETUTIL, KNOT_LSREGISTER, KNOT_SLOT_DIR and KNOT_XCODEGEN, and a KNOT_XCODE that names
-# another Xcode than the pinned one. Every run takes xcodebuild and altool from the selected
-# Xcode, and its other tools from /usr/bin, with PATH set to the system's folders alone. No run
-# starts while XCODE_XCCONFIG_FILE is set, since its settings override the command line's.
+# The App Store Connect key, for --validate and --upload, in three environment variables:
+# KNOT_ASC_KEY_PATH, the absolute path of the key's .p8 file, KNOT_ASC_KEY_ID, ten capitals and
+# digits, and KNOT_ASC_ISSUER_ID, a UUID. The script turns tracing and allexport off before it reads
+# any of them, and takes them out of its environment at once into names of its own that carry no
+# export attribute. While it runs the values are in two places: the arguments of the two commands
+# that authenticate, xcodebuild -exportArchive and altool, which the owner's own processes can read
+# while those run, and the environment of the filters, perl and python, that mask them. Every line
+# it prints or writes passes a filter that masks them, whatever their case, the key file's path as
+# given and resolved, and the team's ID (knot_filter_team); what the shared scripts print while
+# they are read passes the key's filter, and the failure helper filters each field it prints or
+# logs.
+#
+# A validation and an upload refuse, before any tool runs, every stand-in the self-test uses:
+# KNOT_ALTOOL, KNOT_ASSETUTIL, KNOT_LSREGISTER, KNOT_SLOT_DIR, KNOT_XCODEGEN, KNOT_XCODE, KNOT_TREE and
+# TOOLCHAINS. They take the pinned Xcode from where .xcode-version and the scripts' own search find
+# it, check that its xcodebuild and its altool are signed by Apple (codesign -R 'anchor apple')
+# before either gets the key, take the other tools from /usr/bin with PATH set to the system's
+# folders alone, and take XcodeGen from the build folder's tools/ alone. No run starts while
+# XCODE_XCCONFIG_FILE is set, since its settings override the command line's.
 #
 # Before anything is built it reads the tree: the level, which is refused when it opens sync and
 # the tree has no committed CloudKit schema file, so every level from M4 on is refused until that
 # file's path is named below; the evidence of each milestone below the level, its annotated tag
 # m<n> at or before the commit, the convention the tag m1 shows; and the App Store icons' sources,
 # which may carry no alpha channel. The checks on the archive, each naming the part that fails:
-# the four parts at their paths, with their identifiers and platforms; one version, the
-# candidate's, above 0.2.0, the build number given, one flavour and one level; the Release
-# configuration and the pinned Xcode; no fakes and no debug launch argument; a privacy manifest
-# with the reasons the lint finds needed; the usage strings each part is known to need;
-# ITSAppUsesNonExemptEncryption false; an opaque 1024 by 1024 App Store icon for each device
-# family. After the export, on the file that would be uploaded: the same, then every signature
-# verified, every signed entitlement allowed by its part's profile, push and iCloud in
-# production, the milestone's app group and container, no get-task-allow, one team, and profiles
-# with no device list. Every inspector's status is read: one that failed is a failure.
+# the four parts at their paths, with their identifiers, platforms, device families and the keys
+# their source Info.plists declare; one version, the candidate's, above 0.2.0, the build number
+# given, one flavour and one level; the Release configuration and the build that .xcode-version
+# pins; no fakes and no debug launch argument; a privacy manifest with the reasons the lint finds
+# needed; the usage strings each part is known to need; ITSAppUsesNonExemptEncryption false; an
+# opaque 1024 by 1024 App Store icon of the set AppIcon for each device family. After the export,
+# on the file that would be uploaded: the same, then every code object's signature verified, loose
+# libraries among them; for each part, a signing certificate its profile lists and one team, the
+# signature's, the profile's and the archive's; the application identifier, the profile's prefix
+# and the bundle ID; every signed entitlement allowed by its profile, by type and form; push and
+# iCloud in production, the milestone's app group and container, no get-task-allow; and profiles
+# with no device list that allow no debugging and production push. Every inspector's status is
+# read: one that failed is a failure.
 #
-# Known, and not checked: the scan of imports for protected resources is a help that can miss
-# one; an optimised binary can hide a short string from the scan for fakes and debug arguments;
-# and nothing can read from the uploaded file that it is for internal testing only, which the
-# export's options ask for below M7.
+# Known, and not checked: that a certificate and a profile are Apple's is App Store Connect's
+# validation to say; the self-test's made-up certificates test the comparison, not the trust. The
+# scan of imports for protected resources is a help that can miss one; an optimised binary can hide
+# a short string from the scan for fakes and debug arguments; and nothing can read from the
+# uploaded file that it is for internal testing only, which the export's options ask for below M7.
 #
 # One release run works in a worktree at a time: it holds a lock, .build/release/.lock, through a
-# descriptor its children inherit, so the lock is held until every one of them has ended. Each
-# run works in a new folder, .build/release/<mode>-<level>-<commit>-b<n>-<UTC time>-<4 letters>/,
-# with its log, release.log, and its own tmp/, where the tools keep their temporary files. On a
-# signal it ends its children, then cleans, then leaves. On every way out it removes tmp/,
-# filters the files Xcode leaves beside the exported Knot.ipa, and removes Xcode's distribution
-# logs of the run, wherever they were written, keeping a filtered copy in the run's folder when
-# the export or the validation failed or was cut short. Under the lock, a run removes what dead
-# runs left in their tmp/. A run that was cut short is never resumed. After a failed or
-# interrupted upload it says to check App Store Connect before a retry, and does not retry.
-{ set +xv; } 2>/dev/null
+# descriptor its children inherit, so the lock is held until every one of them has ended. After a
+# kill that cannot be caught, the lock stays held while a child lives: the timer of a time limit
+# sleeps to its end, up to KNOT_UPLOAD_LIMIT, an hour, during the upload, KNOT_VALIDATE_LIMIT, 30
+# minutes, during the validation, and KNOT_BUILD_LIMIT, 40 minutes, during the export or the
+# rehearsal's archive. lsof .build/release/.lock shows who holds it. Each run works in a new
+# folder, .build/release/<mode>-<level>-<commit>-b<n>-<UTC time>-<4 letters>/, with its log,
+# release.log, and its own tmp/, where the tools keep their temporary files. On a signal it ends
+# its children, then cleans, then leaves, a closed output among the signals. On every way out it
+# removes tmp/, filters the files Xcode leaves beside the exported Knot.ipa, and removes the
+# distribution logs it can tie to the run, under tmp/ or at the path its xcodebuild printed,
+# keeping a filtered copy in the run's folder when the export or the validation failed or was cut
+# short; a record it cannot read and filter is reported and fails the run. An interrupted
+# validation or upload leaves altool's filtered output in the run's folder. Under the lock, a run
+# removes what dead runs left in their tmp/. A run that was cut short is never resumed. Once the
+# upload has started, every way out without its outcome says to check App Store Connect before a
+# retry, and the script does not retry.
+{ set +xva; } 2>/dev/null
+# A SHELLOPTS or BASHOPTS that a caller exported would hand this script's options to every bash
+# it starts: they stay its own.
+export -n SHELLOPTS BASHOPTS
 
-# The key, out of the environment before anything starts.
+# The key, out of the environment before anything starts. The script's own names are unset first,
+# so that none keeps an export attribute a caller gave it.
+unset RL_KEY_PATH RL_KEY_ID RL_ISSUER RL_KEY_PATH_SET RL_KEY_ID_SET RL_ISSUER_SET RL_KEY_ABSOLUTE RL_KEY_REAL RL_SEAMS RL_FAIL_LOG
 RL_KEY_PATH=${KNOT_ASC_KEY_PATH-} RL_KEY_ID=${KNOT_ASC_KEY_ID-} RL_ISSUER=${KNOT_ASC_ISSUER_ID-}
 RL_KEY_PATH_SET=${KNOT_ASC_KEY_PATH+set} RL_KEY_ID_SET=${KNOT_ASC_KEY_ID+set} RL_ISSUER_SET=${KNOT_ASC_ISSUER_ID+set}
 unset KNOT_ASC_KEY_PATH KNOT_ASC_KEY_ID KNOT_ASC_ISSUER_ID
 # The stand-ins the self-test uses, as the environment holds them before common.sh sets defaults.
 RL_SEAMS=""
-for seam in KNOT_ALTOOL KNOT_ASSETUTIL KNOT_LSREGISTER KNOT_SLOT_DIR KNOT_XCODEGEN; do
+for seam in KNOT_ALTOOL KNOT_ASSETUTIL KNOT_LSREGISTER KNOT_SLOT_DIR KNOT_XCODEGEN KNOT_XCODE KNOT_TREE TOOLCHAINS; do
     [[ -z ${!seam+set} ]] || RL_SEAMS="$RL_SEAMS $seam"
 done
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-
-source "$(dirname "$0")/lib/common.sh"
-# shellcheck source=lib/bundle.sh
-source "$KNOT_SCRIPTS/lib/bundle.sh"
-
-usage() { sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'; }
-usage_fail() { knot_fail "release-usage" "$1" "Run scripts/release.sh --help." "safe" "nothing"; }
-
-# The committed CloudKit schema file, which appears with the production schema (docs/plan/WP-43.md,
-# Failure rules). No document names its path yet (docs/plan/open-points.md, item 1): until the
-# orchestrator names it here, every level that opens sync is refused.
-CLOUDKIT_SCHEMA_FILE=""
 
 # The forms of the key's path: as given, made absolute, and resolved, symbolic links and all. The
 # path reaches python through its environment, never its arguments.
@@ -110,6 +124,7 @@ fi
 # through its environment, given to it alone, never its arguments.
 RELEASE_FILTER='
     BEGIN {
+        $| = 1;
         @masks = ();
         for my $pair (["KNOT_RL_M1", "<KEY-PATH>"], ["KNOT_RL_M2", "<KEY-PATH>"], ["KNOT_RL_M3", "<KEY-PATH>"],
                       ["KNOT_RL_M4", "<KEY-ID>"], ["KNOT_RL_M5", "<ISSUER-ID>"]) {
@@ -118,18 +133,46 @@ RELEASE_FILTER='
         }
         @masks = sort { length($b->[0]) <=> length($a->[0]) } @masks;
     }
-    for my $mask (@masks) { my ($value, $name) = @$mask; s/\Q$value\E/$name/g; }
+    for my $mask (@masks) { my ($value, $name) = @$mask; s/\Q$value\E/$name/gi; }
 '
-release_filter() {
+key_filter() {
     KNOT_RL_M1="$RL_KEY_REAL" KNOT_RL_M2="$RL_KEY_ABSOLUTE" KNOT_RL_M3="$RL_KEY_PATH" KNOT_RL_M4="$RL_KEY_ID" \
-        KNOT_RL_M5="$RL_ISSUER" perl -pe "$RELEASE_FILTER" | knot_filter_team
+        KNOT_RL_M5="$RL_ISSUER" perl -pe "$RELEASE_FILTER"
 }
+release_filter() { key_filter | knot_filter_team; }
 # Filters a file in place, as release_filter filters a stream.
 filter_in_place() {
     KNOT_RL_M1="$RL_KEY_REAL" KNOT_RL_M2="$RL_KEY_ABSOLUTE" KNOT_RL_M3="$RL_KEY_PATH" KNOT_RL_M4="$RL_KEY_ID" \
         KNOT_RL_M5="$RL_ISSUER" perl -pi -e "$RELEASE_FILTER" "$1" &&
         KNOT_FILTER_CONFIG="$(knot_filter_config)" perl -pi -e "$KNOT_TEAM_FILTER" "$1"
 }
+
+# What the shared scripts print while they are read, before the team's filter stands, passes the
+# key's filter: a failure of theirs could name a path. A failure log is written only once the
+# failure helper below filters what it writes there.
+RL_FAIL_LOG=${KNOT_FAIL_LOG-}
+unset KNOT_FAIL_LOG
+{
+    source "$(dirname "$0")/lib/common.sh"
+    # shellcheck source=lib/bundle.sh
+    source "$KNOT_SCRIPTS/lib/bundle.sh"
+} 2> >(key_filter >&2)
+# The failure helper filters each of its fields, for the terminal and for the failure log.
+eval "knot_report_unfiltered() $(declare -f knot_report | sed 1d)"
+knot_report() {
+    local field filtered=()
+    for field in "$@"; do filtered+=("$(printf '%s' "$field" | release_filter)"); done
+    knot_report_unfiltered "${filtered[@]}"
+}
+[[ -z $RL_FAIL_LOG ]] || export KNOT_FAIL_LOG=$RL_FAIL_LOG
+
+usage() { sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'; }
+usage_fail() { knot_fail "release-usage" "$1" "Run scripts/release.sh --help." "safe" "nothing"; }
+
+# The committed CloudKit schema file, which appears with the production schema (docs/plan/WP-43.md,
+# Failure rules). No document names its path yet (docs/plan/open-points.md, item 1): until the
+# orchestrator names it here, every level that opens sync is refused.
+CLOUDKIT_SCHEMA_FILE=""
 
 LOG=""
 say() {
@@ -218,6 +261,14 @@ if [[ $PRODUCTS != ios ]]; then
 fi
 LEVEL_NUMBER=${LEVEL#M}
 refuse_xcconfig_override
+# A validation and an upload take their tools from the pinned Xcode, found where .xcode-version
+# and the scripts' own search find it, and from the system: every stand-in the self-test uses is
+# refused before any tool runs, KNOT_XCODE among them. XcodeGen comes from the build folder's
+# tools/xcodegen-<version>/ alone (docs/dev-setup.md, XcodeGen).
+if [[ ($MODE == validate || $MODE == upload) && -n $RL_SEAMS ]]; then
+    knot_fail "release-stand-ins" "A validation and an upload take their tools from the pinned Xcode and the system alone, and these are set:$RL_SEAMS." \
+        "Unset them. The pinned Xcode is found in /Applications by .xcode-version, and XcodeGen under the build folder's tools/xcodegen-$KNOT_XCODEGEN_VERSION/." "safe" "nothing"
+fi
 
 # ------------------------------------------------------------------ one run at a time
 
@@ -250,70 +301,119 @@ end_children() {
     done
 }
 
-# Xcode's distribution logs of this run, wherever it wrote them: in the run's tmp/xcode/, which is
-# the TMPDIR the export is given, in the user's own temporary folder, newer than the export's
-# start, and at the path xcodebuild names. Each is removed; when the export or the validation
-# failed or was cut short, a filtered copy stays in the run's folder, distribution-logs/.
+# Xcode's distribution logs of this run, those it can be tied to: under the run's tmp/xcode/,
+# which is the TMPDIR the export is given, and at the path this run's xcodebuild printed. Nothing
+# in the user's shared temporary folder is taken because it is newer. When the export or the
+# validation failed or was cut short, a filtered copy stays in the run's folder,
+# distribution-logs/, and the original is removed only once its copy is there; otherwise the
+# original is removed. A file that cannot be read or filtered is reported, never kept unfiltered,
+# and the function returns 1.
 collect_distribution_logs() {
     [[ -n $EXPORT_MARK && -e $EXPORT_MARK ]] || return 0
-    local user_tmp found name kept=0
-    user_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+    local found name file files copy problem=0 failed kept=0
     {
         find "$TMP/xcode" -maxdepth 1 -name '*.xcdistributionlogs' -print 2>/dev/null || true
-        [[ -z $user_tmp ]] || find "${user_tmp%/}" -maxdepth 1 -name '*.xcdistributionlogs' -newer "$EXPORT_MARK" -print 2>/dev/null || true
         sed -n -E 's/.*Created bundle at path "([^"]+\.xcdistributionlogs)".*/\1/p' "$LOG" 2>/dev/null || true
     } | sort -u >"$TMP/distribution-logs" || true
     while IFS= read -r found; do
         [[ -n $found && -d $found ]] || continue
-        case $found in "$TMP"/* | "${user_tmp%/}"/*) ;; *) continue ;; esac
         if ((KEEP_DIAGNOSIS)); then
             name="$(basename "$found")"
-            (cd "$found" && find . -type f -print) 2>/dev/null | while IFS= read -r file; do
-                mkdir -p "$RUN/distribution-logs/$name/$(dirname "$file")"
-                release_filter <"$found/$file" >"$RUN/distribution-logs/$name/$file" 2>/dev/null || true
-            done
-            kept=1
+            failed=0
+            if ! files="$(cd "$found" && find . -type f -print 2>/dev/null)"; then
+                printf 'release: Xcode'"'"'s distribution log %s cannot be read whole: it is left where it is\n' "$name" >&2
+                problem=1
+                continue
+            fi
+            while IFS= read -r file; do
+                [[ -n $file ]] || continue
+                copy="$RUN/distribution-logs/$name/$file"
+                mkdir -p "$(dirname "$copy")"
+                if [[ -r $found/$file ]] && release_filter <"$found/$file" >"$copy.partial" 2>/dev/null && mv "$copy.partial" "$copy"; then
+                    kept=1
+                else
+                    rm -f "$copy.partial"
+                    printf 'release: %s of Xcode'"'"'s distribution log %s cannot be read and filtered\n' "$file" "$name" >&2
+                    failed=1
+                fi
+            done <<<"$files"
+            if ((failed)); then
+                problem=1
+                [[ $found == "$TMP"/* ]] || printf 'release: it is left at %s, unfiltered\n' "$(knot_home_path "$found")" >&2
+                continue
+            fi
         fi
         rm -rf "$found"
     done <"$TMP/distribution-logs"
     ((kept == 0)) || printf 'release: what Xcode wrote of the export, filtered: .build/release/%s/distribution-logs/\n' "$(basename "$RUN")" >&2
+    return "$problem"
 }
 
 # The files Xcode leaves beside the exported Knot.ipa, such as DistributionSummary.plist, name
-# the team: each is filtered in place.
+# the team: each is filtered, through a copy that replaces it. One that cannot be read or
+# filtered is removed and reported, and the function returns 1.
 scrub_export_files() {
     [[ -n $EXPORT && -d $EXPORT ]] || return 0
-    local file
+    local file problem=0
+    if ! find "$EXPORT" -type f ! -path "$EXPORT/Knot.ipa" ! -name '*.filtering' -print0 >"$TMP/sidecars" 2>/dev/null; then
+        printf 'release: the files beside Knot.ipa cannot be listed whole\n' >&2
+        return 1
+    fi
     while IFS= read -r -d '' file; do
-        filter_in_place "$file" 2>/dev/null || rm -f "$file"
-    done < <(find "$EXPORT" -type f ! -name Knot.ipa -print0 2>/dev/null)
+        if [[ -r $file ]] && release_filter <"$file" >"$file.filtering" 2>/dev/null && mv "$file.filtering" "$file"; then
+            continue
+        fi
+        rm -f "$file.filtering" "$file"
+        printf 'release: %s, beside Knot.ipa, cannot be read and filtered: it is removed\n' "$(basename "$file")" >&2
+        problem=1
+    done <"$TMP/sidecars"
+    return "$problem"
+}
+
+UPLOAD_REPORTED=0
+# The sentence on a retry, once the upload has started and its outcome is not recorded.
+report_upload_unfinished() {
+    [[ $PHASE == upload && $UPLOAD_REPORTED != 1 ]] || return 0
+    UPLOAD_REPORTED=1
+    knot_report "release-upload-interrupted" "The upload of build $BUILD was cut short before its outcome was recorded: it may have reached App Store Connect. It was not retried." \
+        "Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken." \
+        "unsafe" "the upload may have reached App Store Connect; the run's folder holds the export" || true
 }
 
 finish() {
-    local status=$?
-    trap '' HUP INT TERM
+    local status=$? record=0
+    trap '' HUP INT TERM PIPE
     end_children
-    collect_distribution_logs || true
-    scrub_export_files || true
+    report_upload_unfinished
+    collect_distribution_logs || record=1
+    scrub_export_files || record=1
     if [[ -n $DERIVED && -d $DERIVED ]]; then
         knot_unregister_apps "$DERIVED" >/dev/null 2>&1 || true
         rm -rf "$DERIVED"
     fi
     [[ -z $TMP ]] || rm -rf "$TMP"
+    if ((record)); then
+        knot_report "release-record" "A record of the export could not be read and filtered: each is named above." \
+            "Read what is named. Nothing unfiltered is kept in the run's folder." "safe" "the run's folder" || true
+        ((status != 0)) || status=1
+    fi
     exit "$status"
 }
 on_signal() {
     local code=$1
-    trap '' HUP INT TERM
+    trap '' HUP INT TERM PIPE
     end_children
     KEEP_DIAGNOSIS=1
     case $PHASE in
-        upload)
-            knot_report "release-upload-interrupted" "The upload of build $BUILD was cut short by a signal: it may have reached App Store Connect. It was not retried." \
-                "Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken." \
-                "unsafe" "the upload may have reached App Store Connect; the run's folder holds the export" || true ;;
+        upload | validate)
+            # What altool said before the signal, filtered, as a failed step leaves it.
+            cat "$TMP/altool.out" >>"$LOG" 2>/dev/null || true
+            cp "$TMP/altool.out" "$RUN/$PHASE.log" 2>/dev/null || true ;;
+    esac
+    case $PHASE in
+        upload) report_upload_unfinished ;;
         validate)
-            knot_report "release-validation-interrupted" "App Store Connect's validation was cut short by a signal. Nothing was uploaded." \
+            knot_report "release-validation-interrupted" "App Store Connect's validation was cut short by a signal. Nothing was uploaded. What altool said is in the run's validate.log." \
                 "Make a new run: a run is never resumed." "safe" "the run's folder" || true ;;
         export)
             knot_report "release-export-interrupted" "The export for App Store Connect was cut short by a signal. Nothing was sent to App Store Connect." \
@@ -340,7 +440,10 @@ if knot_is_beta_build "$KNOT_XCODE_BUILD"; then
     knot_fail "release-beta-xcode" "The Xcode is $(knot_xcode_label): App Store Connect takes no build of a beta Xcode." \
         "Unset KNOT_XCODE, so that the release Xcode that .xcode-version pins is used." "safe" "nothing"
 fi
-PINNED_BUILD=$KNOT_XCODE_BUILD
+# The pinned build, from .xcode-version: what every part of the product must have been built by.
+PINNED_BUILD="$(knot_xcode_pin)" && PINNED_BUILD=${PINNED_BUILD#* }
+# Whether a tool is signed by Apple: checked on xcodebuild and on altool before they get the key.
+apple_signed() { /usr/bin/codesign --verify -R='anchor apple' "$1" >/dev/null 2>&1; }
 XCODEBUILD="$DEVELOPER_DIR/usr/bin/xcodebuild"
 ALTOOL="$DEVELOPER_DIR/usr/bin/altool"
 NM="$(xcrun --find nm 2>/dev/null)" || knot_fail "release-tool" "The pinned Xcode gives no nm." "Run the Xcode once to finish its installation." "safe" "nothing"
@@ -520,6 +623,7 @@ key_state() { # key_state <path|id|issuer>
     case $1 in
         path)
             if [[ -z $RL_KEY_PATH_SET ]]; then echo "not set"
+            elif [[ $RL_KEY_PATH != /* ]]; then echo "set, but not an absolute path"
             elif [[ -f $RL_KEY_PATH && -r $RL_KEY_PATH ]]; then echo "set, a readable file"
             else echo "set, but no readable file"; fi ;;
         id)
@@ -546,9 +650,6 @@ fi
 
 # A validation and an upload take their tools from the pinned Xcode and the system alone.
 if [[ $MODE == validate || $MODE == upload ]]; then
-    for seam in $RL_SEAMS; do
-        refuse "tools: $seam is set, a stand-in the self-test uses: a validation and an upload take their tools from the pinned Xcode and the system alone"
-    done
     [[ -z $KNOT_XCODE_NOTE ]] || refuse "tools: the Xcode is $(knot_xcode_label): a validation and an upload take their tools from the pinned Xcode alone"
 fi
 
@@ -670,7 +771,7 @@ REASONS="$(cd "$KNOT_ROOT" && python3 -I -c "$REASONS_PY" "$KNOT_SCRIPTS/lib")" 
 # and signatures, the last after the export. It prints "ok    <check>: …" or "FAIL  <check>:
 # <part>: …" for each, and exits 1 when any failed. Every inspector's status is read.
 read -r -d '' CHECKS_PY <<'PY' || true
-import fnmatch, glob, json, os, plistlib, re, subprocess, sys
+import json, os, plistlib, re, shutil, subprocess, sys, tempfile
 
 a = dict(arg.split("=", 1) for arg in sys.argv[1:])
 app, archive = a["app"], a.get("archive", "")
@@ -710,6 +811,12 @@ USAGE = [
     ("nearby interaction", ["NISession"], ["NSNearbyInteractionUsageDescription"]),
 ]
 IDIOMS = {1: "phone", 2: "pad", 4: "watch"}
+# What each role's source Info.plist declares, so that the product must carry it: the keys the
+# code reads, and the device families, which the App Store icon must serve.
+REQUIRED_KEYS = {"app": ["KnotAppGroup", "KnotCloudContainer"], "widget": ["KnotAppGroup"], "watch": ["KnotAppGroup"],
+                 "watch-widget": ["KnotAppGroup"]}
+FAMILIES = {"app": [1, 2], "widget": [1, 2], "watch": [4], "watch-widget": [4]}
+ICON_SET = "AppIcon"
 MACHO = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa\xcf"}
 # Entitlement values that may be printed: none holds the team's ID.
 PRINTABLE = {"aps-environment", "com.apple.developer.icloud-container-environment",
@@ -790,6 +897,11 @@ def check_roles():
                 fail("roles", rel(part), "%s %s, not %s" % (key, i[key], want))
         if name == "watch" and i.get("WKCompanionAppBundleIdentifier") != base:
             fail("roles", rel(part), "names no companion app %s" % base)
+        for key in REQUIRED_KEYS[name]:
+            if key not in i:
+                fail("roles", rel(part), "no %s, which its source Info.plist declares" % key)
+        if i.get("UIDeviceFamily") != FAMILIES[name]:
+            fail("roles", rel(part), "device families %s, not %s" % (i.get("UIDeviceFamily"), FAMILIES[name]))
     for part in parts:
         if part not in role_of:
             fail("roles", rel(part), "a part the release does not know: the upload holds the app, its widgets, the Watch app and its widgets alone")
@@ -802,19 +914,30 @@ def check_roles():
 
 def check_configuration():
     before = failures
-    for folder, dirs, files in os.walk(app):
-        for name in files:
-            if name.endswith(".debug.dylib") or name == "__preview.dylib":
-                fail("configuration", rel(os.path.join(folder, name)), "the debug dylib of Xcode's Debug configuration (ENABLE_DEBUG_DYLIB): no Release build holds it")
-        for name in dirs:
-            if name.endswith(".xctest"):
-                fail("configuration", rel(os.path.join(folder, name)), "a test bundle, which no Release archive holds")
+    try:
+        for folder, dirs, files in os.walk(app, onerror=walk_error):
+            for name in files:
+                if name.endswith(".debug.dylib") or name == "__preview.dylib":
+                    fail("configuration", rel(os.path.join(folder, name)), "the debug dylib of Xcode's Debug configuration (ENABLE_DEBUG_DYLIB): no Release build holds it")
+            for name in dirs:
+                if name.endswith(".xctest"):
+                    fail("configuration", rel(os.path.join(folder, name)), "a test bundle, which no Release archive holds")
+    except OSError as error:
+        fail("configuration", rel(app), "the product cannot be read whole: %s" % error)
     for part in parts:
         built = (info(part) or {}).get("DTXcodeBuild", "")
         if built != xcode:
             fail("configuration", rel(part), "built with Xcode %s, not the pinned %s" % (built or "(not named)", xcode))
-    if archive and not glob.glob(os.path.join(archive, "dSYMs", "*.dSYM")):
-        fail("configuration", "dSYMs", "the archive holds no dSYM: its debug information is the Debug configuration's, dwarf, and not Release's, dwarf-with-dsym")
+    if archive:
+        try:
+            dsyms = [name for name in os.listdir(os.path.join(archive, "dSYMs")) if name.endswith(".dSYM")]
+        except FileNotFoundError:
+            dsyms = []
+        except OSError:
+            dsyms = None
+            fail("configuration", "dSYMs", "the archive's dSYMs cannot be read")
+        if dsyms == []:
+            fail("configuration", "dSYMs", "the archive holds no dSYM: its debug information is the Debug configuration's, dwarf, and not Release's, dwarf-with-dsym")
     if failures == before:
         ok("configuration", "Release: no debug dylib, no test bundle, every part built by the pinned Xcode, %s%s" % (xcode, ", with dSYMs" if archive else ""))
 
@@ -906,9 +1029,9 @@ def check_icons():
         part = roles[name]
         i = info(part) or {}
         icon = ((i.get("CFBundleIcons") or {}).get("CFBundlePrimaryIcon") or {}).get("CFBundleIconName")
-        families = i.get("UIDeviceFamily") or []
-        if not icon or not families:
-            fail("icons", rel(part), "its Info.plist names no icon set, CFBundleIconName, or no device family")
+        families = FAMILIES[name]
+        if icon != ICON_SET:
+            fail("icons", rel(part), "its Info.plist names the icon set %s, not %s" % (icon or "(none)", ICON_SET))
             continue
         car = os.path.join(part, "Assets.car")
         if not os.path.isfile(car):
@@ -936,17 +1059,49 @@ def check_icons():
         ok("icons", "an opaque App Store icon of 1024 by 1024 in %s" % ", ".join(checked))
 
 def allowed(value, permit):
-    """Whether a signed entitlement's value is one its profile allows."""
+    """Whether a signed entitlement's value is one its profile allows, by type and form: a Boolean
+    with a Boolean, a list with a list, a string with a string. A profile's list of strings also
+    allows one of them, as the iCloud container environment is signed; a wildcard counts only as a
+    profile writes one, "*" alone or at the end of a prefix ending ".*"."""
+    if isinstance(permit, bool) or isinstance(value, bool):
+        return isinstance(permit, bool) and isinstance(value, bool) and (value == permit or not value)
     if isinstance(permit, list):
-        values = value if isinstance(value, list) else [value]
-        return all(any(allowed(v, p) for p in permit) for v in values)
+        if isinstance(value, list):
+            return all(isinstance(v, str) and any(allowed(v, p) for p in permit) for v in value)
+        return isinstance(value, str) and any(allowed(value, p) for p in permit)
+    if not isinstance(permit, str):
+        return False
     if isinstance(value, list):
-        return all(allowed(v, permit) for v in value)
-    if isinstance(permit, str) and isinstance(value, str):
-        return fnmatch.fnmatchcase(value, permit)
-    if isinstance(permit, bool) and isinstance(value, bool):
-        return value == permit or not value
+        return permit == "*" and all(isinstance(v, str) for v in value)
+    if not isinstance(value, str):
+        return False
+    if permit == "*":
+        return True
+    if permit.endswith(".*"):
+        return value.startswith(permit[:-1])
     return value == permit
+
+def signer_team(part):
+    """The team of a part's signature, read in memory, never printed; None for no team."""
+    result = run([CODESIGN, "-dv", part])
+    if result.returncode != 0:
+        return None
+    found = re.search(rb"^TeamIdentifier=(.+)$", result.stderr, re.M)
+    team = found.group(1).decode("utf-8", "replace").strip() if found else ""
+    return None if team in ("", "not set") else team
+
+def signer_leaf(part):
+    """The leaf certificate of a part's signature, as DER bytes, or None."""
+    folder = tempfile.mkdtemp()
+    try:
+        result = run([CODESIGN, "-d", "--extract-certificates=" + os.path.join(folder, "certificate"), part])
+        path = os.path.join(folder, "certificate0")
+        if result.returncode != 0 or not os.path.isfile(path):
+            return None
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 def check_signatures():
     before = failures
@@ -957,10 +1112,26 @@ def check_signatures():
     except OSError as error:
         fail("signatures", rel(app), "the product cannot be read whole: %s" % error)
     signed = sorted(signed, key=lambda p: -p.count("/")) + [app]
+    # Every code object: each bundle, and each Mach-O file that is not a bundle's own executable,
+    # such as a loose library.
+    mains = set()
+    for part in signed:
+        executable = (info(part) or {}).get("CFBundleExecutable")
+        if executable:
+            mains.add(os.path.join(part, "Contents", "MacOS", executable) if os.path.isdir(os.path.join(part, "Contents"))
+                      else os.path.join(part, executable))
+    try:
+        signed += [path for path in macho_files() if path not in mains]
+    except OSError as error:
+        fail("signatures", rel(app), "the product cannot be read whole: %s" % error)
     for part in signed:
         result = run([CODESIGN, "--verify", "--strict", part])
         if result.returncode != 0:
             fail("signatures", rel(part), "codesign --verify --strict failed on it")
+    # The archive's team, which signed the candidate for development: the export's must be it.
+    archive_team = signer_team(a["signed_archive"]) if a.get("signed_archive") else None
+    if not archive_team:
+        fail("signatures", "the archive", "its signature names no team that can be read")
     teams = set()
     for part in roles.values():
         result = run([CODESIGN, "-d", "--entitlements", "-", "--xml", part])
@@ -993,14 +1164,27 @@ def check_signatures():
             if key not in permits or not allowed(value, permits[key]):
                 fail("signatures", rel(part), "it is signed with %s%s, which its provisioning profile does not allow" % (
                     key, " " + json.dumps(value) if key in PRINTABLE else ""))
-        team = (p.get("TeamIdentifier") or [None])[0]
+        # Who signed: the leaf among the profile's certificates, and one team, the signature's, the
+        # profile's and the archive's, compared in memory and never printed.
+        team = signer_team(part)
+        if not team or team != (p.get("TeamIdentifier") or [None])[0] or team != archive_team:
+            fail("signatures", rel(part), "it is signed by no team, or by another team than its provisioning profile's or the archive's")
+        leaf = signer_leaf(part)
+        if not leaf or leaf not in [c for c in p.get("DeveloperCertificates") or [] if isinstance(c, bytes)]:
+            fail("signatures", rel(part), "its signing certificate is not one its provisioning profile lists")
+        prefix = (p.get("ApplicationIdentifierPrefix") or [None])[0]
         identifier = e.get("application-identifier", "")
-        if not team or identifier != "%s.%s" % (team, base + dict((n, s) for n, _, s, *_ in ROLES)[role_of[part]]):
-            fail("signatures", rel(part), "its application identifier is not its profile's team and its bundle ID")
+        if not prefix or identifier != "%s.%s" % (prefix, base + dict((n, s) for n, _, s, *_ in ROLES)[role_of[part]]):
+            fail("signatures", rel(part), "its application identifier is not its profile's prefix and its bundle ID")
         teams.add(team)
+        if permits.get("get-task-allow") is True:
+            fail("signatures", rel(part), "its provisioning profile allows debugging, get-task-allow")
+        profile_push = permits.get("aps-environment", permits.get("com.apple.developer.aps-environment"))
+        if profile_push is not None and profile_push != "production":
+            fail("signatures", rel(part), "its provisioning profile's push environment is %s, not production" % profile_push)
         if e.get("get-task-allow") is True:
             fail("signatures", rel(part), "get-task-allow: a development signature, which App Store Connect refuses")
-        push = e.get("aps-environment")
+        push = e.get("aps-environment", e.get("com.apple.developer.aps-environment"))
         if part == app and push is None:
             fail("signatures", rel(part), "no push entitlement, aps-environment, which CloudKit's notifications need")
         if push is not None and push != "production":
@@ -1019,7 +1203,7 @@ def check_signatures():
     if len(teams) > 1:
         fail("signatures", rel(app), "its parts are signed for more than one team")
     if failures == before:
-        ok("signatures", "every signature of its %d signed parts verified; each signed entitlement allowed by its part's profile, one team; push and iCloud in production, %s and %s, no get-task-allow, profiles with no device list" % (len(signed), group, container))
+        ok("signatures", "every signature of its %d code objects verified; each part signed by the archive's team with a certificate its profile lists; each signed entitlement allowed by its part's profile; push and iCloud in production, %s and %s, no get-task-allow, profiles with no device list that allow no debugging" % (len(signed), group, container))
 
 for check in a["checks"].split(","):
     globals()["check_" + check]()
@@ -1034,7 +1218,7 @@ check_product() {
     done < <(
         python3 -I -c "$CHECKS_PY" app="$app" archive="$archive" bundle="$WANT_BUNDLE" group="$WANT_GROUP" \
             container="$WANT_CONTAINER" flavour="$FLAVOUR" level="$LEVEL" build="$BUILD" version="$WANT_VERSION" \
-            xcode="$PINNED_BUILD" reasons="$REASONS" nm="$NM" assetutil=/usr/bin/assetutil codesign=/usr/bin/codesign \
+            xcode="$PINNED_BUILD" reasons="$REASONS" nm="$NM" assetutil=/usr/bin/assetutil codesign=/usr/bin/codesign signed_archive="$APP" \
             security=/usr/bin/security checks="$checks" 2>&1
         echo "checks ended $?"
     )
@@ -1118,6 +1302,8 @@ export_archive() {
         -authenticationKeyPath "$RL_KEY_PATH" -authenticationKeyID "$RL_KEY_ID" \
         -authenticationKeyIssuerID "$RL_ISSUER" 2>&1 | logged; } 2>/dev/null # limit: export_archive
 }
+apple_signed "$XCODEBUILD" || knot_fail "release-tool-signature" "The xcodebuild of the pinned Xcode does not verify as signed by Apple: it does not get the key." \
+    "Reinstall the pinned Xcode, then make a new run." "safe" "the run's folder"
 PHASE=export
 status=0
 knot_run_limited "The export for App Store Connect" "$KNOT_BUILD_LIMIT" export_archive || status=$?
@@ -1130,7 +1316,8 @@ if ((status != 0)) || [[ ! -f $IPA ]]; then
         "Read them. A signing error that names a certificate, a profile or the account needs the owner." "safe" \
         "Xcode may have made a distribution certificate or an App Store profile in the owner's account; the run's folder"
 fi
-scrub_export_files
+scrub_export_files || knot_fail "release-export-record" "A file Xcode left beside Knot.ipa could not be read and filtered: it is removed, named above. Nothing was sent to App Store Connect." \
+    "Read what is named, and make a new run." "safe" "the run's folder, which holds the export"
 DIGEST="$(shasum -a 256 "$IPA" | cut -d' ' -f1)" || knot_fail "release-export" "Knot.ipa cannot be read." "Read the run's folder." "safe" "the run's folder"
 unpacked="$TMP/unpacked"
 mkdir -p "$unpacked"
@@ -1170,6 +1357,8 @@ show_altool() {
     cat "$TMP/altool.out" 2>/dev/null || true
     cat "$TMP/altool.out" >>"$LOG" 2>/dev/null || true
 }
+apple_signed "$ALTOOL" || knot_fail "release-tool-signature" "The altool of the pinned Xcode does not verify as signed by Apple: it does not get the key." \
+    "Reinstall the pinned Xcode, then make a new run." "safe" "the run's folder, which holds the export"
 same_file "the validation"
 say "App Store Connect's validation of Knot.ipa"
 PHASE=validate
@@ -1194,11 +1383,12 @@ say "uploading Knot.ipa to App Store Connect, once"
 PHASE=upload
 status=0
 asc "${KNOT_UPLOAD_LIMIT:-3600}" --upload-package "$IPA" || status=$?
-PHASE=""
 show_altool
 if ((status != 0)); then
+    UPLOAD_REPORTED=1
     knot_fail "release-upload" "The upload of Knot $WANT_VERSION ($BUILD) failed$( ((KNOT_LIMIT_HIT)) && echo ", or did not end in time"): its lines are above and in the run's release.log. It was not retried." \
         "Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken." \
         "unsafe" "the upload may have reached App Store Connect; the run's folder holds the export"
 fi
 say "uploaded: Knot $WANT_VERSION ($BUILD), $LEVEL, from ${AT:0:12}. App Store Connect processes it before TestFlight offers it."
+PHASE=""

@@ -1617,6 +1617,44 @@ else
     fail "the scan for debug launch arguments: the list '$debug_list'; a file that holds one '$debug_holds'; a clean one '$debug_clean'"
 fi
 
+# An inspection that fails is no clean file: grep or sort failing in either scan, or an empty list,
+# answers 2 with "the inspection failed", and the packaging step's scans fail on it, whatever they
+# want, as they do on a file with none. The step's two scans are read from verify.sh as they stand.
+inspect_status() { # inspect_status <a tool's stand-in, or ""> <command…>: status/whether it said so
+    local broken=$1 out status=0
+    shift
+    out="$(bash -c 'source "$1"; eval "$2"; shift 2; "$@"' _ "$KNOT_SCRIPTS/lib/common.sh" "$broken" "$@" 2>&1)" || status=$?
+    [[ $out == "the inspection failed: "* ]] && echo "$status/said" || echo "$status/silent"
+}
+grep_fails='grep() { return 2; }' sort_fails='sort() { return 2; }'
+# grep failing on the search for the module alone, after the search for fakes by name passed.
+module_grep_fails='grep() { [[ $1 == -o ]] || return 2; command grep "$@"; }'
+inspected="fakes-grep $(inspect_status "$grep_fails" knot_fakes_in "$fk/release.dylib") fakes-sort $(inspect_status "$sort_fails" knot_fakes_in "$fk/with-fakes.dylib")"
+inspected="$inspected fakes-module $(inspect_status "$module_grep_fails" knot_fakes_in "$fk/release.dylib")"
+inspected="$inspected debug-grep $(inspect_status "$grep_fails" knot_debug_arguments_in "$da/holds" "$debug_list") debug-sort $(inspect_status "$sort_fails" knot_debug_arguments_in "$da/holds" "$debug_list")"
+inspected="$inspected debug-empty $(inspect_status "" knot_debug_arguments_in "$da/holds" " ")"
+scans="$(sed -n -e '/^    scan_for_fakes() {$/,/^    }$/p' -e '/^    scan_for_debug_arguments() {$/,/^    }$/p' "$KNOT_SCRIPTS/verify.sh")"
+scan_status() { # scan_for_<kind> on a made-up app whose two files answer <first> and <second>
+    local status=0
+    SCANS="$scans" bash -c 'eval "$SCANS"
+        main_executable() { echo /app/Knot; }
+        macho_files() { printf "%s\0" /app/Knot /app/Other; }
+        tool() { echo -KnotPreview; }
+        answer() { [[ $1 == /app/Knot ]] && n=$FIRST || n=$SECOND; ((n != 2)) || echo "the inspection failed: synthetic"; return "$n"; }
+        knot_fakes_in() { answer "$1"; }
+        knot_debug_arguments_in() { answer "$1"; }
+        "scan_for_$1" /app "$2"' _ "$1" "$2" >/dev/null 2>&1 || status=$?
+    echo "$status"
+}
+for kind in fakes debug_arguments; do
+    inspected="$inspected $kind $(FIRST=0 SECOND=2 scan_status "$kind" some)$(FIRST=1 SECOND=2 scan_status "$kind" none)$(FIRST=0 SECOND=1 scan_status "$kind" some)$(FIRST=1 SECOND=1 scan_status "$kind" none)"
+done
+if [[ $inspected == "fakes-grep 2/said fakes-sort 2/said fakes-module 2/said debug-grep 2/said debug-sort 2/said debug-empty 2/said fakes 1100 debug_arguments 1100" ]]; then
+    pass "an inspection that fails is neither a clean file nor a find: the scans for fakes and debug arguments answer 2 and say so, and the packaging step's scans fail on it"
+else
+    fail "an inspection that fails: $inspected"
+fi
+
 # The launch step's Mac part and the desktop (item 105). Its app has the bundle ID of every
 # worktree's development build, so it comes to the front beside another worktree's Mac UI
 # test: it takes the exclusive Mac UI slot for as long as its app is up, and no second build
@@ -2844,10 +2882,17 @@ mb_archive_locked="$(mb_run archive-locked M1 --commit "$mb_head" --products ios
 mb_archive_read_only="$(mb_run archive-read-only M1 --commit "$mb_head" --products ios --archive "$mb/archives/read-only" --build-number 7)"
 chmod 700 "$mb/archives/locked" "$mb/archives/read-only"
 mb_override="$(XCODE_XCCONFIG_FILE="$mb/override.xcconfig" mb_run override M1 --commit "$mb_head" --products ios --archive "$mb/archives/override" --build-number 7)"
+# A refusal after the folder is claimed, a commit that is not HEAD: the claim goes, and the folder
+# too when this run made it; a folder that was there stays, unclaimed.
+mkdir -p "$mb/archives/claim-kept"
+mb_claim_made="$(mb_run claim-made M1 --commit "$(mb_git rev-parse HEAD~1)" --products ios --archive "$mb/archives/claim-made" --build-number 7)"
+mb_claim_kept="$(mb_run claim-kept M1 --commit "$(mb_git rev-parse HEAD~1)" --products ios --archive "$mb/archives/claim-kept" --build-number 7)"
+mb_claim="$mb_claim_made/$mb_claim_kept/$([[ -e $mb/archives/claim-made ]] && echo left || echo gone)/$([[ -d $mb/archives/claim-kept && ! -e $mb/archives/claim-kept/.claimed ]] && echo released || echo held)"
 mb_worker=0
 env XCODE_XCCONFIG_FILE="$mb/override.xcconfig" KNOT_TREE="$mb/tree" "$mb/scripts/milestone-build.sh" --in-build >"$mb/worker.out" 2>&1 || mb_worker=$?
-mb_archive_verdicts="ok $mb_archive/$(mb_archived archive) used $mb_archive_used/$(mb_archived archive-used) install $mb_archive_install/$(mb_archived archive-install) number $mb_archive_number/$(mb_builds archive-number) zero $mb_archive_zero/$(mb_archived archive-zero) wrong $mb_archive_wrong/$(mb_archived archive-wrong) failed $mb_archive_failed/$(mb_archived archive-failed) locked $mb_archive_locked/$(mb_archived archive-locked) read-only $mb_archive_read_only/$(mb_archived archive-read-only) override $mb_override/$(mb_archived override) worker $mb_worker"
-if [[ $mb_archive_verdicts == "ok 0/1 used 1/0 install 1/0 number 1/0 zero 1/0 wrong 1/1 failed 1/1 locked 1/0 read-only 1/0 override 1/0 worker 1" ]] &&
+mb_archive_verdicts="ok $mb_archive/$(mb_archived archive) used $mb_archive_used/$(mb_archived archive-used) install $mb_archive_install/$(mb_archived archive-install) number $mb_archive_number/$(mb_builds archive-number) zero $mb_archive_zero/$(mb_archived archive-zero) wrong $mb_archive_wrong/$(mb_archived archive-wrong) failed $mb_archive_failed/$(mb_archived archive-failed) locked $mb_archive_locked/$(mb_archived archive-locked) read-only $mb_archive_read_only/$(mb_archived archive-read-only) override $mb_override/$(mb_archived override) worker $mb_worker claim $mb_claim"
+if [[ $mb_archive_verdicts == "ok 0/1 used 1/0 install 1/0 number 1/0 zero 1/0 wrong 1/1 failed 1/1 locked 1/0 read-only 1/0 override 1/0 worker 1 claim 1/1/gone/released" ]] &&
+    grep -e 'milestone-build-wrong-commit' "$mb/claim-made.out" >/dev/null &&
     grep -e '^    \*\* ARCHIVE FAILED \*\*$' "$mb/archive-failed.out" >/dev/null &&
     grep -e 'is not a new or empty folder that can be read' "$mb/archive-locked.out" >/dev/null &&
     grep -e 'could not be claimed' "$mb/archive-read-only.out" >/dev/null &&
@@ -2863,7 +2908,7 @@ if [[ $mb_archive_verdicts == "ok 0/1 used 1/0 install 1/0 number 1/0 zero 1/0 w
     ! grep -e '^install ' "$mb/archive.record" >/dev/null &&
     grep -e 'is not a new or empty folder' "$mb/archive-used.out" >/dev/null &&
     grep -e 'Knot.app/PlugIns/Widgets-iOS.appex is 0.3.0 (2);' "$mb/archive-wrong.out" >/dev/null; then
-    pass "milestone-build.sh --archive archives into a new folder with the build number given, checks the archived app as it checks a build, names a failed archive, and refuses a used, unreadable or unclaimable folder, an install, a build number without an archive, and XCODE_XCCONFIG_FILE in the script and in its worker"
+    pass "milestone-build.sh --archive archives into a new folder with the build number given, checks the archived app as it checks a build, names a failed archive, and refuses a used, unreadable or unclaimable folder, an install, a build number without an archive, and XCODE_XCCONFIG_FILE in the script and in its worker, and gives back the claim of a folder when it refuses after it"
 else
     fail "milestone-build.sh --archive: $mb_archive_verdicts; $(tail -n 3 "$mb/archive.out" | tr '\n' ' ')"
 fi
@@ -2953,7 +2998,7 @@ rl="$(cd "$rl" && pwd -P)"
 cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$rl/tree/Apps/Config/"
 cp "$KNOT_SELF/Packages/KnotKit/Sources/KnotCore/Settings/FeatureGates.swift" "$rl/tree/Packages/KnotKit/Sources/KnotCore/Settings/"
 cp "$KNOT_SELF/.xcode-version" "$rl/tree/"
-printf '.build/\n*.xcodeproj/\n' >"$rl/tree/.gitignore"
+printf '.build/\n*.xcodeproj/\nscripts/\n' >"$rl/tree/.gitignore"
 # A Swift file of the iPhone app that uses UserDefaults: the lint finds that required-reason API in
 # the reach of the iPhone app's privacy manifest.
 printf 'import Foundation\nlet synthetic = UserDefaults(suiteName: "synthetic")\n' >"$rl/tree/Apps/iOS/Sources/Synthetic.swift"
@@ -2999,6 +3044,12 @@ printf '\xcf\xfa\xed\xfe not an object\n' >"$rl/fx/corrupt"
 # The profiles' signer, a certificate the test makes, and the made-up team.
 /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout "$rl/fx/signer.key" -out "$rl/fx/signer.pem" -days 2 \
     -subj "/CN=Synthetic Profile Signer" >>"$rl/fx/openssl.log" 2>&1 || echo "the signer was not made" >>"$rl/fx/openssl.log"
+for signer in signer other; do
+    [[ $signer == signer ]] || /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout "$rl/fx/other.key" -out "$rl/fx/other.pem" -days 2 \
+        -subj "/CN=Another Synthetic Signer" >>"$rl/fx/openssl.log" 2>&1
+    /usr/bin/openssl x509 -in "$rl/fx/$signer.pem" -outform der -out "$rl/fx/$signer.der" >>"$rl/fx/openssl.log" 2>&1 ||
+        echo "the certificate $signer was not made" >>"$rl/fx/openssl.log"
+done
 rl_team="ZZ9QX42K7T"
 # The team's configuration, as bootstrap links the owner's: the filter masks the team's ID by it.
 mkdir -p "$rl/tree/.build/config"
@@ -3057,6 +3108,12 @@ for name, path, suffix, platform, families in parts:
         del info["NSMicrophoneUsageDescription"]
     if "encryption" in broken and name == "watch":
         del info["ITSAppUsesNonExemptEncryption"]
+    if "no-group-key" in broken and name == "watch-widget":
+        del info["KnotAppGroup"]
+    if "phone-only" in broken and name == "app":
+        info["UIDeviceFamily"] = [1]
+    if "icon-name" in broken and name == "app":
+        info["CFBundleIcons"] = {"CFBundlePrimaryIcon": {"CFBundleIconName": "OtherIcon"}}
     dump(info, path + "/Info.plist")
     if not ("privacy" in broken and name == "watch-widget"):
         reasons = [] if "reason" in broken or name != "app" else [
@@ -3081,6 +3138,8 @@ for name, path, suffix, platform, families in parts:
         if "corrupt-car" in broken and name == "app":
             car = "corrupt.car"
         shutil.copy(os.path.join(fx, car), path + "/Assets.car")
+if "unreadable-file" in broken:
+    os.chmod(app + "/PlugIns/Widgets-iOS.appex/Knot", 0)
 if "unreadable" in broken:
     os.makedirs(app + "/PlugIns/Widgets-iOS.appex/Locked")
     os.chmod(app + "/PlugIns/Widgets-iOS.appex/Locked", 0)
@@ -3104,6 +3163,12 @@ broken, fx, team = set(os.environ.get("KNOT_RL_EXPORT_BREAK", "").split(",")), o
 stage = os.path.join(export, "stage")
 app = os.path.join(stage, "Payload", "Knot.app")
 shutil.copytree(os.path.join(archive, "Products", "Applications", "Knot.app"), app)
+# A loose library, signed before the app that holds it.
+os.makedirs(app + "/Frameworks", exist_ok=True)
+shutil.copy(fx + "/plain", app + "/Frameworks/libsynthetic.dylib")
+subprocess.run(["/usr/bin/codesign", "-f", "-s", "-", app + "/Frameworks/libsynthetic.dylib"], check=True, capture_output=True)
+with open(fx + "/signer.der", "rb") as f:
+    leaf = f.read()
 parts = []
 for folder, dirs, _ in os.walk(os.path.join(stage, "Payload")):
     parts += [os.path.join(folder, d) for d in dirs if d.endswith((".app", ".appex"))]
@@ -3132,7 +3197,14 @@ for part in sorted(parts, key=lambda p: -p.count("/")):
         del permits["beta-reports-active"]
     if "value-not-allowed" in broken and part.endswith("Widgets-watchOS.appex"):
         permits["com.apple.security.application-groups"] = ["group.com.p3ob7o.other"]
-    profile = {"Name": "Synthetic App Store", "TeamIdentifier": [team], "Entitlements": permits}
+    if "bool-int" in broken and top:
+        permits["beta-reports-active"] = 1
+    if "profile-debug" in broken and part.endswith("Widgets-iOS.appex"):
+        permits["get-task-allow"] = True
+    if "profile-push" in broken and top:
+        permits["aps-environment"] = "development"
+    profile = {"Name": "Synthetic App Store", "TeamIdentifier": [team], "Entitlements": permits, "DeveloperCertificates": [leaf],
+               "ApplicationIdentifierPrefix": ["PREFIX0001" if "prefix" in broken and watch else team]}
     if "devices" in broken and part.endswith("Widgets-iOS.appex"):
         profile["ProvisionedDevices"] = []
     with open(work + "/profile.plist", "wb") as f:
@@ -3151,6 +3223,9 @@ for part in sorted(parts, key=lambda p: -p.count("/")):
 if "tampered" in broken:
     with open(app + "/Watch/Knot.app/Knot", "ab") as f:
         f.write(b"changed after signing")
+if "loose-tampered" in broken:
+    with open(app + "/Frameworks/libsynthetic.dylib", "ab") as f:
+        f.write(b"changed after signing")
 subprocess.run(["ditto", "-c", "-k", "--keepParent", os.path.join(stage, "Payload"), os.path.join(export, "Knot.ipa")], check=True)
 shutil.rmtree(stage)
 shutil.rmtree(work)
@@ -3158,6 +3233,8 @@ with open(os.path.join(export, "DistributionSummary.plist"), "wb") as f:
     plistlib.dump({"Knot.ipa": [{"team": {"id": team, "name": "Synthetic Team"}, "certificate": "Apple Distribution: Synthetic (%s)" % team}]}, f)
 with open(os.path.join(export, "Packaging.log"), "w") as f:
     f.write("Signing with team %s, authenticated with the key %s\n" % (team, key_id))
+if "sidecar" in broken:
+    os.chmod(os.path.join(export, "Packaging.log"), 0)
 PY
 # The stand-in Xcode: the pinned one's identity, every tool of the pinned one but xcodebuild and
 # altool, which are stand-ins that write down what they were given and the names of their
@@ -3203,6 +3280,10 @@ if [[ $stood == -exportArchive ]]; then
     logs="${TMPDIR}Knot_synthetic.xcdistributionlogs"
     mkdir -p "$logs"
     echo "authenticated with $key_id of $issuer, team $KNOT_RL_TEAM" >"$logs/IDEDistribution.standard.log"
+    if [[ -n ${KNOT_RL_DIAG_UNREADABLE:-} ]]; then
+        echo "authenticated with $key_id" >"$logs/IDEDistribution.verbose.log"
+        chmod 000 "$logs/IDEDistribution.verbose.log"
+    fi
     echo "IDEDistribution: Created bundle at path \"$logs\"."
     echo "Exporting with the key $key_id, issuer $issuer, from $key_path and $(python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$key_path")"
     if [[ -n ${KNOT_RL_EXPORT_SLEEP:-} ]]; then
@@ -3240,6 +3321,13 @@ for ((i = 1; i <= $#; i++)); do
 done
 echo "chunks of the key $key_id" >"$temporary/upload-chunk"
 echo "Authenticating with the key $key_id, issuer $issuer, from $key_path and $(python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$key_path")"
+echo "Issuer, as a server may print it: $(tr 'a-z' 'A-Z' <<<"$issuer")"
+if [[ $1 == --validate-app && -n ${KNOT_RL_VALIDATE_SLEEP:-} ]]; then
+    echo $$ >"$KNOT_RL_RECORD.pid"
+    : >"$KNOT_RL_RECORD.sleeping"
+    sleep "$KNOT_RL_VALIDATE_SLEEP"
+    : >"$KNOT_RL_RECORD.woke"
+fi
 if [[ $1 == --upload-package && -n ${KNOT_RL_UPLOAD_SLEEP:-} ]]; then
     echo $$ >"$KNOT_RL_RECORD.pid"
     : >"$KNOT_RL_RECORD.sleeping"
@@ -3277,8 +3365,53 @@ SH
 printf '#!/bin/sh\n[ "$1" = --version ] && echo "Version: %s"\nexit 0\n' "$KNOT_XCODEGEN_VERSION" >"$rl/stub/xcodegen"
 printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_RL_RECORD"\n' >"$rl/stub/lsregister"
 chmod +x "$rl/stub/"* "$rl/milestone-build.sh"
-cp -R "$KNOT_SCRIPTS" "$rl/scripts"
-cp "$rl/milestone-build.sh" "$rl/scripts/milestone-build.sh"
+# The stand-in codesign: the signer's team and its leaf certificate, as a real distribution
+# signature carries them, which an ad hoc one does not; every other call goes to the real one.
+cat >"$rl/stub/codesign" <<'SH'
+#!/bin/bash
+part="${@: -1}"
+team=$KNOT_RL_TEAM leaf=$KNOT_RL_FIXTURES/signer.der
+[[ $KNOT_RL_EXPORT_BREAK == *signer-team* && $part == */Watch/Knot.app ]] && team=AA1BB2CC3D
+[[ $KNOT_RL_EXPORT_BREAK == *archive-team* && $part == */candidate/* ]] && team=AA1BB2CC3D
+[[ $KNOT_RL_EXPORT_BREAK == *other-leaf* && $part == */Widgets-iOS.appex ]] && leaf=$KNOT_RL_FIXTURES/other.der
+if [[ $1 == -dv ]]; then
+    /usr/bin/codesign -dv "$part" >/dev/null 2>&1 || exit 1
+    printf 'Executable=%s\nTeamIdentifier=%s\n' "$part" "$team" >&2
+    exit 0
+fi
+if [[ $1 == -d && $2 == --extract-certificates=* ]]; then
+    cp "$leaf" "${2#--extract-certificates=}0"
+    exit 0
+fi
+exec /usr/bin/codesign "$@"
+SH
+chmod +x "$rl/stub/codesign"
+# The scripts, in the scratch tree, so that no KNOT_TREE names it. The stand-ins come in by an edit
+# of this copy, which no environment can reach: xcodebuild and altool, the stand-in codesign, and
+# no check of Apple's signature on the stand-ins. A second copy keeps that check, and a third keeps
+# it on altool alone, so that the export runs and altool's check is reached.
+cp -R "$KNOT_SCRIPTS" "$rl/tree/scripts"
+cp "$rl/milestone-build.sh" "$rl/tree/scripts/milestone-build.sh"
+rl_release="$rl/tree/scripts/release.sh"
+rl_stand="$rl_xcode/Contents/Developer/usr/bin"
+python3 -I - "$rl_release" "$rl/tree/scripts/release-anchored.sh" "$rl_stand" "$rl/stub/codesign" <<'PY'
+import sys
+release, anchored, stand, codesign = sys.argv[1:5]
+text = open(release).read()
+for old, new in (('XCODEBUILD="$DEVELOPER_DIR/usr/bin/xcodebuild"', 'XCODEBUILD="%s/xcodebuild"' % stand),
+                 ('ALTOOL="$DEVELOPER_DIR/usr/bin/altool"', 'ALTOOL="%s/altool"' % stand),
+                 ('codesign=/usr/bin/codesign signed_archive=', 'codesign=%s signed_archive=' % codesign)):
+    assert old in text, old
+    text = text.replace(old, new)
+open(anchored, "w").write(text)
+old = 'apple_signed "$XCODEBUILD" ||'
+assert text.count(old) == 1, old
+open(anchored.replace(".sh", "-altool.sh"), "w").write(text.replace(old, "true ||"))
+old = "apple_signed() { /usr/bin/codesign --verify -R='anchor apple' \"$1\" >/dev/null 2>&1; }"
+assert old in text, old
+open(release, "w").write(text.replace(old, "apple_signed() { true; }"))
+PY
+chmod +x "$rl/tree/scripts/release-anchored.sh" "$rl/tree/scripts/release-anchored-altool.sh"
 rl_git() { git -C "$rl/tree" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
 # A package's pinned checkout, as the rehearsal requires it.
 rl_pkg="$rl/tree/.build/SourcePackages/checkouts/Synthetic"
@@ -3313,9 +3446,12 @@ rl_key_path="$rl/key-link/AuthKey_$rl_key_id.p8" rl_key_real="$rl/key/AuthKey_$r
 printf 'not a key\n' >"$rl_key_real"
 rl_key=(KNOT_ASC_KEY_PATH="$rl_key_path" KNOT_ASC_KEY_ID="$rl_key_id" KNOT_ASC_ISSUER_ID="$rl_issuer")
 rl_env() { # rl_env <name>: the environment of a run, as the stand-ins need it
-    printf '%s\n' "KNOT_TREE=$rl/tree" "KNOT_XCODE=$rl_xcode" "KNOT_RL_RECORD=$rl/$1.record" "KNOT_RL_MAKE=$rl/make-archive.py" \
+    printf '%s\n' "KNOT_RL_RECORD=$rl/$1.record" "KNOT_RL_MAKE=$rl/make-archive.py" \
         "KNOT_RL_EXPORT=$rl/export.py" "KNOT_RL_FIXTURES=$rl/fx" "KNOT_RL_TEAM=$rl_team" "KNOT_RL_XCODE_BUILD=$KNOT_XCODE_BUILD"
 }
+# What no run inherits from the self-test: its tree, a key, a stand-in or a toolchain.
+rl_unset=(-u KNOT_LOCAL_CONFIG -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED -u KNOT_ASC_KEY_PATH -u KNOT_ASC_KEY_ID
+    -u KNOT_ASC_ISSUER_ID -u KNOT_XCODEGEN -u KNOT_SLOT_DIR -u KNOT_LSREGISTER -u KNOT_XCODE -u TOOLCHAINS -u KNOT_FAIL_LOG)
 rl_run() { # rl_run <name> [NAME=value…] -- <arguments…>: runs release.sh with a fresh record; prints its status
     local name=$1 status=0 settings=() entry
     shift
@@ -3324,14 +3460,16 @@ rl_run() { # rl_run <name> [NAME=value…] -- <arguments…>: runs release.sh wi
     : >"$rl/$name.record"
     rm -f "$rl/$name.record.pid" "$rl/$name.record.sleeping" "$rl/$name.record.woke"
     while IFS= read -r entry; do settings=("$entry" ${settings[@]+"${settings[@]}"}); done < <(rl_env "$name")
-    env -u KNOT_LOCAL_CONFIG -u KNOT_ASC_KEY_PATH -u KNOT_ASC_KEY_ID -u KNOT_ASC_ISSUER_ID -u KNOT_XCODEGEN -u KNOT_SLOT_DIR \
-        -u KNOT_LSREGISTER ${settings[@]+"${settings[@]}"} "$rl/scripts/release.sh" "$@" >"$rl/$name.out" 2>&1 || status=$?
+    env "${rl_unset[@]}" ${settings[@]+"${settings[@]}"} "${RL_SCRIPT:-$rl_release}" "$@" >"$rl/$name.out" 2>&1 || status=$?
     echo "$status"
 }
 # The rehearsal's own stand-ins: its XcodeGen, its slots and LaunchServices' tool.
 rl_rehearsal_env=(KNOT_XCODEGEN="$rl/stub/xcodegen" KNOT_SLOT_DIR="$rl/slots" KNOT_LSREGISTER="$rl/stub/lsregister")
 rl_has() { grep -F -e "$2" "$rl/$1.out" >/dev/null; } # rl_has <name> <text>: the run printed it
 rl_calls() { grep -c -e "^$2" "$rl/$1.record" || true; } # rl_calls <name> <tool>: how often it ran
+# rl_none <grep arguments…>: grep says "no match", status 1; an error of its own is no clean search.
+rl_none() { local status=0; grep "$@" >/dev/null 2>&1 || status=$?; [[ $status == 1 ]]; }
+rl_lacks() { rl_none -F -e "$2" "$rl/$1.out"; } # rl_lacks <name> <text>: the run did not print it
 # The run's folder, from the line that names it, and whether its tmp/ is gone: read right after the
 # run, before a later run could sweep it.
 rl_folder() { sed -n -E 's/^release: the run.s folder is \.build\/release\/([^,]+), its log release\.log$/\1/p' "$rl/$1.out" | head -n 1; }
@@ -3341,7 +3479,7 @@ rl_tmp() { local f; f="$(rl_folder "$1")"; if [[ -z $f ]]; then echo "no-folder"
 # status 1; an error of its own is no clean search.
 rl_clean() {
     local status=0
-    grep -r -F --exclude=Knot.ipa -e "$rl_key_id" -e "$rl_issuer" -e "$rl_key_path" -e "$rl_key_real" -e "$rl_team" \
+    grep -r -i -F --exclude=Knot.ipa -e "$rl_key_id" -e "$rl_issuer" -e "$rl_key_path" -e "$rl_key_real" -e "$rl_team" \
         "$rl/$1.out" "$rl/tree/.build/release" >/dev/null 2>&1 || status=$?
     [[ $status == 1 ]] && echo clean || echo "leaked($status)"
 }
@@ -3354,7 +3492,7 @@ rl_swept="$( [[ -e $rl/tree/.build/release/killed/tmp ]] && echo left || echo sw
 rl_names="$(rl_run names "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7)/$(rl_clean names)"
 : >"$rl/traced.record"
 rl_traced=0
-env -u KNOT_LOCAL_CONFIG $(rl_env traced) "${rl_key[@]}" bash -x "$rl/scripts/release.sh" M2 --commit "$rl_head" --build-number 7 \
+env "${rl_unset[@]}" $(rl_env traced) "${rl_key[@]}" bash -x "$rl_release" M2 --commit "$rl_head" --build-number 7 \
     >"$rl/traced.out" 2>&1 || rl_traced=$?
 rl_traced="$rl_traced/$(rl_clean traced)/$(grep -c -e '^+' "$rl/traced.out" || true)"
 rl_verdicts="good $rl_good/$rl_swept names $rl_names traced $rl_traced"
@@ -3364,6 +3502,7 @@ rl_verdicts="good $rl_good/$rl_swept names $rl_names traced $rl_traced"
 # the run, then the FAIL line that one of them must bring.
 rl_g1="version,flavour,level,group,simulator,extra-part,encryption-true,tracking,xctest,debug-dylib,no-dsym,privacy,no-car,fakes"
 rl_g2="family,build,reason,usage,usage-scan,encryption,icon,beta,other-xcode,corrupt-car,retired,debug"
+rl_g3="no-group-key,phone-only,icon-name"
 rl_cases="$rl_g1|binaries: Knot.app/PlugIns/Widgets-iOS.appex/Knot holds what a release may not: the module KnotFakes
 $rl_g2|binaries: Knot.app/Watch/Knot.app/Knot holds what a release may not: -KnotPreview
 corrupt-binary|binaries: could not look: Knot.app/PlugIns/Widgets-iOS.appex/Knot: nm could not read the file
@@ -3387,6 +3526,11 @@ $rl_g2|roles: Knot.app/PlugIns/Widgets-iOS.appex: build number 1, not 7
 $rl_g1|roles: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: flavour dev, not milestone
 $rl_g1|roles: Knot.app/Watch/Knot.app: level M3, not M2
 $rl_g1|roles: Knot.app/PlugIns/Widgets-iOS.appex: KnotAppGroup group.com.example, not group.com.p3ob7o.knot
+$rl_g3|roles: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: no KnotAppGroup, which its source Info.plist declares
+$rl_g3|roles: Knot.app: device families [1], not [1, 2]
+$rl_g3|icons: Knot.app: its Info.plist names the icon set OtherIcon, not AppIcon
+unreadable-file|binaries: could not look: Knot.app/PlugIns/Widgets-iOS.appex's executable, Knot, is not a Mach-O file that file can read
+unreadable-file|usage: Knot.app: the product cannot be read whole
 $rl_g1|privacy: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: no privacy manifest
 $rl_g1|privacy: Knot.app/PlugIns/Widgets-iOS.appex: its privacy manifest does not say NSPrivacyTracking false
 $rl_g2|privacy: Knot.app: its privacy manifest gives no reason for NSPrivacyAccessedAPICategoryUserDefaults, which the lint finds in the reach of Apps/iOS/PrivacyInfo.xcprivacy
@@ -3409,6 +3553,7 @@ for broken in $(cut -d'|' -f1 <<<"$rl_cases" | sort -u); do
 done
 # A product with a folder no one may read is left so that the scratch folder can be removed.
 find "$rl/tree/.build/release" -type d -name Locked -exec chmod 700 {} + 2>/dev/null || true
+find "$rl/tree/.build/release" -type f -perm 000 -exec chmod 600 {} + 2>/dev/null || true
 # What it refuses before anything is built: a level that opens sync, a milestone below with no
 # tag or a tag that is not annotated, an icon source with alpha, the Mac, the key not set or
 # malformed for a validation, a stand-in set for a validation, XCODE_XCCONFIG_FILE, and an
@@ -3422,15 +3567,27 @@ rl_alpha_icon="$(rl_run alpha-icon -- M2 --commit "$rl_alpha" --build-number 7)"
 rl_mac="$(rl_run mac -- M2 --commit "$rl_head" --build-number 7 --products mac)"
 rl_no_key="$(rl_run no-key KNOT_ASC_KEY_ID="$rl_key_id" -- M2 --commit "$rl_head" --build-number 7 --validate)"
 rl_bad_key="$(rl_run bad-key KNOT_ASC_KEY_PATH="$rl_key_path" KNOT_ASC_KEY_ID=lowercase-$rl_key_id KNOT_ASC_ISSUER_ID="not-$rl_issuer" -- M2 --commit "$rl_head" --build-number 7)"
-rl_seam="$(rl_run seam "${rl_key[@]}" KNOT_ALTOOL=/usr/bin/true KNOT_LSREGISTER=/usr/bin/true -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_seam="$(rl_run seam "${rl_key[@]}" KNOT_ALTOOL=/usr/bin/true KNOT_LSREGISTER=/usr/bin/true KNOT_XCODE="$rl_xcode" KNOT_TREE="$rl/tree" \
+    TOOLCHAINS=com.example.synthetic -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_relative="$(rl_run relative-key KNOT_ASC_KEY_PATH=relative/AuthKey_RELATIVE01.p8 KNOT_ASC_KEY_ID="$rl_key_id" KNOT_ASC_ISSUER_ID="$rl_issuer" \
+    -- M2 --commit "$rl_head" --build-number 7 --validate)"
+# The copy that keeps the check of Apple's signature on xcodebuild and altool: the stand-ins fail it
+# before either is given the key. The pinned Xcode's own pass it.
+rl_anchored="$(RL_SCRIPT="$rl/tree/scripts/release-anchored.sh" rl_run anchored "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --validate)"
+rl_anchored_altool="$(RL_SCRIPT="$rl/tree/scripts/release-anchored-altool.sh" rl_run anchored-altool "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --validate)"
+rl_anchored="$rl_anchored/$(rl_calls anchored 'xcodebuild -exportArchive')/$(rl_calls anchored altool)/$(rl_clean anchored) $rl_anchored_altool/$(rl_calls anchored-altool 'xcodebuild -exportArchive')/$(rl_calls anchored-altool altool)/$(rl_clean anchored-altool)"
+rl_apple=0
+for tool in xcodebuild altool; do /usr/bin/codesign --verify -R='anchor apple' "$DEVELOPER_DIR/usr/bin/$tool" >/dev/null 2>&1 || rl_apple=1; done
 rl_override="$(rl_run override XCODE_XCCONFIG_FILE="$rl/fx/override.xcconfig" -- M2 --commit "$rl_head" --build-number 7)"
 rl_argument="$(rl_run argument -- M2 --commit "$rl_head" --build-number 7 "--key=$rl_key_id")"
 rl_mb_fail="$(rl_run mb-fail KNOT_RL_MB_FAIL=1 -- M2 --commit "$rl_head" --build-number 7)"
-rl_verdicts="$rl_verdicts before sync $rl_sync/$(rl_calls sync milestone-build) no-tag $rl_no_tag light $rl_light alpha $rl_alpha_icon mac $rl_mac no-key $rl_no_key/$(rl_calls no-key milestone-build)/$(rl_clean no-key) bad-key $rl_bad_key/$(rl_calls bad-key milestone-build)/$(rl_clean bad-key) seam $rl_seam/$(rl_calls seam milestone-build) override $rl_override/$(rl_calls override milestone-build) argument $rl_argument/$(rl_clean argument) mb-fail $rl_mb_fail"
+rl_verdicts="$rl_verdicts before sync $rl_sync/$(rl_calls sync milestone-build) no-tag $rl_no_tag light $rl_light alpha $rl_alpha_icon mac $rl_mac no-key $rl_no_key/$(rl_calls no-key milestone-build)/$(rl_clean no-key) bad-key $rl_bad_key/$(rl_calls bad-key milestone-build)/$(rl_clean bad-key) seam $rl_seam/$(rl_calls seam milestone-build) relative $rl_relative/$(rl_calls relative-key milestone-build) anchored $rl_anchored apple $rl_apple override $rl_override/$(rl_calls override milestone-build) argument $rl_argument/$(rl_clean argument) mb-fail $rl_mb_fail"
 # A validation and an upload; what would be uploaded, short of each thing the export checks; and
 # the export, the validation and the upload that fail.
 rl_validate="$(rl_run validate "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --validate)/$(rl_tmp validate)"
 rl_validate_run="$rl/tree/.build/release/$(rl_folder validate)"
+rl_exported="$(rl_run exported "${rl_key[@]}" RL_KEY_PATH=/synthetic/elsewhere RL_KEY_ID=SYNTHETIC1 RL_ISSUER=synthetic RL_KEY_REAL=/synthetic/elsewhere \
+    SHELLOPTS=allexport -- M2 --commit "$rl_head" --build-number 7 --validate)/$(rl_clean exported)/$(grep -c -e '^environment ' "$rl/exported.record" || true)"
 rl_upload="$(rl_run upload "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_tmp upload)"
 rl_upload_fail="$(rl_run upload-fail "${rl_key[@]}" KNOT_RL_UPLOAD_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_tmp upload-fail)"
 rl_validate_fail="$(rl_run validate-fail "${rl_key[@]}" KNOT_RL_VALIDATE_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_tmp validate-fail)"
@@ -3438,9 +3595,11 @@ rl_validate_fail_run="$rl/tree/.build/release/$(rl_folder validate-fail)"
 rl_export_fail="$(rl_run export-fail "${rl_key[@]}" KNOT_RL_EXPORT_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_tmp export-fail)"
 rl_export_fail_run="$rl/tree/.build/release/$(rl_folder export-fail)"
 rl_tampered="$(rl_run tamper "${rl_key[@]}" KNOT_RL_TAMPER=1 -- M2 --commit "$rl_head" --build-number 7 --upload)"
-rl_verdicts="$rl_verdicts validate $rl_validate/$(rl_calls validate 'altool --validate-app')/$(rl_calls validate 'altool --upload-package')/$(rl_clean validate) upload $rl_upload/$(rl_calls upload 'altool --upload-package')/$(rl_clean upload) upload-fail $rl_upload_fail/$(rl_calls upload-fail 'altool --upload-package')/$(rl_clean upload-fail) validate-fail $rl_validate_fail/$(rl_calls validate-fail 'altool --upload-package')/$(rl_clean validate-fail) export-fail $rl_export_fail/$(rl_calls export-fail altool)/$(rl_clean export-fail) tamper $rl_tampered/$(rl_calls tamper 'altool --upload-package')"
+rl_verdicts="$rl_verdicts validate $rl_validate/$(rl_calls validate 'altool --validate-app')/$(rl_calls validate 'altool --upload-package')/$(rl_clean validate) upload $rl_upload/$(rl_calls upload 'altool --upload-package')/$(rl_clean upload) upload-fail $rl_upload_fail/$(rl_calls upload-fail 'altool --upload-package')/$(rl_clean upload-fail) validate-fail $rl_validate_fail/$(rl_calls validate-fail 'altool --upload-package')/$(rl_clean validate-fail) export-fail $rl_export_fail/$(rl_calls export-fail altool)/$(rl_clean export-fail) tamper $rl_tampered/$(rl_calls tamper 'altool --upload-package') exported $rl_exported"
 rl_e1="push,container-environment,container,group,get-task-allow,devices,not-allowed,value-not-allowed,team,tampered"
 rl_e2="unreadable-profile,unsigned"
+rl_e3="prefix,signer-team,other-leaf,profile-debug,profile-push,bool-int,loose-tampered"
+rl_e4="archive-team"
 rl_export_cases="$rl_e1|signatures: Knot.app: aps-environment development, not production
 $rl_e1|signatures: Knot.app: iCloud container environment Development, not Production
 $rl_e1|signatures: Knot.app: iCloud containers iCloud.com.example, not iCloud.com.p3ob7o.knot alone
@@ -3449,11 +3608,20 @@ $rl_e1|signatures: Knot.app/Watch/Knot.app: get-task-allow
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its provisioning profile has a device list
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: it is signed with beta-reports-active, which its provisioning profile does not allow
 $rl_e1|signatures: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: it is signed with com.apple.security.application-groups [\"group.com.p3ob7o.knot\"], which its provisioning profile does not allow
-$rl_e1|signatures: Knot.app/Watch/Knot.app: its application identifier is not its profile's team and its bundle ID
+$rl_e1|signatures: Knot.app/Watch/Knot.app: its application identifier is not its profile's prefix and its bundle ID
 $rl_e1|signatures: Knot.app/Watch/Knot.app: codesign --verify --strict failed on it
 $rl_e2|signatures: Knot.app/Watch/Knot.app: no provisioning profile that security can read
-$rl_e2|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its entitlements cannot be read from its signature"
-for broken in "$rl_e1" "$rl_e2"; do
+$rl_e2|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its entitlements cannot be read from its signature
+$rl_e3|signatures: Knot.app/Watch/Knot.app: its application identifier is not its profile's prefix and its bundle ID
+$rl_e3|signatures: Knot.app/Watch/Knot.app: it is signed by no team, or by another team than its provisioning profile's or the archive's
+$rl_e3|signatures: Knot.app: its parts are signed for more than one team
+$rl_e3|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its signing certificate is not one its provisioning profile lists
+$rl_e3|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its provisioning profile allows debugging, get-task-allow
+$rl_e3|signatures: Knot.app: its provisioning profile's push environment is development, not production
+$rl_e3|signatures: Knot.app: it is signed with beta-reports-active, which its provisioning profile does not allow
+$rl_e3|signatures: Knot.app/Frameworks/libsynthetic.dylib: codesign --verify --strict failed on it
+$rl_e4|signatures: Knot.app: it is signed by no team, or by another team than its provisioning profile's or the archive's"
+for broken in "$rl_e1" "$rl_e2" "$rl_e3" "$rl_e4"; do
     name="export-$(shasum <<<"$broken" | cut -c1-8)"
     status="$(rl_run "$name" "${rl_key[@]}" KNOT_RL_EXPORT_BREAK="$broken" -- M2 --commit "$rl_head" --build-number 7 --upload)"
     if [[ $status != 1 ]] || ! rl_has "$name" "release-export-check" || [[ $(rl_calls "$name" altool) != 0 || $(rl_clean "$name") != clean ]]; then
@@ -3464,6 +3632,21 @@ for broken in "$rl_e1" "$rl_e2"; do
         rl_has "$name" "FAIL  $expected" || rl_broken="$rl_broken [$expected]"
     done <<<"$rl_export_cases"
 done
+# A file beside Knot.ipa that cannot be read: removed and reported, and nothing sent. A distribution
+# log in the user's temporary folder that is not this run's: left alone by a failed export. A file
+# of this run's distribution log that cannot be read: reported, and no copy of it kept.
+rl_sidecar="$(rl_run sidecar "${rl_key[@]}" KNOT_RL_EXPORT_BREAK=sidecar -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_calls sidecar altool)/$(rl_clean sidecar)"
+rl_sidecar_run="$rl/tree/.build/release/$(rl_folder sidecar)"
+rl_foreign="$(getconf DARWIN_USER_TEMP_DIR)Knot_self-test-$$-$RANDOM.xcdistributionlogs"
+mkdir -p "$rl_foreign"
+echo "another run's log" >"$rl_foreign/IDEDistribution.standard.log"
+rl_foreign_status="$(rl_run foreign "${rl_key[@]}" KNOT_RL_EXPORT_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_foreign_run="$rl/tree/.build/release/$(rl_folder foreign)"
+rl_foreign_status="$rl_foreign_status/$([[ -f $rl_foreign/IDEDistribution.standard.log && ! -e $rl_foreign_run/distribution-logs/$(basename "$rl_foreign") ]] && echo kept || echo touched)/$(rl_clean foreign)"
+rm -rf "$rl_foreign"
+rl_diag="$(rl_run diag "${rl_key[@]}" KNOT_RL_EXPORT_FAIL=1 KNOT_RL_DIAG_UNREADABLE=1 -- M2 --commit "$rl_head" --build-number 7 --upload)/$(rl_tmp diag)/$(rl_clean diag)"
+rl_diag_logs="$rl/tree/.build/release/$(rl_folder diag)/distribution-logs/Knot_synthetic.xcdistributionlogs"
+rl_verdicts="$rl_verdicts sidecar $rl_sidecar foreign $rl_foreign_status diag $rl_diag"
 # A signal: TERM during the export, TERM and INT during the upload. Each run ends the stand-in it
 # started, which had not woken, says what it says, and leaves no value and no tmp/.
 rl_signal() { # rl_signal <name> <signal> <environment…>: the status, whether the stand-in ended, tmp/
@@ -3474,8 +3657,8 @@ rl_signal() { # rl_signal <name> <signal> <environment…>: the status, whether 
     # A job in the background of a shell that is not interactive starts with INT ignored, which bash
     # cannot then trap: perl gives INT back its default before it starts the run, as a terminal's
     # run has it.
-    env -u KNOT_LOCAL_CONFIG $(rl_env "$name") "${rl_key[@]}" "$@" /usr/bin/perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' \
-        "$rl/scripts/release.sh" M2 --commit "$rl_head" --build-number 7 --upload >"$rl/$name.out" 2>&1 &
+    env "${rl_unset[@]}" $(rl_env "$name") "${rl_key[@]}" "$@" /usr/bin/perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' \
+        "$rl_release" M2 --commit "$rl_head" --build-number 7 --upload >"$rl/$name.out" 2>&1 &
     pid=$!
     while [[ ! -e $rl/$name.record.sleeping ]] && ((waited < 300)); do sleep 0.1; waited=$((waited + 1)); done
     stand_in="$(cat "$rl/$name.record.pid" 2>/dev/null || true)"
@@ -3489,17 +3672,43 @@ rl_signal() { # rl_signal <name> <signal> <environment…>: the status, whether 
 rl_sig_export="$(rl_signal sig-export TERM KNOT_RL_EXPORT_SLEEP=20)"
 rl_sig_upload="$(rl_signal sig-upload TERM KNOT_RL_UPLOAD_SLEEP=20)"
 rl_sig_upload_int="$(rl_signal sig-upload-int INT KNOT_RL_UPLOAD_SLEEP=20)"
+rl_sig_validate="$(rl_signal sig-validate TERM KNOT_RL_VALIDATE_SLEEP=20)"
+rl_sig_upload_run="$rl/tree/.build/release/$(rl_folder sig-upload)"
+rl_sig_validate_run="$rl/tree/.build/release/$(rl_folder sig-validate)"
+# The reader of the run's output ends, then TERM: the writes that follow find no reader, and the
+# run still ends its stand-in and removes its tmp/.
+rm -f "$rl/reader.fifo" "$rl/reader-gone.record.pid" "$rl/reader-gone.record.sleeping" "$rl/reader-gone.record.woke"
+: >"$rl/reader-gone.record"
+mkfifo "$rl/reader.fifo"
+cat "$rl/reader.fifo" >"$rl/reader-gone.out" &
+rl_reader=$!
+env "${rl_unset[@]}" $(rl_env reader-gone) "${rl_key[@]}" KNOT_RL_UPLOAD_SLEEP=20 "$rl_release" M2 --commit "$rl_head" --build-number 7 --upload \
+    >"$rl/reader.fifo" 2>&1 &
+rl_reader_run=$!
+rl_waited=0
+while [[ ! -e $rl/reader-gone.record.sleeping ]] && ((rl_waited < 300)); do sleep 0.1; rl_waited=$((rl_waited + 1)); done
+rl_reader_stand_in="$(cat "$rl/reader-gone.record.pid" 2>/dev/null || true)"
+kill "$rl_reader" 2>/dev/null || true
+wait "$rl_reader" 2>/dev/null || true
+kill -TERM "$rl_reader_run" 2>/dev/null || true
+rl_reader_status=0
+wait "$rl_reader_run" || rl_reader_status=$?
+rl_reader_alive=ended
+[[ -n $rl_reader_stand_in ]] && ! kill -0 "$rl_reader_stand_in" 2>/dev/null || rl_reader_alive=alive
+[[ ! -e $rl/reader-gone.record.woke ]] || rl_reader_alive=woke
+rl_reader_gone="$rl_reader_status/$rl_reader_alive/$(rl_tmp reader-gone)"
 # Two runs at once in one worktree: the second refuses while the first waits in its milestone build.
 : >"$rl/first.record"
 rm -f "$rl/first.record.sleeping"
-env -u KNOT_LOCAL_CONFIG $(rl_env first) KNOT_RL_MB_SLEEP=4 "$rl/scripts/release.sh" M2 --commit "$rl_head" --build-number 7 >"$rl/first.out" 2>&1 &
+env "${rl_unset[@]}" $(rl_env first) KNOT_RL_MB_SLEEP=4 "$rl_release" M2 --commit "$rl_head" --build-number 7 >"$rl/first.out" 2>&1 &
 rl_first=$!
 rl_waited=0
 while [[ ! -e $rl/first.record.sleeping ]] && ((rl_waited < 300)); do sleep 0.1; rl_waited=$((rl_waited + 1)); done
 rl_second="$(rl_run second -- M2 --commit "$rl_head" --build-number 7)"
+rl_first_tmp="$(rl_tmp first)"
 rl_first_status=0
 wait "$rl_first" || rl_first_status=$?
-rl_verdicts="$rl_verdicts signals $rl_sig_export $rl_sig_upload $rl_sig_upload_int together $rl_first_status/$rl_second/$(rl_calls second milestone-build)"
+rl_verdicts="$rl_verdicts signals $rl_sig_export $rl_sig_upload $rl_sig_upload_int sig-validate $rl_sig_validate reader-gone $rl_reader_gone together $rl_first_status/$rl_second/$(rl_calls second milestone-build)/$rl_first_tmp"
 # The rehearsal: the development flavour, signed by nothing, resolving nothing, with no signature
 # read and the key out of its environment; one whose archive carries the milestone's bundle ID in
 # a part; one with the pinned checkout missing; and one that LaunchServices' tool cannot serve.
@@ -3515,7 +3724,7 @@ rl_verdicts="$rl_verdicts rehearsal $rl_rehearsal/$(rl_calls rehearsal milestone
 # The bytes sent: the SHA-256 the run printed, and what altool was given at each call.
 rl_digest="$(sed -n -E 's/.*Knot\.ipa, SHA-256 ([0-9a-f]{64}):.*/\1/p' "$rl/upload.out" | head -n 1)"
 rl_sent="$(sed -n -E 's/^sent ([0-9a-f]{64})$/\1/p' "$rl/upload.record" | sort -u | tr '\n' ' ')"
-rl_expected="good 0/tmp-gone/swept names 0/clean traced 0/clean/0 before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean bad-key 1/0/clean seam 1/0 override 1/0 argument 1/clean mb-fail 1 validate 0/tmp-gone/1/0/clean upload 0/tmp-gone/1/clean upload-fail 1/tmp-gone/1/clean validate-fail 1/tmp-gone/0/clean export-fail 1/tmp-gone/0/clean tamper 1/0 signals 143/ended/tmp-gone/clean 143/ended/tmp-gone/clean 130/ended/tmp-gone/clean together 0/1/0 rehearsal 0/tmp-gone/0/0/0 rehearsal-milestone 1 unknown 0 no-checkout 1/0"
+rl_expected="good 0/tmp-gone/swept names 0/clean traced 0/clean/0 before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean bad-key 1/0/clean seam 1/0 relative 1/0 anchored 1/0/0/clean 1/1/0/clean apple 0 override 1/0 argument 1/clean mb-fail 1 validate 0/tmp-gone/1/0/clean upload 0/tmp-gone/1/clean upload-fail 1/tmp-gone/1/clean validate-fail 1/tmp-gone/0/clean export-fail 1/tmp-gone/0/clean tamper 1/0 exported 0/clean/3 sidecar 1/0/clean foreign 1/kept/clean diag 1/tmp-gone/clean signals 143/ended/tmp-gone/clean 143/ended/tmp-gone/clean 130/ended/tmp-gone/clean sig-validate 143/ended/tmp-gone/clean reader-gone 143/ended/tmp-gone together 0/1/0/tmp-left rehearsal 0/tmp-gone/0/0/0 rehearsal-milestone 1 unknown 0 no-checkout 1/0"
 if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     grep -e "^milestone-build M2 --commit $rl_head --products ios --archive $rl/tree/.build/release/dry-run-M2-${rl_head:0:12}-b7-[0-9TZ]*-[A-Za-z0-9]*/candidate --build-number 7$" "$rl/good.record" >/dev/null &&
     rl_has good "dry run passed" && rl_has good "ok    evidence: the annotated tags of the milestones below M2, at or before ${rl_head:0:12}: m1" &&
@@ -3527,7 +3736,7 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     rl_has good "ok    binaries: no fakes and no debug launch argument in its 4 Mach-O files" &&
     rl_has good "KNOT_ASC_KEY_PATH (not set), KNOT_ASC_KEY_ID (not set), KNOT_ASC_ISSUER_ID (not set)" &&
     rl_has names "KNOT_ASC_KEY_PATH (set, a readable file), KNOT_ASC_KEY_ID (set), KNOT_ASC_ISSUER_ID (set)" &&
-    ! grep -e 'KNOT_ASC_' -e 'XCODE_XCCONFIG_FILE' <(grep -e '^environment ' "$rl/names.record" "$rl/validate.record" "$rl/upload.record" "$rl/rehearsal.record") >/dev/null &&
+    rl_none -e 'KNOT_ASC_' -e 'XCODE_XCCONFIG_FILE' <(grep -e '^environment ' "$rl/names.record" "$rl/validate.record" "$rl/upload.record" "$rl/rehearsal.record") &&
     [[ $(grep -c -e '^environment ' "$rl/validate.record") == 3 ]] &&
     [[ $(rl_calls good xcodebuild) == 0 && $(rl_calls good altool) == 0 ]] &&
     rl_has traced "dry run passed" &&
@@ -3538,7 +3747,9 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     rl_has mac "release-mac-sp3" && rl_has mac "SP-3" &&
     rl_has no-key "key: KNOT_ASC_KEY_PATH is not set" && rl_has no-key "key: KNOT_ASC_ISSUER_ID is not set" &&
     rl_has bad-key "key: KNOT_ASC_KEY_ID is set, but not ten capitals and digits" && rl_has bad-key "key: KNOT_ASC_ISSUER_ID is set, but not a UUID" &&
-    rl_has seam "tools: KNOT_ALTOOL is set" && rl_has seam "tools: KNOT_LSREGISTER is set" &&
+    rl_has seam "release-stand-ins" && rl_has seam "these are set: KNOT_ALTOOL KNOT_LSREGISTER KNOT_XCODE KNOT_TREE TOOLCHAINS." &&
+    rl_has relative-key "key: KNOT_ASC_KEY_PATH is set, but not an absolute path" && rl_lacks relative-key "AuthKey_RELATIVE01" &&
+    rl_has anchored "release-tool-signature" && rl_has anchored-altool "release-tool-signature" &&
     rl_has override "release-xcconfig-override" && rl_has argument "Argument 6 is not one this script takes." &&
     rl_has mb-fail "release-candidate" &&
     grep -e "^xcodebuild -exportArchive .* -allowProvisioningUpdates -authenticationKeyPath $rl_key_path -authenticationKeyID $rl_key_id -authenticationKeyIssuerID $rl_issuer$" "$rl/validate.record" >/dev/null &&
@@ -3546,8 +3757,10 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     grep -F -e "Exporting with the key <KEY-ID>, issuer <ISSUER-ID>, from <KEY-PATH> and <KEY-PATH>" "$rl_validate_run/release.log" >/dev/null &&
     rl_has validate "Authenticating with the key <KEY-ID>, issuer <ISSUER-ID>, from <KEY-PATH> and <KEY-PATH>" &&
     grep -e '^options .*<key>method</key><string>app-store-connect</string>.*<key>destination</key><string>export</string>.*<key>iCloudContainerEnvironment</key><string>Production</string>.*<key>manageAppVersionAndBuildNumber</key><false/>.*<key>testFlightInternalTestingOnly</key><true/>' "$rl/validate.record" >/dev/null &&
-    ! grep -e '^options .*teamID' "$rl/validate.record" >/dev/null &&
-    rl_has validate "ok    signatures: every signature of its 4 signed parts verified" && rl_has validate "validation passed" &&
+    rl_none -e '^options .*teamID' "$rl/validate.record" &&
+    rl_has validate "ok    signatures: every signature of its 5 code objects verified" && rl_has validate "validation passed" &&
+    rl_has validate "Issuer, as a server may print it: <ISSUER-ID>" &&
+    rl_none -E -e '^environment (.* )?(RL_[A-Z_]*|KNOT_ASC_[A-Z_]*|KNOT_RL_M[0-9]) ' "$rl/exported.record" &&
     [[ -f $rl_validate_run/export/Knot.ipa && -f $rl_validate_run/export/DistributionSummary.plist && ! -e $rl_validate_run/distribution-logs ]] &&
     grep -e '<TEAM>' "$rl_validate_run/export/DistributionSummary.plist" >/dev/null && grep -e '<KEY-ID>' "$rl_validate_run/export/Packaging.log" >/dev/null &&
     rl_has upload "uploaded: Knot 0.3.0 (7), M2" && [[ -n $rl_digest && $rl_sent == "$rl_digest " && $(grep -c -e '^sent ' "$rl/upload.record") == 2 ]] &&
@@ -3558,16 +3771,22 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     rl_has tamper "release-changed" &&
     rl_has sig-export "release-export-interrupted" && rl_has sig-upload "release-upload-interrupted" &&
     rl_has sig-upload "Check App Store Connect, the app's TestFlight builds, for build 7, before any retry" && rl_has sig-upload "retry:   unsafe" &&
-    rl_has sig-upload-int "release-upload-interrupted" &&
+    rl_has sig-upload-int "release-upload-interrupted" && grep -e '<KEY-ID>' "$rl_sig_upload_run/upload.log" >/dev/null &&
+    rl_has sig-validate "release-validation-interrupted" && grep -e '<KEY-ID>' "$rl_sig_validate_run/validate.log" >/dev/null &&
+    rl_has sidecar "release-export-record" && rl_has sidecar "Packaging.log, beside Knot.ipa, cannot be read and filtered: it is removed" &&
+    [[ ! -e $rl_sidecar_run/export/Packaging.log && -f $rl_sidecar_run/export/DistributionSummary.plist ]] &&
+    rl_has diag "release-record" && rl_has diag "IDEDistribution.verbose.log of Xcode's distribution log Knot_synthetic.xcdistributionlogs cannot be read and filtered" &&
+    grep -e '<KEY-ID>' "$rl_diag_logs/IDEDistribution.standard.log" >/dev/null &&
+    rl_none -r -l -e . --include='IDEDistribution.verbose.log*' "$rl_diag_logs" &&
     rl_has second "release-busy" && rl_has first "dry run passed" &&
     grep -e '^xcodebuild .* -disableAutomaticPackageResolution -skipPackageUpdates .* KNOT_FLAVOUR=dev KNOT_MILESTONE_LEVEL=M2 KNOT_SIGNING=local KNOT_BUILD_NUMBER=7 DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO .* archive -archivePath ' "$rl/rehearsal.record" >/dev/null &&
-    ! grep -e 'KNOT_FLAVOUR=milestone' "$rl/rehearsal.record" >/dev/null &&
+    rl_none -e 'KNOT_FLAVOUR=milestone' "$rl/rehearsal.record" &&
     rl_has rehearsal "rehearsal passed" && rl_has rehearsal "ok    pins: the packages' checkouts stand at their pinned revisions" &&
     rl_has rehearsal "ok    roles: the app, its widgets, the Watch app and its widgets, at their paths, of com.p3ob7o.knot.dev, 0.3.0 (7), flavour dev, level M2" &&
     rl_has rehearsal-milestone "release-rehearsal-identifiers" &&
     rl_has rehearsal-unknown "LaunchServices registers none of its products (lsregister -u failed on Knot.app" &&
     rl_has rehearsal-no-checkout "The checkout of Synthetic in .build/SourcePackages is not there"; then
-    pass "release.sh refuses a product that lacks any thing it checks, or whose inspection fails, naming the part, and passes the whole one; refuses before any build a level that opens sync, a milestone with no evidence, an icon with alpha, the Mac, a key missing or malformed, a stand-in in a real run and XCODE_XCCONFIG_FILE; prints and leaves no value of the key, under tracing too; checks the signatures of what it exports and sends that file once, unchanged; ends what a signal interrupts; runs one at a time; and rehearses the development flavour unsigned and offline ($(knot_duration $(($(knot_now) - rl_started))))"
+    pass "release.sh refuses a product that lacks any thing it checks, or whose inspection fails, naming the part, and passes the whole one; refuses before any build a level that opens sync, a milestone with no evidence, an icon with alpha, the Mac, a key missing or malformed, a stand-in or another Xcode in a real run, a tool Apple did not sign and XCODE_XCCONFIG_FILE; prints and leaves no value of the key, under tracing too; checks the signatures of what it exports, who signed each part and what its profile allows, keeps no record it cannot filter, and sends that file once, unchanged; ends what a signal interrupts; runs one at a time; and rehearses the development flavour unsigned and offline ($(knot_duration $(($(knot_now) - rl_started))))"
 else
     fail "release.sh: $rl_verdicts; broken:${rl_broken:- none}; good: $(grep -e FAIL "$rl/good.out" | head -n 3 | tr '\n' ' ')"
 fi

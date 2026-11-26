@@ -26,7 +26,7 @@ knot_parts_of() {
     {
         [[ -z $found ]] || printf '%s\n' "$found"
         [[ -z $tool || ! -f $app/Contents/MacOS/$tool ]] || echo "$app/Contents/MacOS/$tool"
-    } | awk -F/ '{ print NF "\t" $0 }' | sort -t "$(printf '\t')" -k1,1rn -k2 | cut -f2- | sed "s|^$base/||"
+    } | awk -F/ '{ print NF "\t" $0 }' | sort -t "$(printf '\t')" -k1,1rn -k2 | cut -f2- | sed "s|^$base/||" || return 1
     echo "$(basename "$app")"
 }
 
@@ -43,7 +43,7 @@ knot_parts_of() {
 # argument out of its symbols and strings, where no scan sees it.
 #   knot_scan_binaries <app>
 knot_scan_binaries() {
-    local app=$1 base f held list kind part parts info executable files status
+    local app=$1 base f held held_status list kind part parts info executable files status
     KNOT_SCAN_COUNT=0 KNOT_SCAN_FILE="" KNOT_SCAN_HELD="" KNOT_SCAN_WHY=""
     base="$(dirname "$app")"
     if ! list="$(python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments)" || [[ -z $list ]]; then
@@ -55,7 +55,7 @@ knot_scan_binaries() {
         return 2
     fi
     while IFS= read -r part; do
-        case $part in *.app | *.appex | *.framework) ;; *) continue ;; esac
+        case $part in *.app | *.appex | *.framework | *.xpc) ;; *) continue ;; esac
         info="$(knot_info_of "$base/$part")"
         executable="$(knot_plist "$info" CFBundleExecutable)"
         # A framework that carries no Info.plist names its executable after itself.
@@ -66,12 +66,16 @@ knot_scan_binaries() {
             KNOT_SCAN_WHY="$part has no executable where its Info.plist names one${executable:+ ($executable)}"
             return 2
         fi
-        if ! kind="$(file -b "$f" 2>/dev/null)" || [[ $kind != *Mach-O* ]]; then
+        # file exits 0 on a file it cannot open, -E or not (measured with macOS 27.3): readable first.
+        if [[ ! -r $f ]] || ! kind="$(file -E -b "$f" 2>/dev/null)" || [[ $kind != *Mach-O* ]]; then
             KNOT_SCAN_WHY="$part's executable, $executable, is not a Mach-O file that file can read"
             return 2
         fi
     done <<<"$parts"
-    files="$(mktemp)"
+    if ! files="$(mktemp)"; then
+        KNOT_SCAN_WHY="no temporary file for the list of the product's files"
+        return 2
+    fi
     status=0
     find "$app" -type f -print0 >"$files" 2>/dev/null || status=$?
     if ((status != 0)); then
@@ -80,22 +84,29 @@ knot_scan_binaries() {
         return 2
     fi
     while IFS= read -r -d '' f; do
-        if ! kind="$(file -b "$f" 2>/dev/null)"; then
+        if [[ ! -r $f ]] || ! kind="$(file -E -b "$f" 2>/dev/null)"; then
             rm -f "$files"
             KNOT_SCAN_WHY="file could not read ${f#"$base"/}"
             return 2
         fi
         [[ $kind == *Mach-O* ]] || continue
         KNOT_SCAN_COUNT=$((KNOT_SCAN_COUNT + 1))
-        if held="$(knot_fakes_in "$f")" || held="$(knot_debug_arguments_in "$f" "$list")"; then
+        # Each helper answers 0, found; 1, none; 2, could not look.
+        held_status=0
+        held="$(knot_fakes_in "$f")" || held_status=$?
+        if ((held_status == 1)); then
+            held_status=0
+            held="$(knot_debug_arguments_in "$f" "$list")" || held_status=$?
+        fi
+        if ((held_status == 0)); then
             rm -f "$files"
-            if [[ $held == "the inspection failed: "* ]]; then
-                KNOT_SCAN_WHY="${f#"$base"/}: ${held#the inspection failed: }"
-                return 2
-            fi
             KNOT_SCAN_FILE="${f#"$base"/}"
             KNOT_SCAN_HELD="$held"
             return 1
+        elif ((held_status > 1)); then
+            rm -f "$files"
+            KNOT_SCAN_WHY="${f#"$base"/}: ${held#the inspection failed: }"
+            return 2
         fi
     done <"$files"
     rm -f "$files"
