@@ -98,6 +98,7 @@ import Testing
         for value in AssetAvailability.allCases { #expect(AssetAvailability(rawValue: value.rawValue) == value) }
         for value in AssetUpload.allCases { #expect(AssetUpload(rawValue: value.rawValue) == value) }
         for value in CaptureSurface.allCases { #expect(CaptureSurface(rawValue: value.rawValue) == value) }
+        for value in RecordingEndReason.allCases { #expect(RecordingEndReason(rawValue: value.rawValue) == value) }
         for origin in [SegmentOrigin.device(thisDevice), .cli, .mcp] {
             #expect(SegmentOrigin(rawValue: origin.rawValue) == origin)
         }

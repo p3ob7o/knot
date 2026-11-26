@@ -161,7 +161,7 @@ enum ErrorSentences {
         "job_died_twice":
             "A job was found running at launch twice. The process died inside it each time.",
         "illegal_transition":
-            "A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed.",
+            "A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed, or `setRecordingEnding` on a segment that is not a voice segment, that is a later piece of its capture or a conflict copy, or whose capture is open.",
         "hotkey_invalid":
             "A hotkey needs at least one modifier, or must be a function key.",
         "hotkey_taken":

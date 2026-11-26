@@ -640,6 +640,31 @@
             return state.peaks[segmentID]
         }
 
+        // MARK: Why a recording ended
+
+        public func setRecordingEnding(_ reason: RecordingEndReason, of segmentID: SegmentID) async throws(KnotError) {
+            guard var segment = state.segments[segmentID] else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            // A voice segment whose capture is no longer open: a recording still being made has
+            // not ended. The reason is kept on a capture's first piece, and a conflict copy, which
+            // holds text only, has none.
+            guard segment.kind == .voice, segment.piece == 0, segment.pieceOf == nil, segment.conflictOf == nil,
+                !segment.state.isCapturing, !isOpen(segmentID)
+            else {
+                throw KnotError.illegalTransition.with(.init(segmentID: segmentID))
+            }
+            // The same reason again changes nothing. Another is a change of the segment, which
+            // moves the cursor and leaves the segment's own revision as it is.
+            guard segment.recordingEnding != reason else { return }
+            var next = state
+            segment.recordingEnding = reason
+            next.segments[segmentID] = segment
+            next.counter += 1
+            touch(segment.noteID, counter: next.counter, at: clock.now(), in: &next)
+            commit(next)
+        }
+
         // MARK: Moving
 
         public func move(_ segmentID: SegmentID, from noteID: NoteID) throws(KnotError) -> MoveResult {

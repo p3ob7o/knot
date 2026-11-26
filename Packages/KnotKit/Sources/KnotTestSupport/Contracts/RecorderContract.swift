@@ -54,6 +54,7 @@ public enum RecorderContract {
         try await aDiscardRemovesTheRecording(make)
         try await recoveryNeverTouchesTheCurrentLaunch(make)
         try await aStoppedRecordingThatWasNotConvertedIsAnOrphan(make)
+        try await anOrphanThatEndedByItselfComesBackWithItsReason(make)
         try await anOrphanThatCannotBeReadIsKept(make)
         try await anOrphanWhoseManifestCannotBeReadEndsRecovered(make)
         try await aManifestWithNoWorkingFileHoldsNoAudio(make)
@@ -366,6 +367,52 @@ public enum RecorderContract {
             "Once its working file is removed, it is not.")
     }
 
+    /// A recording that ended by itself writes why in its manifest, as it writes its end, so that
+    /// a death after the end and before the conversion keeps it: the next launch's recovery, which
+    /// reads the manifest from the drive, returns the orphan with that ending, read to its end. A
+    /// recording stopped at its control keeps no reason, and comes back `stopped`.
+    public static func anOrphanThatEndedByItselfComesBackWithItsReason(
+        _ make: @Sendable () async throws -> RecorderSubject
+    ) async throws {
+        let subject = try await make()
+        let recorder = subject.recorder
+        let launch: LaunchID = Identifier(uuid: UUID())
+        // At its limit, with nobody stopping it: the recording ends by itself.
+        let limited = request(launch, limit: .milliseconds(250))
+        let session = try await recorder.start(limited)
+        let ended: RecordedAudio? =
+            await SuiteWait.value("the end at the limit") {
+                for await event in session.events { if case .ended(let audio) = event { return audio } }
+                return nil
+            } ?? nil
+        #expect(ended?.ending == .limitReached, "The recording ended by itself.")
+        // A stop after the end returns once the whole end has run, the recorder's own bookkeeping
+        // included, so that recovery below never meets the recording as this launch's.
+        let audio = try #require(await SuiteWait.value("the stop after the end") { await session.stop() })
+        #expect(audio == ended, "A stop after the end returns it.")
+        let stopping = request(launch)
+        let second = try await recorder.start(stopping)
+        let stopped = try #require(await SuiteWait.value("the stop") { await second.stop() })
+        #expect(stopped.ending == .stopped)
+
+        // What the drive holds: each manifest keeps its end, and the first why.
+        let reasons: [(RecordingRequest, RecordingEndReason?)] = [(limited, .limitReached), (stopping, nil)]
+        for (request, reason) in reasons {
+            let bytes = subject.read(subject.locations.recordingManifest(request.captureID))
+            let manifest = try #require(bytes.flatMap { try? CaptureManifest.decode($0) }, "The manifest reads.")
+            #expect(manifest.endedAt != nil, "The manifest keeps the end.")
+            #expect(manifest.recordingEnding == reason, "And why, when the recording ended by itself.")
+        }
+
+        // The launch dies before either is converted: the next one finds both, each with its ending.
+        let orphans = try await recorder.recoverOrphans(currentLaunch: Identifier(uuid: UUID()))
+        let found = orphans.first { $0.captureID == limited.captureID }
+        #expect(found?.ending == .limitReached, "It comes back with why it ended: \(String(describing: found)).")
+        #expect(found?.workingFile == audio.workingFile && found?.frames == audio.frames, "Read to its end.")
+        #expect(orphans.first { $0.captureID == stopping.captureID }?.ending == .stopped, "A stop keeps none.")
+        for request in [limited, stopping] { try await recorder.removeWorkingFile(of: request.captureID) }
+    }
+
     /// An orphan whose working file is on the drive and cannot be read is not returned and not
     /// removed, and it is returned whole once it can be read again: it is never taken for a
     /// recording with no audio (the review of the recorder's pull request 57).
@@ -494,6 +541,45 @@ public enum RecorderContract {
             !recovered.contains { $0.captureID == session.captureID }, "The current launch's recording is left alone.")
         #expect(recovered.allSatisfy { $0.ending == .recovered })
         #expect(await SuiteWait.value("the stop") { await session.stop() }?.ending == .stopped, "It records on.")
+    }
+}
+
+/// An orphan's ending as its manifest gives it, the rule of `Recorder.recoverOrphans`, case by
+/// case: the reason the manifest keeps, as the ending it names; `stopped` for the end's time with
+/// no reason, and for a reason this build does not know, with or without the end's time, since the
+/// recording ended and this build cannot say why; `recovered` with neither, and with no manifest
+/// that can be read. Each recorder's own reading of its manifest is tested against these.
+public enum OrphanEndingCases {
+    public struct Case: Sendable {
+        public let manifest: CaptureManifest?
+        public let ending: RecordingEnding
+        public let why: String
+    }
+
+    public static var all: [Case] {
+        let start = Date(timeIntervalSince1970: 1_795_000_000)
+        let request = RecordingRequest(
+            captureID: Identifier(uuid: UUID()), launchID: Identifier(uuid: UUID()),
+            origin: CaptureOrigin(source: .device(Identifier(uuid: UUID())), surface: .control))
+        func manifest(_ reason: RecordingEndReason?, ended: Bool) -> CaptureManifest {
+            var manifest = request.manifest(startedAt: start)
+            manifest.endedAt = ended ? start.addingTimeInterval(60) : nil
+            manifest.recordingEnding = reason
+            return manifest
+        }
+        let newer = RecordingEndReason.unknown("thermal_shutdown")
+        var cases = [
+            Case(manifest: manifest(newer, ended: true), ending: .stopped, why: "a newer reason, with the end"),
+            Case(manifest: manifest(newer, ended: false), ending: .stopped, why: "a newer reason, with no end"),
+            Case(manifest: manifest(nil, ended: true), ending: .stopped, why: "the end's time alone"),
+            Case(manifest: manifest(nil, ended: false), ending: .recovered, why: "neither"),
+            Case(manifest: nil, ending: .recovered, why: "no manifest"),
+        ]
+        for reason in RecordingEndReason.allCases {
+            guard let ending = RecordingEnding(reason) else { continue }
+            cases.append(Case(manifest: manifest(reason, ended: true), ending: ending, why: reason.rawValue))
+        }
+        return cases
     }
 }
 

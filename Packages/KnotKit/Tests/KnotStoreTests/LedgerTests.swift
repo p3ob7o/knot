@@ -375,6 +375,61 @@ import Testing
         expectConsistent(database)
     }
 
+    /// Why a recording ended, set, leaves its segment's row for sync. Once the log is drained, as
+    /// an upload drains it, the same reason again and each refused set leave none: no segment, a
+    /// typed one, an open recording, a later piece and a conflict copy (pull request 128's review).
+    @Test func aReasonLeavesItsRowAndARepeatOrARefusalNone() async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        let clock = FakeClock(Captures.base)
+        let ids = SeededIDGenerator(seed: 507, clock: clock)
+        let database = try openStore(in: folders.make(), clock: clock, ids: ids)
+        let notes = NoteRepository(database: database)
+        let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
+        let stored = try await AssetRepository(locations: database.locations, database: database)
+            .place(Data("synthetic recording bytes".utf8), as: ids.make(), kind: .audio)
+        let voice = try await notes.record(
+            capture(naming: stored, ids: ids, device: database.deviceID, at: captures.at(1)))
+        let segment = voice.segmentIDs[0]
+        let typed = try await notes.record(captures.typed("one two", from: 2, to: 2.5))
+        let open = NewCapture(
+            id: ids.make(), kind: .voice, origin: CaptureOrigin(source: .device(database.deviceID), surface: .app),
+            launchID: captures.launch, placement: .newNote, startedAt: captures.at(3), body: .none)
+        _ = try await notes.record(open)
+        // A later piece and a conflict copy of a voice capture, as sync could bring them.
+        let note: NoteID = ids.make()
+        let first = try Build.voice(
+            ids.make(), in: note, from: captures.at(10), transcript: "synthetic words", device: database.deviceID)
+        var later = try Build.voice(
+            ids.make(), in: note, from: captures.at(10), transcript: "more words", device: database.deviceID)
+        later.piece = 1
+        later.pieceOf = first.id
+        var copy = try Build.voice(
+            ids.make(), in: note, from: captures.at(10), transcript: "words, elsewhere", device: database.deviceID)
+        copy.conflictOf = first.id
+        try await notes.seed([
+            NoteRecord(
+                note: Build.note(note, at: captures.at(10)), segments: [first, later, copy],
+                storeID: database.storeID, generation: database.generation)
+        ])
+        func drain() async throws {
+            try await database.pool.write { db in try db.execute(sql: "DELETE FROM change_log") }
+        }
+
+        try await drain()
+        try await notes.setRecordingEnding(.interrupted, of: segment)
+        let set = try await Self.changeLog(database)
+        #expect(set.filter { $0.hasPrefix("segment ") } == ["segment \(segment)"], "A reason set: \(set)")
+        try await drain()
+        try await notes.setRecordingEnding(.interrupted, of: segment)
+        for refused in [ids.make(), typed.segmentIDs[0], SegmentID(open.id), later.id, copy.id] {
+            await #expect(throws: KnotError.self) { try await notes.setRecordingEnding(.limitReached, of: refused) }
+        }
+        let left = try await Self.changeLog(database)
+        #expect(left.isEmpty, "The same reason again and each refused set leave no row: \(left)")
+        expectConsistent(database)
+    }
+
     /// History older than the purge's date goes: text the command line replaced is kept for
     /// 30 days and no longer.
     @Test func aPurgeRemovesOldHistory() async throws {

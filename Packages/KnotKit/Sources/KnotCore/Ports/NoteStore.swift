@@ -216,9 +216,10 @@ public protocol NoteStore: Sendable {
     func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor
 
     /// "Remove recording" (docs/product-spec.md §7): keeps a voice segment's text and removes
-    /// its recording's row, and the recording's peaks with it. Returns the asset whose file the
-    /// caller then removes through the `AssetStore`. Refused while the capture is open;
-    /// `not_found` when it has no recording; `remove_recording_refused_no_text` until the
+    /// its recording's row, and the recording's peaks with it. Why the recording ended
+    /// (`Segment.recordingEnding`) stays, since it says why the text stops. Returns the asset
+    /// whose file the caller then removes through the `AssetStore`. Refused while the capture is
+    /// open; `not_found` when it has no recording; `remove_recording_refused_no_text` until the
     /// segment has text, since the recording is then all there is and its transcribe job still
     /// needs it.
     func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset
@@ -247,6 +248,24 @@ public protocol NoteStore: Sendable {
     /// It came after the second pull request merged, so it has a default implementation that
     /// answers `port_unavailable`.
     func peaks(of segment: SegmentID) async throws(KnotError) -> Data?
+
+    /// Keeps why a voice segment's recording ended, when it did not end at its control
+    /// (`Segment.recordingEnding`, docs/product-spec.md §4.2 and §4.5). A value that differs from
+    /// the one held is a change of the segment: its note takes the counter's next value, so the
+    /// cursor moves, and sync sends the segment again; the segment's own revision does not rise,
+    /// since the reason is not its text. The same value again changes nothing. A deleted segment,
+    /// in its 30 days, takes it as a live one does, and "Remove recording" keeps it.
+    ///
+    /// Refused, with nothing written: `not_found` for no segment; `illegal_transition` for a
+    /// segment that is not a voice segment, for a later piece of its capture and for a conflict
+    /// copy, since the reason is kept on a capture's first piece, and for a segment whose capture
+    /// is open. A caller never fails, ends or waits a capture on it, and calls it before
+    /// `Recorder.removeWorkingFile(of:)`, so that a death between the two leaves the manifest that
+    /// keeps the reason.
+    ///
+    /// It came after the second pull request merged, so it has a default implementation that
+    /// answers `port_unavailable`.
+    func setRecordingEnding(_ reason: RecordingEndReason, of segment: SegmentID) async throws(KnotError)
 
     /// Clears the marks of late arrivals in one note, which the note view does when it opens.
     /// It is local and changes no revision.
@@ -350,6 +369,11 @@ extension NoteStore {
 
     /// The default of an operation added after the second pull request: not there yet.
     public func peaks(of segment: SegmentID) async throws(KnotError) -> Data? {
+        throw KnotError.portUnavailable.with(.init(segmentID: segment))
+    }
+
+    /// The default of an operation added after the second pull request: not there yet.
+    public func setRecordingEnding(_ reason: RecordingEndReason, of segment: SegmentID) async throws(KnotError) {
         throw KnotError.portUnavailable.with(.init(segmentID: segment))
     }
 }

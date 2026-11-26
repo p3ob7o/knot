@@ -72,6 +72,14 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     /// Ink only: what produced the recognised text. A stored property with a default, so that
     /// no initialiser written before it changes.
     public var recognition: RecognitionProvenance? = nil
+    /// Voice only, synced: why the recording ended, when it did not end at its control
+    /// (docs/product-spec.md §4.2 and §4.5), set by `NoteStore.setRecordingEnding(_:of:)` once
+    /// the capture is no longer open. `nil` for a recording stopped at its control or discarded,
+    /// and for every other kind. It is kept on a capture's first piece, and a conflict copy, which
+    /// holds text only, has none: the store refuses it for either. "Remove recording" keeps it,
+    /// since it says why the text stops.
+    /// A stored property with a default, as `recognition` is.
+    public var recordingEnding: RecordingEndReason? = nil
     /// Voice only, synced: the device that runs the segment's jobs.
     public var processingOwner: DeviceID?
     /// Voice only, synced: rises each time the work moves to another device.
@@ -173,6 +181,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         try container.encodeIfPresent(transcription, forKey: .transcription)
         try container.encodeIfPresent(cleanup, forKey: .cleanup)
         try container.encodeIfPresent(recognition, forKey: .recognition)
+        try container.encodeIfPresent(recordingEnding, forKey: .recordingEnding)
         try container.encodeIfPresent(processingOwner, forKey: .processingOwner)
         try container.encode(ownerGeneration, forKey: .ownerGeneration)
         try container.encodeIfPresent(arrivedAt, forKey: .arrivedAt)
@@ -189,7 +198,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, noteID, kind, noteGeneration, origin, startedAt, endedAt, text, textOrigin, rawTranscript
         case transcription, cleanup, processingOwner, ownerGeneration, arrivedAt, state, assetID, duration
-        case conflictOf, deletedAt, revision, piece, pieceOf, recognition
+        case conflictOf, deletedAt, revision, piece, pieceOf, recognition, recordingEnding
     }
 
     /// Decodes a segment, and refuses one whose text or raw transcript is past the size
@@ -218,6 +227,7 @@ public struct Segment: Hashable, Sendable, Codable, Identifiable {
         self.transcription = try container.decodeIfPresent(TranscriptionProvenance.self, forKey: .transcription)
         self.cleanup = try container.decodeIfPresent(CleanupProvenance.self, forKey: .cleanup)
         self.recognition = try container.decodeIfPresent(RecognitionProvenance.self, forKey: .recognition)
+        self.recordingEnding = try container.decodeIfPresent(RecordingEndReason.self, forKey: .recordingEnding)
         self.processingOwner = try container.decodeIfPresent(DeviceID.self, forKey: .processingOwner)
         self.ownerGeneration = try container.decode(Int.self, forKey: .ownerGeneration)
         self.arrivedAt = try container.decodeIfPresent(Date.self, forKey: .arrivedAt)
