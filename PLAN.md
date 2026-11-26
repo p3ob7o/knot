@@ -62,6 +62,8 @@ These are Paolo's. D1 to D31 are from 2026-11-18, and D32 to D36 from 2026-11-19
 | D35 | The one internal TestFlight upload of the SP-3 spike app is a planned part of G1. At G1 the owner creates an App Store Connect record for the development identifier and an API key, and hands the key over. The upload runs only then. Knot's own record, for `com.p3ob7o.knot`, is created by the owner at G5. |
 | D36 | The build Mac holds no real notes while the build runs. From the M4 milestone build the owner's real notes on a Mac live on his other Mac. |
 
+Beside D14: on 2026-11-26 Paolo asked for agents on GPT 6.2 Sol, the Codex provider's `gpt-6.2-sol`, to implement the design, and the implementers that build from the design round's handoff run on it. D14 holds for every other package, and whether later packages run on it too is his to say.
+
 ## 3. Open questions
 
 Q1 to Q8 were answered on 2026-11-18 and became D10 and D25 to D30. The owner answered the 34 assumptions of the product spec on 2026-11-19, and docs/product-spec.md §16 lists each with his answer.
@@ -415,6 +417,7 @@ Each UI package's build list names the cells it implements, from the state matri
 - Workspace: a new worktree from `origin/main`, on branch `wp/<number>-<slug>`. A PR stacked on unmerged work of its own package starts from that local branch instead. Stacking happens only inside one package.
 - Builds: tests and agent builds use a local build configuration that keeps the sandbox and leaves out the entitlements that need the owner's signing profile, with sync off. The signing team's ID stays out of the repository: `KNOT_LOCAL_CONFIG` names the local file that holds it, beside `KNOT_LOCAL_FIXTURES`.
 - Model: `claude-opus-5-5`. Effort `high` by default, and `xhigh` for WP-10, WP-12 and WP-16, where a mistake loses data.
+- The implementers that build from the design round's handoff run otherwise, as §2 says below its table: on `gpt-6.2-sol` at effort `high`, as delegated tasks in worktrees of their own. `docs/orchestrator.md` says how they are launched.
 - Every thread started for an agent exports `KNOT_AGENT=1`.
 - First message: the prompt in Appendix B.
 
@@ -546,7 +549,7 @@ His sittings come to about 18 hours across the build, including the repeat sitti
 
 - A checklist longer than 20 rows is split into two sittings.
 - Gate G3 is the owner's sitting for confirming the spikes' decisions, and each spike is confirmed on its own.
-- A spike or milestone sitting starts when `scripts/install.sh` has reported success. SP-1 and SP-2 each record the install procedure that worked on the iPhone and on the Watch, and the orchestrator corrects the script from those reports.
+- A spike or milestone sitting starts when `scripts/install.sh` has reported success. A checklist's rows that settle what an install replaces come before the install, which follows on the owner's word. SP-1 and SP-2 each record the install procedure that worked on the iPhone and on the Watch, and the orchestrator corrects the script from those reports.
 - The owner installed the release Xcode 27.2 (27B52) beside the beta on 2026-11-19, and WP-01 pins it in `.xcode-version`: it is the Xcode for the merge gate and for the archive.
 - Without Automation Mode and developer mode, Mac UI tests wait on a password dialog that no agent can answer.
 - An API key is requested through the secret prompt and never pasted into a thread. It is handed over for one upload and revoked after it, and each upload needs the owner's word.
