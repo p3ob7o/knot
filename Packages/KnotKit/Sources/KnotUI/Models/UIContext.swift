@@ -52,7 +52,7 @@ public enum FirstRunSync: Hashable, Sendable {
     /// The line the empty stream shows, or `nil` for none.
     public var line: String? {
         switch self {
-        case .on: localized("Sync is on. You can turn it off in Settings.")
+        case .on: localized("iCloud sync is on. You can turn it off in Settings.")
         case .offByPerson, .notAvailable: nil
         }
     }

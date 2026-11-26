@@ -155,25 +155,79 @@ public struct FirstRunView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing.loose) {
-            Text("No notes yet", bundle: .module)
-                .font(theme.type[.rowTitle])
-            if let line = content.syncLine {
-                Text(line)
-                    .font(theme.type[.banner])
-                    .foregroundStyle(theme.colors[.textSecondary])
+        #if os(iOS)
+            VStack(alignment: .leading, spacing: theme.spacing.space1) {
+                Text("No notes yet.", bundle: .module)
+                    .font(theme.type[.body])
+                if let line = content.syncLine {
+                    Label(line, systemImage: "icloud")
+                        .font(theme.type[.metaLine])
+                        .foregroundStyle(theme.colors[.textSecondary])
+                }
             }
             ForEach(content.setupRows) { row in
-                Banner(
-                    row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } },
-                    openAccessibilityLabel: row == .actionButton
-                        ? String(localized: "Set up Action Button recording", bundle: .module) : nil
-                ) {
+                HStack(spacing: theme.spacing.space2) {
+                    if let onOpen {
+                        Button {
+                            onOpen(row)
+                        } label: {
+                            setupLabel(row)
+                                .frame(maxWidth: .infinity, minHeight: theme.sizes.hitTarget, alignment: .leading)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(openLabel(row))
+                    } else {
+                        setupLabel(row)
+                        Spacer()
+                    }
                     dismiss(row)
                 }
             }
-        }
+        #else
+            VStack(alignment: .leading, spacing: theme.spacing.loose) {
+                Text("No notes yet", bundle: .module)
+                    .font(theme.type[.rowTitle])
+                if let line = content.syncLine {
+                    Text(line)
+                        .font(theme.type[.banner])
+                        .foregroundStyle(theme.colors[.textSecondary])
+                }
+                ForEach(content.setupRows) { row in
+                    Banner(
+                        row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } },
+                        openAccessibilityLabel: row == .actionButton
+                            ? String(localized: "Set up Action Button recording", bundle: .module) : nil
+                    ) {
+                        dismiss(row)
+                    }
+                }
+            }
+        #endif
     }
+
+    #if os(iOS)
+        private func setupLabel(_ row: SetupRow) -> some View {
+            let icon: String =
+                switch row {
+                case .actionButton: "button.programmable"
+                case .lockScreenControl: "lock"
+                case .watchComplication: "applewatch"
+                }
+            return Label(row.title, systemImage: icon)
+                .font(theme.type[.body])
+                .foregroundStyle(theme.colors[.textPrimary])
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        private func openLabel(_ row: SetupRow) -> Text {
+            if row == .actionButton {
+                Text("Set up Action Button recording", bundle: .module)
+            } else {
+                Text(row.title)
+            }
+        }
+    #endif
 
     private func dismiss(_ row: SetupRow) -> some View {
         Button {
@@ -181,7 +235,7 @@ public struct FirstRunView: View {
         } label: {
             Image(systemName: "xmark")
                 #if os(iOS)
-                    .padding(theme.spacing.loose)
+                    .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
                     .contentShape(.rect)
                 #endif
         }

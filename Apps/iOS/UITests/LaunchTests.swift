@@ -241,7 +241,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     func testAuditsTheFirstRunAndSettingsScreens() throws {
         let app = KnotLauncher.launch(.preview)
         app.buttons["shell.notes"].tap()
-        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        XCTAssertTrue(app.staticTexts["No notes yet."].waitForExistence(timeout: limit))
         XCTAssertTrue(app.buttons["Dismiss Add a Lock Screen control"].exists)
         try XCTContext.runActivity(named: "Audit first-run Notes") { _ in try app.auditAccessibility() }
 
@@ -277,7 +277,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     func testFirstRunSetupRowOpensItsSheet() throws {
         let app = KnotLauncher.launch(.preview)
         app.buttons["shell.notes"].tap()
-        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        XCTAssertTrue(app.staticTexts["No notes yet."].waitForExistence(timeout: limit))
         app.buttons["Add a Lock Screen control"].tap()
         XCTAssertTrue(app.navigationBars["Add a Lock Screen control"].waitForExistence(timeout: limit))
         try app.auditAccessibility()

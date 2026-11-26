@@ -218,7 +218,7 @@ import Testing
             environment: rig.environment, context: rig.context(sync: .available(signedInToICloud: true)),
             setupRows: [.actionButton, .lockScreenControl, .watchComplication])
         await on.load()
-        #expect(on.firstRun?.syncLine == "Sync is on. You can turn it off in Settings.")
+        #expect(on.firstRun?.syncLine == "iCloud sync is on. You can turn it off in Settings.")
         #expect(on.firstRun?.setupRows == [.actionButton, .lockScreenControl, .watchComplication])
 
         // Not available in this build, as for an agent's local configuration: nothing about sync.
