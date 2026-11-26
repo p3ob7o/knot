@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Segment states and notices</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#000000}a:hover{color:#3C3C43}
+</style>
+</helmet>
+<div style="width: 910px; height: 800px; box-sizing: border-box; padding: 40px; background: #FFFFFF; color: #000000; font-family: -apple-system, 'SF Pro Text', 'SF Pro', system-ui, sans-serif; -webkit-font-smoothing: antialiased; display: grid; grid-template-columns: 240px minmax(0, 1fr) 250px; column-gap: 36px; align-items: start;">
+
+  <section style="display: flex; flex-direction: column; gap: 20px;">
+    <h2 style="margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: rgba(60,60,67,0.6);">Segment states</h2>
+
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-size: 17px; line-height: 22px; letter-spacing: -0.43px;">Call the framer about the big print.</div>
+      <div style="font-size: 13px; line-height: 18px; color: rgba(60,60,67,0.3);">Ready shows no line.</div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6" width="11" height="12" rx="3.2"></rect><path d="M9 6l.6-3h4.8l.6 3M9 18l.6 3h4.8l.6-3"></path></svg>
+      <span>Saved on the Watch</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"></circle><circle cx="16" cy="12" r="1" fill="currentColor" stroke="none"></circle></svg>
+      <span>Saved, text on its way</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5"></rect><path d="M2.5 18.5h19"></path></svg>
+      <span>Saved, text being made elsewhere</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: #C55300;">
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3.2L2.4 20.2h19.2z" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path><path d="M12 9.5v4.8" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"></path><circle cx="12" cy="17.2" r="1.2" fill="#FFFFFF"></circle></svg>
+      <span>Needs you</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10v4"></path></svg>
+      <span>Kept, no text</span>
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto; margin-top: 2px;"><circle cx="12" cy="12" r="9"></circle><path d="M12 7.5v8M8.5 12.5L12 16l3.5-3.5"></path></svg>
+      <span>Made by a newer Knot. Update Knot to see it.</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3"></rect><path d="M7 10l3 2-3 2M12.5 15H17"></path></svg>
+      <span>Added by an assistant</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 4px; font-size: 13px; line-height: 18px; letter-spacing: -0.08px; color: rgba(60,60,67,0.6);">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4M8 7v6M12 4v6M16 8v8M20 10v4M3.5 3.5l17 17"></path></svg>
+      <span>Recording missing</span>
+    </div>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 12px;">
+    <h2 style="margin: 0 0 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: rgba(60,60,67,0.6);">Notices</h2>
+
+    <div style="padding: 12px 16px; border-radius: 16px; background: rgba(118,118,128,0.12); display: flex; align-items: flex-start; gap: 12px;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#C55300" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto;"><path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"></path><path d="M12 9.5v4"></path><circle cx="12" cy="16" r="0.6" fill="#C55300"></circle></svg>
+      <div style="flex: 1 1 auto; font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">Knot can’t read your notes. Nothing was deleted.</div>
+    </div>
+
+    <div style="padding: 12px 12px 12px 16px; border-radius: 16px; background: rgba(118,118,128,0.12); display: flex; align-items: center; gap: 12px;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto;"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"></path></svg>
+      <div style="flex: 1 1 auto; font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">This note was deleted on another device.</div>
+      <button type="button" style="height: 32px; padding: 0 14px; border: none; border-radius: 999px; background: rgba(118,118,128,0.16); color: #000000; font: 600 15px/20px -apple-system, 'SF Pro Text', system-ui, sans-serif; white-space: nowrap;">Restore</button>
+    </div>
+
+    <div style="padding: 12px 12px 12px 16px; border-radius: 16px; background: rgba(118,118,128,0.12); display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; align-items: flex-start; gap: 12px;">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto;"><path d="M19.5 10A7.5 7.5 0 0 0 6 6.5L4.5 8M4.5 4v4h4M4.5 14A7.5 7.5 0 0 0 18 17.5l1.5-1.5M19.5 20v-4h-4"></path></svg>
+        <div style="flex: 1 1 auto; font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">This text changed elsewhere while you edited it.</div>
+      </div>
+      <div style="display: flex; gap: 8px; padding-left: 32px;">
+        <button type="button" style="height: 32px; padding: 0 14px; border: none; border-radius: 999px; background: rgba(118,118,128,0.16); color: #000000; font: 600 15px/20px -apple-system, 'SF Pro Text', system-ui, sans-serif;">Keep mine</button>
+        <button type="button" style="height: 32px; padding: 0 14px; border: none; border-radius: 999px; background: rgba(118,118,128,0.16); color: #000000; font: 600 15px/20px -apple-system, 'SF Pro Text', system-ui, sans-serif;">Keep the new text</button>
+      </div>
+    </div>
+
+    <div style="padding: 12px 16px; border-radius: 16px; background: rgba(118,118,128,0.12); display: flex; align-items: flex-start; gap: 12px;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#C55300" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto;"><rect x="9" y="3" width="6" height="11.5" rx="3"></rect><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M4 4l16 16"></path></svg>
+      <div style="flex: 1 1 auto; font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">Knot can’t use the microphone. You can allow it in Settings.</div>
+    </div>
+
+    <div style="padding: 12px 12px 12px 16px; border-radius: 16px; background: rgba(118,118,128,0.12); display: flex; align-items: center; gap: 12px;">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 auto;"><path d="M12 3v9M8.5 8.5L12 12l3.5-3.5"></path><path d="M3.5 14h4.5l1.2 3h5.6l1.2-3h4.5v4.5A1.5 1.5 0 0 1 19 20H5a1.5 1.5 0 0 1-1.5-1.5z"></path></svg>
+      <div style="flex: 1 1 auto; font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">A capture arrived.</div>
+      <button type="button" style="height: 32px; padding: 0 14px; border: none; border-radius: 999px; background: rgba(118,118,128,0.16); color: #000000; font: 600 15px/20px -apple-system, 'SF Pro Text', system-ui, sans-serif;">Show</button>
+    </div>
+
+    <h2 style="margin: 24px 0 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: rgba(60,60,67,0.6);">Undo</h2>
+    <div style="align-self: flex-start; height: 48px; box-sizing: border-box; padding: 0 8px 0 16px; border-radius: 999px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.86); box-shadow: 0 2px 14px rgba(0,0,0,0.12); display: flex; align-items: center; gap: 10px;">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></svg>
+      <span style="font-size: 16px; line-height: 21px; letter-spacing: -0.31px;">Segment deleted</span>
+      <button type="button" style="height: 36px; padding: 0 14px; border: none; border-radius: 999px; background: transparent; color: #000000; font: 600 16px/21px -apple-system, 'SF Pro Text', system-ui, sans-serif;">Undo</button>
+    </div>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 12px;">
+    <h2 style="margin: 0 0 8px; font-size: 13px; line-height: 18px; font-weight: 600; color: rgba(60,60,67,0.6);">Segment menu</h2>
+    <div style="padding: 10px 12px; margin: 0 -12px; border-radius: 10px; background: rgba(118,118,128,0.12); font-size: 17px; line-height: 22px; letter-spacing: -0.43px;">Three minutes on what goes wrong when a thought has nowhere to land.</div>
+    <div role="menu" aria-label="Segment actions" style="margin-top: 4px; border-radius: 22px; border: 0.5px solid rgba(0,0,0,0.08); background: rgba(250,250,252,0.94); box-shadow: 0 8px 30px rgba(0,0,0,0.16); padding: 6px 0; display: flex; flex-direction: column;">
+      <sc-for list="{{actions}}" as="a" hint-placeholder-count="6">
+        <button type="button" role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 0 18px; border: none; background: transparent; color: {{a.color}}; text-align: left; font: 400 17px/22px -apple-system, 'SF Pro Text', system-ui, sans-serif; letter-spacing: -0.43px;">
+          <span>{{a.label}}</span>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{a.path}}"></path></svg>
+        </button>
+      </sc-for>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":910,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ink = '#000000';
+    return {
+      actions: [
+        { label: 'Play', color: ink, path: 'M7.5 5v14l11-7z' },
+        { label: 'Show original', color: ink, path: 'M6 3.5h8l4 4v13H6zM14 3.5v4h4M9 12h6M9 15.5h6' },
+        { label: 'Move to its own note', color: ink, path: 'M5 3.5h9v17H5zM12 12h9M18 9l3 3-3 3' },
+        { label: 'Share…', color: ink, path: 'M12 3.5v11M8.5 7L12 3.5 15.5 7M7 10.5H5.5v10h13v-10H17' },
+        { label: 'Remove recording', color: ink, path: 'M4 10v4M8 7v6M12 4v6M16 8v8M20 10v4M3.5 3.5l17 17' },
+        { label: 'Delete', color: '#FF3B30', path: 'M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

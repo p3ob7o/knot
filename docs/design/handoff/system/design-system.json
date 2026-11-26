@@ -1,0 +1,49 @@
+{
+  "v": 3,
+  "assetGroups": {
+    "Logos": {
+      "files": {
+        "knot-mark-white.svg": {
+          "blob": "a3f8348b9eb0e679997928bd9e95a246",
+          "name": "knot-mark-white.svg",
+          "size": 1273,
+          "type": "image/svg+xml"
+        },
+        "knot-mark.svg": {
+          "blob": "d0d822d66cc993ff51988aeac8bd4df0",
+          "name": "knot-mark.svg",
+          "size": 1273,
+          "type": "image/svg+xml"
+        }
+      },
+      "name": "Logos",
+      "order": [
+        "knot-mark.svg",
+        "knot-mark-white.svg"
+      ],
+      "tile": "l"
+    }
+  },
+  "blobs": {},
+  "createdOnFiles": {
+    "at": "2026-11-25T01:23:24Z",
+    "v": 1
+  },
+  "docs": {
+    "sections": []
+  },
+  "groups": [
+    "Logos"
+  ],
+  "lastChange": {
+    "at": "2026-11-25T01:23:24Z",
+    "by": "Paolo Belcastro",
+    "note": "First version: HIG-native tokens, brand book, 15 components, the mark.",
+    "via": "Cowork"
+  },
+  "layout": "files",
+  "libraries": [],
+  "namespace": "Knot",
+  "sections": {},
+  "title": "Knot"
+}
