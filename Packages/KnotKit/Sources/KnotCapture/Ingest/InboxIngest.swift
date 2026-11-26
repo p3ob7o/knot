@@ -321,7 +321,8 @@ public actor InboxIngest {
             // item is the reason's only copy on a drive: a death before the set leaves the item,
             // and the next run sets the same reason again, which writes nothing. A refusal is
             // logged and dropped, and the item goes all the same (the review of pull request 130,
-            // B1).
+            // B1). Known: the two sets wait with no deadline, as the peaks' did before them, so a
+            // store call that never returns holds the ingest run, and now the item with it.
             await peaks.keep(manifest.peaks ?? peaks.fromFile(id, frames: manifest.revision), of: id)
             await endings.keep(manifest.recordingEnding, of: id)
         }

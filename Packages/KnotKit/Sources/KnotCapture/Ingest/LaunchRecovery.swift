@@ -208,7 +208,7 @@ public struct LaunchRecovery: Sendable {
                 converted = try await recorder.convert(recording)
             } catch {
                 guard let row else { return nil }
-                return try await failConversion(row, recording, error.about(capture: id))
+                return try await failConversion(row, recording, error.about(capture: id), reason: reason)
             }
             // The file of an earlier conversion may be there already: a death between the move and
             // the end leaves it, and this conversion's bytes differ from it (WP-11b).
@@ -292,12 +292,32 @@ public struct LaunchRecovery: Sendable {
     /// never marked: an unmarked manifest (`recording_manifest_not_marked`) reads as `recovered`
     /// through the recorder's port, and says nothing of how a recording that ended alive ended.
     ///
+    /// Where recovery itself ends, as failed, a capture that the launch found with no end, it sets
+    /// the reason it decided on the segment right after that end (`failConversion`,
+    /// `finishWithoutRow`, `finishWithoutFile`): a later launch then finds the reason on the
+    /// segment, and the store's end of that row, stored at last, leaves it.
+    ///
+    /// Known, and left (the second round of review of pull request 130): a death between
+    /// recovery's own end, failed or stored, and its set. The next launch then finds a row with an
+    /// end, an unmarked manifest and no reason on the segment, and keeps none. It needs two deaths
+    /// in a row, the second within a few milliseconds.
+    ///
     /// A reason that a newer build wrote reads as a stop through the recorder's port, as pull
     /// request 128 ruled, so recovery keeps none for it.
     private static func reason(of recording: RecordedAudio, row: Capture?) -> RecordingEndReason? {
         guard let reason = RecordingEndReason(recording.ending) else { return nil }
         if reason == .recovered, let row, row.outcome != .open { return nil }
         return reason
+    }
+
+    /// Why a recording whose working file could not be read ended, read from its manifest as the
+    /// recorder's port reads an orphan's (`Recorder.recoverOrphans`): the reason the manifest keeps,
+    /// none for an end's time alone or for a reason this build does not know, and `recovered` when
+    /// it has neither or cannot be read. Only a row that the launch found open comes here.
+    private static func orphanReason(_ manifest: CaptureManifest?) -> RecordingEndReason? {
+        guard let manifest else { return .recovered }
+        if let reason = manifest.recordingEnding { return reason.isUnknown ? nil : reason }
+        return manifest.endedAt == nil ? .recovered : nil
     }
 
     /// Keeps why a stored recording ended, unless its segment holds a reason already: a death came
@@ -316,15 +336,19 @@ public struct LaunchRecovery: Sendable {
     }
 
     /// Ends the row of a recording whose audio will not convert as failed with the error's
-    /// code. The working file and its manifest stay.
-    private func failConversion(_ row: Capture, _ recording: RecordedAudio, _ error: KnotError) async throws(KnotError)
-        -> Outcome
-    {
+    /// code. The working file and its manifest stay. A row that the launch found open had no end
+    /// before this one: its segment takes `reason`, the one recovery decided for it, right after
+    /// the end, so that the launch that stores it later, finding a row with an end, still finds
+    /// the reason on the segment (the review of pull request 130, B3).
+    private func failConversion(
+        _ row: Capture, _ recording: RecordedAudio, _ error: KnotError, reason: RecordingEndReason?
+    ) async throws(KnotError) -> Outcome {
         if row.outcome == .open || row.awaitsItsFile {
             _ = try await notes.end(
                 CaptureEnd(
                     captureID: row.id, endedAt: row.startedAt.addingTimeInterval(seconds(recording.duration)),
                     outcome: .failed(error.code), revision: max(row.revision, recording.frames)))
+            if row.outcome == .open { await endings.keep(reason, of: row.id) }
         }
         log.failure(error, "recording_not_converted")
         return .ended(.failed(error.code))
@@ -356,7 +380,10 @@ public struct LaunchRecovery: Sendable {
                     body: .none, revision: 0,
                     shownNote: manifest.shownNoteID))
             guard let row = try await notes.capture(id) else { return .kept(KnotError.notFound.code) }
-            return try await failConversion(row, recording, KnotError.conversionFailed.about(capture: id))
+            // The launch found no row: the reason is the one an orphan with no row has.
+            return try await failConversion(
+                row, recording, KnotError.conversionFailed.about(capture: id),
+                reason: Self.reason(of: recording, row: nil))
         } catch {
             log.failure(error.about(capture: id), "recording_not_recovered")
             return .kept(error.code)
@@ -396,6 +423,12 @@ public struct LaunchRecovery: Sendable {
         do throws(KnotError) {
             let receipt = try await notes.end(end)
             log.capture(row.id, "capture_recovered")
+            if row.kind == .voice, case .failed = end.outcome {
+                // The row was open, with no end: its segment takes the reason recovery decided, right
+                // after the end, read from the recorder's manifest as the port reads an orphan's
+                // (the review of pull request 130, B3).
+                await endings.keep(Self.orphanReason(try? recordingManifest(row.id)), of: row.id)
+            }
             return .ended(receipt.outcome)
         } catch {
             log.failure(error.about(capture: row.id), "capture_not_recovered")

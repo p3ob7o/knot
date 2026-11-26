@@ -202,40 +202,104 @@ import Testing
     /// deadline, and a miss is what a refusal is. The end goes on with the row stored and the
     /// working file gone, and the held call lands once the store lets it go. The test runs the
     /// deadline out by hand.
+    ///
+    /// The end is the test's own call, on a recording that ended by itself before the engine heard
+    /// of it, so that the test can cancel the end's task once the deadline has run out: a set that
+    /// raced the deadline runs in a task of its own, which that cancels not; one that did not race
+    /// runs in the end's, and the held call sees the cancellation at once. No wait of the test then
+    /// waits out a limit, whichever way the code under it breaks.
     @Test func aHeldSetOfTheReasonNeverHoldsTheEnd() async throws {
         let r = Rig()
         r.recorder.setScript(.init(buffers: 3, endsBySelf: .interrupted))
-        let gate = Gate()
-        gate.close()
-        defer { gate.open() }
+        let held = HeldCall()
+        defer { held.release() }
         var store = ChaosStore(store: r.notes) {}
-        store.holdRecordingEnding = { await gate.pass() }
+        store.holdRecordingEnding = { await held.hold() }
         let manual = ManualDeadline()
-        let engine = BoundedEngine(
-            StandardCaptureEngine(
-                notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
-                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
-                deadline: manual.deadline, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs)))
-        let states = engine.states()
-        let begun = try await engine.begin(CaptureRequest(kind: .voice, surface: .app))
-        let id = begun.captureID
-        let workingFile = r.locations.recordingAudio(id, format: .caf)
-        // An end that never asks for the set removes the working file at once: the wait ends then.
+        let engine = StandardCaptureEngine(
+            notes: store, assets: r.assets, recorder: SteeredRecorder(r.recorder, quietEnd: true), queue: r.queue,
+            clock: r.clock, ids: r.ids, deviceID: r.deviceID, launchID: r.launchID, locations: r.locations,
+            layer: r.layer, deadline: manual.deadline, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs))
+        let id = try await r.beginRecording(on: BoundedEngine(engine)).captureID
         try #require(
-            await eventually("the set of the reason to be held, or the end to go on without it") {
-                gate.isHolding || !r.layer.exists(workingFile)
+            await eventually("the recording to end by itself") {
+                Self.recorderManifest(r, id)?.recordingEnding == .interrupted
             })
-        try #require(gate.isHolding, "The engine did not ask the store for the reason.")
-        try #require(await eventually("the set's deadline to wait") { manual.waitingCount > 0 })
+        let end = EndCall(engine, id)
+        defer { end.cancel() }
+        let workingFile = r.locations.recordingAudio(id, format: .caf)
+        try #require(
+            await eventually("the set of the reason to be held, or the end to return") {
+                held.isHolding || end.returned
+            })
+        try #require(held.isHolding, "The engine did not ask the store for the reason.")
+        try #require(await eventually("the set's deadline to wait") { manual.waitingCount > 0 || end.returned })
         manual.expire()
-        let state = try #require(await Self.ended(states, id))
+        end.cancel()
+        try #require(
+            await eventually("the end to return") { end.returned || held.wasCancelled || manual.waitingCount > 0 })
+        #expect(!held.wasCancelled, "The set did not race the deadline: it ran in the end's own task.")
+        let state = try #require(end.state, "The end did not return once the deadline ran out.")
         #expect(state.outcome == .stored)
         #expect(state.recordingEnding == .interrupted)
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(!r.layer.exists(workingFile), "The working file went before the end returned.")
         #expect(r.logs.lines.contains("recording_ending_not_kept capture=\(id) code=store_not_open"))
-        gate.open()
+        held.release()
         #expect(await eventually("the held call to land") { (try? await Self.held(r, id)) == .interrupted })
+    }
+
+    /// The review of pull request 130, F1. The peaks and the reason are set together, under one
+    /// deadline: with the store holding both, one deadline waits, and when it runs out, once, the
+    /// end returns, both logged as missed. Sets that each race a deadline of their own leave one
+    /// waiting after it, and so do sets one after the other, the second of which starts its own;
+    /// the test sees that at once.
+    @Test func thePeaksAndTheReasonShareOneDeadline() async throws {
+        let r = Rig()
+        r.recorder.setScript(.init(buffers: 3, endsBySelf: .limitReached))
+        let peaksCall = HeldCall()
+        let reasonCall = HeldCall()
+        defer {
+            peaksCall.release()
+            reasonCall.release()
+        }
+        var store = ChaosStore(store: r.notes) {}
+        store.holdPeaks = { await peaksCall.hold() }
+        store.holdRecordingEnding = { await reasonCall.hold() }
+        let manual = ManualDeadline()
+        let engine = StandardCaptureEngine(
+            notes: store, assets: r.assets, recorder: SteeredRecorder(r.recorder, quietEnd: true), queue: r.queue,
+            clock: r.clock, ids: r.ids, deviceID: r.deviceID, launchID: r.launchID, locations: r.locations,
+            layer: r.layer, deadline: manual.deadline, ingest: r.ingest, log: KnotLog(.capture, sink: r.logs))
+        let id = try await r.beginRecording(on: BoundedEngine(engine)).captureID
+        try #require(
+            await eventually("the recording to end by itself") {
+                Self.recorderManifest(r, id)?.recordingEnding == .limitReached
+            })
+        try r.layer.write(
+            RecordingPeaks(framesPerValue: 800, values: [10, 20, 30]).encoded(), to: r.locations.recordingPeaks(id))
+        try r.layer.syncFile(r.locations.recordingPeaks(id))
+        let end = EndCall(engine, id)
+        defer { end.cancel() }
+        // A set held and a deadline waiting: sets one after the other hold one at a time, so the
+        // wait does not ask for both.
+        try #require(
+            await eventually("a set to be held and a deadline to wait, or the end to return") {
+                ((peaksCall.isHolding || reasonCall.isHolding) && manual.waitingCount > 0) || end.returned
+            })
+        try #require(!end.returned, "The end returned while the store held its sets.")
+        manual.expireOne()
+        end.cancel()
+        try #require(
+            await eventually("the end to return") {
+                end.returned || manual.waitingCount > 0 || peaksCall.wasCancelled || reasonCall.wasCancelled
+            })
+        #expect(manual.waitingCount == 0, "Another deadline waits: the two sets do not share one.")
+        #expect(!peaksCall.wasCancelled && !reasonCall.wasCancelled, "A set did not race the deadline.")
+        let state = try #require(end.state, "The end did not return once the one deadline ran out.")
+        #expect(state.outcome == .stored)
+        #expect(r.logs.lines.contains("recording_peaks_not_kept capture=\(id) code=store_not_open"))
+        #expect(r.logs.lines.contains("recording_ending_not_kept capture=\(id) code=store_not_open"))
     }
 
     // MARK: The `Inbox/` path and ingest
@@ -338,8 +402,17 @@ import Testing
         let dying = InboxIngest(
             notes: store, assets: r.assets, recorder: r.recorder, queue: next.queue, clock: r.clock,
             launchID: next.launchID, locations: r.locations, layer: r.layer, log: KnotLog(.capture, sink: r.logs))
-        let run = Task { await dying.ingestAll() }
-        try #require(await eventually("the set of the reason to be held") { gate.isHolding })
+        let dyingEnded = Mutex(false)
+        let run = Task {
+            _ = await dying.ingestAll()
+            dyingEnded.withLock { $0 = true }
+        }
+        // A run that never asks for the reason ends: the wait ends then.
+        try #require(
+            await eventually("the set of the reason to be held, or the run to end") {
+                gate.isHolding || dyingEnded.withLock { $0 }
+            })
+        try #require(gate.isHolding, "Ingest did not ask the store for the reason.")
         #expect(try await r.notes.capture(id)?.outcome == .stored, "The row is stored.")
         #expect(r.layer.exists(r.locations.inboxManifest(id)), "The item is still there.")
         // The launch after it.
@@ -457,6 +530,45 @@ import Testing
         #expect(try await Self.held(r, id) == ending.flatMap { RecordingEndReason($0) })
         kill.release()
         if let stopping { _ = try await within("the dead launch's stop") { await stopping.value } }
+    }
+
+    /// How the first launch after a death fails to finish the recording it cut short.
+    enum FirstRecovery: CaseIterable, Sendable {
+        /// Its conversion fails, with its row open.
+        case conversionFails
+        /// Its working file cannot be read, as before the first unlock after a restart.
+        case fileUnreadable
+        /// Its conversion fails, and the store never took its row: recovery makes it.
+        case noRowAndConversionFails
+    }
+
+    /// The review of pull request 130, B3. A recording that a death cut short, which the first
+    /// launch after cannot finish: recovery ends its row as failed itself, and keeps `recovered` on
+    /// its segment right after. The launch after that finds a row with an end, keeps its own
+    /// reading of the orphan out, stores the recording, and the segment still says recovered: the
+    /// store's end of a failed row leaves the reason the segment holds.
+    @Test(arguments: FirstRecovery.allCases)
+    func aRecordingCutShortWhoseFirstRecoveryFailsStaysRecovered(_ first: FirstRecovery) async throws {
+        let r = Rig(engineIngests: false)
+        if first == .noRowAndConversionFails { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+        let recording = try await r.beginRecording()
+        let id = recording.captureID
+        try #require((recording.path == .store) == (first != .noRowAndConversionFails))
+        // The process dies here, mid-recording.
+        r.clock.advance(by: 5)
+        let workingFile = r.locations.recordingAudio(id, format: .caf)
+        switch first {
+        case .conversionFails, .noRowAndConversionFails: r.recorder.failNextConversions(with: .conversionFailed)
+        case .fileUnreadable: r.layer.setReadable(workingFile, false)
+        }
+        let next = r.relaunch()
+        let outcomes = try await Self.recover(next)
+        try #require(outcomes[id] == .ended(.failed(KnotError.conversionFailed.code)))
+        #expect(try await Self.held(r, id) == .recovered, "Recovery's own failed end keeps the reason it decided.")
+        r.layer.setReadable(workingFile, true)
+        let again = try await Self.recover(next.relaunch())
+        #expect(again[id] == .ended(.stored))
+        #expect(try await Self.held(r, id) == .recovered)
     }
 
     /// A recording that a death cut short, its row open: recovery stores it, and its segment says
@@ -746,4 +858,51 @@ final class SteeredSession: RecordingSession, Sendable {
     func stop() async -> RecordedAudio { await base.stop() }
 
     func discard() async { await base.discard() }
+}
+
+/// A store call that a test holds at a gate, which notes whether the task it runs in was cancelled
+/// while it waited there.
+final class HeldCall: Sendable {
+    private let gate = Gate()
+    private let cancelled = Mutex(false)
+
+    init() { gate.close() }
+
+    var isHolding: Bool { gate.isHolding }
+    var wasCancelled: Bool { cancelled.withLock { $0 } }
+
+    func hold() async {
+        await withTaskCancellationHandler {
+            await gate.pass()
+        } onCancel: {
+            cancelled.withLock { $0 = true }
+        }
+    }
+
+    func release() { gate.open() }
+}
+
+/// An end of a capture engine's, on a task of the test's own, which the test can cancel, and
+/// which says once it has returned.
+final class EndCall: Sendable {
+    private let answer = Mutex<Result<CaptureState, KnotError>?>(nil)
+    private let task = Mutex<Task<Void, Never>?>(nil)
+
+    init(_ engine: StandardCaptureEngine, _ capture: CaptureID) {
+        let started = Task { [self] in
+            let result: Result<CaptureState, KnotError>
+            do throws(KnotError) {
+                result = .success(try await engine.end(capture))
+            } catch {
+                result = .failure(error)
+            }
+            answer.withLock { $0 = result }
+        }
+        task.withLock { $0 = started }
+    }
+
+    var returned: Bool { answer.withLock { $0 != nil } }
+    var state: CaptureState? { answer.withLock { try? $0?.get() } }
+
+    func cancel() { task.withLock { $0 }?.cancel() }
 }

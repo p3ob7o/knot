@@ -3,6 +3,7 @@ import KnotCapture
 import KnotCore
 import KnotFakes
 import KnotTestSupport
+import Synchronization
 import Testing
 
 /// A stored recording keeps its level peaks (`NoteStore.setPeaks(_:of:)`, pull request 86).
@@ -98,11 +99,14 @@ import Testing
     /// miss is what a refusal is. So `end`, and a press that stops, return with the row stored, the
     /// working file gone and, for the press, one `saved` cue. The held call lands once the store
     /// lets it go, and the peaks are with the segment then. The test runs the deadline out by hand.
+    /// Each wait ends as soon as what it waits for can no longer come: the end that returns without
+    /// the hold, or without a deadline waiting, ends it (row 11g).
     @Test(arguments: [false, true])
     func aHeldSetOfThePeaksNeverHoldsTheEnd(byPress: Bool) async throws {
         let r = Rig()
         let gate = Gate()
         gate.close()
+        defer { gate.open() }
         var store = ChaosStore(store: r.notes) {}
         store.holdPeaks = { await gate.pass() }
         let manual = ManualDeadline()
@@ -128,12 +132,20 @@ import Testing
         try Self.writePeaks(r, id)
         r.clock.advance(by: 2)
         let clock = r.clock
+        let returned = Mutex(false)
         let ending = Task { () throws -> CaptureState? in
+            defer { returned.withLock { $0 = true } }
             if byPress { return try await engine.press(Press(.tap, at: clock.now())).stopped }
             return try await engine.end(id)
         }
-        #expect(await eventually("setPeaks to be held") { gate.isHolding })
-        await manual.expireNext()
+        try #require(
+            await eventually("setPeaks to be held, or the end to return") {
+                gate.isHolding || returned.withLock { $0 }
+            })
+        try #require(gate.isHolding, "The engine did not ask the store for the peaks.")
+        try #require(
+            await eventually("the set's deadline to wait") { manual.waitingCount > 0 || returned.withLock { $0 } })
+        manual.expire()
         let ended = try #require(try await ending.value)
         #expect(ended.outcome == .stored)
         #expect(try await r.notes.capture(id)?.outcome == .stored)
