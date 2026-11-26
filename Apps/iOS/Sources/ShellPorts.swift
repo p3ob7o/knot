@@ -10,6 +10,11 @@ final class IOSSurfaceRouter: SurfaceRouter {
     private var pending: SurfaceDestination?
     private var navigate: ((SurfaceDestination) async -> Void)?
 
+    func takePending() -> SurfaceDestination? {
+        defer { pending = nil }
+        return pending
+    }
+
     func attach(_ navigate: @escaping (SurfaceDestination) async -> Void) async {
         self.navigate = navigate
         if let pending {

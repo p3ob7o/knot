@@ -24,13 +24,14 @@ final class Shell {
     let player: PlayerViewModel
     /// The screens pushed from Notes.
     var path: [Screen] = []
-    var sheet: Sheet? = .capture
+    var sheet: Sheet?
     var isSearching = false
     var setupRow: SetupRow?
     private(set) var presentsCaptureAtLaunch = true
     private(set) var deletedNote: NoteViewModel?
     private(set) var syncStatus: SyncStatus = .off
     private var answeredSyncQuestion: SyncQuestion?
+    private var preparedLaunch = false
 
     enum Screen: Hashable {
         case note(NoteID)
@@ -122,14 +123,35 @@ final class Shell {
         Task { await environment.sync.answer(question, answer) }
     }
 
-    func attachRouter() async {
+    func prepareLaunch(_ destination: SurfaceDestination?) {
+        guard !preparedLaunch else { return }
+        preparedLaunch = true
+        switch destination {
+        case .search:
+            presentsCaptureAtLaunch = false
+            isSearching = true
+        case .note(let id):
+            presentsCaptureAtLaunch = false
+            path = [.note(id)]
+        default:
+            sheet = .capture
+        }
+    }
+
+    func connect(_ destination: SurfaceDestination?) async {
+        let pending = Self.surfaces.takePending()
+        prepareLaunch(destination ?? pending)
+        if !presentsCaptureAtLaunch { startLaunchSequence() }
         await Self.surfaces.attach { [weak self] destination in await self?.navigate(destination) }
     }
 
-    func openURL(_ url: URL) {
+    static func destination(for url: URL) -> SurfaceDestination? {
         let scheme = LiveConfiguration.currentFlavour() == .milestone ? "knot" : "knot-dev"
-        guard let destination = IOSDeepLink.destination(url, scheme: scheme) else { return }
-        Task { await Self.surfaces.open(destination) }
+        return IOSDeepLink.destination(url, scheme: scheme)
+    }
+
+    static func open(_ destination: SurfaceDestination) async {
+        await surfaces.open(destination)
     }
 
     private func navigate(_ destination: SurfaceDestination) async {
@@ -208,6 +230,7 @@ final class Shell {
 /// Notes is the window's root. The capture surface starts above it, already focused.
 struct ShellView: View {
     @Bindable var shell: Shell
+    @EnvironmentObject private var sceneDelegate: IOSSceneDelegate
 
     var body: some View {
         NavigationStack(path: $shell.path) {
@@ -308,10 +331,12 @@ struct ShellView: View {
                 shell.setupRow = nil
             }
         }
-        .task { await shell.attachRouter() }
+        .task(id: sceneDelegate.connection) {
+            guard let connection = sceneDelegate.connection else { return }
+            await shell.connect(connection.destination)
+        }
         .task { await shell.observeSync() }
         .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == nil))
-        .onOpenURL(perform: shell.openURL)
         .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in pulse?.feedback }
     }
 }
