@@ -235,8 +235,7 @@
                 if example == .live || example == .blocked {
                     (environment.recorder as? ScriptedRecorder)?.setScript(
                         .init(buffers: 30, interval: .milliseconds(30)))
-                    (environment.transcriber as? ScriptedTranscriber)?.scriptLive(
-                        words: ["Ask", "about", "the", "roof", "estimate."])
+                    environment.engine = PreviewLiveWords(base: engine)
                 }
                 let frozen = RecordingClock(
                     now: { .zero },
@@ -300,6 +299,42 @@
             {
                 for await _ in wait {}
                 return .ignored
+            }
+        }
+
+        /// The common preview engine emits audio levels. Supply sample words on that same
+        /// feed so the phone preview draws the real live transcript view.
+        private struct PreviewLiveWords: CaptureEngine {
+            let base: any CaptureEngine
+
+            func states() -> AsyncStream<CaptureState> { base.states() }
+            func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+                try await base.begin(request)
+            }
+            func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+                try await base.update(capture, with: content)
+            }
+            func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { try await base.end(capture) }
+            func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+                try await base.discard(capture)
+            }
+            func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+                -> RecordingPressOutcome
+            {
+                try await base.press(press, recording: request)
+            }
+
+            func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> {
+                let events = base.live(capture)
+                return AsyncStream(bufferingPolicy: .bufferingNewest(32)) { continuation in
+                    continuation.yield(
+                        .transcript(LiveTranscript(final: "Ask about the roof", volatile: "estimate.")))
+                    let task = Task {
+                        for await event in events { continuation.yield(event) }
+                        continuation.finish()
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
             }
         }
 
