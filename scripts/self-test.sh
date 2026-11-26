@@ -2852,6 +2852,7 @@ if [[ $mb_archive_verdicts == "ok 0/1 used 1/0 install 1/0 number 1/0 zero 1/0 w
     grep -e 'is not a new or empty folder that can be read' "$mb/archive-locked.out" >/dev/null &&
     grep -e 'could not be claimed' "$mb/archive-read-only.out" >/dev/null &&
     grep -e 'milestone-build-xcconfig-override' "$mb/override.out" >/dev/null && grep -e 'milestone-build-xcconfig-override' "$mb/worker.out" >/dev/null &&
+    ! grep -e 'archiving Knot-iOS' -e 'build slot' "$mb/override.out" >/dev/null &&
     grep -e "^xcodebuild .* KNOT_BUILD_NUMBER=7 .* archive -archivePath $mb/archives/ok/Knot-ios.xcarchive$" "$mb/archive.record" >/dev/null &&
     grep -e "-derivedDataPath $mb/archives/ok/DerivedData-ios " "$mb/archive.record" >/dev/null &&
     [[ -f $mb/archives/ok/Knot-ios.xcarchive/Products/Applications/Knot.app/Info.plist && ! -e $mb/archives/ok/DerivedData-ios ]] &&
@@ -3447,7 +3448,7 @@ $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: app groups group.com.exam
 $rl_e1|signatures: Knot.app/Watch/Knot.app: get-task-allow
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its provisioning profile has a device list
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: it is signed with beta-reports-active, which its provisioning profile does not allow
-$rl_e1|signatures: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: it is signed with com.apple.security.application-groups ["group.com.p3ob7o.knot"], which its provisioning profile does not allow
+$rl_e1|signatures: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: it is signed with com.apple.security.application-groups [\"group.com.p3ob7o.knot\"], which its provisioning profile does not allow
 $rl_e1|signatures: Knot.app/Watch/Knot.app: its application identifier is not its profile's team and its bundle ID
 $rl_e1|signatures: Knot.app/Watch/Knot.app: codesign --verify --strict failed on it
 $rl_e2|signatures: Knot.app/Watch/Knot.app: no provisioning profile that security can read
