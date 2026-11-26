@@ -3258,6 +3258,10 @@ done <<<"$rl_export_cases"
 # archive carries the milestone's bundle ID.
 rl_rehearsal="$(rl_run rehearsal -- --rehearsal M2 --build-number 7)"
 rl_rehearsal_milestone="$(rl_run rehearsal-milestone KNOT_RL_REHEARSAL_FAMILY=milestone -- --rehearsal M2 --build-number 7)"
+# An iOS app that LaunchServices never registered fails lsregister -u; its list then names none.
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_RL_RECORD"\n[[ $1 == -dump ]] && { echo "path: /Applications/Other.app"; exit 0; }\nexit 1\n' >"$rl/stub/lsregister-unknown"
+chmod +x "$rl/stub/lsregister-unknown"
+rl_unknown="$(rl_run rehearsal-unknown KNOT_LSREGISTER="$rl/stub/lsregister-unknown" -- --rehearsal M2 --build-number 7)"
 rl_verdicts="$rl_verdicts rehearsal $rl_rehearsal/$(rl_calls rehearsal milestone-build)/$(rl_calls rehearsal codesign)/$(rl_calls rehearsal altool) rehearsal-milestone $rl_rehearsal_milestone"
 if [[ $rl_verdicts == "good 0/swept names 0/clean before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean mb-fail 1 validate 0/1/0/clean upload 0/1 upload-fail 1/1/clean validate-fail 1/0 rehearsal 0/0/0/0 rehearsal-milestone 1" && -z $rl_broken ]] &&
     grep -e "^milestone-build M2 --commit $rl_head --products ios --archive $rl/tree/.build/release/dry-run-M2-${rl_head:0:12}-b7-[0-9TZ]*-[A-Za-z0-9]*/candidate --build-number 7$" "$rl/good.record" >/dev/null &&
@@ -3292,7 +3296,8 @@ if [[ $rl_verdicts == "good 0/swept names 0/clean before sync 1/0 no-tag 1 light
     grep -e '^xcodebuild .* KNOT_FLAVOUR=dev KNOT_MILESTONE_LEVEL=M2 KNOT_SIGNING=local KNOT_BUILD_NUMBER=7 DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO .* archive -archivePath ' "$rl/rehearsal.record" >/dev/null &&
     ! grep -e 'KNOT_FLAVOUR=milestone' "$rl/rehearsal.record" >/dev/null &&
     rl_has rehearsal "rehearsal passed" && rl_has rehearsal "ok    identity: 4 parts of com.p3ob7o.knot.dev, 0.3.0 (7), flavour dev, level M2" &&
-    rl_has rehearsal-milestone "release-rehearsal-identifiers"; then
+    rl_has rehearsal-milestone "release-rehearsal-identifiers" && [[ $rl_unknown == 0 ]] &&
+    rl_has rehearsal-unknown "LaunchServices registers none of its products (lsregister -u failed on Knot.app"; then
     pass "release.sh refuses an archive that lacks any thing it checks, naming the part, and passes the whole one; refuses before any build a level that opens sync, a milestone with no evidence, an icon with alpha, the Mac and a missing key; prints and leaves no value of the key; exports, validates and uploads the checked file once, refusing a distribution signature short of production; after a failed upload names App Store Connect and does not retry; and rehearses the development flavour unsigned"
 else
     fail "release.sh: $rl_verdicts; broken:${rl_broken:- none}; good: $(grep -e FAIL "$rl/good.out" | head -n 3 | tr '\n' ' ')"

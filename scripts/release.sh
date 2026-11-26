@@ -377,7 +377,16 @@ if [[ $MODE == rehearsal ]]; then
     status=0
     KNOT_RL_DERIVED=$derived KNOT_RL_ARCHIVE=$ARCHIVE KNOT_RL_LEVEL=$LEVEL KNOT_RL_BUILD=$BUILD KNOT_RL_LOG="$RUN/archive.log" \
         "$KNOT_SCRIPTS/build-slot.sh" run --label "release rehearsal" -- "$KNOT_SCRIPTS/release.sh" --in-archive || status=$?
-    knot_unregister_apps "$RUN" || say "its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY"
+    # An iOS app that LaunchServices never registered fails lsregister -u (-10814): what counts
+    # is whether its list names one of the run's products afterwards.
+    if ! knot_unregister_apps "$RUN"; then
+        listed="$("$KNOT_LSREGISTER" -dump 2>/dev/null)" || listed="$RUN/ (the list could not be read)"
+        if ! grep -F -e "$RUN/" <<<"$listed" >/dev/null; then
+            say "LaunchServices registers none of its products ($KNOT_UNREGISTER_WHY, as for an app it never registered)"
+        else
+            say "its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY. Unregister each by hand with lsregister -u <app>"
+        fi
+    fi
     rm -rf "$derived"
     if ((status != 0)); then
         grep -E 'error:|ARCHIVE FAILED|did not end within' "$RUN/archive.log" | tail -n 10 | sed 's/^/    /' | logged --show || true
