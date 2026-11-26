@@ -387,19 +387,25 @@
                             .safeAreaInset(edge: .bottom) { controls }
                     } else {
                         NavigationStack {
-                            page
-                                .toolbar {
-                                    ToolbarItem(placement: .confirmationAction) {
-                                        Button("Done", systemImage: "checkmark") {}
-                                            .labelStyle(.iconOnly)
-                                            .disabled(true)
-                                    }
-                                    #if os(iOS)
-                                        ToolbarItem(placement: .bottomBar) { controls }
-                                    #else
-                                        ToolbarItem(placement: .automatic) { controls }
-                                    #endif
+                            Group {
+                                if example == .limit {
+                                    ScrollView { page }
+                                } else {
+                                    page
                                 }
+                            }
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button("Done", systemImage: "checkmark") {}
+                                        .labelStyle(.iconOnly)
+                                        .disabled(true)
+                                }
+                                #if os(iOS)
+                                    ToolbarItem(placement: .bottomBar) { controls }
+                                #else
+                                    ToolbarItem(placement: .automatic) { controls }
+                                #endif
+                            }
                         }
                     }
                 }
