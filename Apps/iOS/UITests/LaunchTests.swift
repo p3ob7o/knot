@@ -119,6 +119,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: limit))
         XCTAssertTrue(match.waitForNonExistence(timeout: limit))
+        try app.auditAccessibility()
         undo.tap()
         XCTAssertTrue(match.waitForExistence(timeout: limit))
         try app.auditAccessibility()
@@ -191,6 +192,33 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(captureField(in: app).waitForNonExistence(timeout: limit))
         app.typeText("Synthetic query")
         XCTAssertEqual(search.value as? String, "Synthetic query")
+        try app.auditAccessibility()
+    }
+
+    @MainActor
+    func testAuditsTheFirstRunAndSettingsScreens() throws {
+        let app = KnotLauncher.launch(.preview)
+        app.buttons["shell.notes"].tap()
+        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        XCTAssertTrue(app.buttons["Dismiss Add a Lock Screen control"].exists)
+        try app.auditAccessibility()
+
+        app.buttons["More"].tap()
+        app.buttons["Settings"].tap()
+        let settings = app.navigationBars["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: limit))
+        let about = app.buttons["About"]
+        XCTAssertTrue(about.waitForExistence(timeout: limit))
+        XCTAssertTrue(about.isEnabled)
+        try app.auditAccessibility()
+
+        about.tap()
+        let aboutPage = app.navigationBars["About Knot"]
+        XCTAssertTrue(aboutPage.waitForExistence(timeout: limit))
+        try app.auditAccessibility()
+        aboutPage.buttons["Settings"].tap()
+        app.buttons["Export all notes"].tap()
+        XCTAssertTrue(app.buttons["Choose a folder…"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
 

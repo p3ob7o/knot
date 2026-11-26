@@ -27,7 +27,18 @@ public struct Banner<Actions: View>: View {
                 .foregroundStyle(theme.colors[role])
                 .accessibilityHidden(true)
             Group {
-                if let open { Button(message, action: open).buttonStyle(.plain) } else { Text(message) }
+                if let open {
+                    Button(action: open) {
+                        Text(message)
+                            #if os(iOS)
+                                .padding(.vertical, theme.spacing.loose)
+                                .contentShape(.rect)
+                            #endif
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(message)
+                }
             }
             .font(theme.type[.banner])
             .foregroundStyle(theme.colors[.textPrimary])
@@ -84,6 +95,10 @@ public struct FirstRunView: View {
             onDismiss(row)
         } label: {
             Image(systemName: "xmark")
+                #if os(iOS)
+                    .padding(theme.spacing.loose)
+                    .contentShape(.rect)
+                #endif
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("Dismiss \(row.title)", bundle: .module))

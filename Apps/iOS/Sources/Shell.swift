@@ -8,6 +8,10 @@ import Observation
 import SwiftUI
 import UIKit
 
+#if DEBUG
+    import KnotFakes
+#endif
+
 /// What the shell builds once per launch over its environment: the capture surface's model,
 /// the stream's and search's, and the player. Views never touch storage: every model here
 /// talks to the environment's ports (docs/architecture.md §6, rule 5).
@@ -22,6 +26,9 @@ final class Shell {
     let stream: StreamViewModel
     let search: SearchViewModel
     let player: PlayerViewModel
+    #if DEBUG
+        private let previewSettings = InMemorySettingsStore()
+    #endif
     /// The screens pushed from Notes.
     var path: [Screen] = []
     var sheet: Sheet?
@@ -189,7 +196,11 @@ final class Shell {
     }
 
     func settingsModel() -> SettingsViewModel {
-        SettingsViewModel(
+        var environment = environment
+        #if DEBUG
+            if app.live == nil { environment.settings = previewSettings }
+        #endif
+        return SettingsViewModel(
             environment: environment, context: context,
             platform: UIDevice.current.userInterfaceIdiom == .pad ? .iPad : .iPhone,
             liveActivitiesEnabled: ActivityAuthorizationInfo().areActivitiesEnabled)
@@ -227,6 +238,7 @@ final class Shell {
 struct ShellView: View {
     @Bindable var shell: Shell
     @EnvironmentObject private var sceneDelegate: IOSSceneDelegate
+    @Environment(\.knotTheme) private var theme
 
     var body: some View {
         NavigationStack(path: $shell.path) {
@@ -251,7 +263,13 @@ struct ShellView: View {
                 if let deleted = shell.deletedNote {
                     if let offer = deleted.undoOffer {
                         Banner(offer.label, symbol: "arrow.uturn.backward") {
-                            Button("Undo", action: shell.undoNoteDeletion).buttonStyle(.borderless)
+                            Button(action: shell.undoNoteDeletion) {
+                                Text("Undo")
+                                    .foregroundStyle(theme.colors[.textPrimary])
+                                    .padding(theme.spacing.loose)
+                                    .contentShape(.rect)
+                            }
+                            .buttonStyle(.borderless)
                         }
                     } else if let problem = deleted.problem {
                         Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed)
