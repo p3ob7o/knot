@@ -40,6 +40,38 @@ public enum SettingsRow: String, Hashable, Sendable, CaseIterable, Identifiable 
     }
 }
 
+/// The status the iCloud sync row can show, without exposing CloudKit errors.
+public enum SettingsSyncState: Hashable, Sendable, CaseIterable {
+    case off
+    case upToDate
+    case syncing
+    case error
+    case storageFull
+    case noAccount
+
+    public init(_ status: SyncStatus) {
+        switch status {
+        case .off: self = .off
+        case .idle: self = .upToDate
+        case .fetching, .sending: self = .syncing
+        case .failed(KnotError.syncQuotaExceeded.code): self = .storageFull
+        case .failed(KnotError.syncSignedOut.code): self = .noAccount
+        case .failed, .paused, .waiting: self = .error
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .off: localized("Off")
+        case .upToDate: localized("Up to date")
+        case .syncing: localized("Syncing…")
+        case .error: localized("Sync paused. Your notes are kept on this device.")
+        case .storageFull: localized("iCloud storage is full. Your notes and recordings are kept on this device.")
+        case .noAccount: localized("Sign in to iCloud to sync your notes.")
+        }
+    }
+}
+
 /// Settings (docs/product-spec.md §11 and §12).
 @MainActor
 @Observable
@@ -52,6 +84,7 @@ public final class SettingsViewModel {
     public private(set) var saveProblem: ErrorCode?
     /// Whether the person may turn sync on here: the build can sync and its gate is open.
     public private(set) var offersSync = false
+    public private(set) var syncState: SettingsSyncState = .off
 
     public let platform: SettingsPlatform
     private let environment: AppEnvironment
@@ -142,6 +175,13 @@ public final class SettingsViewModel {
     public func observeChanges() async {
         for await changed in environment.settings.changes() {
             settings = changed
+        }
+    }
+
+    public func observeSync() async {
+        guard context.sync != .notInThisBuild else { return }
+        for await status in environment.sync.statusUpdates() {
+            syncState = SettingsSyncState(status)
         }
     }
 

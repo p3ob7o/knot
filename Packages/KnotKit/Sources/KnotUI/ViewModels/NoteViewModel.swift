@@ -881,6 +881,18 @@ public final class NoteViewModel {
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url
     }
 
+    /// Reads the stored drawing through the asset and rendering ports.
+    public func drawing(of item: SegmentItem, scale: Double) async throws(KnotError) -> RenderedDrawing? {
+        guard item.kind == .ink, let file = await file(of: item) else { return nil }
+        let bytes: Data
+        do {
+            bytes = try await Task.detached { try Data(contentsOf: file, options: .mappedIfSafe) }.value
+        } catch {
+            throw .drawingUnreadable
+        }
+        return try await environment.drawingImages.image(of: InkDrawingData(bytes: bytes), scale: scale)
+    }
+
     public func dismissProblem() {
         if recordingOutcome == .couldNotStart { showRecordingOutcome(nil) }
         problem = nil

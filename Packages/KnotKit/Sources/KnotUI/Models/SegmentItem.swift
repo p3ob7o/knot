@@ -171,11 +171,20 @@ public enum SegmentPresenter {
             case .mcp: .mcp
             default: nil
             }
+        let visible: VisibleState
+        switch segment.state {
+        case .ink(.ready) where CaptureText.isEmpty(segment.text),
+            .ink(.failed(KnotError.drawingUnreadable.code)):
+            visible = .keptNoText
+        default:
+            visible = state
+        }
         return SegmentItem(
-            id: segment.id, kind: segment.kind, text: segment.text, rawTranscript: segment.rawTranscript, state: state,
+            id: segment.id, kind: segment.kind, text: segment.text, rawTranscript: segment.rawTranscript,
+            state: visible,
             attachment: attachment, duration: segment.duration, originMark: originMark,
             isConflictCopy: segment.conflictOf != nil, hasArrived: segment.arrivedAt != nil,
-            actions: actions(segment, state: state, attachment: attachment, noteCaptures: noteCaptures))
+            actions: actions(segment, state: visible, attachment: attachment, noteCaptures: noteCaptures))
     }
 
     /// What a segment offers, in order.

@@ -153,3 +153,5 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-21 PR 2 | Where the short-recording message sits | Inline notice above the capture page. |
 | 2026-11-26 | WP-21 PR 2 | No microphone connected, other start failures, or typed text that cannot be saved | Inline notice using the reason available to the view model. The field keeps text that could not be saved. |
 | 2026-11-26 | WP-21 PR 2 | What the Mac panel’s hints say before the microphone is live | Keeps the ordinary key hints until the hold is live. |
+| 2026-11-26 | WP-21 PR 2 | Ink recognition and the unavailable drawing | A caption while handwriting is being recognised. A placeholder retains the recognisable text when the renderer is unavailable. |
+| 2026-11-26 | WP-21 PR 2 | Sync status and iCloud storage full | A secondary caption under the sync toggle. Storage full says notes and recordings stay on this device. |
