@@ -443,6 +443,8 @@
                     if let model {
                         SettingsForm(model, actionButtonSetup: surface == .phone ? {} : nil)
                             .modifier(MatrixReady())
+                    } else {
+                        ProgressView()
                     }
                 }
                 .task {
