@@ -163,6 +163,26 @@ final class KnotIOSLaunchTests: XCTestCase {
         try app.auditAccessibility()
     }
 
+    /// `ui-late-capture-through-preview-iphone`
+    @MainActor
+    func testPreviewShowsALateArrivalUntilItsNoteOpens() throws {
+        let app = KnotLauncher.application(.preview)
+        app.launchArguments += ["-KnotPreviewLateCapture"]
+        app.launch()
+        try assertStreamShows("A synthetic late arrival", in: app)
+        let notice = app.staticTexts["A capture arrived."]
+        XCTAssertTrue(notice.waitForExistence(timeout: limit))
+        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "A synthetic late arrival"))
+            .firstMatch
+        XCTAssertTrue(row.label.contains("Arrived"))
+        row.tap()
+        XCTAssertTrue(segment("A synthetic late arrival", in: app).waitForExistence(timeout: limit))
+        app.navigationBars.buttons["Notes"].tap()
+        XCTAssertTrue(notice.waitForNonExistence(timeout: limit))
+        XCTAssertFalse(row.label.contains("Arrived"))
+        try app.auditAccessibility()
+    }
+
     // MARK: Helpers
 
     @MainActor

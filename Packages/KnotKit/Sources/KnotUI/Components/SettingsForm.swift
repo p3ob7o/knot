@@ -8,12 +8,17 @@
         @Environment(\.knotTheme) private var theme
         let model: SettingsViewModel
         let open: (SettingsRow) -> Void
+        let actionButtonSetup: (() -> Void)?
 
         /// - Parameter open: opens a row that leads elsewhere: export, recently deleted, about,
         ///   and the Mac's hotkey chooser, which the app shell owns.
-        public init(_ model: SettingsViewModel, open: @escaping (SettingsRow) -> Void = { _ in }) {
+        public init(
+            _ model: SettingsViewModel, actionButtonSetup: (() -> Void)? = nil,
+            open: @escaping (SettingsRow) -> Void = { _ in }
+        ) {
             self.model = model
             self.open = open
+            self.actionButtonSetup = actionButtonSetup
         }
 
         public var body: some View {
@@ -28,6 +33,9 @@
                 }
                 ForEach(model.rows) { row in
                     rowView(row)
+                }
+                if let actionButtonSetup {
+                    Button(SetupRow.actionButton.title, action: actionButtonSetup)
                 }
                 if let note = model.lockScreenNote {
                     Text(note)

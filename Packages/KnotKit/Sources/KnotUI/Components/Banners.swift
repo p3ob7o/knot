@@ -7,14 +7,17 @@ public struct Banner<Actions: View>: View {
     let message: String
     let symbol: String
     let role: ColorRole
+    let open: (() -> Void)?
     let actions: Actions
 
     public init(
-        _ message: String, symbol: String, role: ColorRole = .textSecondary, @ViewBuilder actions: () -> Actions
+        _ message: String, symbol: String, role: ColorRole = .textSecondary,
+        open: (() -> Void)? = nil, @ViewBuilder actions: () -> Actions
     ) {
         self.message = message
         self.symbol = symbol
         self.role = role
+        self.open = open
         self.actions = actions()
     }
 
@@ -23,10 +26,12 @@ public struct Banner<Actions: View>: View {
             Image(systemName: symbol)
                 .foregroundStyle(theme.colors[role])
                 .accessibilityHidden(true)
-            Text(message)
-                .font(theme.type[.banner])
-                .foregroundStyle(theme.colors[.textPrimary])
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if let open { Button(message, action: open).buttonStyle(.plain) } else { Text(message) }
+            }
+            .font(theme.type[.banner])
+            .foregroundStyle(theme.colors[.textPrimary])
+            .frame(maxWidth: .infinity, alignment: .leading)
             actions
         }
         .padding(theme.spacing.regular)
@@ -47,10 +52,14 @@ public struct FirstRunView: View {
     @Environment(\.knotTheme) private var theme
     let content: FirstRunContent
     let onDismiss: (SetupRow) -> Void
+    let onOpen: ((SetupRow) -> Void)?
 
-    public init(_ content: FirstRunContent, onDismiss: @escaping (SetupRow) -> Void) {
+    public init(
+        _ content: FirstRunContent, onOpen: ((SetupRow) -> Void)? = nil, onDismiss: @escaping (SetupRow) -> Void
+    ) {
         self.content = content
         self.onDismiss = onDismiss
+        self.onOpen = onOpen
     }
 
     public var body: some View {
@@ -63,16 +72,20 @@ public struct FirstRunView: View {
                     .foregroundStyle(theme.colors[.textSecondary])
             }
             ForEach(content.setupRows) { row in
-                Banner(row.title, symbol: "sparkles") {
-                    Button {
-                        onDismiss(row)
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Dismiss", bundle: .module))
+                Banner(row.title, symbol: "sparkles", open: onOpen.map { open in { open(row) } }) {
+                    dismiss(row)
                 }
             }
         }
+    }
+
+    private func dismiss(_ row: SetupRow) -> some View {
+        Button {
+            onDismiss(row)
+        } label: {
+            Image(systemName: "xmark")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Dismiss \(row.title)", bundle: .module))
     }
 }

@@ -164,3 +164,7 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-21 PR 2 | The append caption for a note from another day | Shows the time alone in the region’s clock, with no day period. |
 | 2026-11-26 | WP-21 PR 2 | The title of a note shown above the capture field | The capture surface shows the append caption and the segments. The title can be edited when the note is opened. |
 | 2026-11-26 | WP-30 PR 2 | The Recently deleted page | Both routes open a system unavailable view titled “Recently deleted” while the listing and its store query are pending. |
+| 2026-11-26 | WP-30 PR 2 | Empty search results | The Notes list shows the system search unavailable view for the query. |
+| 2026-11-26 | WP-30 PR 2 | Export progress, completion and missing attachments | The export page uses a system progress view and list sections for the report and missing files. |
+| 2026-11-26 | WP-30 PR 2 | About contents and test-build actions | About uses a system list, a file picker and a confirmation alert for restore. |
+| 2026-11-26 | WP-30 PR 2 | The instructions inside the first-run setup sheets | Each sheet uses a system list with the setup steps and a close control. |

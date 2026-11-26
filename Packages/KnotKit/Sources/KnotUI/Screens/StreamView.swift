@@ -10,15 +10,18 @@
         let stream: StreamViewModel
         let search: SearchViewModel
         let showsInlineSearch: Bool
+        let openSetupRow: ((SetupRow) -> Void)?
         let open: (NoteID) -> Void
 
         public init(
             stream: StreamViewModel, search: SearchViewModel, showsInlineSearch: Bool = true,
+            openSetupRow: ((SetupRow) -> Void)? = nil,
             open: @escaping (NoteID) -> Void
         ) {
             self.stream = stream
             self.search = search
             self.showsInlineSearch = showsInlineSearch
+            self.openSetupRow = openSetupRow
             self.open = open
         }
 
@@ -50,9 +53,13 @@
                     }
                 }
                 if let results = search.results {
-                    ForEach(results) { row in rowButton(row) }
+                    if results.isEmpty, !showsInlineSearch {
+                        ContentUnavailableView.search(text: search.query)
+                    } else {
+                        ForEach(results) { row in rowButton(row) }
+                    }
                 } else if let firstRun = stream.firstRun {
-                    FirstRunView(firstRun, onDismiss: stream.dismissSetupRow)
+                    FirstRunView(firstRun, onOpen: openSetupRow, onDismiss: stream.dismissSetupRow)
                 } else {
                     ForEach(stream.rows) { row in rowButton(row) }
                     if stream.hasMore {

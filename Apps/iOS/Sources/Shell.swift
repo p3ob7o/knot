@@ -1,6 +1,8 @@
 import ActivityKit
+import AppIntents
 import KnotApp
 import KnotCore
+import KnotIntents
 import KnotUI
 import Observation
 import SwiftUI
@@ -12,6 +14,8 @@ import UIKit
 @MainActor
 @Observable
 final class Shell {
+    private static let surfaces = IOSSurfaceRouter()
+    static let cues = IOSCueEmitter()
     /// The process's app, from the composition's one call.
     let app: AppComposition
     let capture: NoteViewModel
@@ -22,6 +26,7 @@ final class Shell {
     var path: [Screen] = []
     var sheet: Sheet? = .capture
     var isSearching = false
+    var setupRow: SetupRow?
     private(set) var presentsCaptureAtLaunch = true
     private(set) var deletedNote: NoteViewModel?
 
@@ -40,17 +45,24 @@ final class Shell {
     var environment: AppEnvironment { app.environment }
     var context: UIContext { app.context }
 
-    /// The shell implements none of the shell's ports yet: the cues, the surface router and
-    /// the Live Activity come with WP-30's second pull request.
-    init(app: AppComposition = EnvironmentFactory.app(shell: ShellPorts())) {
+    init(app: AppComposition = EnvironmentFactory.app(shell: ShellPorts(cues: cues, surfaces: surfaces))) {
         self.app = app
         let environment = app.environment
         let context = app.context
         capture = NoteViewModel(
             environment: environment, context: context, surface: .app, announcer: VoiceOverAnnouncer())
-        stream = StreamViewModel(environment: environment, context: context)
+        let applicable: [SetupRow] =
+            UIDevice.current.userInterfaceIdiom == .pad ? [.lockScreenControl] : SetupRow.allCases
+        let preview = app.live == nil
+        stream = StreamViewModel(
+            environment: environment, context: context,
+            setupRows: applicable.filter { preview || !UserDefaults.standard.bool(forKey: Self.setupKey($0)) },
+            onDismissSetupRow: { row in
+                if !preview { UserDefaults.standard.set(true, forKey: Self.setupKey(row)) }
+            })
         search = SearchViewModel(environment: environment, context: context)
         player = PlayerViewModel(player: environment.player)
+        KnotIntentEnvironment.register(environment, in: .shared)
     }
 
     /// Starts the launch sequence, once, when the capture surface is on screen. Typing never
@@ -59,10 +71,21 @@ final class Shell {
     func startLaunchSequence() {
         guard launch == nil else { return }
         let app = app
-        launch = Task { _ = await app.runLaunchSequence() }
+        launch = Task {
+            #if DEBUG
+                if app.live == nil, ProcessInfo.processInfo.arguments.contains("-KnotPreviewLateCapture") {
+                    await injectPreviewArrival(into: app.environment)
+                }
+            #endif
+            _ = await app.runLaunchSequence()
+        }
     }
 
     @ObservationIgnored private var launch: Task<Void, Never>?
+
+    private nonisolated static func setupKey(_ row: SetupRow) -> String {
+        "knot.setup.dismissed.\(row.rawValue)"
+    }
 
     func captureAppeared() {
         presentsCaptureAtLaunch = false
@@ -72,6 +95,39 @@ final class Shell {
     func showCapture() {
         isSearching = false
         sheet = .capture
+    }
+
+    func attachRouter() async {
+        await Self.surfaces.attach { [weak self] destination in await self?.navigate(destination) }
+    }
+
+    func openURL(_ url: URL) {
+        let scheme = LiveConfiguration.currentFlavour() == .milestone ? "knot" : "knot-dev"
+        guard let destination = IOSDeepLink.destination(url, scheme: scheme) else { return }
+        Task { await Self.surfaces.open(destination) }
+    }
+
+    private func navigate(_ destination: SurfaceDestination) async {
+        switch destination {
+        case .capture:
+            path = []
+            showCapture()
+        case .search, .note:
+            if sheet == .capture {
+                capture.endCapture()
+                await capture.settle()
+                guard capture.fieldText.isEmpty else { return }
+            }
+            presentsCaptureAtLaunch = false
+            sheet = nil
+            path = []
+            if case .note(let id) = destination { path = [.note(id)] }
+            isSearching = destination == .search
+            startLaunchSequence()
+        case .sketch:
+            // WP-35 owns the canvas.
+            break
+        }
     }
 
     func dismissCapture() {
@@ -104,6 +160,7 @@ final class Shell {
     func noteDeleted(_ model: NoteViewModel) {
         deletedNote = model
         path = []
+        if !search.query.isEmpty { search.setQuery(search.query) }
     }
 
     func undoNoteDeletion() {
@@ -112,6 +169,7 @@ final class Shell {
         Task {
             await deletedNote.settle()
             if self.deletedNote === deletedNote, !deletedNote.isClosed { self.deletedNote = nil }
+            if !search.query.isEmpty { search.setQuery(search.query) }
         }
     }
 
@@ -128,7 +186,10 @@ struct ShellView: View {
 
     var body: some View {
         NavigationStack(path: $shell.path) {
-            StreamView(stream: shell.stream, search: shell.search, showsInlineSearch: false) { id in
+            StreamView(
+                stream: shell.stream, search: shell.search, showsInlineSearch: false,
+                openSetupRow: { shell.setupRow = $0 }
+            ) { id in
                 shell.path.append(.note(id))
             }
             .navigationTitle("Notes")
@@ -200,25 +261,50 @@ struct ShellView: View {
                 .onDisappear(perform: shell.captureDismissed)
             case .settings:
                 SettingsScreen(
-                    model: shell.settingsModel(), close: { shell.sheet = nil },
+                    model: shell.settingsModel(), app: shell.app, close: { shell.sheet = nil },
                     recentlyDeleted: shell.showRecentlyDeleted)
             }
         }
         .transaction { transaction in
             if shell.presentsCaptureAtLaunch { transaction.disablesAnimations = true }
         }
+        .sheet(item: $shell.setupRow) { row in
+            SetupInstructions(row: row) {
+                shell.stream.dismissSetupRow(row)
+                shell.setupRow = nil
+            }
+        }
+        .task { await shell.attachRouter() }
+        .onOpenURL(perform: shell.openURL)
+        .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in pulse?.feedback }
     }
 }
 
-private struct SettingsScreen: View {
+#if DEBUG
+    private func injectPreviewArrival(into environment: AppEnvironment) async {
+        let end = environment.clock.now().addingTimeInterval(-3600)
+        let capture = NewCapture(
+            id: environment.ids.make(), kind: .typed,
+            origin: CaptureOrigin(source: .device(environment.ids.make()), surface: .app),
+            launchID: environment.ids.make(), placement: .window, arrival: .late,
+            startedAt: end.addingTimeInterval(-10), endedAt: end, body: .text("A synthetic late arrival"))
+        _ = try? await environment.notes.record(capture)
+    }
+#endif
+
+struct SettingsScreen: View {
     @State var model: SettingsViewModel
+    let app: AppComposition
     let close: () -> Void
     let recentlyDeleted: () -> Void
+    @State private var detail: SettingsRow?
+    @State private var setupRow: SetupRow?
 
     var body: some View {
         NavigationStack {
-            SettingsForm(model) { row in
-                if row == .recentlyDeleted { recentlyDeleted() }
+            let setup: (() -> Void)? = model.platform == .iPhone ? { setupRow = .actionButton } : nil
+            SettingsForm(model, actionButtonSetup: setup) { row in
+                if row == .recentlyDeleted { recentlyDeleted() } else { detail = row }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -230,6 +316,14 @@ private struct SettingsScreen: View {
                 }
             }
             .task { await model.load() }
+            .sheet(item: $setupRow) { row in SetupInstructions(row: row) }
+            .navigationDestination(item: $detail) { row in
+                switch row {
+                case .about: AboutScreen(app: app)
+                case .exportAll: ExportScreen(environment: app.environment)
+                default: EmptyView()
+                }
+            }
         }
     }
 }
