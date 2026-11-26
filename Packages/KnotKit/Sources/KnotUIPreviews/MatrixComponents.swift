@@ -41,11 +41,10 @@
     }
 
     enum RecordingExample {
-        case live, starting, saved, discarded, limit, cannotStart, nearlyFull, dimmed, destination, newDestination
+        case live, saved, discarded, limit, cannotStart, nearlyFull, dimmed, destination, newDestination
 
         var phase: KnotUI.RecordingPhase {
             switch self {
-            case .starting: .starting
             case .live, .dimmed, .destination, .newDestination: .recording(PreviewSamples.liveID)
             default: .idle
             }
@@ -72,7 +71,6 @@
             case .nearlyFull: "Storage is nearly full."
             case .destination: "Adding to an open note"
             case .newDestination: "Starting a new note"
-            case .starting: nil
             }
         }
 
@@ -85,6 +83,7 @@
         }
     }
 
+    // WP-32 owns the Watch screen. This preview shows its shared record control at Watch size.
     struct WatchMatrixPreview: View {
         let example: RecordingExample
 
@@ -106,6 +105,7 @@
     #if !os(watchOS)
         enum CaptureExample {
             case blank, typing, adding, expired, older, live, blocked, permission, noMicrophone, saveFailure
+            case starting, saved, discarded
 
             var hasPriorNote: Bool {
                 switch self {
@@ -123,6 +123,7 @@
             private struct Loaded {
                 let model: NoteViewModel
                 let player: PlayerViewModel
+                var releaseStart: AsyncStream<Void>.Continuation? = nil
             }
 
             var body: some View {
@@ -145,6 +146,7 @@
             private func note(_ loaded: Loaded) -> some View {
                 NoteView(model: loaded.model, player: loaded.player)
                     .onDisappear {
+                        loaded.releaseStart?.finish()
                         if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
                     }
             }
@@ -155,6 +157,7 @@
                     path: "KnotMatrix-\(UUID().uuidString)", directoryHint: .isDirectory)
                 var environment = AppEnvironment.makePreview(root: folder)
                 let engine = environment.engine
+                let pressClock = FakeClock(.now)
                 var note: NoteID?
                 if example.hasPriorNote {
                     let request = CaptureRequest(
@@ -169,11 +172,27 @@
                 if example == .saveFailure {
                     environment.engine = UnavailableCaptureEngine()
                 }
+                let pendingStart = example == .starting ? AsyncStream<Void>.makeStream() : nil
+                if let pendingStart { environment.engine = HeldPreviewStart(wait: pendingStart.stream) }
+                if example == .discarded { environment.clock = pressClock }
+                if example == .saved {
+                    (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.notInstalled)
+                }
+                let frozen = RecordingClock(
+                    now: { .zero },
+                    sleepUntil: { _ in
+                        let (stream, continuation) = AsyncStream<Void>.makeStream()
+                        for await _ in stream {}
+                        continuation.finish()
+                        try Task.checkCancellation()
+                    })
                 let model = NoteViewModel(
                     environment: environment, context: KnotUIPreviews.context(for: environment),
                     surface: surface.captureSurface, opening: example == .older ? note : nil,
-                    announcer: RecordingAnnouncer())
+                    announcer: RecordingAnnouncer(),
+                    recordingClock: example == .saved || example == .discarded ? frozen : .continuous)
                 await model.refresh()
+                let player = PlayerViewModel(player: environment.player)
                 switch example {
                 case .typing, .saveFailure:
                     model.fieldChanged("Ask about the estimate on Thursday.")
@@ -185,15 +204,46 @@
                     model.toggleRecording()
                 case .live, .blocked:
                     model.press(.holdStart)
+                case .starting:
+                    model.press(.holdStart)
+                    loaded = Loaded(model: model, player: player, releaseStart: pendingStart?.continuation)
+                    return
+                case .saved:
+                    model.press(.holdStart)
+                    await model.settle()
+                    model.press(.holdRelease)
+                case .discarded:
+                    model.toggleRecording()
+                    await model.settle()
+                    pressClock.advance(by: 0.25)
+                    model.toggleRecording()
                 default:
                     break
                 }
                 await model.settle()
-                loaded = Loaded(model: model, player: PlayerViewModel(player: environment.player))
+                loaded = Loaded(model: model, player: player)
             }
         }
 
-        /// The retained record-control state, for outcomes that expire on the live surface.
+        /// Holds the real note view in the phase before the recorder can answer.
+        private struct HeldPreviewStart: CaptureEngine {
+            let wait: AsyncStream<Void>
+            func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+            func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+                throw .portUnavailable
+            }
+            func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+                -> RecordingPressOutcome
+            {
+                for await _ in wait {}
+                return .ignored
+            }
+        }
+
+        // WP-33 owns the panel’s capture destination. The limit notice waits for the recording contract.
         struct RecordingMatrixPreview: View {
             let surface: PreviewSurface
             let example: RecordingExample
@@ -228,9 +278,6 @@
                 VStack(alignment: .leading) {
                     if example == .limit {
                         Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill")
-                    }
-                    if example.outcome == .discarded, let message = example.notice {
-                        Banner(message, symbol: "mic")
                     }
                     if example.outcome == .saved {
                         SegmentView(PreviewSamples.pendingRecording, handlers: .none)
@@ -270,137 +317,8 @@
             }
         }
 
-        enum StreamExample {
-            case populated, empty, noText, pendingAndFailed, arrived, restoring, unavailable, largest, search
-        }
-
-        struct StreamMatrixPreview: View {
-            let surface: PreviewSurface
-            let example: StreamExample
-
-            var body: some View {
-                matrixFrame(surface) {
-                    NavigationStack {
-                        List {
-                            switch example {
-                            case .populated, .largest:
-                                StreamRowView(PreviewSamples.busyRow)
-                                StreamRowView(PreviewSamples.recordingOnlyRow)
-                            case .empty:
-                                FirstRunView(
-                                    FirstRunContent(
-                                        syncLine: FirstRunSync.on.line,
-                                        setupRows: surface == .phone
-                                            ? [.actionButton, .lockScreenControl, .watchComplication] : [])
-                                ) { _ in }
-                            case .noText:
-                                StreamRowView(PreviewSamples.recordingOnlyRow)
-                            case .pendingAndFailed:
-                                StreamRowView(PreviewSamples.pendingRow)
-                                StreamRowView(PreviewSamples.failedRow)
-                            case .arrived:
-                                Banner("A capture arrived.", symbol: "tray.and.arrow.down")
-                                StreamRowView(PreviewSamples.arrivedRow)
-                            case .restoring:
-                                ProgressView("Restoring notes from iCloud…")
-                            case .unavailable:
-                                Banner(StoreProblem(KnotError.storeDamaged).message, symbol: "exclamationmark.icloud")
-                            case .search:
-                                SearchField(text: "roof") { _ in }
-                                StreamRowView(PreviewSamples.busyRow)
-                                SearchField(text: "stapler") { _ in }
-                                ContentUnavailableView.search(text: "stapler")
-                            }
-                        }
-                        .navigationTitle("Notes")
-                    }
-                    .dynamicTypeSize(example == .largest ? .accessibility5 : .large)
-                }
-            }
-        }
-
-        enum NoteExample {
-            case mixed, titles, editing, voiceStates, playback, ink, conflict, marked, attachments, deleted, moved
-        }
-
-        struct NoteMatrixPreview: View {
-            let surface: PreviewSurface
-            let example: NoteExample
-            @State private var titleDraft = "Roof estimate"
-            @State private var editedSegment = PreviewSamples.typed
-
-            var body: some View {
-                matrixFrame(surface) {
-                    ScrollView {
-                        VStack(alignment: .leading) { content }
-                            .padding()
-                    }
-                }
-            }
-
-            @ViewBuilder private var content: some View {
-                switch example {
-                case .mixed:
-                    segment(PreviewSamples.typed)
-                    segment(PreviewSamples.pendingRecording)
-                    ink(PreviewSamples.ink)
-                case .titles:
-                    segment(PreviewSamples.typed)
-                    LabeledContent("Generated", value: "Roof repair")
-                    LabeledContent("Typed", value: "Roof estimate")
-                    TextField("Title", text: $titleDraft)
-                case .editing:
-                    SegmentView(
-                        editedSegment,
-                        handlers: SegmentHandlers(
-                            edit: { editedSegment.text = $0 }, action: { _ in }))
-                case .voiceStates:
-                    ForEach(PreviewSamples.voiceStates) { segment($0) }
-                case .playback:
-                    SegmentView(
-                        PreviewSamples.pendingRecording, text: "um ask about the estimate", isShowingOriginal: true,
-                        playback: .playing(at: .seconds(12), of: .seconds(42)), handlers: .none)
-                    segment(PreviewSamples.removedRecording)
-                case .ink:
-                    ink(PreviewSamples.ink)
-                    ink(PreviewSamples.changedInk(to: .savedTextOnItsWay, text: ""))
-                    ink(PreviewSamples.changedInk(to: .needsYou, text: ""))
-                    ink(PreviewSamples.changedInk(to: .keptNoText, text: ""))
-                case .conflict:
-                    segment(PreviewSamples.typed)
-                    segment(PreviewSamples.conflict)
-                case .marked:
-                    segment(PreviewSamples.commandLine)
-                    segment(PreviewSamples.newerKnot)
-                case .attachments:
-                    segment(PreviewSamples.remoteRecording(.remote))
-                    segment(PreviewSamples.remoteRecording(.downloading))
-                    segment(PreviewSamples.missingRecording)
-                case .deleted:
-                    undo("Segment deleted")
-                    ShareLink(item: PreviewSamples.typed.text)
-                case .moved:
-                    undo("Moved to its own note")
-                    segment(PreviewSamples.typed)
-                }
-            }
-
-            private func segment(_ item: SegmentItem) -> some View { SegmentView(item, handlers: .none) }
-
-            private func ink(_ item: SegmentItem) -> some View {
-                SegmentView(
-                    item,
-                    handlers: SegmentHandlers(
-                        edit: { _ in }, action: { _ in }, drawing: { _ in PreviewSamples.drawing }))
-            }
-
-            private func undo(_ message: String) -> some View {
-                Banner(message, symbol: "arrow.uturn.backward") { Button("Undo") {} }
-            }
-        }
-
         enum SettingsExample {
-            case full, sync, prompts, export, hotkey, firstRun
+            case full, sync, prompts, export, firstRun
         }
 
         struct SettingsMatrixPreview: View {
@@ -410,13 +328,14 @@
             var body: some View {
                 matrixFrame(surface) {
                     switch example {
-                    case .full, .hotkey:
-                        SettingsMatrixForm(surface: surface, showHotkeyConflict: example == .hotkey)
+                    case .full:
+                        SettingsMatrixForm(surface: surface)
                     case .sync:
                         Form {
                             ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
                         }
                     case .prompts:
+                        // WP-16 owns sync prompts. These are examples of their shared notice.
                         Form {
                             Banner("The iCloud account changed.", symbol: "person.crop.circle") {
                                 Button("Keep sync paused") {}
@@ -426,12 +345,14 @@
                             }
                         }
                     case .export:
+                        // WP-20 owns the export flow. This shows the shared notice and progress controls.
                         Form {
                             ProgressView("Exporting notes…")
                             Banner("Export complete", symbol: "checkmark")
                             Banner("One recording could not be fetched.", symbol: "icloud.slash")
                         }
                     case .firstRun:
+                        // WP-30 owns first-run routing and the model download states.
                         FirstRunView(FirstRunContent(syncLine: nil, setupRows: [.actionButton])) { _ in }
                             .safeAreaInset(edge: .bottom) {
                                 VStack {
@@ -450,14 +371,10 @@
 
         private struct SettingsMatrixForm: View {
             let surface: PreviewSurface
-            let showHotkeyConflict: Bool
             @State private var model: SettingsViewModel?
 
             var body: some View {
-                VStack {
-                    if showHotkeyConflict {
-                        Banner("That shortcut is already in use.", symbol: "keyboard")
-                    }
+                Group {
                     if let model { SettingsForm(model) }
                 }
                 .task {

@@ -19,7 +19,6 @@
         let model: NoteViewModel
         let player: PlayerViewModel
         @State private var restoreFieldFocus = false
-        @State private var playing: SegmentID?
 
         public init(model: NoteViewModel, player: PlayerViewModel) {
             self.model = model
@@ -299,7 +298,7 @@
                 item,
                 text: model.editConflict(for: .segment(item.id))?.draft ?? model.displayedText(of: item),
                 isShowingOriginal: model.showingOriginal.contains(item.id),
-                playback: playing == item.id ? player.state : .empty,
+                playback: player.segment == item.id ? player.state : .empty,
                 secondaryText: secondaryText, handlers: handlers(for: item))
         }
 
@@ -310,8 +309,7 @@
                 togglePlay: {
                     Task {
                         guard let file = await model.file(of: item) else { return }
-                        playing = item.id
-                        await player.toggle(file)
+                        await player.toggle(file, segment: item.id)
                     }
                 },
                 seek: { position in Task { await player.seek(to: position) } },

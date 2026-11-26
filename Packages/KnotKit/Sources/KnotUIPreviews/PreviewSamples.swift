@@ -69,26 +69,6 @@
 
         static let liveID: CaptureID = KnotUIPreviews.environment.ids.make()
 
-        static let typed = SegmentItem(
-            id: ids.make(), kind: .typed, text: "Call the roofer about the leak.", rawTranscript: nil,
-            state: .ready, attachment: .none, duration: nil, originMark: nil, isConflictCopy: false,
-            hasArrived: false, actions: [.moveToOwnNote, .delete])
-
-        static let commandLine: SegmentItem = {
-            var item = fromAnAgent
-            item.originMark = .commandLine
-            return item
-        }()
-
-        static let conflict: SegmentItem = {
-            var item = typed
-            item.id = ids.make()
-            item.text = "Ask for Thursday morning."
-            item.isConflictCopy = true
-            item.actions = [.delete]
-            return item
-        }()
-
         static let pendingRecording: SegmentItem = {
             let id: SegmentID = ids.make()
             let asset = Asset(
@@ -98,61 +78,6 @@
                 id: id, kind: .voice, text: "", rawTranscript: nil, state: .savedTextOnItsWay,
                 attachment: .here(asset), duration: .seconds(42), originMark: nil, isConflictCopy: false,
                 hasArrived: false, actions: [.play, .moveToOwnNote, .delete])
-        }()
-
-        static let removedRecording: SegmentItem = {
-            var item = pendingRecording
-            item.id = ids.make()
-            item.state = .ready
-            item.text = "The recording was removed after the estimate arrived."
-            item.attachment = .none
-            item.actions = [.delete]
-            return item
-        }()
-
-        static func remoteRecording(_ availability: AssetAvailability) -> SegmentItem {
-            var item = pendingRecording
-            if case .here(var asset) = item.attachment {
-                asset.availability = availability
-                item.attachment = .onAnotherDevice(asset)
-            }
-            item.actions = [.delete]
-            return item
-        }
-
-        static let ink = changedInk(to: .ready, text: "Sketch of the roof")
-
-        static func changedInk(to state: VisibleState, text: String) -> SegmentItem {
-            SegmentItem(
-                id: ids.make(), kind: .ink, text: text, rawTranscript: nil, state: state, attachment: .none,
-                duration: nil, originMark: nil, isConflictCopy: false, hasArrived: false,
-                actions: state == .needsYou ? [.retry, .delete] : [.delete])
-        }
-
-        // A small synthetic roof sketch, encoded as PNG, just as the drawing port returns it.
-        static let drawing: RenderedDrawing? = Data(
-            base64Encoded:
-                "iVBORw0KGgoAAAANSUhEUgAAAHgAAAA8CAYAAACtrX6oAAABbElEQVR4nO2TQW7DQBDD8hf//43ttQiQpEacUKPhQRd7gaVE7O04jpvpDQ5gFGwUbBS8NDiAUbBRsFHw0uAARsFGwf/Oz5/QLAr+oNw1knEASOwa0TgAIPfZ97rgAF8Uey9xxWvGASC5ayTjAJDYNaJxgAC51ZJxgACx1aJxgFARNZJxgAsFTL5HwU8G//Too18zDvDm0JvurxWc9IKSWCoEJw6ayDRO8IQRJzBGCh4x3BRWHGDSWBPZcYD0gaZ3oEd5NAzNVNMnbYjpcuO6pQ3QIDmqW0r5+3+0pKs6vupcJfhV0VbBqOQEsRsEY6IpwWeHmZQzPesEX3EuPVF9v1n4qmHSc6ZHheBPDJOcqB44QOowLT1wgNRhWnrgAKnDtPTAAVKHaemBA6QO09IDB0gdpqUHDpA6TEsPHCB1mJYeOEDqMC09cIDUYVp64AAPhmkJvamCFaxgBZvc4ABGwUbBRsFLgwMYBZs38gsddbW2G7YhWgAAAABJRU5ErkJggg=="
-        ).map { RenderedDrawing(png: $0, pixelWidth: 120, pixelHeight: 60) }
-
-        static let pendingRow: StreamRowModel = {
-            var row = recordingOnlyRow
-            row.hasFailed = false
-            return row
-        }()
-
-        static let failedRow: StreamRowModel = {
-            var row = busyRow
-            row.hasPending = false
-            row.hasArrived = false
-            return row
-        }()
-
-        static let arrivedRow: StreamRowModel = {
-            var row = busyRow
-            row.hasPending = false
-            row.hasFailed = false
-            return row
         }()
 
         /// Peaks for the waveform.

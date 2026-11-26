@@ -32,11 +32,11 @@
         }
 
         #Preview("iPhone | Just stopped: saved, with text arriving except on the Watch") {
-            RecordingMatrixPreview(surface: .phone, example: .saved)
+            CaptureMatrixPreview(surface: .phone, example: .saved)
         }
 
         #Preview("iPhone | Short recording discarded") {
-            RecordingMatrixPreview(surface: .phone, example: .discarded)
+            CaptureMatrixPreview(surface: .phone, example: .discarded)
         }
 
         #Preview("iPhone | Stopped at the limit, or by a call") {
@@ -84,7 +84,10 @@
         }
 
         #Preview("iPhone | Search, results and none") {
-            StreamMatrixPreview(surface: .phone, example: .search)
+            Group {
+                StreamMatrixPreview(surface: .phone, example: .search, query: "roof")
+                StreamMatrixPreview(surface: .phone, example: .search, query: "stapler")
+            }
         }
 
         #Preview("iPhone | Note, mixed segments") {
@@ -92,7 +95,11 @@
         }
 
         #Preview("iPhone | Note, title: none, generated, typed, editing") {
-            NoteMatrixPreview(surface: .phone, example: .titles)
+            Group {
+                NoteMatrixPreview(surface: .phone, example: .titles)
+                NoteMatrixPreview(surface: .phone, example: .titles, titleOrigin: .generated)
+                NoteMatrixPreview(surface: .phone, example: .titles, titleOrigin: .user)
+            }
         }
 
         #Preview("iPhone | Note, a segment being edited") {
@@ -186,6 +193,7 @@
         }
 
         #Preview("iPad | Two columns do not fit; keyboard up") {
+            // WP-30 owns the split view. Its compact capture detail uses the iPhone layout.
             CaptureMatrixPreview(surface: .phone, example: .blank)
         }
 
@@ -212,7 +220,7 @@
         }
 
         #Preview("Mac panel | Recording, before the microphone is live") {
-            RecordingMatrixPreview(surface: .panel, example: .starting)
+            CaptureMatrixPreview(surface: .panel, example: .starting)
         }
 
         #Preview("Mac panel | Recording, continues a note or starts a new one") {
@@ -223,7 +231,7 @@
         }
 
         #Preview("Mac panel | Just stopped: saved, with text arriving except on the Watch") {
-            RecordingMatrixPreview(surface: .panel, example: .saved)
+            CaptureMatrixPreview(surface: .panel, example: .saved)
         }
 
         #Preview("Mac panel | Stopped at the limit, or by a call") {
@@ -266,7 +274,10 @@
         }
 
         #Preview("Mac window | Search, results and none") {
-            StreamMatrixPreview(surface: .window, example: .search)
+            Group {
+                StreamMatrixPreview(surface: .window, example: .search, query: "roof")
+                StreamMatrixPreview(surface: .window, example: .search, query: "stapler")
+            }
         }
 
         #Preview("Mac window | Note, mixed segments") {
@@ -289,11 +300,8 @@
             SettingsMatrixPreview(surface: .window, example: .full)
         }
 
-        #Preview("Mac window | Hotkey recorder; key already taken; command-line access") {
-            SettingsMatrixPreview(surface: .window, example: .hotkey)
-        }
-
         #Preview("Mac window | Two columns do not fit; keyboard up") {
+            // WP-33 owns column collapse. This shows the shared capture page at compact width.
             CaptureMatrixPreview(surface: .phone, example: .blank)
         }
 
