@@ -85,7 +85,8 @@ final class KnotIOSLaunchTests: XCTestCase {
 
         let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
         XCTAssertTrue(stop.waitForExistence(timeout: limit))
-        XCTAssertFalse(captureField(in: app).exists)
+        XCTAssertTrue(captureField(in: app).waitForNonExistence(timeout: limit))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: limit))
         try app.auditAccessibility()
 
         // The visible elapsed time is the witness that this was a deliberate stop.
@@ -136,7 +137,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.buttons["Move to its own note"].tap()
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: limit))
-        XCTAssertFalse(segment(second, in: app).exists)
+        XCTAssertTrue(segment(second, in: app).waitForNonExistence(timeout: limit))
         XCTAssertTrue(segment(first, in: app).exists)
         undo.tap()
         XCTAssertTrue(segment(second, in: app).waitForExistence(timeout: limit))
@@ -187,7 +188,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.open(url)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: limit))
-        XCTAssertFalse(captureField(in: app).exists)
+        XCTAssertTrue(captureField(in: app).waitForNonExistence(timeout: limit))
         app.typeText("Synthetic query")
         XCTAssertEqual(search.value as? String, "Synthetic query")
         try app.auditAccessibility()
