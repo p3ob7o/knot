@@ -113,6 +113,11 @@ func everyDesignedCellHasOneNamedPreview() throws {
     #expect(playback.note.items.contains { $0.kind == .voice && $0.attachment == .none })
     let voice = try await NoteMatrixPreview(surface: .phone, example: .voiceStates).makeModels(in: root)
     #expect(Set(voice.note.items.filter { $0.kind == .voice }.map(\.state)).count == 6)
+    for state in PreviewSamples.voiceStates.map(\.state) {
+        let variant = try await NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: state)
+            .makeModels(in: root)
+        #expect(variant.note.items.filter { $0.kind == .voice }.map(\.state) == [state])
+    }
     let attachments = try await NoteMatrixPreview(surface: .phone, example: .attachments).makeModels(in: root)
     #expect(attachments.note.items.contains { $0.attachment == .missing })
     let ink = try await NoteMatrixPreview(surface: .phone, example: .ink).makeModels(in: root)

@@ -306,7 +306,7 @@
                     startedAt: later, endedAt: later, textOrigin: newer.textOrigin, state: .unknown("preview.newer"))
                 segments.append(unreadable)
             } else if example == .voiceStates {
-                if voiceState != nil { segments = [] }
+                // The store needs a live capture in the note before a named append can join it.
                 if voiceState == nil || voiceState == .savedTextBeingMadeElsewhere {
                     var elsewhere = try Build.voice(
                         ids.make(), in: note, from: date, transcript: "", device: ids.make())
