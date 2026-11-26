@@ -14,7 +14,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     /// is saved, and the stream shows it.
     @MainActor
     func testLaunchIntoCaptureTypeAndFindTheLineInTheStream() throws {
-        let line = "A synthetic line for the skeleton"
+        let line = "A synthetic line for the stream"
         let app = KnotLauncher.launch(.preview)
 
         let field = captureField(in: app)
@@ -29,6 +29,14 @@ final class KnotIOSLaunchTests: XCTestCase {
         // The stream is one step away. Leaving the surface ends the capture, and the stream
         // shows the line.
         try assertStreamShows(line, in: app)
+        XCTAssertTrue(app.navigationBars["Notes"].exists)
+
+        // Capture follows the window. The earlier line is on the page and typing
+        // goes straight into the new field.
+        app.buttons["shell.compose"].tap()
+        XCTAssertTrue(app.staticTexts[line].waitForExistence(timeout: limit))
+        app.typeText("One more thought")
+        XCTAssertEqual(field.value as? String, "One more thought")
     }
 
     /// `live-smoke-type-kill-relaunch-read-iphone`: on `.live` with a temporary store, type,

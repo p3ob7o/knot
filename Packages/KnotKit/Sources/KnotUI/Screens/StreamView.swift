@@ -9,18 +9,25 @@
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         let stream: StreamViewModel
         let search: SearchViewModel
+        let showsInlineSearch: Bool
         let open: (NoteID) -> Void
 
-        public init(stream: StreamViewModel, search: SearchViewModel, open: @escaping (NoteID) -> Void) {
+        public init(
+            stream: StreamViewModel, search: SearchViewModel, showsInlineSearch: Bool = true,
+            open: @escaping (NoteID) -> Void
+        ) {
             self.stream = stream
             self.search = search
+            self.showsInlineSearch = showsInlineSearch
             self.open = open
         }
 
         public var body: some View {
             List {
                 Section {
-                    SearchField(text: search.query, onChange: search.setQuery)
+                    if showsInlineSearch {
+                        SearchField(text: search.query, onChange: search.setQuery)
+                    }
                     if let problem = stream.problem {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
                     }

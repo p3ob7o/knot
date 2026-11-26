@@ -1,3 +1,4 @@
+import ActivityKit
 import KnotApp
 import KnotCore
 import KnotUI
@@ -17,12 +18,22 @@ final class Shell {
     let stream: StreamViewModel
     let search: SearchViewModel
     let player: PlayerViewModel
-    /// The screens pushed over the capture surface.
+    /// The screens pushed from Notes.
     var path: [Screen] = []
+    var sheet: Sheet? = .capture
+    var isSearching = false
+    private(set) var presentsCaptureAtLaunch = true
 
     enum Screen: Hashable {
-        case stream
         case note(NoteID)
+        case recentlyDeleted
+    }
+
+    enum Sheet: String, Identifiable {
+        case capture
+        case settings
+
+        var id: Self { self }
     }
 
     var environment: AppEnvironment { app.environment }
@@ -52,6 +63,43 @@ final class Shell {
 
     @ObservationIgnored private var launch: Task<Void, Never>?
 
+    func captureAppeared() {
+        presentsCaptureAtLaunch = false
+        startLaunchSequence()
+    }
+
+    func showCapture() {
+        isSearching = false
+        sheet = .capture
+    }
+
+    func dismissCapture() {
+        capture.endCapture()
+        Task {
+            await capture.settle()
+            if capture.fieldText.isEmpty { sheet = nil }
+        }
+    }
+
+    func captureDismissed() {
+        Task {
+            await capture.settle()
+            if !capture.fieldText.isEmpty { showCapture() }
+        }
+    }
+
+    func settingsModel() -> SettingsViewModel {
+        SettingsViewModel(
+            environment: environment, context: context,
+            platform: UIDevice.current.userInterfaceIdiom == .pad ? .iPad : .iPhone,
+            liveActivitiesEnabled: ActivityAuthorizationInfo().areActivitiesEnabled)
+    }
+
+    func showRecentlyDeleted() {
+        sheet = nil
+        path = [.recentlyDeleted]
+    }
+
     /// A model for a note opened from the stream. Its field appends to that note (rule 5).
     func noteModel(_ id: NoteID) -> NoteViewModel {
         NoteViewModel(
@@ -59,35 +107,101 @@ final class Shell {
     }
 }
 
-/// The window's content: the capture surface, with the stream and the notes pushed over it.
+/// Notes is the window's root. The capture surface starts above it, already focused.
 struct ShellView: View {
     @Bindable var shell: Shell
 
     var body: some View {
         NavigationStack(path: $shell.path) {
-            NoteScreen(model: shell.capture, player: shell.player)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            shell.path.append(.stream)
-                        } label: {
-                            Label("Notes", systemImage: "list.bullet")
-                        }
-                        .accessibilityIdentifier("shell.notes")
+            StreamView(stream: shell.stream, search: shell.search, showsInlineSearch: false) { id in
+                shell.path.append(.note(id))
+            }
+            .navigationTitle("Notes")
+            .navigationBarTitleDisplayMode(.large)
+            .listStyle(.plain)
+            .searchable(
+                text: Binding(get: { shell.search.query }, set: shell.search.setQuery),
+                isPresented: $shell.isSearching
+            )
+            .toolbar(removing: .search)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Settings") { shell.sheet = .settings }
+                        Button(SettingsRow.recentlyDeleted.title, action: shell.showRecentlyDeleted)
+                    } label: {
+                        Label("More", systemImage: "ellipsis")
                     }
                 }
-                .onAppear { shell.startLaunchSequence() }
-                .navigationDestination(for: Shell.Screen.self) { screen in
-                    switch screen {
-                    case .stream:
-                        StreamView(stream: shell.stream, search: shell.search) { id in
-                            shell.path.append(.note(id))
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                ToolbarSpacer(.fixed, placement: .bottomBar)
+                ToolbarItem(placement: .bottomBar) {
+                    Button(action: shell.showCapture) {
+                        Label("Capture", systemImage: "square.and.pencil")
+                    }
+                    .accessibilityIdentifier("shell.compose")
+                }
+            }
+            .navigationDestination(for: Shell.Screen.self) { screen in
+                switch screen {
+                case .note(let id):
+                    OpenNoteScreen(model: shell.noteModel(id), player: shell.player)
+                case .recentlyDeleted:
+                    ContentUnavailableView(
+                        SettingsRow.recentlyDeleted.title, systemImage: "trash")
+                }
+            }
+        }
+        .sheet(item: $shell.sheet) { sheet in
+            switch sheet {
+            case .capture:
+                NavigationStack {
+                    NoteScreen(model: shell.capture, player: shell.player)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button(action: shell.dismissCapture) {
+                                    Label("Notes", systemImage: "list.bullet")
+                                }
+                                .accessibilityIdentifier("shell.notes")
+                            }
                         }
-                        .navigationTitle("Notes")
-                    case .note(let id):
-                        OpenNoteScreen(model: shell.noteModel(id), player: shell.player)
+                }
+                .presentationDetents([.large])
+                .interactiveDismissDisabled(shell.capture.isEnding)
+                .onAppear(perform: shell.captureAppeared)
+                .onDisappear(perform: shell.captureDismissed)
+            case .settings:
+                SettingsScreen(
+                    model: shell.settingsModel(), close: { shell.sheet = nil },
+                    recentlyDeleted: shell.showRecentlyDeleted)
+            }
+        }
+        .transaction { transaction in
+            if shell.presentsCaptureAtLaunch { transaction.disablesAnimations = true }
+        }
+    }
+}
+
+private struct SettingsScreen: View {
+    @State var model: SettingsViewModel
+    let close: () -> Void
+    let recentlyDeleted: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm(model) { row in
+                if row == .recentlyDeleted { recentlyDeleted() }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: close) {
+                        Label("Close", systemImage: "xmark")
                     }
                 }
+            }
+            .task { await model.load() }
         }
     }
 }
