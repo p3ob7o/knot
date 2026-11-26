@@ -47,6 +47,9 @@ struct OpenNoteScreen: View {
                         } label: {
                             Label("Note actions", systemImage: "ellipsis")
                         }
+                        .accessibilityShowsLargeContentViewer {
+                            Label("Note actions", systemImage: "ellipsis")
+                        }
                     }
                 }
             }
@@ -98,6 +101,9 @@ struct SegmentShareSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") { dismiss() }
+                        .accessibilityShowsLargeContentViewer {
+                            Label("Close", systemImage: "xmark")
+                        }
                 }
             }
         }

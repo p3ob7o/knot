@@ -123,7 +123,7 @@ import Testing
         model.perform(.moveWorkHere, on: segment)
         await settled(model)
         #expect(model.problem == .notAvailableYet)
-        #expect(model.problem?.message == "This isn't available yet.")
+        #expect(model.problem?.message == "This isn’t available yet.")
         #expect(try await rig.notes.segment(segment) == before)
         #expect(rig.queue.segments.isEmpty)
         #expect(model.items.first { $0.id == segment }?.state == .savedTextBeingMadeElsewhere)

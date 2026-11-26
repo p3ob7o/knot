@@ -46,6 +46,16 @@ import Testing
         #expect(try await rig.settings.load().syncEnabled == nil)
     }
 
+    @Test(arguments: [
+        (EnglishVariant.followRegion, "Follow the region"),
+        (.locale("en_US"), "US"),
+        (.locale("en_GB"), "UK"),
+        (.locale("en_AU"), "Australia"),
+    ])
+    func regionalChoicesUseShortLabels(_ variant: EnglishVariant, expected: String) {
+        #expect(SettingsViewModel.label(of: variant, locale: Locale(identifier: "en_US")) == expected)
+    }
+
     @Test func aFailedSaveLeavesTheSettingsAsTheyWere() async throws {
         let rig = StoreRig()
         let model = SettingsViewModel(environment: rig.environment, context: rig.context(), platform: .mac)

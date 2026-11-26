@@ -268,7 +268,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(aboutPage.waitForExistence(timeout: limit))
         try app.auditAccessibility()
         aboutPage.buttons["Settings"].tap()
-        app.buttons["Export all notes"].tap()
+        app.buttons["Export all notes…"].tap()
         XCTAssertTrue(app.buttons["Choose a folder…"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
