@@ -6,6 +6,7 @@ import SwiftUI
 public enum Announcement: String, Hashable, Sendable, CaseIterable {
     case recordingStarted
     case recordingStopped
+    case recordingSaveFailed
     /// A tap-started recording stopped within a second: nothing was kept.
     case recordingDiscarded
     case recordingCouldNotStart
@@ -13,9 +14,10 @@ public enum Announcement: String, Hashable, Sendable, CaseIterable {
     public var text: String {
         switch self {
         case .recordingStarted: localized("Recording")
-        case .recordingStopped: localized("Recording saved")
-        case .recordingDiscarded: localized("Recording too short. Nothing was kept.")
-        case .recordingCouldNotStart: localized("The recording couldn't start")
+        case .recordingStopped: localized("Saved")
+        case .recordingSaveFailed: localized("Knot couldn’t finish saving the recording.")
+        case .recordingDiscarded: localized("Too short. Nothing was kept.")
+        case .recordingCouldNotStart: localized("Couldn’t start.")
         }
     }
 }

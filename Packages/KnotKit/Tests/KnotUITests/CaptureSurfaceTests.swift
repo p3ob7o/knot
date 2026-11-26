@@ -140,3 +140,66 @@ import Testing
         #expect(model.noteID == older)
     }
 }
+
+@MainActor
+@Test func aRefusedSaveRequiresAnAnsweredUpdateEvenAfterRevertingTheField() async throws {
+    let rig = await PreviewRig.make()
+    defer { rig.remove() }
+    let flaky = FlakyEngine(rig.environment.engine)
+    var environment = rig.environment
+    environment.engine = flaky
+    let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+    model.fieldChanged("first")
+    await settled(model)
+    let id = try #require(model.typedCapture)
+
+    flaky.failUpdates(true)
+    model.fieldChanged("first and more")
+    await settled(model)
+    model.fieldChanged("first")
+    model.endCapture()
+    await settled(model)
+    #expect(model.typedCapture == id)
+    #expect(model.fieldText == "first")
+    #expect(try await environment.notes.capture(id)?.outcome == .open)
+
+    flaky.failUpdates(false)
+    model.endCapture()
+    await settled(model)
+    #expect(model.typedCapture == nil)
+    #expect(model.fieldText.isEmpty)
+    #expect(try await environment.notes.segment(SegmentID(id))?.text == "first")
+}
+
+@MainActor
+@Test(arguments: [("first and more", " and more"), ("rewritten entirely", "rewritten entirely")])
+func aCaptureEndedByAnotherSurfaceLeavesOnlyUnsavedTextInTheField(draft: String, remainder: String) async throws {
+    let rig = await PreviewRig.make()
+    defer { rig.remove() }
+    let engine = rig.environment.engine
+    let flaky = FlakyEngine(engine)
+    var environment = rig.environment
+    environment.engine = flaky
+    let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+    model.fieldChanged("first")
+    await settled(model)
+    let id = try #require(model.typedCapture)
+
+    flaky.failUpdates(true)
+    model.fieldChanged(draft)
+    await settled(model)
+    let other = try await engine.begin(CaptureRequest(kind: .typed, surface: .macWindow, text: "on the other surface"))
+    _ = try await engine.end(other.captureID)
+    #expect(await eventually("the earlier field to receive its terminal state") { model.typedCapture == nil })
+    #expect(model.fieldText == remainder)
+    #expect(try await environment.notes.segment(SegmentID(id))?.text == "first")
+
+    flaky.failUpdates(false)
+    model.fieldChanged(remainder + ".")
+    await settled(model)
+    let next = try #require(model.typedCapture)
+    #expect(next != id)
+    model.endCapture()
+    await settled(model)
+    #expect(try await environment.notes.segment(SegmentID(next))?.text == remainder + ".")
+}

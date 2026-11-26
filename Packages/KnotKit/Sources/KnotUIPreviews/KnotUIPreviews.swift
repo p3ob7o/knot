@@ -6,10 +6,8 @@
 
     /// SwiftUI previews of KnotUI, on the preview environment (docs/architecture.md §16).
     ///
-    /// The state matrix of docs/design/brief.md §6 gets one named preview here for every
-    /// designed cell, with WP-21's second pull request. This first one holds the previews of the
-    /// skeleton: the screens on `.preview`, and each component in its states. Like KnotFakes, it
-    /// is compiled only under DEBUG or KNOT_FAKES.
+    /// The named previews follow the state matrix in docs/design/brief.md §6. Like KnotFakes,
+    /// this module is compiled only under DEBUG or KNOT_FAKES.
     public enum KnotUIPreviews {
         /// The environment every preview runs on.
         public static var environment: AppEnvironment {

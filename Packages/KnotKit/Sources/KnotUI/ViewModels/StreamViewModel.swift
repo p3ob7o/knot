@@ -19,6 +19,11 @@ public struct FirstRunContent: Hashable, Sendable {
     public var syncLine: String?
     /// Up to three dismissible rows on setting up a way to capture (assumption A29).
     public var setupRows: [SetupRow]
+
+    public init(syncLine: String?, setupRows: [SetupRow]) {
+        self.syncLine = syncLine
+        self.setupRows = setupRows
+    }
 }
 
 /// The stream: every note, newest first, a page at a time.

@@ -64,3 +64,13 @@ extension SegmentKind {
         }
     }
 }
+
+/// The append caption uses the region’s clock without a day period.
+func appendCaptionTime(_ date: Date, calendar: Calendar, locale: Locale) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = locale
+    formatter.calendar = calendar
+    formatter.timeZone = calendar.timeZone
+    formatter.setLocalizedDateFormatFromTemplate("Jm")
+    return formatter.string(from: date)
+}

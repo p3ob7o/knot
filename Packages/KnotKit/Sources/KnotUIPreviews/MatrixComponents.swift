@@ -1,0 +1,394 @@
+#if DEBUG || KNOT_FAKES
+    import Foundation
+    import KnotCore
+    import KnotFakes
+    import KnotUI
+    import SwiftUI
+
+    enum PreviewSurface {
+        case phone, pad, panel, window, watch
+
+        var size: CGSize {
+            switch self {
+            case .phone: CGSize(width: 390, height: 844)
+            case .pad: CGSize(width: 700, height: 900)
+            case .panel: CGSize(width: 640, height: 280)
+            case .window: CGSize(width: 1024, height: 700)
+            case .watch: CGSize(width: 198, height: 242)
+            }
+        }
+
+        var captureSurface: CaptureSurface {
+            switch self {
+            case .panel: .macPanel
+            case .window: .macWindow
+            default: .app
+            }
+        }
+
+        var settingsPlatform: SettingsPlatform {
+            switch self {
+            case .pad: .iPad
+            case .panel, .window: .mac
+            default: .iPhone
+            }
+        }
+    }
+
+    @MainActor
+    func matrixFrame(_ surface: PreviewSurface, @ViewBuilder contents: () -> some View) -> some View {
+        contents().frame(width: surface.size.width, height: surface.size.height)
+    }
+
+    enum RecordingExample {
+        case live, saved, discarded, limit, cannotStart, nearlyFull, dimmed, destination, newDestination
+
+        var phase: KnotUI.RecordingPhase {
+            switch self {
+            case .live, .dimmed, .destination, .newDestination: .recording(PreviewSamples.liveID)
+            default: .idle
+            }
+        }
+
+        var outcome: RecordingOutcome? {
+            switch self {
+            case .saved, .limit: .saved
+            case .discarded: .discarded
+            case .cannotStart: .couldNotStart
+            default: nil
+            }
+        }
+
+        var duration: Duration? { phase.isRecording ? .seconds(12) : nil }
+
+        var notice: String? {
+            switch self {
+            case .live, .dimmed: "Recording"
+            case .saved: "Saved"
+            case .discarded: "Too short. Nothing was kept."
+            case .limit: "Saved"
+            case .cannotStart: "Couldn’t start."
+            case .nearlyFull: "Storage is nearly full."
+            case .destination: "Adding to an open note"
+            case .newDestination: "Starting a new note"
+            }
+        }
+
+        var detail: String? {
+            switch self {
+            case .limit: "Stopped at 30 minutes."
+            case .cannotStart: "Allow the microphone in Settings."
+            default: nil
+            }
+        }
+    }
+
+    // WP-32 owns the Watch screen. This preview shows its shared record control at Watch size.
+    struct WatchMatrixPreview: View {
+        let example: RecordingExample
+
+        var body: some View {
+            matrixFrame(.watch) {
+                VStack {
+                    if let duration = example.duration {
+                        Text(ClockText.of(duration)).monospacedDigit()
+                    }
+                    RecordButton(phase: example.phase, elapsed: example.duration, outcome: example.outcome) {}
+                    if let notice = example.notice { Text(notice) }
+                    if let detail = example.detail { Text(detail).foregroundStyle(.secondary) }
+                }
+                .opacity(example == .dimmed ? 0.65 : 1)
+            }
+        }
+    }
+
+    #if !os(watchOS)
+        enum CaptureExample {
+            case blank, typing, adding, expired, older, live, blocked, permission, noMicrophone, saveFailure
+            case starting, saved, discarded
+
+            var hasPriorNote: Bool {
+                switch self {
+                case .adding, .expired, .older: true
+                default: false
+                }
+            }
+        }
+
+        struct CaptureMatrixPreview: View {
+            let surface: PreviewSurface
+            let example: CaptureExample
+            @State private var loaded: Loaded?
+
+            private struct Loaded {
+                let model: NoteViewModel
+                let player: PlayerViewModel
+                var releaseStart: AsyncStream<Void>.Continuation? = nil
+            }
+
+            var body: some View {
+                matrixFrame(surface) {
+                    Group {
+                        if let loaded {
+                            if surface == .panel {
+                                note(loaded)
+                            } else {
+                                NavigationStack { note(loaded) }
+                            }
+                        } else {
+                            ProgressView()
+                        }
+                    }
+                    .task { await load() }
+                }
+            }
+
+            private func note(_ loaded: Loaded) -> some View {
+                NoteView(model: loaded.model, player: loaded.player)
+                    .onDisappear {
+                        loaded.releaseStart?.finish()
+                        if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
+                    }
+            }
+
+            private func load() async {
+                guard loaded == nil else { return }
+                let folder = FileManager.default.temporaryDirectory.appending(
+                    path: "KnotMatrix-\(UUID().uuidString)", directoryHint: .isDirectory)
+                var environment = AppEnvironment.makePreview(root: folder)
+                let engine = environment.engine
+                let pressClock = FakeClock(.now)
+                var note: NoteID?
+                if example.hasPriorNote {
+                    let request = CaptureRequest(
+                        kind: .typed, surface: .app, text: "Call the roofer about the leak.")
+                    if let state = try? await engine.begin(request) {
+                        note = try? await engine.end(state.captureID).noteID
+                    }
+                }
+                if example == .expired || example == .older {
+                    await (environment.notes as? InMemoryNoteStore)?.setWindow(AppendWindow.off)
+                }
+                if example == .saveFailure {
+                    environment.engine = UnavailableCaptureEngine()
+                }
+                let pendingStart = example == .starting ? AsyncStream<Void>.makeStream() : nil
+                if let pendingStart { environment.engine = HeldPreviewStart(wait: pendingStart.stream) }
+                if example == .discarded { environment.clock = pressClock }
+                if example == .saved {
+                    (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.notInstalled)
+                }
+                let frozen = RecordingClock(
+                    now: { .zero },
+                    sleepUntil: { _ in
+                        let (stream, continuation) = AsyncStream<Void>.makeStream()
+                        for await _ in stream {}
+                        continuation.finish()
+                        try Task.checkCancellation()
+                    })
+                let model = NoteViewModel(
+                    environment: environment, context: KnotUIPreviews.context(for: environment),
+                    surface: surface.captureSurface, opening: example == .older ? note : nil,
+                    announcer: RecordingAnnouncer(),
+                    recordingClock: example == .saved || example == .discarded ? frozen : .continuous)
+                await model.refresh()
+                let player = PlayerViewModel(player: environment.player)
+                switch example {
+                case .typing, .saveFailure:
+                    model.fieldChanged("Ask about the estimate on Thursday.")
+                case .older:
+                    model.fieldChanged("Send a photo of the roof.")
+                case .permission, .noMicrophone:
+                    let error: KnotError = example == .permission ? .microphonePermissionRefused : .noInputDevice
+                    (environment.recorder as? ScriptedRecorder)?.failNextStarts(with: error)
+                    model.toggleRecording()
+                case .live, .blocked:
+                    model.press(.holdStart)
+                case .starting:
+                    model.press(.holdStart)
+                    loaded = Loaded(model: model, player: player, releaseStart: pendingStart?.continuation)
+                    return
+                case .saved:
+                    model.press(.holdStart)
+                    await model.settle()
+                    model.press(.holdRelease)
+                case .discarded:
+                    model.toggleRecording()
+                    await model.settle()
+                    pressClock.advance(by: 0.25)
+                    model.toggleRecording()
+                default:
+                    break
+                }
+                await model.settle()
+                loaded = Loaded(model: model, player: player)
+            }
+        }
+
+        /// Holds the real note view in the phase before the recorder can answer.
+        private struct HeldPreviewStart: CaptureEngine {
+            let wait: AsyncStream<Void>
+            func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+            func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+                throw .portUnavailable
+            }
+            func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+            func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+                -> RecordingPressOutcome
+            {
+                for await _ in wait {}
+                return .ignored
+            }
+        }
+
+        // WP-33 owns the panel’s capture destination. The limit notice waits for the recording contract.
+        struct RecordingMatrixPreview: View {
+            let surface: PreviewSurface
+            let example: RecordingExample
+            @FocusState private var focused: Bool
+
+            var body: some View {
+                matrixFrame(surface) {
+                    if surface == .panel {
+                        page
+                            .safeAreaInset(edge: .bottom) { controls }
+                    } else {
+                        NavigationStack {
+                            page
+                                .toolbar {
+                                    ToolbarItem(placement: .confirmationAction) {
+                                        Button("Done", systemImage: "checkmark") {}
+                                            .labelStyle(.iconOnly)
+                                            .disabled(true)
+                                    }
+                                    #if os(iOS)
+                                        ToolbarItem(placement: .bottomBar) { controls }
+                                    #else
+                                        ToolbarItem(placement: .automatic) { controls }
+                                    #endif
+                                }
+                        }
+                    }
+                }
+            }
+
+            private var page: some View {
+                VStack(alignment: .leading) {
+                    if example == .limit {
+                        Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill")
+                    }
+                    if example.outcome == .saved {
+                        SegmentView(PreviewSamples.pendingRecording, handlers: .none)
+                    }
+                    if example.phase.isRecording {
+                        if example == .destination || example == .newDestination, let message = example.notice {
+                            Text(message)
+                        }
+                        LiveCaptureSegment(
+                            transcript: LiveTranscript(final: "Ask about ", volatile: "the estimate."),
+                            levels: surface == .panel ? [] : PreviewSamples.levels)
+                    } else {
+                        CaptureField(
+                            text: "", acceptsTyping: example.phase == .idle, isFocused: $focused,
+                            typeRole: surface == .panel ? .noteTitle : .body, onChange: { _ in }, onSubmit: {})
+                    }
+                    Spacer()
+                }
+                .padding()
+            }
+
+            private var controls: some View {
+                HStack {
+                    if surface == .panel {
+                        Text(
+                            example.phase.isRecording ? "Release the hotkey to stop" : "⌘↩ Done, ⌘N New note, esc Close"
+                        )
+                        Spacer()
+                    }
+                    if example.outcome == .saved { Text("Saved") }
+                    if let duration = example.duration { Text(ClockText.of(duration)).monospacedDigit() }
+                    RecordButton(
+                        phase: example.phase, elapsed: example.duration, outcome: example.outcome,
+                        toolbar: surface != .panel
+                    ) {}
+                }
+            }
+        }
+
+        enum SettingsExample {
+            case full, sync, prompts, export, firstRun
+        }
+
+        struct SettingsMatrixPreview: View {
+            let surface: PreviewSurface
+            let example: SettingsExample
+
+            var body: some View {
+                matrixFrame(surface) {
+                    switch example {
+                    case .full:
+                        SettingsMatrixForm(surface: surface)
+                    case .sync:
+                        Form {
+                            ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
+                        }
+                    case .prompts:
+                        // WP-16 owns sync prompts. These are examples of their shared notice.
+                        Form {
+                            Banner("The iCloud account changed.", symbol: "person.crop.circle") {
+                                Button("Keep sync paused") {}
+                            }
+                            Banner("Notes were removed from iCloud.", symbol: "icloud.slash") {
+                                Button("Keep sync paused") {}
+                            }
+                        }
+                    case .export:
+                        // WP-20 owns the export flow. This shows the shared notice and progress controls.
+                        Form {
+                            ProgressView("Exporting notes…")
+                            Banner("Export complete", symbol: "checkmark")
+                            Banner("One recording could not be fetched.", symbol: "icloud.slash")
+                        }
+                    case .firstRun:
+                        // WP-30 owns first-run routing and the model download states.
+                        FirstRunView(FirstRunContent(syncLine: nil, setupRows: [.actionButton])) { _ in }
+                            .safeAreaInset(edge: .bottom) {
+                                VStack {
+                                    Banner(
+                                        SurfaceProblem.couldNotStartRecording(
+                                            KnotError.microphonePermissionRefused.code
+                                        ).message,
+                                        symbol: "mic.slash")
+                                    ProgressView("Downloading the speech model…")
+                                }
+                            }
+                    }
+                }
+            }
+        }
+
+        private struct SettingsMatrixForm: View {
+            let surface: PreviewSurface
+            @State private var model: SettingsViewModel?
+
+            var body: some View {
+                Group {
+                    if let model { SettingsForm(model) }
+                }
+                .task {
+                    guard model == nil else { return }
+                    var environment = KnotUIPreviews.environment
+                    environment.gates = ScriptedFeatureGates()
+                    var context = KnotUIPreviews.context(for: environment)
+                    context.sync = .available(signedInToICloud: true)
+                    let model = SettingsViewModel(
+                        environment: environment, context: context, platform: surface.settingsPlatform)
+                    await model.load()
+                    self.model = model
+                }
+            }
+        }
+    #endif
+#endif

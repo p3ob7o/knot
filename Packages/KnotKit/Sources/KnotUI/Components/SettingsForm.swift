@@ -36,6 +36,7 @@
                 }
             }
             .disabled(!model.isAvailable)
+            .task { await model.observeSync() }
         }
 
         @ViewBuilder private func rowView(_ row: SettingsRow) -> some View {
@@ -72,11 +73,14 @@
                     }
                 }
             case .sync:
-                Toggle(
-                    row.title,
-                    isOn: Binding(
-                        get: { model.settings.syncEnabled ?? false },
-                        set: { on in Task { await model.setSyncEnabled(on) } }))
+                VStack(alignment: .leading) {
+                    Toggle(
+                        row.title,
+                        isOn: Binding(
+                            get: { model.settings.syncEnabled ?? false },
+                            set: { on in Task { await model.setSyncEnabled(on) } }))
+                    SettingsSyncStatusView(model.syncState)
+                }
             case .hotkey:
                 Button {
                     open(row)
@@ -98,6 +102,22 @@
             case .exportAll, .recentlyDeleted, .about:
                 Button(row.title) { open(row) }
             }
+        }
+    }
+
+    /// The status below the iCloud sync toggle.
+    public struct SettingsSyncStatusView: View {
+        @Environment(\.knotTheme) private var theme
+        let state: SettingsSyncState
+
+        public init(_ state: SettingsSyncState) {
+            self.state = state
+        }
+
+        public var body: some View {
+            Text(state.label)
+                .font(theme.type[.caption])
+                .foregroundStyle(theme.colors[.textSecondary])
         }
     }
 #endif
