@@ -224,6 +224,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-11 | 11d | Two stale failed ends of a stored recording are shown to change nothing: the store refuses them, and a test holds each | WP-11c |
 | WP-11 | 11e | Four of the engine's tests wait for the ingest run to end, not for an empty inbox: one failed by chance on a loaded Mac | WP-11d |
 | WP-11 | 11f | A press right after a stop that meets this launch's own saved state still reading "recording" starts a new recording and leaves the stopped capture alone: a test holds it | WP-11e |
+| WP-11 | 11g | The engine keeps why a recording ended on its voice segment, on every path a recording takes to the store, and says when a recording went live: the store path, the `Inbox/` item and ingest, launch recovery, the two fields of the capture's state, and the forward in the composition's store gate | WP-11f; the contract pull request on why a recording ended |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
