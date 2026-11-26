@@ -460,6 +460,9 @@
                     var settings = Settings.defaults
                     settings.syncEnabled = true
                     environment.settings = InMemorySettingsStore(settings)
+                    let sync = ScriptedSyncEngine(clock: environment.clock)
+                    await sync.start()
+                    environment.sync = sync
                     var context = KnotUIPreviews.context(for: environment)
                     context.sync = .available(signedInToICloud: true)
                     let model = SettingsViewModel(
