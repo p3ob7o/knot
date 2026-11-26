@@ -9,7 +9,7 @@ Knot opens ready for the next thought. A note reads as one page, with space betw
 3. The screens govern what they draw. [Screen handoff](docs/design/handoff/screens/canvas.json)
 4. The design system governs the rest, including tokens, glyphs and voice. [Design system](docs/design/handoff/system/README.md)
 
-The owner's choice of 2026-11-26 gives the design system precedence over the screens for iPhone navigation and control placement. Notes is the root. The capture surface is a sheet at the large detent over Notes. The list button or a swipe down reveals Notes. The record control is 44 points on iPhone and iPad. A control the spec needs stays when a drawing leaves it out. [Platform handoff](docs/design/handoff/system/01-platforms.md)
+The orchestrator set this order. The owner can change it. The owner's choice of 2026-11-26 gives the design system precedence over the screens for iPhone navigation and control placement. Notes is the root. The capture surface is a sheet at the large detent over Notes. The list button or a swipe down reveals Notes. The record control is 44 points on iPhone and iPad. A control the spec needs stays when a drawing leaves it out. [Design direction](docs/design/direction.md)
 
 ## Theme roles
 
@@ -41,9 +41,13 @@ Views read `knotTheme` from the environment. Use the name of the role that fits 
 | `toggleOn` | `toggle-on` | System green | System green | System green | Reference for Toggle. Let Toggle paint itself. |
 | System focus | `focus-ring` | System focus effect | System focus ring in the person's accent | System focus | Keyboard focus |
 
-Ink as tint is black in light appearance and white in dark. Keep the person's Mac accent when it is set. Attention uses `#C55300` in light appearance, including Increase Contrast. It uses the system orange in dark appearance.
+The `accent` and `arrived` roles use ink on every platform for what Knot draws. Ink is black in light appearance and white in dark. On Mac, keep any use of the role as a tint within the individual control. Selection, focus and native controls keep the person's accent. The Mac catalogue's `AccentColor` entry applies only when the person's accent is Multicolor.
 
-Knot's secondary ink is an opaque sRGB grey. Its level is 0.35 in light appearance and 0.72 in dark. Increase Contrast uses 0.25 and 0.85. The resolved Mac paper measures 6.98:1 in light and 8.37:1 in dark, or 10.41:1 and 11.78:1 with Increase Contrast. On the handoff's white and black iOS paper references, the same ink calculates to 6.98:1 and 10.54:1 at standard contrast. The handoff's system secondary label is 3.4:1 in iOS light and 4.0:1 in Mac light. It is 6.4:1 and 5.9:1 in dark, respectively. Keep the tested ink until the owner rules.
+Attention uses `#C55300` in light appearance, including Increase Contrast. It uses the system orange in dark appearance.
+
+Knot's secondary ink is an opaque sRGB grey. Its level is 0.35 in light appearance and 0.72 in dark. Increase Contrast uses 0.25 and 0.85. The resolved Mac paper measures 6.98:1 in light and 8.37:1 in dark, or 10.41:1 and 11.78:1 with Increase Contrast. On the handoff's white and black iOS paper references, the same ink calculates to 6.98:1 and 10.54:1 at standard contrast. The handoff's system secondary label is 3.4:1 in iOS light and 4.0:1 in Mac light. It is 6.4:1 and 5.9:1 in dark, respectively. Keep the tested ink until the owner rules. On glass, including the Mac sidebar and floating panel, the contrast of the fixed grey depends on what lies behind it. WP-40c checks it on those surfaces.
+
+A widget or Live Activity checks a role in both appearances before adopting it.
 
 The system paints elevated grounds and Mac grouped rows. A transparent role leaves that paint visible. The Watch also supplies its own ground. The Watch's label, fill and separator fallbacks are for shared views where UIKit's semantic colours are unavailable.
 
@@ -77,18 +81,18 @@ Use system text styles at every Dynamic Type size. Use the style's emphasized we
 
 | Theme value | Token | Points | Use |
 |---|---|---:|---|
-| `Spacing.space1`, `tight` | `space-1` | 4 | Glyph gaps in metadata |
-| `Spacing.space2`, `regular` | `space-2` | 8 | State line to text, play button to waveform |
-| `Spacing.space3` | `space-3` | 12 | Notice padding and glyph gap, undo padding, Mac panel row gap |
-| `Spacing.space4`, `loose`, `surfaceMargin` | `space-4` | 16 | Compact margin fallback |
-| `Spacing.space5` | `space-5` | 20 | Regular margin fallback and Mac panel padding |
-| `Spacing.space6`, `betweenSegments` | `space-6` | 24 | Between segments and above the capture field |
-| `Spacing.space8` | `space-8` | 32 | Above the first segment under the toolbar |
-| `Radii.radiusSm`, `small` | `radius-sm` | 8 | Small corners. The system draws sidebar selection. |
-| `Radii.radiusMd`, `regular` | `radius-md` | 12 | Menu-open highlight and ink canvas frame |
-| `Radii.radiusLg` | `radius-lg` | 20 | Inline notice |
-| `Radii.radiusXl` | `radius-xl` | 26 | Floating Mac panel |
-| `Radii.radiusFull`, `control` | `radius-full` | 999 | Capsule fallback. Use the system capsule shape. |
+| `spacing.space1`, `spacing.tight` | `space-1` | 4 | Glyph gaps in metadata |
+| `spacing.space2`, `spacing.regular` | `space-2` | 8 | State line to text, play button to waveform |
+| `spacing.space3` | `space-3` | 12 | Notice padding and glyph gap, undo padding, Mac panel row gap |
+| `spacing.space4`, `spacing.loose`, `spacing.surfaceMargin` | `space-4` | 16 | Compact margin fallback |
+| `spacing.space5` | `space-5` | 20 | Regular margin fallback and Mac panel padding |
+| `spacing.space6`, `spacing.betweenSegments` | `space-6` | 24 | Between segments and above the capture field |
+| `spacing.space8` | `space-8` | 32 | Above the first segment under the toolbar |
+| `radii.radiusSm`, `radii.small` | `radius-sm` | 8 | Small corners. The system draws sidebar selection. |
+| `radii.radiusMd`, `radii.regular` | `radius-md` | 12 | Menu-open highlight and ink canvas frame |
+| `radii.radiusLg` | `radius-lg` | 20 | Inline notice |
+| `radii.radiusXl` | `radius-xl` | 26 | Floating Mac panel |
+| `radii.radiusFull`, `radii.control` | `radius-full` | 999 | Capsule fallback. Use the system capsule shape. |
 | `sizes.hitTarget` | `hit-target` | 44 | Minimum tap size and the iPhone and iPad record control |
 | `sizes.hitTargetMac` | `hit-target-mac` | 28 | Minimum click size and the Mac panel record control |
 | `sizes.recordControlWatch` | `record-control-watch` | 88 | Watch record control diameter |
@@ -112,9 +116,15 @@ Resolve motion through `animation(for:reduceMotion:)`. With Reduce Motion on, th
 
 Use the system component and record the difference. Translate point sizes to Dynamic Type styles, hex values to colour roles and effects to system materials. Give controls, complications, widgets and the Live Activity the handoff's content, glyphs and strings. Let the system draw them.
 
-Use the system default when the handoff leaves something open. Add a line to section 2 of the deltas for the owner at M6. The orchestrator assigns changes to structure. Keep behaviour in the view model so a restyle stays in the view.
+Use the system default when the handoff leaves something open. Add a line to section 2 of the deltas for the owner to clear at M6. When the design changes structure, the orchestrator lists each difference in the deltas and assigns it. WP-40 owns the view models those differences touch. A late handoff or a change to structure can mean reworking the UI. Keep behaviour in view models and keep views thin so WP-40 can restyle them. [Design deltas](docs/design/deltas.md)
 
-A designed state needs a named preview and a side-by-side image rendered from it. Run the system accessibility audit in each UI smoke test. Keep any exclusion with its reason in the audit file. A Mac UI test on the build Mac may launch, read the accessibility tree, audit and end the app. Use the hosted runner or the owner's M6 checklist for input. From M4, the owner opens the Mac milestone build from the folder selected for install. [WP-40 failure rules](docs/plan/WP-40.md)
+A test fails when a cell marked as designed in the brief's state matrix has no named preview. Render the side-by-side images from those previews. WP-40c renders the Mac images.
+
+Run the system accessibility audit in each UI smoke test. Keep all exclusions in one file and give a reason for each. WP-41 makes the audit clean on every designed cell.
+
+On the build Mac, a UI test may launch the app, read the accessibility tree, audit it and end it. Keep clicks, keystrokes, menu actions and `activate()` out of those tests. Use the hosted runner or the owner's M6 checklist for input.
+
+Starting with M4, keep milestone installs and runs off the build Mac. For a Mac build, `scripts/install.sh` writes it to a folder the owner names. The owner opens it there. [WP-40 failure rules](docs/plan/WP-40.md)
 
 ## Review a view
 

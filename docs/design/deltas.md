@@ -151,3 +151,4 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-40 PR 1 | The editable note heading has no text style in the handoff. | Use the system Title 2 in its emphasized weight. |
 | 2026-11-26 | WP-40 PR 1 | The Watch handoff gives no native equivalents for the phone's paper, tertiary and quaternary inks, fills and separator. | Leave the system ground visible. Shared view fallbacks use the system's secondary colour at reduced opacity. |
 | 2026-11-26 | WP-40 PR 1 | The handoff asks for Reduce Motion crossfades. It gives no token for their timing. | Keep the theme's existing `nil` for all motion kinds until the owner rules. |
+| 2026-11-26 | WP-40 PR 1 | The accent token says the person's Mac accent wins. | Knot draws `accent` and `arrived` in ink on every platform. Mac selection, focus and system controls keep the person's accent. |

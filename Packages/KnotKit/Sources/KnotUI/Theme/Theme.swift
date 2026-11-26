@@ -8,7 +8,7 @@ public struct Theme: Sendable {
     public var spacing: Spacing
     public var radii: Radii
     public var motion: Motion
-    public let sizes = Sizes()
+    public var sizes = Sizes()
 
     public init(colors: ColorPalette, type: TypeRamp, spacing: Spacing, radii: Radii, motion: Motion) {
         self.colors = colors
