@@ -17,6 +17,24 @@ public enum RecordingPhase: Hashable, Sendable {
     }
 }
 
+/// A recording outcome is separate from the phase so typing can resume as soon as it ends.
+public enum RecordingOutcome: Hashable, Sendable {
+    case saved
+    case discarded
+    case couldNotStart
+    case saveFailed
+}
+
+/// The typed field owns one sequence of saves. A refused save can still change what the engine
+/// will try to write on end, so only an answered save lets the field ask for an end.
+private struct TypedDraft {
+    let placement: CapturePlacement
+    let shownNote: NoteID?
+    var acknowledged: (text: String, revision: Int64)?
+    var submitted: String?
+    var needsSave = false
+}
+
 /// What can be undone at once (docs/product-spec.md §7): a delete, or a move to a note of its
 /// own. The app's undo of a move is the store's return.
 public enum UndoOffer: Hashable, Sendable {
@@ -92,6 +110,18 @@ public final class NoteViewModel {
     /// "New note" was pressed: the surface shows a blank note until the next capture makes it.
     public private(set) var isNewNote = false
     public private(set) var recording: RecordingPhase = .idle
+    public private(set) var recordingOutcome: RecordingOutcome?
+    public private(set) var liveTranscript = LiveTranscript(final: "", volatile: "")
+    public private(set) var liveLevels: [Float] = []
+    public private(set) var lastRecording: CaptureID?
+    public private(set) var activeRecording: CaptureID?
+    public private(set) var isHeldRecording = false
+
+    public var recordingElapsed: Duration? {
+        if recording == .stopping { return frozenElapsed }
+        guard recording.isRecording else { return nil }
+        return recordingStartedAt.map { recordingClock.now() - $0 }
+    }
     /// Where the open capture's content is durable, once it began.
     public private(set) var capturePath: CapturePath?
     public private(set) var problem: SurfaceProblem?
@@ -137,8 +167,14 @@ public final class NoteViewModel {
     private var speech: TranscriberReadiness = .ready
     private var assets: [AssetID: Asset] = [:]
     private var chain: Task<Void, Never>?
-    private var sentText = ""
-    private var recordingPress: Press?
+    private var draft: TypedDraft?
+    private var typedWatch: Task<Void, Never>?
+    private var pressInFlight = false
+    private let recordingClock: RecordingClock
+    private var recordingStartedAt: Duration?
+    private var frozenElapsed: Duration?
+    private var recordingLive: Task<Void, Never>?
+    private var recordingOutcomeExpiry: Task<Void, Never>?
     /// The ends of the typed capture asked and not yet answered.
     private var endsAsked = 0
     /// The revision of each segment when the person began editing it, which the edit carries.
@@ -147,20 +183,29 @@ public final class NoteViewModel {
     /// change that arrives after the conflict was shown is never replaced unseen.
     private var conflictBases: [EditConflict.Target: StampedRevision] = [:]
     /// The note's revision when the person began editing its title.
-    private var titleBase: StampedRevision?
+    private var titleBase: (note: NoteID, revision: StampedRevision)?
+    private var conflictTitleNote: NoteID?
     /// Follows the running recording's capture, which can end by itself.
     private var recordingWatch: Task<Void, Never>?
     private var arrivalsCleared = false
 
     public init(
         environment: AppEnvironment, context: UIContext, surface: CaptureSurface = .app, opening note: NoteID? = nil,
-        announcer: any Announcer
+        announcer: any Announcer, recordingClock: RecordingClock = .continuous
     ) {
         self.environment = environment
         self.context = context
         self.surface = surface
         self.announcer = announcer
+        self.recordingClock = recordingClock
         self.mode = note.map(Mode.note) ?? .capture
+    }
+
+    isolated deinit {
+        typedWatch?.cancel()
+        recordingWatch?.cancel()
+        recordingLive?.cancel()
+        recordingOutcomeExpiry?.cancel()
     }
 
     // MARK: Loading
@@ -180,7 +225,7 @@ public final class NoteViewModel {
                 await show(id)
             }
         case .capture:
-            if typedCapture != nil || recording != .idle {
+            if draft != nil || !fieldText.isEmpty || recording != .idle {
                 if let id = record?.note.id { await show(id) }
             } else if isNewNote {
                 clearNote()
@@ -205,7 +250,7 @@ public final class NoteViewModel {
     public func followWindow(every interval: Duration) async {
         while !Task.isCancelled {
             do { try await Task.sleep(for: interval) } catch { return }
-            if typedCapture == nil, recording == .idle, mode == .capture { await refresh() }
+            if draft == nil, fieldText.isEmpty, recording == .idle, mode == .capture { await refresh() }
         }
     }
 
@@ -224,15 +269,21 @@ public final class NoteViewModel {
         do {
             decision = try await environment.notes.predictPlacement(request, kind: .typed, surface: surface)
         } catch {
-            clearNote()
+            if canFollowWindow { clearNote() }
             return
         }
-        if let id = decision.joinedNote { await show(id) } else { clearNote() }
+        guard canFollowWindow else { return }
+        if let id = decision.joinedNote { await show(id, followingWindow: true) } else { clearNote() }
     }
 
-    private func show(_ id: NoteID) async {
+    private var canFollowWindow: Bool {
+        mode == .capture && draft == nil && fieldText.isEmpty && !isNewNote && recording == .idle
+    }
+
+    private func show(_ id: NoteID, followingWindow: Bool = false) async {
         let read: NoteRecord?
         do { read = try await environment.notes.note(id) } catch { return }
+        guard !followingWindow || canFollowWindow else { return }
         guard let read else {
             // Purged: gone everywhere.
             if case .note = mode, !isClosed { isDeletedElsewhere = true }
@@ -247,6 +298,7 @@ public final class NoteViewModel {
         for assetID in read.liveSegments.compactMap(\.assetID) {
             if let asset = try? await environment.notes.asset(assetID) { found[assetID] = asset }
         }
+        guard !followingWindow || canFollowWindow else { return }
         assets = found
         record = read
         items = SegmentPresenter.items(
@@ -266,6 +318,9 @@ public final class NoteViewModel {
     /// in order, and the latest text wins when several wait.
     public func fieldChanged(_ text: String) {
         guard fieldAcceptsTyping else { return }
+        if draft == nil, !text.isEmpty {
+            draft = TypedDraft(placement: placement, shownNote: record?.note.id)
+        }
         fieldText = text
         enqueue { model in await model.saveField() }
     }
@@ -286,9 +341,9 @@ public final class NoteViewModel {
         guard recording == .idle else { return }
         endsAsked += 1
         enqueue { model in
-            await model.endTypedCapture()
+            let ended = await model.endTypedCapture()
             model.endsAsked -= 1
-            guard model.typedCapture == nil else { return }
+            guard ended else { return }
             model.mode = .capture
             model.isNewNote = true
             model.isDeletedElsewhere = false
@@ -304,65 +359,120 @@ public final class NoteViewModel {
         }
     }
 
-    private func saveField() async {
+    @discardableResult
+    private func saveField() async -> Bool {
         let text = fieldText
-        guard text != sentText else { return }
+        if draft == nil, !text.isEmpty {
+            draft = TypedDraft(placement: placement, shownNote: record?.note.id)
+        }
+        guard let draft else { return true }
+        if !draft.needsSave, draft.acknowledged?.text == text { return true }
         if let id = typedCapture {
+            self.draft?.submitted = text
             do {
                 let state = try await environment.engine.update(id, with: .text(text))
-                sentText = text
-                capturePath = state.path
-                clearSaveProblem()
+                await acknowledgeTyped(state, text: text)
+                return true
             } catch {
+                self.draft?.needsSave = true
                 problem = .couldNotSave(error.code)
+                return false
             }
-            return
         }
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            self.draft = nil
+            clearSaveProblem()
+            return true
+        }
         let request = CaptureRequest(
-            kind: .typed, surface: surface, placement: placement, shownNote: record?.note.id, text: text)
+            kind: .typed, surface: surface, placement: draft.placement, shownNote: draft.shownNote, text: text)
+        let states = environment.engine.states()
+        self.draft?.submitted = text
         do {
             let state = try await environment.engine.begin(request)
             typedCapture = state.captureID
-            sentText = text
-            capturePath = state.path
-            isNewNote = false
-            clearSaveProblem()
-            // The destination is fixed now: the surface shows the note the capture is in.
-            if let id = state.noteID { await show(id) } else { clearNote() }
+            watchTyped(state.captureID, in: states)
+            await acknowledgeTyped(state, text: text)
+            return true
         } catch {
+            if error.code != KnotError.segmentCaptureOpen.code,
+                error.code != KnotError.captureBlockedByRecording.code,
+                let id = error.context.captureID
+            {
+                typedCapture = id
+                watchTyped(id, in: states)
+            }
+            self.draft?.needsSave = true
             problem = .couldNotSave(error.code)
+            return false
         }
     }
 
-    /// Ends the typed capture, and returns false when the text stays on the surface instead.
-    ///
-    /// A capture ends only when what the field holds is what the engine answered as saved. When
-    /// the last save failed, the capture stays open with the text in the field, the surface says
-    /// it could not save, and the next save or Done carries the whole text again (§4.4).
+    private func acknowledgeTyped(_ state: CaptureState, text: String) async {
+        draft?.acknowledged = (text, state.durableRevision)
+        draft?.needsSave = false
+        capturePath = state.path
+        isNewNote = false
+        clearSaveProblem()
+        if let note = state.noteID, record?.note.id != note { await show(note) }
+    }
+
+    private func watchTyped(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
+        typedWatch?.cancel()
+        typedWatch = Task { [weak self] in
+            for await state in states where state.captureID == id && state.outcome != .open {
+                self?.enqueue { model in await model.acceptTypedEnd(state) }
+                return
+            }
+        }
+    }
+
+    private func acceptTypedEnd(_ state: CaptureState) async {
+        guard typedCapture == state.captureID, let draft else { return }
+        let endedText: String?
+        switch state.outcome {
+        case .stored:
+            if let saved = draft.acknowledged, saved.revision == state.durableRevision {
+                endedText = saved.text
+            } else if state.path == .store,
+                let stored = try? await environment.notes.segment(SegmentID(state.captureID))
+            {
+                endedText = stored.text
+            } else {
+                // Only the field sends updates. An end can make its last refused save durable.
+                endedText = state.durableRevision > (draft.acknowledged?.revision ?? 0) ? draft.submitted : nil
+            }
+        case .discardedEmpty:
+            let emptyText =
+                draft.acknowledged?.revision == state.durableRevision
+                ? draft.acknowledged?.text : draft.submitted
+            endedText = emptyText.flatMap { CaptureText.isEmpty($0) ? $0 : nil }
+        default:
+            endedText = nil
+        }
+        if let endedText, fieldText.hasPrefix(endedText) {
+            fieldText = String(fieldText.dropFirst(endedText.count))
+        }
+        typedWatch?.cancel()
+        typedWatch = nil
+        typedCapture = nil
+        self.draft = nil
+        capturePath = state.path
+        if fieldText.isEmpty { clearSaveProblem() }
+        if let note = state.noteID, !recording.isRecording { await show(note) }
+    }
+
+    /// End follows an acknowledged write of exactly the field's current text.
     @discardableResult
     private func endTypedCapture() async -> Bool {
-        guard let id = typedCapture else {
-            if fieldText.isEmpty { return true }
-            // Text that could not begin a capture stays in the field: try once more.
-            await saveField()
-            guard typedCapture != nil else { return false }
-            return await endTypedCapture()
-        }
-        if fieldText != sentText { await saveField() }
-        guard fieldText == sentText else { return false }
+        guard await saveField() else { return false }
+        guard let id = typedCapture else { return fieldText.isEmpty }
         do {
             let state = try await environment.engine.end(id)
-            capturePath = state.path
-            typedCapture = nil
-            fieldText = ""
-            sentText = ""
-            clearSaveProblem()
-            if let note = state.noteID, case .capture = mode, state.outcome == .stored { await show(note) }
+            await acceptTypedEnd(state)
             await refresh()
-            return true
+            return fieldText.isEmpty
         } catch {
-            // The surface stays open with the text in it and says it could not save (§4.4).
             problem = .couldNotSave(error.code)
             return false
         }
@@ -383,100 +493,168 @@ public final class NoteViewModel {
 
     /// A press of the record control, or of the Mac hotkey's hold.
     public func press(_ kind: PressKind) {
-        let now = environment.clock.now()
-        let activity: RecorderActivity =
-            switch recording {
-            case .idle: .idle
-            case .starting: .starting
-            case .stopping: .stopping
-            case .recording: .recording(startedBy: recordingPress ?? Press(.tap, at: .distantPast))
+        guard !pressInFlight else { return }
+        pressInFlight = true
+        let press = Press(kind, at: environment.clock.now())
+        let before = recording
+        if before.isRecording {
+            if kind != .holdStart {
+                frozenElapsed = recordingElapsed
+                recording = .stopping
             }
-        let decision = RecordingPressRule.decide(Press(kind, at: now), recorder: activity, saved: nil)
-        switch decision {
-        case .ignore:
-            return
-        case .start, .recoverOrphanThenStart:
+        } else if kind != .holdRelease {
             recording = .starting
-            recordingPress = Press(kind, at: now)
-            enqueue { model in await model.startRecording() }
-        case .stopAndKeep, .stopAndDiscard:
-            guard case .recording(let id) = recording else { return }
-            recording = .stopping
-            let discard = decision == .stopAndDiscard
-            enqueue { model in await model.stopRecording(id, discard: discard) }
         }
+        enqueue { model in await model.sendPress(press, before: before) }
     }
 
-    private func startRecording() async {
-        // Starting a recording ends the typed capture: its text is saved as it stands, and the
-        // recording becomes the next segment of the same note (rule 15). Text that cannot be
-        // saved is never left behind a recording, which would block the field: the recording
-        // does not start, and the surface keeps saying the text could not be saved.
-        guard await endTypedCapture() else {
-            recording = .idle
-            recordingPress = nil
+    private func sendPress(_ press: Press, before: RecordingPhase) async {
+        defer { pressInFlight = false }
+        if recording == .starting, !(await saveField()) {
+            recording = before
+            environment.cues.emit(.couldNotStart)
             announcer.announce(.recordingCouldNotStart)
             return
         }
         let request = CaptureRequest(kind: .voice, surface: surface, placement: placement, shownNote: record?.note.id)
-        // Subscribed before the start, so that a recording that ends at once is not missed.
         let states = environment.engine.states()
         do {
-            let state = try await environment.engine.begin(request)
-            recording = .recording(state.captureID)
-            watchRecording(state.captureID, in: states)
-            capturePath = state.path
-            isNewNote = false
-            if problem != nil, case .couldNotStartRecording = problem { problem = nil }
-            announcer.announce(.recordingStarted)
-            if let id = state.noteID { await show(id) }
+            switch try await environment.engine.press(press, recording: request) {
+            case .ignored:
+                recording = before
+            case .started(let state):
+                watchRecordingEnd(state.captureID, in: states)
+                await adoptRecording(state, startedHere: press.kind)
+            case .stopped(let state):
+                await finishRecording(state)
+            }
         } catch {
-            recording = .idle
-            recordingPress = nil
-            problem = .couldNotStartRecording(error.code)
-            announcer.announce(.recordingCouldNotStart)
+            recording = before
+            if !before.isRecording, error.code != KnotError.captureBlockedByRecording.code,
+                error.code != KnotError.segmentCaptureOpen.code
+            {
+                showRecordingOutcome(.couldNotStart)
+                problem = .couldNotStartRecording(error.code)
+                announcer.announce(.recordingCouldNotStart)
+            } else if before.isRecording {
+                announceFailedStop()
+            }
         }
     }
 
-    /// A recording can end by itself: at its limit, when a call interrupts it, or when it cannot
-    /// be saved further. The surface then leaves the recording state with the same cue as a
-    /// stop, and takes typing again (docs/product-spec.md §4.2 and §4.5).
-    private func watchRecording(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
+    /// A surface learns about recordings started by another entry point at the next engine state.
+    public func observeRecordings() async {
+        for await state in environment.engine.states() where state.kind == .voice {
+            if state.outcome == .open {
+                guard recording == .idle, !pressInFlight else { continue }
+                await adoptRecording(state, startedHere: nil)
+            } else {
+                acceptRecordingEnd(state)
+            }
+        }
+    }
+
+    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?) async {
+        guard state.outcome == .open else {
+            await finishRecording(state)
+            return
+        }
+        showRecordingOutcome(nil)
+        activeRecording = state.captureID
+        isHeldRecording = startedHere == .holdStart
+        recording = .recording(state.captureID)
+        recordingStartedAt = startedHere == nil ? nil : recordingClock.now()
+        liveTranscript = LiveTranscript(final: "", volatile: "")
+        liveLevels = []
+        capturePath = state.path
+        isNewNote = false
+        if case .couldNotStartRecording = problem { problem = nil }
+        followLiveRecording(state.captureID)
+        announcer.announce(.recordingStarted)
+        if mode == .capture, let id = state.noteID { await show(id) }
+    }
+
+    private func acceptRecordingEnd(_ state: CaptureState) {
+        guard activeRecording == state.captureID else { return }
+        enqueue { model in
+            guard model.activeRecording == state.captureID else { return }
+            await model.finishRecording(state)
+        }
+    }
+
+    private func watchRecordingEnd(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
         recordingWatch?.cancel()
         recordingWatch = Task { [weak self] in
             for await state in states where state.captureID == id && state.outcome != .open {
-                self?.recordingEndedByItself(state)
+                self?.acceptRecordingEnd(state)
                 return
             }
         }
     }
 
-    private func recordingEndedByItself(_ state: CaptureState) {
-        // A stop the person pressed is already on its way, and says its own cue.
-        guard recording == .recording(state.captureID) else { return }
-        recording = .idle
-        recordingPress = nil
-        announcer.announce(state.outcome == .discardedEmpty ? .recordingDiscarded : .recordingStopped)
-        enqueue { model in
-            if let note = state.noteID, state.outcome == .stored { await model.show(note) }
-            await model.refresh()
+    private func followLiveRecording(_ id: CaptureID) {
+        recordingLive?.cancel()
+        let live = environment.engine.live(id)
+        recordingLive = Task { [weak self] in
+            for await event in live {
+                guard let self, recording == .recording(id) else { return }
+                switch event {
+                case .level(let peak, _):
+                    liveLevels.append(peak)
+                    if liveLevels.count > 30 { liveLevels.removeFirst() }
+                case .transcript(let transcript):
+                    liveTranscript = transcript
+                case .transcriptUnavailable:
+                    break
+                }
+            }
         }
     }
 
-    private func stopRecording(_ id: CaptureID, discard: Bool) async {
+    private func finishRecording(_ state: CaptureState) async {
         recordingWatch?.cancel()
         recordingWatch = nil
-        let state: CaptureState?
-        if discard {
-            state = try? await environment.engine.discard(id)
-        } else {
-            state = try? await environment.engine.end(id)
-        }
+        recordingLive?.cancel()
+        recordingLive = nil
+        activeRecording = nil
+        isHeldRecording = false
         recording = .idle
-        recordingPress = nil
-        announcer.announce(discard || state?.outcome == .discardedEmpty ? .recordingDiscarded : .recordingStopped)
-        if let note = state?.noteID, state?.outcome == .stored { await show(note) }
+        capturePath = state.path
+        switch state.outcome {
+        case .stored:
+            lastRecording = state.captureID
+            showRecordingOutcome(.saved)
+            announcer.announce(.recordingStopped)
+            if mode == .capture, let note = state.noteID { await show(note) }
+        case .discardedEmpty:
+            showRecordingOutcome(.discarded)
+            announcer.announce(.recordingDiscarded)
+        case .failed:
+            announceFailedStop()
+        case .open:
+            break
+        }
         await refresh()
+    }
+
+    private func announceFailedStop() {
+        showRecordingOutcome(.saveFailed)
+        announcer.announce(.recordingSaveFailed)
+    }
+
+    private func showRecordingOutcome(_ outcome: RecordingOutcome?) {
+        recordingOutcomeExpiry?.cancel()
+        recordingOutcome = outcome
+        guard outcome == .saved || outcome == .discarded else { return }
+        let clock = recordingClock
+        let deadline = clock.now() + (outcome == .saved ? .seconds(1) : .seconds(3))
+        recordingOutcomeExpiry = Task { [weak self] in
+            do {
+                try await clock.sleepUntil(deadline)
+                try Task.checkCancellation()
+                self?.recordingOutcome = nil
+            } catch {}
+        }
     }
 
     // MARK: Segments and the note
@@ -495,7 +673,7 @@ public final class NoteViewModel {
 
     /// The person began editing the title: it carries the note's revision they read now.
     public func beginEditingTitle() {
-        titleBase = record?.revision
+        titleBase = record.map { ($0.note.id, $0.revision) }
     }
 
     /// The person left the title without changing it.
@@ -508,23 +686,23 @@ public final class NoteViewModel {
     /// meanwhile is never replaced unseen: the store refuses it, nothing is written, and
     /// `editConflicts` keeps the draft for the person to decide.
     public func editText(of segment: SegmentID, to text: String) {
+        guard let base = editBases.removeValue(forKey: segment) ?? record?.revision(of: segment) else { return }
         enqueue { model in
-            guard let record = model.record else { return }
-            let base = model.editBases.removeValue(forKey: segment) ?? record.revision(of: segment)
             await model.replace(segment, with: text, ifRevision: base)
         }
     }
 
-    /// Sets the note's title, or clears it with `nil` or blank text, against the revision read
-    /// when the title's edit began.
+    /// Sets or clears the title on the note and revision the edit showed.
     public func setTitle(_ title: String?) {
+        let base = titleBase ?? record.map { ($0.note.id, $0.revision) }
+        titleBase = nil
+        guard let base else { return }
         enqueue { model in
-            guard let record = model.record else { return }
-            let base = model.titleBase ?? record.revision
-            model.titleBase = nil
-            await model.retitle(title, ifRevision: base)
+            await model.retitle(base.note, to: title, ifRevision: base.revision)
         }
     }
+
+    public func canKeepEdit(_ target: EditConflict.Target) -> Bool { conflictBases[target] != nil }
 
     /// Commits the kept draft of `target` over what arrived.
     public func keepMyEdit(_ target: EditConflict.Target) {
@@ -533,14 +711,16 @@ public final class NoteViewModel {
             guard model.editConflicts[target] == conflict else { return }
             // The revision of what the conflict showed. If it is stale by now, nothing is written
             // and the conflict shows the newer arrival.
-            let shown = model.conflictBases[target]
+            guard let shown = model.conflictBases[target] else { return }
             model.editConflicts[target] = nil
             model.conflictBases[target] = nil
             switch conflict.target {
             case .segment(let segment):
                 await model.replace(segment, with: conflict.draft ?? "", ifRevision: shown)
             case .title:
-                await model.retitle(conflict.draft, ifRevision: shown)
+                if let id = model.conflictTitleNote {
+                    await model.retitle(id, to: conflict.draft, ifRevision: shown)
+                }
             }
         }
     }
@@ -551,7 +731,7 @@ public final class NoteViewModel {
         conflictBases[target] = nil
     }
 
-    private func replace(_ segment: SegmentID, with text: String, ifRevision: StampedRevision?) async {
+    private func replace(_ segment: SegmentID, with text: String, ifRevision: StampedRevision) async {
         let replacement = TextReplacement(
             segment: segment, text: text, origin: .edited, writer: .app, ifRevision: ifRevision)
         do {
@@ -561,10 +741,10 @@ public final class NoteViewModel {
             conflictBases[.segment(segment)] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
-            conflictBases[.segment(segment)] = record?.revision(of: segment)
+            let arrived = try? await environment.notes.segment(segment)
+            conflictBases[.segment(segment)] = arrived?.revision
             editConflicts[.segment(segment)] = EditConflict(
-                target: .segment(segment), draft: text,
-                arrived: record?.segments.first { $0.id == segment }?.text)
+                target: .segment(segment), draft: text, arrived: arrived?.text)
             return
         } catch {
             problem = .actionRefused(error.code)
@@ -572,8 +752,7 @@ public final class NoteViewModel {
         await refresh()
     }
 
-    private func retitle(_ title: String?, ifRevision: StampedRevision?) async {
-        guard let id = record?.note.id else { return }
+    private func retitle(_ id: NoteID, to title: String?, ifRevision: StampedRevision) async {
         let value = title.flatMap { CaptureText.isEmpty($0) ? nil : $0 }
         do {
             _ = try await environment.notes.setTitle(value, of: id, ifRevision: ifRevision)
@@ -581,8 +760,10 @@ public final class NoteViewModel {
             conflictBases[.title] = nil
         } catch  where error.code == KnotError.revisionStale.code {
             await refresh()
-            conflictBases[.title] = record?.revision
-            editConflicts[.title] = EditConflict(target: .title, draft: value, arrived: record?.note.title)
+            let arrived = try? await environment.notes.note(id)
+            conflictTitleNote = id
+            conflictBases[.title] = arrived?.revision
+            editConflicts[.title] = EditConflict(target: .title, draft: value, arrived: arrived?.note.title)
             return
         } catch {
             problem = .actionRefused(error.code)
@@ -752,7 +933,22 @@ public final class NoteViewModel {
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url
     }
 
+    /// Reads the stored drawing through the asset and rendering ports.
+    public func drawing(of item: SegmentItem, scale: Double) async throws(KnotError) -> RenderedDrawing? {
+        guard item.kind == .ink, let file = await file(of: item) else { return nil }
+        let bytes: Data
+        do {
+            bytes = try await Task.detached { try Data(contentsOf: file, options: .mappedIfSafe) }.value
+        } catch {
+            throw .drawingUnreadable
+        }
+        return try await environment.drawingImages.image(of: InkDrawingData(bytes: bytes), scale: scale)
+    }
+
+    public func dismissRecordingOutcome() { showRecordingOutcome(nil) }
+
     public func dismissProblem() {
+        if recordingOutcome == .couldNotStart { showRecordingOutcome(nil) }
         problem = nil
     }
 

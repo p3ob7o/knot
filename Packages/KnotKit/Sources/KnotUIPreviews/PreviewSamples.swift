@@ -67,6 +67,19 @@
             id: ids.make(), title: "Recording, 0:42", preview: nil, kinds: [.voice], time: clock.now(),
             hasPending: true, hasFailed: false, hasArrived: false)
 
+        static let liveID: CaptureID = KnotUIPreviews.environment.ids.make()
+
+        static let pendingRecording: SegmentItem = {
+            let id: SegmentID = ids.make()
+            let asset = Asset(
+                id: ids.make(), segmentID: id, kind: .audio, byteCount: 0,
+                sha256: String(repeating: "0", count: 64))
+            return SegmentItem(
+                id: id, kind: .voice, text: "", rawTranscript: nil, state: .savedTextOnItsWay,
+                attachment: .here(asset), duration: .seconds(42), originMark: nil, isConflictCopy: false,
+                hasArrived: false, actions: [.play, .moveToOwnNote, .delete])
+        }()
+
         /// Peaks for the waveform.
         public static let levels: [Float] = (0..<48).map { index in
             Float(0.2 + 0.7 * abs(sin(Double(index) / 4)))

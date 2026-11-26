@@ -1,3 +1,4 @@
+import ImageIO
 import KnotCore
 import SwiftUI
 
@@ -7,6 +8,7 @@ public struct SegmentHandlers {
     public var action: (SegmentAction) -> Void
     public var togglePlay: () -> Void
     public var seek: (Duration) -> Void
+    public var drawing: (Double) async throws(KnotError) -> RenderedDrawing?
     /// The person began editing the text: the edit carries the revision read now.
     public var beginEdit: () -> Void
     /// The person left the text unchanged: the edit's base ends with it.
@@ -15,7 +17,8 @@ public struct SegmentHandlers {
     public init(
         edit: @escaping (String) -> Void, action: @escaping (SegmentAction) -> Void,
         togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in },
-        beginEdit: @escaping () -> Void = {}, endEdit: @escaping () -> Void = {}
+        beginEdit: @escaping () -> Void = {}, endEdit: @escaping () -> Void = {},
+        drawing: @escaping (Double) async throws(KnotError) -> RenderedDrawing? = { _ in nil }
     ) {
         self.beginEdit = beginEdit
         self.endEdit = endEdit
@@ -23,6 +26,7 @@ public struct SegmentHandlers {
         self.action = action
         self.togglePlay = togglePlay
         self.seek = seek
+        self.drawing = drawing
     }
 
     /// Handlers that do nothing, for previews of a still state.
@@ -33,11 +37,16 @@ public struct SegmentHandlers {
 /// alone, and each is edited on its own: a selection does not cross from one into the next,
 /// and undo covers the segment being edited (docs/product-spec.md §7).
 public struct SegmentView: View {
+    @Environment(\.displayScale) private var displayScale
+    @State private var drawing: CGImage?
+    @State private var drawingUnreadable = false
     @Environment(\.knotTheme) private var theme
     let item: SegmentItem
     let text: String
     let isShowingOriginal: Bool
     let playback: PlaybackState
+    let secondaryText: Bool
+    let initiallyEditing: Bool
     let handlers: SegmentHandlers
 
     /// - Parameters:
@@ -45,12 +54,14 @@ public struct SegmentView: View {
     ///   - playback: the player's state while this segment's recording is loaded.
     public init(
         _ item: SegmentItem, text: String? = nil, isShowingOriginal: Bool = false, playback: PlaybackState = .empty,
-        handlers: SegmentHandlers
+        secondaryText: Bool = false, initiallyEditing: Bool = false, handlers: SegmentHandlers
     ) {
         self.item = item
         self.text = text ?? item.text
         self.isShowingOriginal = isShowingOriginal
         self.playback = playback
+        self.secondaryText = secondaryText
+        self.initiallyEditing = initiallyEditing
         self.handlers = handlers
     }
 
@@ -62,20 +73,42 @@ public struct SegmentView: View {
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .ink:
-                InkSegmentPlaceholder(item: item)
+                if let drawing {
+                    Image(drawing, scale: displayScale, label: Text("Sketch", bundle: .module))
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    InkSegmentPlaceholder(item: item)
+                }
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .typed:
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .unknown:
                 EmptyView()
             }
             if let mark = item.originMark { OriginMarkView(mark) }
+        }
+        .task(id: DrawingRequest(attachment: item.attachment, scale: displayScale)) {
+            guard item.kind == .ink else { return }
+            drawing = nil
+            drawingUnreadable = false
+            do throws(KnotError) {
+                guard let rendered = try await handlers.drawing(displayScale), !Task.isCancelled else { return }
+                drawing = CGImageSourceCreateWithData(rendered.png as CFData, nil)
+                    .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+                drawingUnreadable = drawing == nil
+            } catch {
+                if !Task.isCancelled { drawingUnreadable = error.code == KnotError.drawingUnreadable.code }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityActions {
@@ -91,7 +124,15 @@ public struct SegmentView: View {
     @ViewBuilder private var header: some View {
         HStack(spacing: theme.spacing.regular) {
             if item.hasArrived { ArrivedMarker() }
-            if item.state != .ready { SegmentStateLabel(item.state) }
+            if item.kind == .ink, item.state == .savedTextOnItsWay {
+                Text("Recognising handwriting…", bundle: .module)
+                    .font(theme.type[.caption])
+                    .foregroundStyle(theme.colors[.textSecondary])
+            } else if drawingUnreadable {
+                SegmentStateLabel(.keptNoText)
+            } else if item.state != .ready {
+                SegmentStateLabel(item.state)
+            }
             if item.isConflictCopy {
                 Text("Edited on another device at the same time", bundle: .module)
                     .font(theme.type[.caption])
@@ -146,6 +187,8 @@ struct SegmentText: View {
     let text: String
     let isShowingOriginal: Bool
     let edit: (String) -> Void
+    let secondaryText: Bool
+    let initiallyEditing: Bool
     var beginEdit: () -> Void = {}
     var endEdit: () -> Void = {}
 
@@ -156,8 +199,12 @@ struct SegmentText: View {
             }
             .textFieldStyle(.plain)
             .font(theme.type[.body])
+            .foregroundStyle(theme.colors[secondaryText ? .textSecondary : .textPrimary])
             .focused($isEditing)
-            .onAppear { draft = text }
+            .onAppear {
+                draft = text
+                isEditing = initiallyEditing
+            }
             .onChange(of: text) { _, new in if !isEditing { draft = new } }
             .onChange(of: isEditing) { _, editing in if editing { beginEdit() } else { commit() } }
             .onSubmit(commit)
@@ -190,9 +237,14 @@ struct VoiceSegmentBody: View {
         case .here:
             AudioPlayerView(
                 state: playback, length: item.duration, onToggle: handlers.togglePlay, onSeek: handlers.seek)
-        case .onAnotherDevice:
-            notice(
-                Text("The recording downloads when this note opens.", bundle: .module), symbol: "icloud.and.arrow.down")
+        case .onAnotherDevice(let asset):
+            if asset.availability == .downloading {
+                notice(Text("Downloading recording…", bundle: .module), symbol: "icloud.and.arrow.down")
+            } else {
+                notice(
+                    Text("The recording downloads when this note opens.", bundle: .module),
+                    symbol: "icloud.and.arrow.down")
+            }
         case .missing:
             // A recording purged after the restored copy was made: missing, never a broken player.
             notice(Text("Recording missing", bundle: .module), symbol: "waveform.slash")
@@ -212,8 +264,12 @@ struct VoiceSegmentBody: View {
     }
 }
 
-/// An ink segment until its own view arrives with WP-21's second pull request: the drawing's
-/// place, with its recognised text below.
+private struct DrawingRequest: Equatable {
+    let attachment: AttachmentState
+    let scale: Double
+}
+
+/// Holds the drawing's place while the image is unavailable. Its recognised text stays visible.
 struct InkSegmentPlaceholder: View {
     @Environment(\.knotTheme) private var theme
     let item: SegmentItem
@@ -221,7 +277,7 @@ struct InkSegmentPlaceholder: View {
     var body: some View {
         RoundedRectangle(cornerRadius: theme.radii.regular)
             .fill(theme.colors[.surface])
-            .frame(minHeight: 60)
+            .frame(minHeight: theme.spacing.betweenSegments)
             .overlay {
                 Image(systemName: item.attachment == .missing ? "scribble.variable" : "scribble")
                     .foregroundStyle(theme.colors[.textSecondary])

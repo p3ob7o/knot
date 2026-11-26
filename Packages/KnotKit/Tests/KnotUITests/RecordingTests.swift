@@ -40,6 +40,89 @@ import Testing
         #expect(stored?.kind == .voice)
     }
 
+    @Test(arguments: [false, true])
+    func aFailedStopAnnouncesThatTheRecordingCouldNotBeSaved(throwsOnStop: Bool) async {
+        let rig = StoreRig()
+        rig.environment.engine = FailedStopEngine(id: rig.ids.make(), throwsOnStop: throwsOnStop)
+        let model = rig.capture()
+        model.toggleRecording()
+        await settled(model)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recordingOutcome == .saveFailed)
+        #expect(rig.announcer.heard == [.recordingStarted, .recordingSaveFailed])
+        #expect(Announcement.recordingSaveFailed.text == "Knot couldn’t finish saving the recording.")
+    }
+
+    @Test func aRecordingStartedByAnotherSurfaceDisablesTheFieldAndCanBeStoppedHere() async throws {
+        let rig = await PreviewRig.make()
+        defer { rig.remove() }
+        let clock = FakeClock()
+        let engine = ObservedCaptureEngine(rig.environment.engine)
+        var environment = rig.environment
+        environment.engine = engine
+        environment.clock = clock
+        let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+        let observing = Task { await model.observeRecordings() }
+        defer { observing.cancel() }
+        try #require(await eventually("the surface to subscribe to recording states") { engine.isObserving })
+
+        let outcome = try await rig.environment.engine.press(
+            Press(.tap, at: clock.now()), recording: CaptureRequest(kind: .voice, surface: .control))
+        guard case .started(let state) = outcome else {
+            Issue.record("The control did not start a recording")
+            return
+        }
+        try #require(
+            await eventually("the surface to see the live capture") {
+                model.recording == .recording(state.captureID)
+            })
+        #expect(model.recordingElapsed == nil)
+        #expect(!model.fieldAcceptsTyping)
+        model.fieldChanged("Typing must wait")
+        #expect(model.fieldText.isEmpty)
+        #expect(model.problem == nil)
+
+        clock.advance(by: 2)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recording == .idle)
+        #expect(model.recordingOutcome == .saved)
+    }
+
+    @Test(arguments: [false, true])
+    func aRecordingOutcomeExpiresOnTheInjectedClock(discard: Bool) async throws {
+        let rig = await PreviewRig.make()
+        defer { rig.remove() }
+        let pressClock = FakeClock()
+        let timer = ManualRecordingClock()
+        var environment = rig.environment
+        environment.clock = pressClock
+        let model = NoteViewModel(
+            environment: environment, context: rig.context, announcer: rig.announcer, recordingClock: timer.clock)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recordingElapsed == .zero)
+        timer.advance(by: .milliseconds(400))
+        pressClock.advance(by: discard ? 0.4 : 2)
+        #expect(model.recordingElapsed == .milliseconds(400))
+
+        model.toggleRecording()
+        #expect(model.recordingElapsed == .milliseconds(400))
+        timer.advance(by: .milliseconds(600))
+        #expect(model.recordingElapsed == .milliseconds(400))
+        await settled(model)
+        let duration: Duration = discard ? .seconds(3) : .seconds(1)
+        let expected: RecordingOutcome = discard ? .discarded : .saved
+        try #require(await eventually("the outcome to schedule its expiry") { timer.deadline != nil })
+        try #require(timer.deadline == .seconds(1) + duration)
+        #expect(model.recordingOutcome == expected)
+        timer.advance(by: duration - .milliseconds(50))
+        #expect(model.recordingOutcome == expected)
+        timer.advance(by: .milliseconds(50))
+        #expect(await eventually("expiry at the controlled deadline") { model.recordingOutcome == nil })
+    }
+
     /// The second tap's time is set by the test, on a clock it moves itself: never by how fast
     /// the test runs (docs/product-spec.md §4.2, a tap stopped within a second is discarded).
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {
@@ -157,5 +240,37 @@ import Testing
         await settled(model)
         #expect(model.fieldText == "keep me")
         #expect(model.problem == .couldNotSave(KnotError.portUnavailable.code))
+    }
+}
+
+private actor FailedStopEngine: CaptureEngine {
+    let id: CaptureID
+    let throwsOnStop: Bool
+    private var started = false
+
+    init(id: CaptureID, throwsOnStop: Bool) {
+        self.id = id
+        self.throwsOnStop = throwsOnStop
+    }
+
+    nonisolated func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+    func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+    func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        throw .portUnavailable
+    }
+    func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+    func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome {
+        if !started {
+            started = true
+            return .started(state(.open))
+        }
+        if throwsOnStop { throw .writeFailed }
+        return .stopped(state(.failed(KnotError.writeFailed.code)))
+    }
+
+    private func state(_ outcome: CaptureOutcome) -> CaptureState {
+        CaptureState(captureID: id, kind: .voice, noteID: nil, outcome: outcome, path: .store, durableRevision: 1)
     }
 }

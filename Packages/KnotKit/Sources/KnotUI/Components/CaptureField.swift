@@ -12,17 +12,19 @@ public struct CaptureField: View {
     let text: String
     let acceptsTyping: Bool
     let isFocused: FocusState<Bool>.Binding
+    let typeRole: TypeRole
     let onChange: @MainActor (String) -> Void
     let onSubmit: () -> Void
 
     public init(
         text: String, acceptsTyping: Bool, isFocused: FocusState<Bool>.Binding,
-        onChange: @escaping @MainActor (String) -> Void,
+        typeRole: TypeRole = .body, onChange: @escaping @MainActor (String) -> Void,
         onSubmit: @escaping () -> Void
     ) {
         self.text = text
         self.acceptsTyping = acceptsTyping
         self.isFocused = isFocused
+        self.typeRole = typeRole
         self.onChange = onChange
         self.onSubmit = onSubmit
     }
@@ -33,7 +35,7 @@ public struct CaptureField: View {
         ) {
             Text("Type a thought", bundle: .module)
         }
-        .font(theme.type[.body])
+        .font(theme.type[typeRole])
         .textFieldStyle(.plain)
         .focused(isFocused)
         .disabled(!acceptsTyping)
@@ -45,7 +47,7 @@ public struct CaptureField: View {
         .accessibilityHint(
             acceptsTyping
                 ? Text("Type to add to this note.", bundle: .module)
-                : Text("Typing waits while a recording runs.", bundle: .module))
+                : Text(verbatim: ""))
     }
 }
 

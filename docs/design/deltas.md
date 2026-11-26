@@ -148,3 +148,18 @@ An implementer who meets a state or a detail that the handoff does not design us
 
 | Date | Pull request | What the handoff does not say | What was used |
 |---|---|---|---|
+| 2026-11-26 | WP-21 PR 2 | Done when the field has nothing to finish or is blocked | Keeps the trailing confirmation control visible and disables it. |
+| 2026-11-26 | WP-21 PR 2 | The append window running out with an empty field | The earlier note leaves with the theme’s list change. |
+| 2026-11-26 | WP-21 PR 2 | Where the short-recording message sits | Inline notice above the capture page. |
+| 2026-11-26 | WP-21 PR 2 | No microphone connected, other start failures, or typed text that cannot be saved | Inline notice using the reason available to the view model. The field keeps text that could not be saved. |
+| 2026-11-26 | WP-21 PR 2 | What the Mac panel’s hints say before the microphone is live | Keeps the ordinary key hints until the hold is live. |
+| 2026-11-26 | WP-21 PR 2 | Ink recognition and the unavailable drawing | A caption while handwriting is being recognised. A placeholder retains the recognisable text when the renderer is unavailable. |
+| 2026-11-26 | WP-21 PR 2 | Sync status and iCloud storage full | A secondary caption under the sync toggle. Storage full says notes and recordings stay on this device. |
+| 2026-11-26 | WP-21 PR 2 | The unsuccessful recording save | The inline notice is temporary. The product spec §4.5 calls for the segment itself to say why, as [S-23](handoff-differences.md) records. That change awaits the open point “Why a recording ended”. |
+| 2026-11-26 | WP-21 PR 2 | A first restore, empty search results and an export in progress | The matrix previews use system progress and search empty states with the shared stream and settings components. |
+| 2026-11-26 | WP-21 PR 2 | Account or zone changes, export outcomes, a shortcut already taken and model downloading | The matrix previews pair inline notices or a system progress view with the settings or first-run controls. |
+| 2026-11-26 | WP-21 PR 2 | The recording destination, low storage and a dimmed Watch screen | The matrix previews show the shared controls with a text-only destination and storage notice, and dim the live example. |
+| 2026-11-26 | WP-21 PR 2 | Note title editing and the largest-text or compact column examples | The open note uses a plain field in the title role. The previews use system accessibility text sizing and the shared capture column at compact width. |
+| 2026-11-26 | WP-21 PR 2 | What a conflict shows before “Keep mine” | The notice shows the changed text that the conditional write would replace. |
+| 2026-11-26 | WP-21 PR 2 | The append caption for a note from another day | Shows the time alone in the region’s clock, with no day period. |
+| 2026-11-26 | WP-21 PR 2 | The title of a note shown above the capture field | The capture surface shows the append caption and the segments. The title can be edited when the note is opened. |
