@@ -61,7 +61,8 @@
                     set: { minutes in Task { await model.setAppendWindow(minutes: minutes) } })
                 #if os(iOS)
                     HStack {
-                        let layout = dynamicTypeSize.isAccessibilitySize
+                        let layout =
+                            dynamicTypeSize.isAccessibilitySize
                             ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())
                         layout {
                             Text(row.title)
