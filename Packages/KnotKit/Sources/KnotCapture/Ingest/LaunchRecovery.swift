@@ -302,6 +302,9 @@ public struct LaunchRecovery: Sendable {
     /// end, an unmarked manifest and no reason on the segment, and keeps none. It needs two deaths
     /// in a row, the second within a few milliseconds.
     ///
+    /// Known, and left (the third round): a manifest that is on the drive and cannot be read gives
+    /// `recovered`, as the recorder's port reads it, and no later reading of it clears that.
+    ///
     /// A reason that a newer build wrote reads as a stop through the recorder's port, as pull
     /// request 128 ruled, so recovery keeps none for it.
     private static func reason(of recording: RecordedAudio, row: Capture?) -> RecordingEndReason? {
@@ -315,6 +318,8 @@ public struct LaunchRecovery: Sendable {
     /// none for an end's time alone or for a reason this build does not know, and `recovered` when
     /// it has neither or cannot be read. Only a row that the launch found open comes here.
     private static func orphanReason(_ manifest: CaptureManifest?) -> RecordingEndReason? {
+        // A manifest that names another capture, or another kind, is no manifest of this
+        // recording's (`ownManifest(of:)`), as the recorder's port takes it.
         guard let manifest else { return .recovered }
         if let reason = manifest.recordingEnding { return reason.isUnknown ? nil : reason }
         return manifest.endedAt == nil ? .recovered : nil
@@ -336,10 +341,12 @@ public struct LaunchRecovery: Sendable {
     }
 
     /// Ends the row of a recording whose audio will not convert as failed with the error's
-    /// code. The working file and its manifest stay. A row that the launch found open had no end
-    /// before this one: its segment takes `reason`, the one recovery decided for it, right after
-    /// the end, so that the launch that stores it later, finding a row with an end, still finds
-    /// the reason on the segment (the review of pull request 130, B3).
+    /// code. The working file and its manifest stay. The segment takes `reason`, the one recovery
+    /// decided for the capture from what the launch found, right after the end, so that the launch
+    /// that stores it later, finding a row with an end, still finds the reason on the segment (the
+    /// review of pull request 130, B3). That holds also for a row that `finishWithoutRow` records
+    /// as a late start, ended and waiting for its file, beside a capture of this launch: the launch
+    /// found it with no row.
     private func failConversion(
         _ row: Capture, _ recording: RecordedAudio, _ error: KnotError, reason: RecordingEndReason?
     ) async throws(KnotError) -> Outcome {
@@ -348,7 +355,7 @@ public struct LaunchRecovery: Sendable {
                 CaptureEnd(
                     captureID: row.id, endedAt: row.startedAt.addingTimeInterval(seconds(recording.duration)),
                     outcome: .failed(error.code), revision: max(row.revision, recording.frames)))
-            if row.outcome == .open { await endings.keep(reason, of: row.id) }
+            await endings.keep(reason, of: row.id)
         }
         log.failure(error, "recording_not_converted")
         return .ended(.failed(error.code))
@@ -427,7 +434,7 @@ public struct LaunchRecovery: Sendable {
                 // The row was open, with no end: its segment takes the reason recovery decided, right
                 // after the end, read from the recorder's manifest as the port reads an orphan's
                 // (the review of pull request 130, B3).
-                await endings.keep(Self.orphanReason(try? recordingManifest(row.id)), of: row.id)
+                await endings.keep(Self.orphanReason(ownManifest(of: row.id)), of: row.id)
             }
             return .ended(receipt.outcome)
         } catch {
@@ -448,6 +455,16 @@ public struct LaunchRecovery: Sendable {
         } catch {
             return error.context.posixError != ENOENT
         }
+    }
+
+    /// The recorder's manifest of the voice capture `id`, as the recorder's port takes it: one that
+    /// cannot be read, that names another capture or that is of another kind is none (the review
+    /// of pull request 130, B4).
+    private func ownManifest(of id: CaptureID) -> CaptureManifest? {
+        guard let manifest = try? recordingManifest(id), manifest.captureID == id, manifest.kind == .voice else {
+            return nil
+        }
+        return manifest
     }
 
     private func recordingManifest(_ id: CaptureID) throws(KnotError) -> CaptureManifest? {

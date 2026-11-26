@@ -204,10 +204,10 @@ import Testing
     /// deadline out by hand.
     ///
     /// The end is the test's own call, on a recording that ended by itself before the engine heard
-    /// of it, so that the test can cancel the end's task once the deadline has run out: a set that
-    /// raced the deadline runs in a task of its own, which that cancels not; one that did not race
-    /// runs in the end's, and the held call sees the cancellation at once. No wait of the test then
-    /// waits out a limit, whichever way the code under it breaks.
+    /// of it, so that the test can cancel the end's task as soon as the set is held: a set that
+    /// races the deadline runs in a task of its own, which that cancels not; one that does not race
+    /// runs in the end's, and the held call sees the cancellation at once. Every wait of the test
+    /// then ends as soon as what it waits for can no longer come.
     @Test func aHeldSetOfTheReasonNeverHoldsTheEnd() async throws {
         let r = Rig()
         r.recorder.setScript(.init(buffers: 3, endsBySelf: .interrupted))
@@ -233,9 +233,13 @@ import Testing
                 held.isHolding || end.returned
             })
         try #require(held.isHolding, "The engine did not ask the store for the reason.")
-        try #require(await eventually("the set's deadline to wait") { manual.waitingCount > 0 || end.returned })
-        manual.expire()
         end.cancel()
+        try #require(
+            await eventually("the set's deadline to wait") {
+                manual.waitingCount > 0 || end.returned || held.wasCancelled
+            })
+        try #require(!held.wasCancelled, "The set did not race the deadline: it ran in the end's own task.")
+        manual.expire()
         try #require(
             await eventually("the end to return") { end.returned || held.wasCancelled || manual.waitingCount > 0 })
         #expect(!held.wasCancelled, "The set did not race the deadline: it ran in the end's own task.")
@@ -249,11 +253,13 @@ import Testing
         #expect(await eventually("the held call to land") { (try? await Self.held(r, id)) == .interrupted })
     }
 
-    /// The review of pull request 130, F1. The peaks and the reason are set together, under one
-    /// deadline: with the store holding both, one deadline waits, and when it runs out, once, the
-    /// end returns, both logged as missed. Sets that each race a deadline of their own leave one
-    /// waiting after it, and so do sets one after the other, the second of which starts its own;
-    /// the test sees that at once.
+    /// The review of pull request 130, F1 and F6. The peaks and the reason are set together, under
+    /// one deadline: both sets are in their holds, exactly one deadline waits, and when it runs
+    /// out, once, the end returns, both logged as missed. Sets that each race a deadline of their
+    /// own leave a second waiting, and a set that races none sees the cancellation of the end's
+    /// task: the test sees either at once. Sets one after the other on one timer never put the
+    /// second in its hold before the deadline runs out, and no event says so: the wait for both
+    /// holds runs out its limit then.
     @Test func thePeaksAndTheReasonShareOneDeadline() async throws {
         let r = Rig()
         r.recorder.setScript(.init(buffers: 3, endsBySelf: .limitReached))
@@ -281,15 +287,23 @@ import Testing
         try r.layer.syncFile(r.locations.recordingPeaks(id))
         let end = EndCall(engine, id)
         defer { end.cancel() }
-        // A set held and a deadline waiting: sets one after the other hold one at a time, so the
-        // wait does not ask for both.
         try #require(
-            await eventually("a set to be held and a deadline to wait, or the end to return") {
-                ((peaksCall.isHolding || reasonCall.isHolding) && manual.waitingCount > 0) || end.returned
+            await eventually("a set to be held, or the end to return") {
+                peaksCall.isHolding || reasonCall.isHolding || end.returned
             })
-        try #require(!end.returned, "The end returned while the store held its sets.")
-        manual.expireOne()
+        // A set that races no deadline runs in the end's task, and sees this at once.
         end.cancel()
+        let cancelled: @Sendable () -> Bool = { peaksCall.wasCancelled || reasonCall.wasCancelled }
+        try #require(
+            await eventually("both sets to be held with one deadline waiting") {
+                (peaksCall.isHolding && reasonCall.isHolding && manual.waitingCount > 0) || end.returned
+                    || cancelled() || manual.waitingCount > 1
+            })
+        try #require(!cancelled(), "A set did not race the deadline: it ran in the end's own task.")
+        try #require(!end.returned, "The end returned while the store held its sets.")
+        try #require(peaksCall.isHolding && reasonCall.isHolding, "The store does not hold both sets.")
+        try #require(manual.waitingCount == 1, "\(manual.waitingCount) deadlines wait: the two sets do not share one.")
+        manual.expireOne()
         try #require(
             await eventually("the end to return") {
                 end.returned || manual.waitingCount > 0 || peaksCall.wasCancelled || reasonCall.wasCancelled
@@ -540,6 +554,9 @@ import Testing
         case fileUnreadable
         /// Its conversion fails, and the store never took its row: recovery makes it.
         case noRowAndConversionFails
+        /// The same, while a capture of the new launch is open: the store records the orphan's row
+        /// as a late start, ended and waiting for its file.
+        case noRowBesideAnOpenCapture
     }
 
     /// The review of pull request 130, B3. A recording that a death cut short, which the first
@@ -550,18 +567,24 @@ import Testing
     @Test(arguments: FirstRecovery.allCases)
     func aRecordingCutShortWhoseFirstRecoveryFailsStaysRecovered(_ first: FirstRecovery) async throws {
         let r = Rig(engineIngests: false)
-        if first == .noRowAndConversionFails { await r.notes.failNextCaptureWrites(with: .storeBusy) }
+        let noRow = first == .noRowAndConversionFails || first == .noRowBesideAnOpenCapture
+        if noRow { await r.notes.failNextCaptureWrites(with: .storeBusy) }
         let recording = try await r.beginRecording()
         let id = recording.captureID
-        try #require((recording.path == .store) == (first != .noRowAndConversionFails))
+        try #require((recording.path == .store) == !noRow)
         // The process dies here, mid-recording.
         r.clock.advance(by: 5)
         let workingFile = r.locations.recordingAudio(id, format: .caf)
         switch first {
-        case .conversionFails, .noRowAndConversionFails: r.recorder.failNextConversions(with: .conversionFailed)
+        case .conversionFails, .noRowAndConversionFails, .noRowBesideAnOpenCapture:
+            r.recorder.failNextConversions(with: .conversionFailed)
         case .fileUnreadable: r.layer.setReadable(workingFile, false)
         }
         let next = r.relaunch()
+        if first == .noRowBesideAnOpenCapture {
+            // The app does not wait for recovery: typing starts at once.
+            _ = try await next.engine.begin(CaptureRequest(kind: .typed, surface: .app, text: "synthetic"))
+        }
         let outcomes = try await Self.recover(next)
         try #require(outcomes[id] == .ended(.failed(KnotError.conversionFailed.code)))
         #expect(try await Self.held(r, id) == .recovered, "Recovery's own failed end keeps the reason it decided.")
@@ -569,6 +592,74 @@ import Testing
         let again = try await Self.recover(next.relaunch())
         #expect(again[id] == .ended(.stored))
         #expect(try await Self.held(r, id) == .recovered)
+    }
+
+    /// What the recorder's manifest says, for `orphanReasonReadsTheManifestAsThePortDoes`.
+    enum ManifestOnTheDrive: CaseIterable, Sendable {
+        /// Marked with the 30-minute limit.
+        case limitReached
+        /// Marked with an end's time and no reason: a stop at the control.
+        case stoppedAtTheControl
+        /// Marked with a reason a newer build gave.
+        case unknownReason
+        /// Unmarked: a death cut the recording short.
+        case unmarked
+        /// Another capture's, which carries a reason.
+        case anotherCapturesOwn
+        /// Of another kind, which carries a reason.
+        case anotherKind
+
+        /// What recovery keeps on the segment for it.
+        var kept: RecordingEndReason? {
+            switch self {
+            case .limitReached: .limitReached
+            case .stoppedAtTheControl, .unknownReason: nil
+            case .unmarked, .anotherCapturesOwn, .anotherKind: .recovered
+            }
+        }
+    }
+
+    /// The reviews of pull request 130, B4 and the third round. A recording whose row is open and
+    /// whose working file cannot be read at the next launch: recovery ends its row as failed, and
+    /// keeps the reason it reads from the recorder's manifest as the recorder's port reads an
+    /// orphan's. The reason the manifest keeps; none for an end's time alone or for a reason this
+    /// build does not know; `recovered` for an unmarked manifest, and for one that names another
+    /// capture or is of another kind, which is no manifest of this recording's.
+    @Test(arguments: ManifestOnTheDrive.allCases)
+    func orphanReasonReadsTheManifestAsThePortDoes(_ manifest: ManifestOnTheDrive) async throws {
+        let r = Rig(engineIngests: false)
+        let recording = try await r.beginRecording()
+        let id = recording.captureID
+        try #require(recording.path == .store)
+        // The process dies here, mid-recording, and the manifest is what the case says.
+        r.clock.advance(by: 5)
+        let start = try #require(Self.recorderManifest(r, id))
+        func marked(_ capture: CaptureID, kind: SegmentKind, reason: RecordingEndReason?, ended: Bool)
+            -> CaptureManifest
+        {
+            CaptureManifest(
+                captureID: capture, kind: kind, origin: start.origin, launchID: start.launchID,
+                startedAt: start.startedAt, endedAt: ended ? start.startedAt.addingTimeInterval(2) : nil,
+                duration: ended ? .seconds(2) : nil, placement: start.placement, shownNoteID: start.shownNoteID,
+                recordingEnding: reason)
+        }
+        let written: CaptureManifest? =
+            switch manifest {
+            case .limitReached: marked(id, kind: .voice, reason: .limitReached, ended: true)
+            case .stoppedAtTheControl: marked(id, kind: .voice, reason: nil, ended: true)
+            case .unknownReason: marked(id, kind: .voice, reason: .unknown("thermal_shutdown"), ended: true)
+            case .unmarked: nil
+            case .anotherCapturesOwn: marked(CaptureID(uuid: UUID()), kind: .voice, reason: .interrupted, ended: true)
+            case .anotherKind: marked(id, kind: .typed, reason: .interrupted, ended: true)
+            }
+        if let written {
+            try r.layer.write(try written.encoded(), to: r.locations.recordingManifest(id))
+            try r.layer.syncFile(r.locations.recordingManifest(id))
+        }
+        r.layer.setReadable(r.locations.recordingAudio(id, format: .caf), false)
+        let outcomes = try await Self.recover(r.relaunch())
+        try #require(outcomes[id] == .ended(.failed(KnotError.conversionFailed.code)))
+        #expect(try await Self.held(r, id) == manifest.kept)
     }
 
     /// A recording that a death cut short, its row open: recovery stores it, and its segment says
@@ -882,17 +973,19 @@ final class HeldCall: Sendable {
     func release() { gate.open() }
 }
 
-/// An end of a capture engine's, on a task of the test's own, which the test can cancel, and
-/// which says once it has returned.
+/// A call of a capture engine's that ends a recording, its end or a press that stops it, on a task
+/// of the test's own, which the test can cancel, and which says once it has returned. The call is
+/// the engine's own, not a `BoundedEngine`'s, whose call runs in a task of `SuiteWait`'s that a
+/// cancel of this one does not reach.
 final class EndCall: Sendable {
-    private let answer = Mutex<Result<CaptureState, KnotError>?>(nil)
+    private let answer = Mutex<Result<CaptureState?, KnotError>?>(nil)
     private let task = Mutex<Task<Void, Never>?>(nil)
 
-    init(_ engine: StandardCaptureEngine, _ capture: CaptureID) {
+    init(_ call: @escaping @Sendable () async throws(KnotError) -> CaptureState?) {
         let started = Task { [self] in
-            let result: Result<CaptureState, KnotError>
+            let result: Result<CaptureState?, KnotError>
             do throws(KnotError) {
-                result = .success(try await engine.end(capture))
+                result = .success(try await call())
             } catch {
                 result = .failure(error)
             }
@@ -901,8 +994,12 @@ final class EndCall: Sendable {
         task.withLock { $0 = started }
     }
 
+    convenience init(_ engine: StandardCaptureEngine, _ capture: CaptureID) {
+        self.init { () async throws(KnotError) -> CaptureState? in try await engine.end(capture) }
+    }
+
     var returned: Bool { answer.withLock { $0 != nil } }
-    var state: CaptureState? { answer.withLock { try? $0?.get() } }
+    var state: CaptureState? { answer.withLock { $0.flatMap { try? $0.get() } ?? nil } }
 
     func cancel() { task.withLock { $0 }?.cancel() }
 }
