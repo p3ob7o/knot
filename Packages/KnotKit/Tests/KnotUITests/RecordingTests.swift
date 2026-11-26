@@ -76,6 +76,39 @@ import Testing
         #expect(model.recordingOutcome == .saved)
     }
 
+    @Test(arguments: [false, true])
+    func aRecordingOutcomeExpiresOnTheInjectedClock(discard: Bool) async throws {
+        let rig = await PreviewRig.make()
+        defer { rig.remove() }
+        let pressClock = FakeClock()
+        let timer = ManualRecordingClock()
+        var environment = rig.environment
+        environment.clock = pressClock
+        let model = NoteViewModel(
+            environment: environment, context: rig.context, announcer: rig.announcer, recordingClock: timer.clock)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recordingElapsed == .zero)
+        timer.advance(by: .milliseconds(400))
+        pressClock.advance(by: discard ? 0.4 : 2)
+        #expect(model.recordingElapsed == .milliseconds(400))
+
+        model.toggleRecording()
+        #expect(model.recordingElapsed == .milliseconds(400))
+        timer.advance(by: .milliseconds(600))
+        #expect(model.recordingElapsed == .milliseconds(400))
+        await settled(model)
+        let duration: Duration = discard ? .seconds(3) : .seconds(1)
+        let expected: RecordingOutcome = discard ? .discarded : .saved
+        try #require(await eventually("the outcome to schedule its expiry") { timer.deadline != nil })
+        #expect(timer.deadline == .seconds(1) + duration)
+        #expect(model.recordingOutcome == expected)
+        timer.advance(by: duration - .milliseconds(50))
+        #expect(model.recordingOutcome == expected)
+        timer.advance(by: .milliseconds(50))
+        #expect(await eventually("expiry at the controlled deadline") { model.recordingOutcome == nil })
+    }
+
     /// The second tap's time is set by the test, on a clock it moves itself: never by how fast
     /// the test runs (docs/product-spec.md §4.2, a tap stopped within a second is discarded).
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {

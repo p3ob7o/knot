@@ -120,7 +120,7 @@ public final class NoteViewModel {
     public var recordingElapsed: Duration? {
         if recording == .stopping { return frozenElapsed }
         guard recording.isRecording else { return nil }
-        return recordingStartedAt.map { $0.duration(to: .now) }
+        return recordingStartedAt.map { recordingClock.now() - $0 }
     }
     /// Where the open capture's content is durable, once it began.
     public private(set) var capturePath: CapturePath?
@@ -170,7 +170,8 @@ public final class NoteViewModel {
     private var draft: TypedDraft?
     private var typedWatch: Task<Void, Never>?
     private var pressInFlight = false
-    private var recordingStartedAt: ContinuousClock.Instant?
+    private let recordingClock: RecordingClock
+    private var recordingStartedAt: Duration?
     private var frozenElapsed: Duration?
     private var recordingLive: Task<Void, Never>?
     private var recordingOutcomeExpiry: Task<Void, Never>?
@@ -190,12 +191,13 @@ public final class NoteViewModel {
 
     public init(
         environment: AppEnvironment, context: UIContext, surface: CaptureSurface = .app, opening note: NoteID? = nil,
-        announcer: any Announcer
+        announcer: any Announcer, recordingClock: RecordingClock = .continuous
     ) {
         self.environment = environment
         self.context = context
         self.surface = surface
         self.announcer = announcer
+        self.recordingClock = recordingClock
         self.mode = note.map(Mode.note) ?? .capture
     }
 
@@ -561,7 +563,7 @@ public final class NoteViewModel {
         activeRecording = state.captureID
         isHeldRecording = startedHere == .holdStart
         recording = .recording(state.captureID)
-        recordingStartedAt = startedHere == nil ? nil : .now
+        recordingStartedAt = startedHere == nil ? nil : recordingClock.now()
         liveTranscript = LiveTranscript(final: "", volatile: "")
         liveLevels = []
         capturePath = state.path
@@ -639,9 +641,14 @@ public final class NoteViewModel {
         recordingOutcomeExpiry?.cancel()
         recordingOutcome = outcome
         guard outcome == .saved || outcome == .discarded else { return }
+        let clock = recordingClock
+        let deadline = clock.now() + (outcome == .saved ? .seconds(1) : .seconds(3))
         recordingOutcomeExpiry = Task { [weak self] in
-            do { try await Task.sleep(for: outcome == .saved ? .seconds(1) : .seconds(3)) } catch { return }
-            self?.recordingOutcome = nil
+            do {
+                try await clock.sleepUntil(deadline)
+                try Task.checkCancellation()
+                self?.recordingOutcome = nil
+            } catch {}
         }
     }
 
