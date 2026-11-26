@@ -129,3 +129,15 @@ import Testing
         #expect(String(reflecting: KnotUILive.self) == "KnotUI.KnotUILive")
     }
 }
+
+@Test(arguments: [
+    (SyncStatus.off, SettingsSyncState.off),
+    (.fetching, .syncing),
+    (.sending(remaining: 2), .syncing),
+    (.failed(KnotError.syncQuotaExceeded.code), .storageFull),
+    (.failed(KnotError.syncSignedOut.code), .noAccount),
+    (.failed(KnotError.syncFinal.code), .error),
+])
+func settingsShowsTheStatusTheSyncEngineReports(status: SyncStatus, expected: SettingsSyncState) {
+    #expect(SettingsSyncState(status) == expected)
+}

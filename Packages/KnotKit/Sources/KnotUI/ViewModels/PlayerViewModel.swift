@@ -7,6 +7,7 @@ import Observation
 @Observable
 public final class PlayerViewModel {
     public private(set) var state: PlaybackState = .empty
+    public private(set) var segment: SegmentID?
     public private(set) var problem: ErrorCode?
 
     private let player: any AudioPlayer
@@ -31,7 +32,7 @@ public final class PlayerViewModel {
     }
 
     /// Plays `file`, loading it first, or pauses it while it plays.
-    public func toggle(_ file: URL) async {
+    public func toggle(_ file: URL, segment: SegmentID? = nil) async {
         if isPlaying {
             await player.pause()
             return
@@ -40,6 +41,7 @@ public final class PlayerViewModel {
             do {
                 _ = try await player.load(file)
                 loaded = file
+                self.segment = segment
                 problem = nil
             } catch {
                 problem = error.code

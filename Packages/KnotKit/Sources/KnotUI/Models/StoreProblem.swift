@@ -55,7 +55,7 @@ public enum SurfaceProblem: Hashable, Sendable {
         case .couldNotStartRecording(let code):
             switch code {
             case KnotError.microphonePermissionRefused.code:
-                localized("Knot can't use the microphone. You can allow it in Settings.")
+                localized("Knot can’t use the microphone. You can allow it in Settings.")
             case KnotError.noInputDevice.code:
                 localized("No microphone is connected. You can still type.")
             case KnotError.tooLittleSpace.code:
