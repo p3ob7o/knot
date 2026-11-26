@@ -2,7 +2,7 @@
 
 `docs/architecture.md` §16: the orchestrator lists every difference between the handoff and the built structure here and assigns each one, WP-40's ownership extends to the view models those differences touch, and where the handoff is silent the implementer uses the system default and adds a line here, which the owner clears at M6.
 
-The handoff is in [`handoff/`](handoff/README.md). [`direction.md`](direction.md) gives the order in which the sources rule, and [`handoff-differences.md`](handoff-differences.md) lists where the handoff's two parts differ from each other and from the spec, with what holds for each. The list below was made on 2026-11-26. A reader drew it from the code and the handoff, and a second reader checked it against both.
+The handoff is in [`handoff/`](handoff/README.md). [`direction.md`](direction.md) gives the order in which the sources rule, and [`handoff-differences.md`](handoff-differences.md) lists where the handoff's two parts differ from each other and from the spec, with what holds for each. The list below was made on 2026-11-26. A reader drew it from the code and the handoff, and a second reader checked it against both. It was made before the owner chose the design system's structure for the iPhone, on the same day. Where a row gives the screens beside the design system for the iPhone's navigation or the placing of its controls, the design system's is now the one to build, and a row that leaves that choice to the owner is settled by it.
 
 ## 1. Where the handoff differs from what is built
 
