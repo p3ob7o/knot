@@ -99,6 +99,7 @@
                 NoteMatrixPreview(surface: .phone, example: .titles)
                 NoteMatrixPreview(surface: .phone, example: .titles, titleOrigin: .generated)
                 NoteMatrixPreview(surface: .phone, example: .titles, titleOrigin: .user)
+                NoteMatrixPreview(surface: .phone, example: .titles, titleOrigin: .user, editingTitle: true)
             }
         }
 

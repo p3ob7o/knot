@@ -88,6 +88,7 @@
         let surface: PreviewSurface
         let example: NoteExample
         var titleOrigin: TitleOrigin = .none
+        var editingTitle = false
         @State private var loaded: Loaded?
 
         struct Loaded {
@@ -99,13 +100,19 @@
             matrixFrame(surface) {
                 NavigationStack {
                     if let loaded {
-                        NoteView(model: loaded.note, player: loaded.player)
+                        NoteView(model: loaded.note, player: loaded.player, initialFocus: focus(for: loaded.note))
                     } else {
                         ProgressView()
                     }
                 }
                 .task { await load() }
             }
+        }
+
+        private func focus(for note: NoteViewModel) -> NoteView.InitialFocus {
+            if editingTitle { return .title }
+            if example == .editing, let first = note.items.first { return .segment(first.id) }
+            return .capture
         }
 
         private func load() async {

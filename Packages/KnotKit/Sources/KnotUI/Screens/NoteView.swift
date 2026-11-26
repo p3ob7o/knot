@@ -20,9 +20,18 @@
         let player: PlayerViewModel
         @State private var restoreFieldFocus = false
 
-        public init(model: NoteViewModel, player: PlayerViewModel) {
+        public enum InitialFocus: Equatable, Sendable {
+            case capture
+            case title
+            case segment(SegmentID)
+        }
+
+        private let initialFocus: InitialFocus
+
+        public init(model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture) {
             self.model = model
             self.player = player
+            self.initialFocus = initialFocus
         }
 
         public var body: some View {
@@ -62,7 +71,7 @@
                     .padding(theme.spacing.surfaceMargin)
                 }
             #endif
-            .onAppear { fieldFocused = true }
+            .onAppear { fieldFocused = initialFocus == .capture }
             .onChange(of: model.recording) { _, phase in
                 if phase == .idle, restoreFieldFocus {
                     fieldFocused = true
@@ -116,7 +125,7 @@
                     segment(item)
                 }
             } else {
-                NoteTitleEditor(model: model)
+                NoteTitleEditor(model: model, initiallyEditing: initialFocus == .title)
                 ForEach(model.items) { item in
                     if item.id != model.activeRecording.map(SegmentID.init) {
                         segment(item)
@@ -296,7 +305,8 @@
                 text: model.editConflict(for: .segment(item.id))?.draft ?? model.displayedText(of: item),
                 isShowingOriginal: model.showingOriginal.contains(item.id),
                 playback: player.segment == item.id ? player.state : .empty,
-                secondaryText: secondaryText, handlers: handlers(for: item))
+                secondaryText: secondaryText, initiallyEditing: initialFocus == .segment(item.id),
+                handlers: handlers(for: item))
         }
 
         private func handlers(for item: SegmentItem) -> SegmentHandlers {
@@ -322,6 +332,7 @@
         @State private var draft = ""
         @State private var original = ""
         let model: NoteViewModel
+        let initiallyEditing: Bool
 
         private var title: String { model.title ?? "" }
 
@@ -333,7 +344,10 @@
             .font(theme.type[.noteTitle])
             .focused($editing)
             .accessibilityAddTraits(.isHeader)
-            .onAppear { draft = title }
+            .onAppear {
+                draft = title
+                editing = initiallyEditing
+            }
             .onChange(of: title) { _, new in
                 if !editing { draft = new }
             }

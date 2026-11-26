@@ -46,6 +46,7 @@ public struct SegmentView: View {
     let isShowingOriginal: Bool
     let playback: PlaybackState
     let secondaryText: Bool
+    let initiallyEditing: Bool
     let handlers: SegmentHandlers
 
     /// - Parameters:
@@ -53,13 +54,14 @@ public struct SegmentView: View {
     ///   - playback: the player's state while this segment's recording is loaded.
     public init(
         _ item: SegmentItem, text: String? = nil, isShowingOriginal: Bool = false, playback: PlaybackState = .empty,
-        secondaryText: Bool = false, handlers: SegmentHandlers
+        secondaryText: Bool = false, initiallyEditing: Bool = false, handlers: SegmentHandlers
     ) {
         self.item = item
         self.text = text ?? item.text
         self.isShowingOriginal = isShowingOriginal
         self.playback = playback
         self.secondaryText = secondaryText
+        self.initiallyEditing = initiallyEditing
         self.handlers = handlers
     }
 
@@ -71,7 +73,8 @@ public struct SegmentView: View {
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
-                    secondaryText: secondaryText, beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .ink:
                 if let drawing {
                     Image(drawing, scale: displayScale, label: Text("Sketch", bundle: .module))
@@ -82,11 +85,13 @@ public struct SegmentView: View {
                 }
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    secondaryText: secondaryText, beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .typed:
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
-                    secondaryText: secondaryText, beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
+                    secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
+                    endEdit: handlers.endEdit)
             case .unknown:
                 EmptyView()
             }
@@ -183,6 +188,7 @@ struct SegmentText: View {
     let isShowingOriginal: Bool
     let edit: (String) -> Void
     let secondaryText: Bool
+    let initiallyEditing: Bool
     var beginEdit: () -> Void = {}
     var endEdit: () -> Void = {}
 
@@ -195,7 +201,10 @@ struct SegmentText: View {
             .font(theme.type[.body])
             .foregroundStyle(theme.colors[secondaryText ? .textSecondary : .textPrimary])
             .focused($isEditing)
-            .onAppear { draft = text }
+            .onAppear {
+                draft = text
+                isEditing = initiallyEditing
+            }
             .onChange(of: text) { _, new in if !isEditing { draft = new } }
             .onChange(of: isEditing) { _, editing in if editing { beginEdit() } else { commit() } }
             .onSubmit(commit)
