@@ -38,15 +38,10 @@
             #if os(iOS)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { done }
-                    ToolbarItemGroup(placement: .keyboard) {
-                        newNote
-                        Spacer()
-                        recordingControls
-                    }
-                    ToolbarItemGroup(placement: .bottomBar) {
-                        newNote
-                        Spacer()
-                        recordingControls
+                    if fieldFocused {
+                        ToolbarItemGroup(placement: .keyboard) { captureActions }
+                    } else {
+                        ToolbarItemGroup(placement: .bottomBar) { captureActions }
                     }
                 }
             #else
@@ -80,6 +75,12 @@
             .task { await model.observeStore() }
             .task { await model.followWindow(every: .seconds(5)) }
             .task { await player.observe() }
+        }
+
+        @ViewBuilder private var captureActions: some View {
+            newNote
+            Spacer()
+            recordingControls
         }
 
         // Use .appendCaption once the WP-40 theme merges.
