@@ -335,6 +335,17 @@ public final class NoteViewModel {
         }
     }
 
+    /// The Notes compose button opens the capture sheet as at launch. An unused force-new
+    /// choice belongs to the sheet that was dismissed.
+    public func followWindowOnPresentation() {
+        enqueue { model in
+            guard model.mode == .capture, model.draft == nil, model.fieldText.isEmpty, model.recording == .idle
+            else { return }
+            model.isNewNote = false
+            await model.refresh()
+        }
+    }
+
     /// "New note": forces a new note inside the window (rule 4). The text typed so far stays in
     /// its own note, and the surface shows a blank note until the next capture makes it.
     public func newNote() {

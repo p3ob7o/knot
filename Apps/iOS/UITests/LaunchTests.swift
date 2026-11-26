@@ -98,6 +98,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     func testSearchDeleteAndUndoANote() throws {
         let line = "Quartz instruments"
         let app = KnotLauncher.launch(.preview)
+        XCTAssertTrue(captureField(in: app).waitForExistence(timeout: limit))
         app.typeText(line)
         try assertStreamShows(line, in: app)
         let search = app.searchFields.firstMatch
@@ -112,6 +113,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.buttons["Delete note"].tap()
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: limit))
+        XCTAssertTrue(match.waitForNonExistence(timeout: limit))
         undo.tap()
         XCTAssertTrue(match.waitForExistence(timeout: limit))
         try app.auditAccessibility()
@@ -146,17 +148,8 @@ final class KnotIOSLaunchTests: XCTestCase {
         let editor = segment(second, in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: limit))
         editor.tap()
-        editor.press(forDuration: 1)
-        let selectAll = app.menuItems["Select All"].firstMatch
-        if selectAll.exists {
-            selectAll.tap()
-        } else if app.buttons["Select All"].exists {
-            app.buttons["Select All"].tap()
-        } else {
-            // Replace the exact contents of this editor through its own keyboard input.
-            editor.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: second.count))
-        }
-        editor.typeText("Changed segment")
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText("Changed segment")
         segment(first, in: app).tap()
         XCTAssertTrue(segment("Changed segment", in: app).waitForExistence(timeout: limit))
         XCTAssertTrue(segment(first, in: app).exists)
@@ -167,7 +160,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testPreviewShowsALateArrivalUntilItsNoteOpens() throws {
         let app = KnotLauncher.application(.preview)
-        app.launchArguments += ["-KnotPreviewLateCapture"]
+        app.launchEnvironment["KNOT_PREVIEW_LATE_CAPTURE"] = "1"
         app.launch()
         try assertStreamShows("A synthetic late arrival", in: app)
         let notice = app.staticTexts["A capture arrived."]
@@ -180,6 +173,19 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.navigationBars.buttons["Notes"].tap()
         XCTAssertTrue(notice.waitForNonExistence(timeout: limit))
         XCTAssertFalse(row.label.contains("Arrived"))
+        try app.auditAccessibility()
+    }
+
+    @MainActor
+    func testSearchLinkShowsFocusedSearchOverNotes() throws {
+        let app = KnotLauncher.application(.preview)
+        let url = try XCTUnwrap(URL(string: "knot-dev://search"))
+        app.open(url)
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: limit))
+        XCTAssertFalse(captureField(in: app).exists)
+        app.typeText("Synthetic query")
+        XCTAssertEqual(search.value as? String, "Synthetic query")
         try app.auditAccessibility()
     }
 
@@ -200,7 +206,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         let field = captureField(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: limit))
         app.typeText(first)
-        app.buttons["Done"].tap()
+        app.navigationBars.buttons["Done"].tap()
         XCTAssertTrue(segment(first, in: app).waitForExistence(timeout: limit))
         field.tap()
         app.typeText(second)

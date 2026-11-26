@@ -27,6 +27,7 @@ struct OpenNoteScreen: View {
     var body: some View {
         NoteScreen(model: model, player: player, environment: environment)
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: remoteAttachments) { await fetchAttachments() }
             .toolbar {
                 if let record = model.record, !model.isClosed {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -51,6 +52,22 @@ struct OpenNoteScreen: View {
                     }
                 }
             }
+    }
+
+    private var remoteAttachments: [AssetID] {
+        model.items.compactMap {
+            if case .onAnotherDevice(let asset) = $0.attachment { return asset.id }
+            return nil
+        }
+    }
+
+    private func fetchAttachments() async {
+        for id in remoteAttachments {
+            guard !Task.isCancelled else { return }
+            guard let asset = try? await environment.notes.asset(id) else { continue }
+            _ = try? await environment.fetcher.fetch(asset) { _ in }
+        }
+        await model.refresh()
     }
 
     private func delete() {

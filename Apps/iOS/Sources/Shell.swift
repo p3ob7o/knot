@@ -29,6 +29,8 @@ final class Shell {
     var setupRow: SetupRow?
     private(set) var presentsCaptureAtLaunch = true
     private(set) var deletedNote: NoteViewModel?
+    private(set) var syncStatus: SyncStatus = .off
+    private var answeredSyncQuestion: SyncQuestion?
 
     enum Screen: Hashable {
         case note(NoteID)
@@ -53,12 +55,15 @@ final class Shell {
             environment: environment, context: context, surface: .app, announcer: VoiceOverAnnouncer())
         let applicable: [SetupRow] =
             UIDevice.current.userInterfaceIdiom == .pad ? [.lockScreenControl] : SetupRow.allCases
-        let preview = app.live == nil
+        let setupSuite = app.live.map { $0.configuration.settingsSuite + ".setup" }
+        let defaults = setupSuite.flatMap(UserDefaults.init(suiteName:))
         stream = StreamViewModel(
             environment: environment, context: context,
-            setupRows: applicable.filter { preview || !UserDefaults.standard.bool(forKey: Self.setupKey($0)) },
+            setupRows: applicable.filter { defaults?.bool(forKey: Self.setupKey($0)) != true },
             onDismissSetupRow: { row in
-                if !preview { UserDefaults.standard.set(true, forKey: Self.setupKey(row)) }
+                if let setupSuite {
+                    UserDefaults(suiteName: setupSuite)?.set(true, forKey: Self.setupKey(row))
+                }
             })
         search = SearchViewModel(environment: environment, context: context)
         player = PlayerViewModel(player: environment.player)
@@ -73,7 +78,7 @@ final class Shell {
         let app = app
         launch = Task {
             #if DEBUG
-                if app.live == nil, ProcessInfo.processInfo.arguments.contains("-KnotPreviewLateCapture") {
+                if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_LATE_CAPTURE"] == "1" {
                     await injectPreviewArrival(into: app.environment)
                 }
             #endif
@@ -93,8 +98,28 @@ final class Shell {
     }
 
     func showCapture() {
+        if sheet != .capture { capture.followWindowOnPresentation() }
         isSearching = false
         sheet = .capture
+    }
+
+    var syncQuestion: SyncQuestion? {
+        if case .paused(let question) = syncStatus { return question }
+        return nil
+    }
+
+    var showsSyncQuestion: Bool { syncQuestion != nil && syncQuestion != answeredSyncQuestion }
+
+    func observeSync() async {
+        for await status in environment.sync.statusUpdates() {
+            syncStatus = status
+            if syncQuestion != answeredSyncQuestion { answeredSyncQuestion = nil }
+        }
+    }
+
+    func answer(_ question: SyncQuestion, _ answer: SyncAnswer) {
+        answeredSyncQuestion = question
+        Task { await environment.sync.answer(question, answer) }
     }
 
     func attachRouter() async {
@@ -195,6 +220,11 @@ struct ShellView: View {
             .navigationTitle("Notes")
             .navigationBarTitleDisplayMode(.large)
             .listStyle(.plain)
+            .safeAreaInset(edge: .top) {
+                if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
+                    ProgressView("Syncing notes…")
+                }
+            }
             .safeAreaInset(edge: .bottom) {
                 if let deleted = shell.deletedNote {
                     if let offer = deleted.undoOffer {
@@ -257,12 +287,15 @@ struct ShellView: View {
                 }
                 .presentationDetents([.large])
                 .interactiveDismissDisabled(shell.capture.isEnding)
+                .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == .capture))
                 .onAppear(perform: shell.captureAppeared)
                 .onDisappear(perform: shell.captureDismissed)
             case .settings:
                 SettingsScreen(
                     model: shell.settingsModel(), app: shell.app, close: { shell.sheet = nil },
-                    recentlyDeleted: shell.showRecentlyDeleted)
+                    recentlyDeleted: shell.showRecentlyDeleted
+                )
+                .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == .settings))
             }
         }
         .transaction { transaction in
@@ -275,6 +308,8 @@ struct ShellView: View {
             }
         }
         .task { await shell.attachRouter() }
+        .task { await shell.observeSync() }
+        .modifier(SyncPresentation(shell: shell, isFront: shell.sheet == nil))
         .onOpenURL(perform: shell.openURL)
         .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in pulse?.feedback }
     }
@@ -340,6 +375,7 @@ struct NoteScreen: View {
     let environment: AppEnvironment
     @State private var share: SegmentShare?
     @State private var shareUnavailable = false
+    @State private var speechDownloading = false
     @Environment(\.timeZone) private var timeZone
 
     init(model: NoteViewModel, player: PlayerViewModel, environment: AppEnvironment) {
@@ -350,6 +386,12 @@ struct NoteScreen: View {
 
     var body: some View {
         NoteView(model: model, player: player, shareSegment: shareSegment)
+            .safeAreaInset(edge: .top) {
+                if speechDownloading, model.mode == .capture {
+                    ProgressView("Downloading the speech model…")
+                }
+            }
+            .task { await observeSpeechReadiness() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { Flush.run(model) }
             }
@@ -360,6 +402,15 @@ struct NoteScreen: View {
             .alert("Couldn’t share the file", isPresented: $shareUnavailable) {
                 Button("OK", role: .cancel) {}
             }
+    }
+
+    private func observeSpeechReadiness() async {
+        while !Task.isCancelled {
+            let status = await environment.transcriber.readiness()
+            speechDownloading = status == .notInstalled || status == .installing
+            guard speechDownloading else { return }
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        }
     }
 
     private func shareSegment(_ id: SegmentID) {

@@ -31,7 +31,7 @@
                     if showsInlineSearch {
                         SearchField(text: search.query, onChange: search.setQuery)
                     }
-                    if let problem = stream.problem {
+                    if let problem = search.problem ?? stream.problem {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
                     }
                     if let arrival = stream.arrival {

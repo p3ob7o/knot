@@ -142,7 +142,11 @@ struct AboutScreen: View {
                 "Version",
                 value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
             Text("GNU General Public License v3 or later")
-            Link("Source code", destination: URL(string: "https://github.com/p3ob7o/knot")!)
+            if let text = Bundle.main.object(forInfoDictionaryKey: "KnotSourceURL") as? String,
+                let source = URL(string: text)
+            {
+                Link("Source code", destination: source)
+            }
             if let live = app.live, showsTestActions {
                 Section {
                     Button("Export diagnostics…", action: makeDiagnostics)

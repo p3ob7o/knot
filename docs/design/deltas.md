@@ -168,3 +168,5 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-30 PR 2 | Export progress, completion and missing attachments | The export page uses a system progress view and list sections for the report and missing files. |
 | 2026-11-26 | WP-30 PR 2 | About contents and test-build actions | About uses a system list, a file picker and a confirmation alert for restore. |
 | 2026-11-26 | WP-30 PR 2 | The instructions inside the first-run setup sheets | Each sheet uses a system list with the setup steps and a close control. |
+| 2026-11-26 | WP-30 PR 2 | A first iCloud restore and permission to upload after an account or zone change | Notes uses a system progress indicator while the first fetch is filling it. The system alert offers to keep sync paused or upload local notes. |
+| 2026-11-26 | WP-30 PR 2 | The first speech-model download | The capture sheet uses a system progress view while the model is missing or installing. |
