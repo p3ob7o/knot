@@ -100,6 +100,37 @@ final class KnotIOSLaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testNotesShowsLiveRecordingAfterClosingCapture() throws {
+        let app = KnotLauncher.launch(.preview)
+        let record = app.buttons["Record"]
+        XCTAssertTrue(record.waitForExistence(timeout: limit))
+        let notice = app.buttons["shell.recordingNotice"]
+        XCTAssertFalse(notice.exists)
+        record.tap()
+
+        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: limit))
+        app.buttons["shell.notes"].tap()
+
+        XCTAssertTrue(notice.waitForExistence(timeout: limit))
+        XCTAssertTrue(stop.waitForNonExistence(timeout: limit))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: limit))
+        XCTAssertTrue(notice.label.hasPrefix("Recording, "))
+        XCTAssertTrue(notice.label.hasSuffix(", Show"))
+        XCTAssertGreaterThanOrEqual(notice.frame.height, 44)
+        try app.auditAccessibility()
+
+        notice.tap()
+        XCTAssertTrue(stop.waitForExistence(timeout: limit))
+        XCTAssertTrue(app.staticTexts["Recording. Typing waits until you stop."].waitForExistence(timeout: limit))
+        stop.tap()
+        XCTAssertTrue(segment("a scripted transcript of a recording", in: app).waitForExistence(timeout: limit))
+        app.buttons["shell.notes"].tap()
+        XCTAssertTrue(app.buttons["shell.compose"].waitForExistence(timeout: limit))
+        XCTAssertTrue(notice.waitForNonExistence(timeout: limit))
+    }
+
+    @MainActor
     func testSearchDeleteAndUndoANote() throws {
         let line = "Quartz instruments"
         let app = KnotLauncher.launch(.preview)

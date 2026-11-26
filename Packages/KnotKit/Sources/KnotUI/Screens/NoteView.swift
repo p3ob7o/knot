@@ -28,17 +28,19 @@
 
         private let initialFocus: InitialFocus
         private let shareSegment: ((SegmentID) -> Void)?
+        private let observesRecordings: Bool
 
         private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
 
         public init(
             model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
-            shareSegment: ((SegmentID) -> Void)? = nil
+            shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true
         ) {
             self.model = model
             self.player = player
             self.initialFocus = initialFocus
             self.shareSegment = shareSegment
+            self.observesRecordings = observesRecordings
         }
 
         public var body: some View {
@@ -98,7 +100,9 @@
             .onDisappear { model.endCapture() }
             .task { await model.refresh() }
             .task { await model.observeStore() }
-            .task { await model.observeRecordings() }
+            .task {
+                if observesRecordings { await model.observeRecordings() }
+            }
             .task { await model.followWindow(every: .seconds(5)) }
             .task { await player.observe() }
         }

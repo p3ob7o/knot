@@ -251,11 +251,16 @@ struct ShellView: View {
             .navigationBarTitleDisplayMode(.large)
             .listStyle(.plain)
             .safeAreaInset(edge: .top) {
-                if let question = shell.syncQuestion {
-                    SyncPresentation(question: question) { shell.answer(question, $0) }
-                }
-                if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
-                    ProgressView("Syncing notes…")
+                VStack(spacing: theme.spacing.regular) {
+                    if shell.sheet == nil, shell.capture.recording.isRecording {
+                        RecordingNotice(model: shell.capture, show: shell.showCapture)
+                    }
+                    if let question = shell.syncQuestion {
+                        SyncPresentation(question: question) { shell.answer(question, $0) }
+                    }
+                    if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
+                        ProgressView("Syncing notes…")
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -350,7 +355,38 @@ struct ShellView: View {
             await shell.connect(connection.destination)
         }
         .task { await shell.observeSync() }
+        .task { await shell.capture.observeRecordings(announceStart: false) }
         .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in Shell.cues.feedback(for: pulse) }
+    }
+}
+
+private struct RecordingNotice: View {
+    @Environment(\.knotTheme) private var theme
+    let model: NoteViewModel
+    let show: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let message = message(elapsed: model.recordingElapsed)
+            Button(action: show) {
+                Banner(message, symbol: "mic.fill", role: .recording) {
+                    Text("Show")
+                        .font(theme.type[.banner])
+                        .foregroundStyle(theme.colors[.textPrimary])
+                }
+                .monospacedDigit()
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("\(message), Show"))
+            .accessibilityIdentifier("shell.recordingNotice")
+        }
+    }
+
+    private func message(elapsed: Duration?) -> String {
+        if let elapsed { return String(localized: "Recording, \(ClockText.of(elapsed))") }
+        return String(localized: "Recording")
     }
 }
 
@@ -421,7 +457,7 @@ struct NoteScreen: View {
     }
 
     var body: some View {
-        NoteView(model: model, player: player, shareSegment: shareSegment)
+        NoteView(model: model, player: player, shareSegment: shareSegment, observesRecordings: model.mode != .capture)
             .safeAreaInset(edge: .top) {
                 if model.speechDownloading, model.mode == .capture {
                     ProgressView("Downloading the speech model…")

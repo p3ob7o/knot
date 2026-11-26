@@ -558,18 +558,18 @@ public final class NoteViewModel {
     }
 
     /// A surface learns about recordings started by another entry point at the next engine state.
-    public func observeRecordings() async {
+    public func observeRecordings(announceStart: Bool = true) async {
         for await state in environment.engine.states() where state.kind == .voice {
             if state.outcome == .open {
                 guard recording == .idle, !pressInFlight else { continue }
-                await adoptRecording(state, startedHere: nil)
+                await adoptRecording(state, startedHere: nil, announceStart: announceStart)
             } else {
                 acceptRecordingEnd(state)
             }
         }
     }
 
-    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?) async {
+    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?, announceStart: Bool = true) async {
         guard state.outcome == .open else {
             await finishRecording(state)
             return
@@ -585,7 +585,7 @@ public final class NoteViewModel {
         isNewNote = false
         if case .couldNotStartRecording = problem { problem = nil }
         followLiveRecording(state.captureID)
-        announcer.announce(.recordingStarted)
+        if announceStart { announcer.announce(.recordingStarted) }
         if mode == .capture, let id = state.noteID { await show(id) }
     }
 
