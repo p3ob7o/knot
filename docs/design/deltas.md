@@ -148,3 +148,8 @@ An implementer who meets a state or a detail that the handoff does not design us
 
 | Date | Pull request | What the handoff does not say | What was used |
 |---|---|---|---|
+| 2026-11-26 | WP-21 PR 2 | Done when the field has nothing to finish or is blocked | Keeps the trailing confirmation control visible and disables it. |
+| 2026-11-26 | WP-21 PR 2 | The append window running out with an empty field | The earlier note leaves with the theme’s list change. |
+| 2026-11-26 | WP-21 PR 2 | Where the short-recording message sits | Inline notice above the capture page. |
+| 2026-11-26 | WP-21 PR 2 | No microphone connected, other start failures, or typed text that cannot be saved | Inline notice using the reason available to the view model. The field keeps text that could not be saved. |
+| 2026-11-26 | WP-21 PR 2 | What the Mac panel’s hints say before the microphone is live | Keeps the ordinary key hints until the hold is live. |
