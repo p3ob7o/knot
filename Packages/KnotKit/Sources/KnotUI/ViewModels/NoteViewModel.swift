@@ -521,19 +521,8 @@ public final class NoteViewModel {
             case .ignored:
                 recording = before
             case .started(let state):
-                showRecordingOutcome(nil)
-                activeRecording = state.captureID
-                isHeldRecording = press.kind == .holdStart
-                recording = .recording(state.captureID)
-                recordingStartedAt = .now
-                liveTranscript = LiveTranscript(final: "", volatile: "")
-                liveLevels = []
-                capturePath = state.path
-                isNewNote = false
-                if case .couldNotStartRecording = problem { problem = nil }
-                watchRecording(state.captureID, in: states)
-                announcer.announce(.recordingStarted)
-                if let id = state.noteID { await show(id) }
+                watchRecordingEnd(state.captureID, in: states)
+                await adoptRecording(state, startedHere: press.kind)
             case .stopped(let state):
                 await finishRecording(state)
             }
@@ -551,17 +540,57 @@ public final class NoteViewModel {
         }
     }
 
-    private func watchRecording(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
+    /// A surface learns about recordings started by another entry point at the next engine state.
+    public func observeRecordings() async {
+        for await state in environment.engine.states() where state.kind == .voice {
+            if state.outcome == .open {
+                guard recording == .idle, !pressInFlight else { continue }
+                await adoptRecording(state, startedHere: nil)
+            } else {
+                acceptRecordingEnd(state)
+            }
+        }
+    }
+
+    private func adoptRecording(_ state: CaptureState, startedHere: PressKind?) async {
+        guard state.outcome == .open else {
+            await finishRecording(state)
+            return
+        }
+        showRecordingOutcome(nil)
+        activeRecording = state.captureID
+        isHeldRecording = startedHere == .holdStart
+        recording = .recording(state.captureID)
+        recordingStartedAt = startedHere == nil ? nil : .now
+        liveTranscript = LiveTranscript(final: "", volatile: "")
+        liveLevels = []
+        capturePath = state.path
+        isNewNote = false
+        if case .couldNotStartRecording = problem { problem = nil }
+        followLiveRecording(state.captureID)
+        announcer.announce(.recordingStarted)
+        if mode == .capture, let id = state.noteID { await show(id) }
+    }
+
+    private func acceptRecordingEnd(_ state: CaptureState) {
+        guard activeRecording == state.captureID else { return }
+        enqueue { model in
+            guard model.activeRecording == state.captureID else { return }
+            await model.finishRecording(state)
+        }
+    }
+
+    private func watchRecordingEnd(_ id: CaptureID, in states: AsyncStream<CaptureState>) {
         recordingWatch?.cancel()
         recordingWatch = Task { [weak self] in
             for await state in states where state.captureID == id && state.outcome != .open {
-                self?.enqueue { model in
-                    guard model.recording == .recording(id) else { return }
-                    await model.finishRecording(state)
-                }
+                self?.acceptRecordingEnd(state)
                 return
             }
         }
+    }
+
+    private func followLiveRecording(_ id: CaptureID) {
         recordingLive?.cancel()
         let live = environment.engine.live(id)
         recordingLive = Task { [weak self] in
@@ -594,7 +623,7 @@ public final class NoteViewModel {
             lastRecording = state.captureID
             showRecordingOutcome(.saved)
             announcer.announce(.recordingStopped)
-            if let note = state.noteID { await show(note) }
+            if mode == .capture, let note = state.noteID { await show(note) }
         case .discardedEmpty:
             showRecordingOutcome(.discarded)
             announcer.announce(.recordingDiscarded)

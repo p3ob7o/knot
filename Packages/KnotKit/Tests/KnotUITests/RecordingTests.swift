@@ -40,6 +40,42 @@ import Testing
         #expect(stored?.kind == .voice)
     }
 
+    @Test func aRecordingStartedByAnotherSurfaceDisablesTheFieldAndCanBeStoppedHere() async throws {
+        let rig = await PreviewRig.make()
+        defer { rig.remove() }
+        let clock = FakeClock()
+        let engine = ObservedCaptureEngine(rig.environment.engine)
+        var environment = rig.environment
+        environment.engine = engine
+        environment.clock = clock
+        let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+        let observing = Task { await model.observeRecordings() }
+        defer { observing.cancel() }
+        try #require(await eventually("the surface to subscribe to recording states") { engine.isObserving })
+
+        let outcome = try await rig.environment.engine.press(
+            Press(.tap, at: clock.now()), recording: CaptureRequest(kind: .voice, surface: .control))
+        guard case .started(let state) = outcome else {
+            Issue.record("The control did not start a recording")
+            return
+        }
+        try #require(
+            await eventually("the surface to see the live capture") {
+                model.recording == .recording(state.captureID)
+            })
+        #expect(model.recordingElapsed == nil)
+        #expect(!model.fieldAcceptsTyping)
+        model.fieldChanged("Typing must wait")
+        #expect(model.fieldText.isEmpty)
+        #expect(model.problem == nil)
+
+        clock.advance(by: 2)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recording == .idle)
+        #expect(model.recordingOutcome == .saved)
+    }
+
     /// The second tap's time is set by the test, on a clock it moves itself: never by how fast
     /// the test runs (docs/product-spec.md §4.2, a tap stopped within a second is discarded).
     @Test func aTapStoppedWithinASecondIsDiscarded() async throws {

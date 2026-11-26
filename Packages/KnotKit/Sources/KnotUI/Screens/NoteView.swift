@@ -73,6 +73,7 @@
             .onDisappear { model.endCapture() }
             .task { await model.refresh() }
             .task { await model.observeStore() }
+            .task { await model.observeRecordings() }
             .task { await model.followWindow(every: .seconds(5)) }
             .task { await player.observe() }
         }
