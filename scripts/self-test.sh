@@ -1623,7 +1623,7 @@ fi
 inspect_status() { # inspect_status <a tool's stand-in, or ""> <command…>: status/whether it said so
     local broken=$1 out status=0
     shift
-    out="$(bash -c 'source "$1"; eval "$2"; shift 2; "$@"' _ "$KNOT_SCRIPTS/lib/common.sh" "$broken" "$@" 2>&1)" || status=$?
+    out="$(/bin/bash -c 'source "$1"; eval "$2"; shift 2; "$@"' _ "$KNOT_SCRIPTS/lib/common.sh" "$broken" "$@" 2>&1)" || status=$?
     [[ $out == "the inspection failed: "* ]] && echo "$status/said" || echo "$status/silent"
 }
 grep_fails='grep() { return 2; }' sort_fails='sort() { return 2; }'
@@ -1633,6 +1633,11 @@ inspected="fakes-grep $(inspect_status "$grep_fails" knot_fakes_in "$fk/release.
 inspected="$inspected fakes-module $(inspect_status "$module_grep_fails" knot_fakes_in "$fk/release.dylib")"
 inspected="$inspected debug-grep $(inspect_status "$grep_fails" knot_debug_arguments_in "$da/holds" "$debug_list") debug-sort $(inspect_status "$sort_fails" knot_debug_arguments_in "$da/holds" "$debug_list")"
 inspected="$inspected debug-empty $(inspect_status "" knot_debug_arguments_in "$da/holds" " ")"
+# No file may grow, as when the drive is full: /bin/bash 3.2, the scripts' shell, cannot write a
+# here-string to its temporary file, and its command would not run. The scans hand their texts
+# through pipes, and still find.
+no_file_may_grow='trap "" XFSZ; ulimit -f 0'
+inspected="$inspected full-drive $(/bin/bash -c 'source "$1"; eval "$2"; knot_debug_arguments_in "$3" "$4"' _ "$KNOT_SCRIPTS/lib/common.sh" "$no_file_may_grow" "$da/holds" "$debug_list" 2>/dev/null | tr '\n' ' ' || true)"
 scans="$(sed -n -e '/^    scan_for_fakes() {$/,/^    }$/p' -e '/^    scan_for_debug_arguments() {$/,/^    }$/p' "$KNOT_SCRIPTS/verify.sh")"
 scan_status() { # scan_for_<kind> on a made-up app whose two files answer <first> and <second>
     local status=0
@@ -1646,10 +1651,14 @@ scan_status() { # scan_for_<kind> on a made-up app whose two files answer <first
         "scan_for_$1" /app "$2"' _ "$1" "$2" >/dev/null 2>&1 || status=$?
     echo "$status"
 }
+# A grep that answers "none" without reading: the text was not handed over whole, so the scan
+# could not look.
+python3 -I -c 'import sys; open(sys.argv[1], "w").write("".join("word%06d\n" % i for i in range(40000)))' "$da/large"
+inspected="$inspected unread $(inspect_status 'grep() { return 1; }' knot_debug_arguments_in "$da/large" "$debug_list")"
 for kind in fakes debug_arguments; do
     inspected="$inspected $kind $(FIRST=0 SECOND=2 scan_status "$kind" some)$(FIRST=1 SECOND=2 scan_status "$kind" none)$(FIRST=0 SECOND=1 scan_status "$kind" some)$(FIRST=1 SECOND=1 scan_status "$kind" none)"
 done
-if [[ $inspected == "fakes-grep 2/said fakes-sort 2/said fakes-module 2/said debug-grep 2/said debug-sort 2/said debug-empty 2/said fakes 1100 debug_arguments 1100" ]]; then
+if [[ $inspected == "fakes-grep 2/said fakes-sort 2/said fakes-module 2/said debug-grep 2/said debug-sort 2/said debug-empty 2/said full-drive -KnotTemporaryStore  unread 2/said fakes 1100 debug_arguments 1100" ]]; then
     pass "an inspection that fails is neither a clean file nor a find: the scans for fakes and debug arguments answer 2 and say so, and the packaging step's scans fail on it"
 else
     fail "an inspection that fails: $inspected"
@@ -3380,6 +3389,7 @@ if [[ $1 == -dv ]]; then
     exit 0
 fi
 if [[ $1 == -d && $2 == --extract-certificates=* ]]; then
+    echo "certificates ${2#--extract-certificates=}" >>"$KNOT_RL_RECORD"
     cp "$leaf" "${2#--extract-certificates=}0"
     exit 0
 fi
@@ -3451,7 +3461,8 @@ rl_env() { # rl_env <name>: the environment of a run, as the stand-ins need it
 }
 # What no run inherits from the self-test: its tree, a key, a stand-in or a toolchain.
 rl_unset=(-u KNOT_LOCAL_CONFIG -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED -u KNOT_ASC_KEY_PATH -u KNOT_ASC_KEY_ID
-    -u KNOT_ASC_ISSUER_ID -u KNOT_XCODEGEN -u KNOT_SLOT_DIR -u KNOT_LSREGISTER -u KNOT_XCODE -u TOOLCHAINS -u KNOT_FAIL_LOG)
+    -u KNOT_ASC_ISSUER_ID -u KNOT_XCODEGEN -u KNOT_SLOT_DIR -u KNOT_LSREGISTER -u KNOT_XCODE -u TOOLCHAINS -u KNOT_FAIL_LOG
+    -u KNOT_BUILD_FOLDER)
 rl_run() { # rl_run <name> [NAME=value…] -- <arguments…>: runs release.sh with a fresh record; prints its status
     local name=$1 status=0 settings=() entry
     shift
@@ -3567,7 +3578,7 @@ rl_alpha_icon="$(rl_run alpha-icon -- M2 --commit "$rl_alpha" --build-number 7)"
 rl_mac="$(rl_run mac -- M2 --commit "$rl_head" --build-number 7 --products mac)"
 rl_no_key="$(rl_run no-key KNOT_ASC_KEY_ID="$rl_key_id" -- M2 --commit "$rl_head" --build-number 7 --validate)"
 rl_bad_key="$(rl_run bad-key KNOT_ASC_KEY_PATH="$rl_key_path" KNOT_ASC_KEY_ID=lowercase-$rl_key_id KNOT_ASC_ISSUER_ID="not-$rl_issuer" -- M2 --commit "$rl_head" --build-number 7)"
-rl_seam="$(rl_run seam "${rl_key[@]}" KNOT_ALTOOL=/usr/bin/true KNOT_LSREGISTER=/usr/bin/true KNOT_XCODE="$rl_xcode" KNOT_TREE="$rl/tree" \
+rl_seam="$(rl_run seam "${rl_key[@]}" KNOT_ALTOOL=/usr/bin/true KNOT_BUILD_FOLDER="$rl/build-folder" KNOT_LSREGISTER=/usr/bin/true KNOT_XCODE="$rl_xcode" KNOT_TREE="$rl/tree" \
     TOOLCHAINS=com.example.synthetic -- M2 --commit "$rl_head" --build-number 7 --upload)"
 rl_relative="$(rl_run relative-key KNOT_ASC_KEY_PATH=relative/AuthKey_RELATIVE01.p8 KNOT_ASC_KEY_ID="$rl_key_id" KNOT_ASC_ISSUER_ID="$rl_issuer" \
     -- M2 --commit "$rl_head" --build-number 7 --validate)"
@@ -3675,28 +3686,40 @@ rl_sig_upload_int="$(rl_signal sig-upload-int INT KNOT_RL_UPLOAD_SLEEP=20)"
 rl_sig_validate="$(rl_signal sig-validate TERM KNOT_RL_VALIDATE_SLEEP=20)"
 rl_sig_upload_run="$rl/tree/.build/release/$(rl_folder sig-upload)"
 rl_sig_validate_run="$rl/tree/.build/release/$(rl_folder sig-validate)"
-# The reader of the run's output ends, then TERM: the writes that follow find no reader, and the
-# run still ends its stand-in and removes its tmp/.
-rm -f "$rl/reader.fifo" "$rl/reader-gone.record.pid" "$rl/reader-gone.record.sleeping" "$rl/reader-gone.record.woke"
-: >"$rl/reader-gone.record"
-mkfifo "$rl/reader.fifo"
-cat "$rl/reader.fifo" >"$rl/reader-gone.out" &
-rl_reader=$!
-env "${rl_unset[@]}" $(rl_env reader-gone) "${rl_key[@]}" KNOT_RL_UPLOAD_SLEEP=20 "$rl_release" M2 --commit "$rl_head" --build-number 7 --upload \
-    >"$rl/reader.fifo" 2>&1 &
-rl_reader_run=$!
-rl_waited=0
-while [[ ! -e $rl/reader-gone.record.sleeping ]] && ((rl_waited < 300)); do sleep 0.1; rl_waited=$((rl_waited + 1)); done
-rl_reader_stand_in="$(cat "$rl/reader-gone.record.pid" 2>/dev/null || true)"
-kill "$rl_reader" 2>/dev/null || true
-wait "$rl_reader" 2>/dev/null || true
-kill -TERM "$rl_reader_run" 2>/dev/null || true
-rl_reader_status=0
-wait "$rl_reader_run" || rl_reader_status=$?
-rl_reader_alive=ended
-[[ -n $rl_reader_stand_in ]] && ! kill -0 "$rl_reader_stand_in" 2>/dev/null || rl_reader_alive=alive
-[[ ! -e $rl/reader-gone.record.woke ]] || rl_reader_alive=woke
-rl_reader_gone="$rl_reader_status/$rl_reader_alive/$(rl_tmp reader-gone)"
+# The reader of the run's output goes away while the upload runs: the writes that follow find no
+# reader. rl_reader <name> <TERM, or none> <environment…>: the status, whether the stand-in ended,
+# tmp/. With TERM after it, the run still ends its stand-in and removes its tmp/. With no other
+# signal, an upload that fails ends through PIPE's trap, with the sentence on a retry in the run's
+# release.log and altool's transcript in upload.log; an upload that succeeds is in release.log,
+# and its status is 0.
+rl_reader() {
+    local name=$1 signal=$2 reader run stand_in waited=0 status=0 alive=ended
+    shift 2
+    rm -f "$rl/$name.fifo" "$rl/$name.record.pid" "$rl/$name.record.sleeping" "$rl/$name.record.woke"
+    : >"$rl/$name.record"
+    mkfifo "$rl/$name.fifo"
+    cat "$rl/$name.fifo" >"$rl/$name.out" &
+    reader=$!
+    env "${rl_unset[@]}" $(rl_env "$name") "${rl_key[@]}" "$@" "$rl_release" M2 --commit "$rl_head" --build-number 7 --upload \
+        >"$rl/$name.fifo" 2>&1 &
+    run=$!
+    while [[ ! -e $rl/$name.record.sleeping ]] && ((waited < 300)); do sleep 0.1; waited=$((waited + 1)); done
+    stand_in="$(cat "$rl/$name.record.pid" 2>/dev/null || true)"
+    kill "$reader" 2>/dev/null || true
+    wait "$reader" 2>/dev/null || true
+    [[ $signal == none ]] || kill "-$signal" "$run" 2>/dev/null || true
+    wait "$run" || status=$?
+    if [[ $signal != none ]]; then
+        [[ -n $stand_in ]] && ! kill -0 "$stand_in" 2>/dev/null || alive=alive
+        [[ ! -e $rl/$name.record.woke ]] || alive=woke
+    fi
+    echo "$status/$alive/$(rl_tmp "$name")"
+}
+rl_reader_gone="$(rl_reader reader-gone TERM KNOT_RL_UPLOAD_SLEEP=20)"
+rl_reader_fail="$(rl_reader reader-fail none KNOT_RL_UPLOAD_SLEEP=3 KNOT_RL_UPLOAD_FAIL=1)"
+rl_reader_fail_run="$rl/tree/.build/release/$(rl_folder reader-fail)"
+rl_reader_ok="$(rl_reader reader-ok none KNOT_RL_UPLOAD_SLEEP=3)"
+rl_reader_ok_run="$rl/tree/.build/release/$(rl_folder reader-ok)"
 # Two runs at once in one worktree: the second refuses while the first waits in its milestone build.
 : >"$rl/first.record"
 rm -f "$rl/first.record.sleeping"
@@ -3708,7 +3731,7 @@ rl_second="$(rl_run second -- M2 --commit "$rl_head" --build-number 7)"
 rl_first_tmp="$(rl_tmp first)"
 rl_first_status=0
 wait "$rl_first" || rl_first_status=$?
-rl_verdicts="$rl_verdicts signals $rl_sig_export $rl_sig_upload $rl_sig_upload_int sig-validate $rl_sig_validate reader-gone $rl_reader_gone together $rl_first_status/$rl_second/$(rl_calls second milestone-build)/$rl_first_tmp"
+rl_verdicts="$rl_verdicts signals $rl_sig_export $rl_sig_upload $rl_sig_upload_int sig-validate $rl_sig_validate reader-gone $rl_reader_gone reader-fail $rl_reader_fail reader-ok $rl_reader_ok together $rl_first_status/$rl_second/$(rl_calls second milestone-build)/$rl_first_tmp"
 # The rehearsal: the development flavour, signed by nothing, resolving nothing, with no signature
 # read and the key out of its environment; one whose archive carries the milestone's bundle ID in
 # a part; one with the pinned checkout missing; and one that LaunchServices' tool cannot serve.
@@ -3724,7 +3747,7 @@ rl_verdicts="$rl_verdicts rehearsal $rl_rehearsal/$(rl_calls rehearsal milestone
 # The bytes sent: the SHA-256 the run printed, and what altool was given at each call.
 rl_digest="$(sed -n -E 's/.*Knot\.ipa, SHA-256 ([0-9a-f]{64}):.*/\1/p' "$rl/upload.out" | head -n 1)"
 rl_sent="$(sed -n -E 's/^sent ([0-9a-f]{64})$/\1/p' "$rl/upload.record" | sort -u | tr '\n' ' ')"
-rl_expected="good 0/tmp-gone/swept names 0/clean traced 0/clean/0 before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean bad-key 1/0/clean seam 1/0 relative 1/0 anchored 1/0/0/clean 1/1/0/clean apple 0 override 1/0 argument 1/clean mb-fail 1 validate 0/tmp-gone/1/0/clean upload 0/tmp-gone/1/clean upload-fail 1/tmp-gone/1/clean validate-fail 1/tmp-gone/0/clean export-fail 1/tmp-gone/0/clean tamper 1/0 exported 0/clean/3 sidecar 1/0/clean foreign 1/kept/clean diag 1/tmp-gone/clean signals 143/ended/tmp-gone/clean 143/ended/tmp-gone/clean 130/ended/tmp-gone/clean sig-validate 143/ended/tmp-gone/clean reader-gone 143/ended/tmp-gone together 0/1/0/tmp-left rehearsal 0/tmp-gone/0/0/0 rehearsal-milestone 1 unknown 0 no-checkout 1/0"
+rl_expected="good 0/tmp-gone/swept names 0/clean traced 0/clean/0 before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean bad-key 1/0/clean seam 1/0 relative 1/0 anchored 1/0/0/clean 1/1/0/clean apple 0 override 1/0 argument 1/clean mb-fail 1 validate 0/tmp-gone/1/0/clean upload 0/tmp-gone/1/clean upload-fail 1/tmp-gone/1/clean validate-fail 1/tmp-gone/0/clean export-fail 1/tmp-gone/0/clean tamper 1/0 exported 0/clean/3 sidecar 1/0/clean foreign 1/kept/clean diag 1/tmp-gone/clean signals 143/ended/tmp-gone/clean 143/ended/tmp-gone/clean 130/ended/tmp-gone/clean sig-validate 143/ended/tmp-gone/clean reader-gone 143/ended/tmp-gone reader-fail 141/ended/tmp-gone reader-ok 0/ended/tmp-gone together 0/1/0/tmp-left rehearsal 0/tmp-gone/0/0/0 rehearsal-milestone 1 unknown 0 no-checkout 1/0"
 if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     grep -e "^milestone-build M2 --commit $rl_head --products ios --archive $rl/tree/.build/release/dry-run-M2-${rl_head:0:12}-b7-[0-9TZ]*-[A-Za-z0-9]*/candidate --build-number 7$" "$rl/good.record" >/dev/null &&
     rl_has good "dry run passed" && rl_has good "ok    evidence: the annotated tags of the milestones below M2, at or before ${rl_head:0:12}: m1" &&
@@ -3747,11 +3770,11 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     rl_has mac "release-mac-sp3" && rl_has mac "SP-3" &&
     rl_has no-key "key: KNOT_ASC_KEY_PATH is not set" && rl_has no-key "key: KNOT_ASC_ISSUER_ID is not set" &&
     rl_has bad-key "key: KNOT_ASC_KEY_ID is set, but not ten capitals and digits" && rl_has bad-key "key: KNOT_ASC_ISSUER_ID is set, but not a UUID" &&
-    rl_has seam "release-stand-ins" && rl_has seam "these are set: KNOT_ALTOOL KNOT_LSREGISTER KNOT_XCODE KNOT_TREE TOOLCHAINS." &&
+    rl_has seam "release-stand-ins" && rl_has seam "these are set: KNOT_ALTOOL KNOT_BUILD_FOLDER KNOT_LSREGISTER KNOT_XCODE KNOT_TREE TOOLCHAINS." &&
     rl_has relative-key "key: KNOT_ASC_KEY_PATH is set, but not an absolute path" && rl_lacks relative-key "AuthKey_RELATIVE01" &&
     rl_has anchored "release-tool-signature" && rl_has anchored-altool "release-tool-signature" &&
     rl_has override "release-xcconfig-override" && rl_has argument "Argument 6 is not one this script takes." &&
-    rl_has mb-fail "release-candidate" &&
+    rl_has mb-fail "release-candidate" && rl_has mb-fail "/release.log; once its build had started, the build's own log is in .build/release/" &&
     grep -e "^xcodebuild -exportArchive .* -allowProvisioningUpdates -authenticationKeyPath $rl_key_path -authenticationKeyID $rl_key_id -authenticationKeyIssuerID $rl_issuer$" "$rl/validate.record" >/dev/null &&
     grep -e "^altool --validate-app $rl_validate_run/export/Knot.ipa --api-key $rl_key_id --api-issuer $rl_issuer --p8-file-path $rl_key_path -CDTempDir " "$rl/validate.record" >/dev/null &&
     grep -F -e "Exporting with the key <KEY-ID>, issuer <ISSUER-ID>, from <KEY-PATH> and <KEY-PATH>" "$rl_validate_run/release.log" >/dev/null &&
@@ -3760,19 +3783,26 @@ if [[ $rl_verdicts == "$rl_expected" && -z $rl_broken ]] &&
     rl_none -e '^options .*teamID' "$rl/validate.record" &&
     rl_has validate "ok    signatures: every signature of its 5 code objects verified" && rl_has validate "validation passed" &&
     rl_has validate "Issuer, as a server may print it: <ISSUER-ID>" &&
+    [[ $(grep -c -e '^certificates ' "$rl/validate.record") == 4 ]] && rl_none -v -F -e "certificates $rl_validate_run/tmp/" <(grep -e '^certificates ' "$rl/validate.record") &&
     rl_none -E -e '^environment (.* )?(RL_[A-Z_]*|KNOT_ASC_[A-Z_]*|KNOT_RL_M[0-9]) ' "$rl/exported.record" &&
     [[ -f $rl_validate_run/export/Knot.ipa && -f $rl_validate_run/export/DistributionSummary.plist && ! -e $rl_validate_run/distribution-logs ]] &&
     grep -e '<TEAM>' "$rl_validate_run/export/DistributionSummary.plist" >/dev/null && grep -e '<KEY-ID>' "$rl_validate_run/export/Packaging.log" >/dev/null &&
     rl_has upload "uploaded: Knot 0.3.0 (7), M2" && [[ -n $rl_digest && $rl_sent == "$rl_digest " && $(grep -c -e '^sent ' "$rl/upload.record") == 2 ]] &&
     rl_has upload-fail "FAIL release-upload" && rl_has upload-fail "Check App Store Connect, the app's TestFlight builds, for build 7, before any retry" &&
     rl_has upload-fail "retry:   unsafe" &&
+    grep -F -e "FAIL  release-upload: " "$rl/tree/.build/release/$(rl_folder upload-fail)/release.log" | grep -F -e "before any retry" >/dev/null &&
     rl_has validate-fail "release-validation" && [[ -f $rl_validate_fail_run/validation.log ]] &&
     rl_has export-fail "release-export" && grep -e '<KEY-ID>' "$rl_export_fail_run/distribution-logs/Knot_synthetic.xcdistributionlogs/IDEDistribution.standard.log" >/dev/null &&
     rl_has tamper "release-changed" &&
     rl_has sig-export "release-export-interrupted" && rl_has sig-upload "release-upload-interrupted" &&
     rl_has sig-upload "Check App Store Connect, the app's TestFlight builds, for build 7, before any retry" && rl_has sig-upload "retry:   unsafe" &&
-    rl_has sig-upload-int "release-upload-interrupted" && grep -e '<KEY-ID>' "$rl_sig_upload_run/upload.log" >/dev/null &&
+    rl_has sig-upload-int "release-upload-interrupted" &&
+    grep -F -e "FAIL  release-upload-interrupted: " "$rl_sig_upload_run/release.log" | grep -F -e "before any retry" >/dev/null && grep -e '<KEY-ID>' "$rl_sig_upload_run/upload.log" >/dev/null &&
     rl_has sig-validate "release-validation-interrupted" && grep -e '<KEY-ID>' "$rl_sig_validate_run/validate.log" >/dev/null &&
+    grep -F -e "FAIL  release-upload: " "$rl_reader_fail_run/release.log" | grep -F -e "before any retry" >/dev/null &&
+    grep -e '<KEY-ID>' "$rl_reader_fail_run/upload.log" >/dev/null &&
+    grep -F -e "release: uploaded: Knot 0.3.0 (7), M2" "$rl_reader_ok_run/release.log" >/dev/null &&
+    rl_none -e 'release-upload-interrupted' "$rl_reader_ok_run/release.log" &&
     rl_has sidecar "release-export-record" && rl_has sidecar "Packaging.log, beside Knot.ipa, cannot be read and filtered: it is removed" &&
     [[ ! -e $rl_sidecar_run/export/Packaging.log && -f $rl_sidecar_run/export/DistributionSummary.plist ]] &&
     rl_has diag "release-record" && rl_has diag "IDEDistribution.verbose.log of Xcode's distribution log Knot_synthetic.xcdistributionlogs cannot be read and filtered" &&

@@ -387,6 +387,26 @@ knot_swift_test_limited() {
     return "$status"
 }
 
+# grep over a text handed to it through a pipe, and its answer from every status of the pipe: 0,
+# a match; 1, none, and the whole text was handed over; 2, the search could not be made. A match
+# is a match even when grep stopped reading early.
+#   knot_grep_text <text> <grep arguments…>
+knot_grep_text() {
+    local text=$1 statuses
+    shift
+    { printf '%s\n' "$text" | grep "$@" 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    ((statuses[1] == 0)) && return 0
+    ((statuses[1] == 1 && statuses[0] == 0)) && return 1
+    return 2
+}
+# The lines of a text, sorted and unique, through a pipe: fails when either end of it failed.
+#   knot_sort_text <text>
+knot_sort_text() {
+    local statuses
+    { printf '%s\n' "$1" | sort -u 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    ((statuses[0] == 0 && statuses[1] == 0))
+}
+
 # Prints the fakes that a Mach-O file holds, one a line, and returns 0 when it holds any: the
 # KnotFakes module, by its mangled name in a symbol or its name in a string, as the scan has
 # looked for it since WP-01, and any type of one of this project's modules whose name begins
@@ -404,7 +424,10 @@ knot_swift_test_limited() {
 #
 # An inspection that fails is neither a clean file nor a find: when nm, strings, swift-demangle,
 # grep or sort fails, it prints "the inspection failed: …" and returns 2, which every caller
-# reads as a check that could not look.
+# reads as a check that could not look. Every text reaches grep and sort through a pipe, whose
+# every status is read: a text that could not be handed over is a failed inspection, never
+# "none". (/bin/bash 3.2 writes a here-string to a temporary file, and when that write fails the
+# command never runs and its status, 1, is grep's "none".)
 #   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
     local file=$1 symbols strings demangled matches found status=0
@@ -420,17 +443,17 @@ knot_fakes_in() {
         echo "the inspection failed: swift-demangle failed on the file's names"
         return 2
     fi
-    matches="$(grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' <<<"$demangled" 2>/dev/null)" ||
+    matches="$(knot_grep_text "$demangled" -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*')" ||
         status=$?
-    if ((status > 1)) || ! found="$(sort -u <<<"$matches" 2>/dev/null)"; then
+    if ((status > 1)) || ! found="$(knot_sort_text "$matches")"; then
         echo "the inspection failed: grep or sort failed on the file's names"
         return 2
     fi
     status=0
-    grep -e 9KnotFakes <<<"$symbols" >/dev/null 2>&1 || status=$?
+    knot_grep_text "$symbols" -e 9KnotFakes >/dev/null || status=$?
     if ((status == 1)); then
         status=0
-        grep -e KnotFakes <<<"$strings" >/dev/null 2>&1 || status=$?
+        knot_grep_text "$strings" -e KnotFakes >/dev/null || status=$?
     fi
     if ((status > 1)); then
         echo "the inspection failed: grep failed on the file's names"
@@ -452,7 +475,7 @@ knot_fakes_in() {
 #   knot_debug_arguments_in <file> <list, one name a line>
 knot_debug_arguments_in() {
     local found strings matches status=0
-    if [[ -z "$(tr -d '[:space:]' <<<"$2")" ]]; then
+    if [[ -z ${2//[[:space:]]/} ]]; then
         echo "the inspection failed: the list of debug launch arguments is empty"
         return 2
     fi
@@ -460,8 +483,16 @@ knot_debug_arguments_in() {
         echo "the inspection failed: strings could not read the file"
         return 2
     fi
-    matches="$(grep -x -F -f <(printf '%s\n' "$2") <<<"$strings" 2>/dev/null)" || status=$?
-    if ((status > 1)) || ! found="$(sort -u <<<"$matches" 2>/dev/null)"; then
+    # The names, as grep's patterns: a pattern file of process substitution does not reach grep
+    # inside a pipe in /bin/bash 3.2.
+    local name patterns=()
+    while IFS= read -r name; do [[ -z $name ]] || patterns+=(-e "$name"); done < <(printf '%s\n' "$2")
+    if ((${#patterns[@]} == 0)); then
+        echo "the inspection failed: the list of debug launch arguments could not be read"
+        return 2
+    fi
+    matches="$(knot_grep_text "$strings" -x -F "${patterns[@]}")" || status=$?
+    if ((status > 1)) || ! found="$(knot_sort_text "$matches")"; then
         echo "the inspection failed: grep or sort failed on the file's strings"
         return 2
     fi

@@ -32,6 +32,14 @@
 # stale file, a tool that fails, a run cut short. It does not defend against someone who controls
 # the operator's shell or files, who could replace the script itself.
 #
+# Known, and not defended, by that measure: the key's path held in another variable as well, or
+# of several lines or of three characters, is not masked there; altool's signature is checked
+# once, before the validation; a FAT64 header and code outside Payload/Knot.app are not read; a
+# profile's malformed values and the entitlement matcher's looser shapes are App Store Connect's
+# validation to judge; a line of the run's own release.log that names a .xcdistributionlogs folder
+# is taken as this run's; a file beside Knot.ipa named with the filter's own suffix, .filtering;
+# and a copy of altool's output that fails on the way out after a signal.
+#
 # The App Store Connect key, for --validate and --upload, in three environment variables:
 # KNOT_ASC_KEY_PATH, the absolute path of the key's .p8 file, KNOT_ASC_KEY_ID, ten capitals and
 # digits, and KNOT_ASC_ISSUER_ID, a UUID. The script turns tracing and allexport off before it reads
@@ -44,9 +52,11 @@
 # they are read passes the key's filter, and the failure helper filters each field it prints or
 # logs.
 #
-# A validation and an upload refuse, before any tool runs, every stand-in the self-test uses:
-# KNOT_ALTOOL, KNOT_ASSETUTIL, KNOT_LSREGISTER, KNOT_SLOT_DIR, KNOT_XCODEGEN, KNOT_XCODE, KNOT_TREE and
-# TOOLCHAINS. They take the pinned Xcode from where .xcode-version and the scripts' own search find
+# A validation and an upload refuse every stand-in the self-test uses: KNOT_ALTOOL, KNOT_ASSETUTIL,
+# KNOT_BUILD_FOLDER, KNOT_LSREGISTER, KNOT_SLOT_DIR, KNOT_XCODEGEN, KNOT_XCODE, KNOT_TREE and
+# TOOLCHAINS. Before that refusal only the system's tools run, and python3 for the forms of the
+# key's path, which /usr/bin hands to the selected developer folder's: that normalization runs
+# first, and no other tool of an Xcode does. They take the pinned Xcode from where .xcode-version and the scripts' own search find
 # it, check that its xcodebuild and its altool are signed by Apple (codesign -R 'anchor apple')
 # before either gets the key, take the other tools from /usr/bin with PATH set to the system's
 # folders alone, and take XcodeGen from the build folder's tools/ alone. No run starts while
@@ -93,7 +103,10 @@
 # validation or upload leaves altool's filtered output in the run's folder. Under the lock, a run
 # removes what dead runs left in their tmp/. A run that was cut short is never resumed. Once the
 # upload has started, every way out without its outcome says to check App Store Connect before a
-# retry, and the script does not retry.
+# retry, and the script does not retry. The outcome, or that sentence, reaches the run's
+# release.log before the terminal: when the log says "uploaded", the upload succeeded, whatever
+# became of the lines printed after it. A reader of the output that goes away (PIPE) ends the run
+# as another signal does, with status 141.
 { set +xva; } 2>/dev/null
 # A SHELLOPTS or BASHOPTS that a caller exported would hand this script's options to every bash
 # it starts: they stay its own.
@@ -107,7 +120,7 @@ RL_KEY_PATH_SET=${KNOT_ASC_KEY_PATH+set} RL_KEY_ID_SET=${KNOT_ASC_KEY_ID+set} RL
 unset KNOT_ASC_KEY_PATH KNOT_ASC_KEY_ID KNOT_ASC_ISSUER_ID
 # The stand-ins the self-test uses, as the environment holds them before common.sh sets defaults.
 RL_SEAMS=""
-for seam in KNOT_ALTOOL KNOT_ASSETUTIL KNOT_LSREGISTER KNOT_SLOT_DIR KNOT_XCODEGEN KNOT_XCODE KNOT_TREE TOOLCHAINS; do
+for seam in KNOT_ALTOOL KNOT_ASSETUTIL KNOT_BUILD_FOLDER KNOT_LSREGISTER KNOT_SLOT_DIR KNOT_XCODEGEN KNOT_XCODE KNOT_TREE TOOLCHAINS; do
     [[ -z ${!seam+set} ]] || RL_SEAMS="$RL_SEAMS $seam"
 done
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -166,7 +179,7 @@ knot_report() {
 }
 [[ -z $RL_FAIL_LOG ]] || export KNOT_FAIL_LOG=$RL_FAIL_LOG
 
-usage() { sed -n '2,96p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,109p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "release-usage" "$1" "Run scripts/release.sh --help." "safe" "nothing"; }
 
 # The committed CloudKit schema file, which appears with the production schema (docs/plan/WP-43.md,
@@ -181,6 +194,8 @@ say() {
     printf '%s\n' "$line"
     [[ -z $LOG ]] || printf '%s\n' "$line" >>"$LOG" 2>/dev/null || true
 }
+# A line, filtered, to the run's log alone: an outcome goes to the drive before the terminal.
+log_line() { [[ -n $LOG ]] && printf 'release: %s\n' "$1" | release_filter >>"$LOG" 2>/dev/null; }
 # A command's output, filtered, to the run's log and, with --show, the terminal.
 logged() { if [[ ${1:-} == --show ]]; then release_filter | tee -a "$LOG"; else release_filter >>"$LOG"; fi; }
 
@@ -263,7 +278,8 @@ LEVEL_NUMBER=${LEVEL#M}
 refuse_xcconfig_override
 # A validation and an upload take their tools from the pinned Xcode, found where .xcode-version
 # and the scripts' own search find it, and from the system: every stand-in the self-test uses is
-# refused before any tool runs, KNOT_XCODE among them. XcodeGen comes from the build folder's
+# refused, KNOT_XCODE among them, before any tool of an Xcode but python3, which gave the key's
+# path its forms above. XcodeGen comes from the build folder's
 # tools/xcodegen-<version>/ alone (docs/dev-setup.md, XcodeGen).
 if [[ ($MODE == validate || $MODE == upload) && -n $RL_SEAMS ]]; then
     knot_fail "release-stand-ins" "A validation and an upload take their tools from the pinned Xcode and the system alone, and these are set:$RL_SEAMS." \
@@ -372,11 +388,14 @@ scrub_export_files() {
 
 UPLOAD_REPORTED=0
 # The sentence on a retry, once the upload has started and its outcome is not recorded.
+# It reaches the run's release.log first, then the terminal and the failure log.
+RETRY_SENTENCE=""
 report_upload_unfinished() {
     [[ $PHASE == upload && $UPLOAD_REPORTED != 1 ]] || return 0
+    local what="The upload of build $BUILD was cut short before its outcome was recorded: it may have reached App Store Connect. It was not retried."
+    log_line "FAIL  release-upload-interrupted: $what $RETRY_SENTENCE" || true
     UPLOAD_REPORTED=1
-    knot_report "release-upload-interrupted" "The upload of build $BUILD was cut short before its outcome was recorded: it may have reached App Store Connect. It was not retried." \
-        "Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken." \
+    knot_report "release-upload-interrupted" "$what" "$RETRY_SENTENCE" \
         "unsafe" "the upload may have reached App Store Connect; the run's folder holds the export" || true
 }
 
@@ -426,6 +445,8 @@ trap finish EXIT
 trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
+# A reader of the output that goes away: the run ends as a signal ends it, with that status.
+trap 'on_signal 141' PIPE
 
 # Runs a command in the background and waits for it, so that a signal reaches the trap at once.
 waited() {
@@ -725,7 +746,7 @@ else
     waited candidate || status=$?
     if ((status != 0)); then
         knot_fail "release-candidate" "The milestone build of the candidate failed, as it said above." \
-            "Read its lines and its log in .build/release/$(basename "$RUN")/candidate/." "safe" "the run's folder"
+            "Read its lines, above and in .build/release/$(basename "$RUN")/release.log; once its build had started, the build's own log is in .build/release/$(basename "$RUN")/candidate/." "safe" "the run's folder"
     fi
     ARCHIVE="$RUN/candidate/Knot-ios.xcarchive"
 fi
@@ -1216,7 +1237,7 @@ check_product() {
     while IFS= read -r line; do
         if [[ $line == "checks ended "* ]]; then ended=${line#checks ended }; else say "$line"; fi
     done < <(
-        python3 -I -c "$CHECKS_PY" app="$app" archive="$archive" bundle="$WANT_BUNDLE" group="$WANT_GROUP" \
+        TMPDIR="$TMP" python3 -I -c "$CHECKS_PY" app="$app" archive="$archive" bundle="$WANT_BUNDLE" group="$WANT_GROUP" \
             container="$WANT_CONTAINER" flavour="$FLAVOUR" level="$LEVEL" build="$BUILD" version="$WANT_VERSION" \
             xcode="$PINNED_BUILD" reasons="$REASONS" nm="$NM" assetutil=/usr/bin/assetutil codesign=/usr/bin/codesign signed_archive="$APP" \
             security=/usr/bin/security checks="$checks" 2>&1
@@ -1380,15 +1401,20 @@ fi
 
 same_file "the upload"
 say "uploading Knot.ipa to App Store Connect, once"
+RETRY_SENTENCE="Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken."
 PHASE=upload
 status=0
 asc "${KNOT_UPLOAD_LIMIT:-3600}" --upload-package "$IPA" || status=$?
 show_altool
 if ((status != 0)); then
+    what="The upload of Knot $WANT_VERSION ($BUILD) failed$( ((KNOT_LIMIT_HIT == 0)) || echo ", or did not end in time"): its lines are above and in the run's release.log. It was not retried."
+    log_line "FAIL  release-upload: $what $RETRY_SENTENCE" || true
     UPLOAD_REPORTED=1
-    knot_fail "release-upload" "The upload of Knot $WANT_VERSION ($BUILD) failed$( ((KNOT_LIMIT_HIT)) && echo ", or did not end in time"): its lines are above and in the run's release.log. It was not retried." \
-        "Check App Store Connect, the app's TestFlight builds, for build $BUILD, before any retry: the upload may have reached it. A retry needs the owner's word, and a build number App Store Connect has not taken." \
+    knot_fail "release-upload" "$what" "$RETRY_SENTENCE" \
         "unsafe" "the upload may have reached App Store Connect; the run's folder holds the export"
 fi
-say "uploaded: Knot $WANT_VERSION ($BUILD), $LEVEL, from ${AT:0:12}. App Store Connect processes it before TestFlight offers it."
-PHASE=""
+# The outcome, in the log first. Once the log holds it the upload succeeded: a print that fails
+# after it, a reader gone among the causes, changes neither the outcome nor the status.
+uploaded="uploaded: Knot $WANT_VERSION ($BUILD), $LEVEL, from ${AT:0:12}. App Store Connect processes it before TestFlight offers it."
+log_line "$uploaded" && PHASE=""
+{ printf 'release: %s\n' "$uploaded" | release_filter 2>/dev/null; } && PHASE="" || true
