@@ -102,6 +102,11 @@
                     }
                 }
                 .foregroundStyle(theme.colors[.textSecondary])
+                if model.surface == .macPanel, let last = model.lastRecording,
+                    let item = model.items.first(where: { $0.id == SegmentID(last) })
+                {
+                    segment(item)
+                }
             } else {
                 if let title = model.title {
                     Text(title)
@@ -205,6 +210,18 @@
                 Banner(
                     String(localized: "Too short. Nothing was kept.", bundle: .module), symbol: "mic",
                     role: .textSecondary)
+            }
+            if model.recordingOutcome == .saveFailed {
+                Banner(
+                    String(localized: "Knot couldn’t finish saving the recording.", bundle: .module),
+                    symbol: "exclamationmark.triangle", role: .failed
+                ) {
+                    Button {
+                        model.dismissRecordingOutcome()
+                    } label: {
+                        Text("Dismiss", bundle: .module)
+                    }
+                }
             }
             if let problem = model.problem {
                 Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed) {

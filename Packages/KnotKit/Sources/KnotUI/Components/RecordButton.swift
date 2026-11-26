@@ -11,11 +11,13 @@ public struct RecordButton: View {
     let elapsed: Duration?
     let outcome: RecordingOutcome?
     let toolbar: Bool
+    private var legacyLabel = false
     let action: () -> Void
 
     // The Watch shell uses this initializer until it adopts the shared outcomes in WP-32.
     public init(phase: RecordingPhase, action: @escaping () -> Void) {
         self.init(phase: phase, elapsed: nil, outcome: nil, toolbar: false, action: action)
+        legacyLabel = true
     }
 
     public init(
@@ -78,7 +80,7 @@ public struct RecordButton: View {
         case .idle:
             if outcome == .saved {
                 Text("Saved", bundle: .module)
-            } else if !toolbar && elapsed == nil && outcome == nil {
+            } else if legacyLabel {
                 Text("Start recording", bundle: .module)
             } else {
                 Text("Record", bundle: .module)

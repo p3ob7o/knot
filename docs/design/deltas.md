@@ -155,3 +155,8 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-21 PR 2 | What the Mac panel’s hints say before the microphone is live | Keeps the ordinary key hints until the hold is live. |
 | 2026-11-26 | WP-21 PR 2 | Ink recognition and the unavailable drawing | A caption while handwriting is being recognised. A placeholder retains the recognisable text when the renderer is unavailable. |
 | 2026-11-26 | WP-21 PR 2 | Sync status and iCloud storage full | A secondary caption under the sync toggle. Storage full says notes and recordings stay on this device. |
+| 2026-11-26 | WP-21 PR 2 | The unsuccessful recording save | An inline notice says Knot could not finish saving it. |
+| 2026-11-26 | WP-21 PR 2 | A first restore, empty search results and an export in progress | The matrix previews use system progress and search empty states with the shared stream and settings components. |
+| 2026-11-26 | WP-21 PR 2 | Account or zone changes, export outcomes, a shortcut already taken and model downloading | The matrix previews pair inline notices or a system progress view with the settings or first-run controls. |
+| 2026-11-26 | WP-21 PR 2 | The recording destination, low storage and a dimmed Watch screen | The matrix previews show the shared controls with a text-only destination and storage notice, and dim the live example. |
+| 2026-11-26 | WP-21 PR 2 | Note title editing and the largest-text or compact column examples | The matrix previews use a plain title field, system accessibility text sizing and the shared capture column at compact width. |

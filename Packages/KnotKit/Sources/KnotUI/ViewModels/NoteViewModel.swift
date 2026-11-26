@@ -22,6 +22,7 @@ public enum RecordingOutcome: Hashable, Sendable {
     case saved
     case discarded
     case couldNotStart
+    case saveFailed
 }
 
 /// The typed field owns one sequence of saves. A refused save can still change what the engine
@@ -168,6 +169,7 @@ public final class NoteViewModel {
     private var chain: Task<Void, Never>?
     private var draft: TypedDraft?
     private var typedWatch: Task<Void, Never>?
+    private var pressInFlight = false
     private var recordingStartedAt: ContinuousClock.Instant?
     private var frozenElapsed: Duration?
     private var recordingLive: Task<Void, Never>?
@@ -430,14 +432,19 @@ public final class NoteViewModel {
         case .stored:
             if let saved = draft.acknowledged, saved.revision == state.durableRevision {
                 endedText = saved.text
-            } else if let stored = try? await environment.notes.segment(SegmentID(state.captureID)) {
+            } else if state.path == .store,
+                let stored = try? await environment.notes.segment(SegmentID(state.captureID))
+            {
                 endedText = stored.text
             } else {
                 // Only the field sends updates. An end can make its last refused save durable.
                 endedText = state.durableRevision > (draft.acknowledged?.revision ?? 0) ? draft.submitted : nil
             }
         case .discardedEmpty:
-            endedText = draft.submitted
+            let emptyText =
+                draft.acknowledged?.revision == state.durableRevision
+                ? draft.acknowledged?.text : draft.submitted
+            endedText = emptyText.flatMap { CaptureText.isEmpty($0) ? $0 : nil }
         default:
             endedText = nil
         }
@@ -484,7 +491,8 @@ public final class NoteViewModel {
 
     /// A press of the record control, or of the Mac hotkey's hold.
     public func press(_ kind: PressKind) {
-        guard recording != .starting, recording != .stopping else { return }
+        guard !pressInFlight else { return }
+        pressInFlight = true
         let press = Press(kind, at: environment.clock.now())
         let before = recording
         if before.isRecording {
@@ -499,6 +507,7 @@ public final class NoteViewModel {
     }
 
     private func sendPress(_ press: Press, before: RecordingPhase) async {
+        defer { pressInFlight = false }
         if recording == .starting, !(await saveField()) {
             recording = before
             environment.cues.emit(.couldNotStart)
@@ -537,7 +546,7 @@ public final class NoteViewModel {
                 problem = .couldNotStartRecording(error.code)
                 announcer.announce(.recordingCouldNotStart)
             } else if before.isRecording {
-                problem = .couldNotSave(error.code)
+                showRecordingOutcome(.saveFailed)
             }
         }
     }
@@ -589,8 +598,8 @@ public final class NoteViewModel {
         case .discardedEmpty:
             showRecordingOutcome(.discarded)
             announcer.announce(.recordingDiscarded)
-        case .failed(let code):
-            problem = .couldNotSave(code)
+        case .failed:
+            showRecordingOutcome(.saveFailed)
         case .open:
             break
         }
@@ -600,7 +609,7 @@ public final class NoteViewModel {
     private func showRecordingOutcome(_ outcome: RecordingOutcome?) {
         recordingOutcomeExpiry?.cancel()
         recordingOutcome = outcome
-        guard let outcome, outcome != .couldNotStart else { return }
+        guard outcome == .saved || outcome == .discarded else { return }
         recordingOutcomeExpiry = Task { [weak self] in
             do { try await Task.sleep(for: outcome == .saved ? .seconds(1) : .seconds(3)) } catch { return }
             self?.recordingOutcome = nil
@@ -892,6 +901,8 @@ public final class NoteViewModel {
         }
         return try await environment.drawingImages.image(of: InkDrawingData(bytes: bytes), scale: scale)
     }
+
+    public func dismissRecordingOutcome() { showRecordingOutcome(nil) }
 
     public func dismissProblem() {
         if recordingOutcome == .couldNotStart { showRecordingOutcome(nil) }
