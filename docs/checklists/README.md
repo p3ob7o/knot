@@ -18,7 +18,7 @@ The minutes are those of PLAN.md §10. The orchestrator owns this folder once WP
 
 ## How to use a checklist
 
-- A sitting starts when `scripts/install.sh` has reported success. Each sitting says what it needs first.
+- A sitting starts when `scripts/install.sh` has reported success, unless it says otherwise: a checklist's rows that settle what an install replaces come before that install, and the sitting says so. `scripts/install.sh` then runs on your word. Each sitting says what it needs first.
 - Each row is one action. Do it, compare with **Expect**, and tick one box: ☐ pass or ☐ fail.
 - Write numbers, times and anything odd in **Notes**. Never write the text of a real note there.
 - Mark a row n/a when it says it may not apply, such as a row for a device you don't have.
@@ -53,7 +53,7 @@ Every hardware item of docs/architecture.md §17 has rows here, and so does ever
 | Locked and unlocked rows for each iPhone trigger | WP-04 brief | M2.1-02, M2.1-03, M2.1-04, M2.1-05, M2.1-06, M2.1-07 |
 | The six cues on the iPhone | product spec §4.5 | M2.2-12, M2.2-13, M2.2-14, M2.2-15, M2.1-13, M3.1-12 |
 | The six cues on the Watch | product spec §4.5 | M3.2-01, M3.2-02, M3.2-03, M3.2-04, M3.2-05, M3.2-06 |
-| The six cues on the Mac | product spec §4.5 | M4.2-12, M4.2-13, M4.2-14, M4.2-15, M4.2-08, M4.3-07 |
+| The six cues on the Mac | product spec §4.5 | M4.2-12, M4.2-13, M4.2-14, M4.2-15, M4.2-19, M4.2-08, M4.3-07 |
 | VoiceOver on each capture path | product spec §13 | M2.1-16, M2.2-16, M3.2-08, M4.2-10, M4.2-11, M5.1-13 |
 | Latencies from the diagnostics export | WP-04 brief | M2.2-17, M4.2-16, M6.3-06 |
 | The 60-second Watch target, in SP-2's condition | product spec §14 | M3.1-03 |
