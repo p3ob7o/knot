@@ -45,7 +45,7 @@ The `accent` and `arrived` roles use ink on every platform for what Knot draws. 
 
 Attention uses `#C55300` in light appearance, including Increase Contrast. It uses the system orange in dark appearance.
 
-Knot's secondary ink is an opaque sRGB grey. Its level is 0.35 in light appearance and 0.72 in dark. Increase Contrast uses 0.25 and 0.85. The resolved Mac paper measures 6.98:1 in light and 8.37:1 in dark, or 10.41:1 and 11.78:1 with Increase Contrast. On the handoff's white and black iOS paper references, the same ink calculates to 6.98:1 and 10.54:1 at standard contrast. The handoff's system secondary label is 3.4:1 in iOS light and 4.0:1 in Mac light. It is 6.4:1 and 5.9:1 in dark, respectively. Keep the tested ink until the owner rules. On glass, including the Mac sidebar and floating panel, the contrast of the fixed grey depends on what lies behind it. WP-40c checks it on those surfaces.
+Knot's secondary ink is the system's primary colour at 72% opacity (`Color.primary.opacity(0.72)`). The Mac accessibility audit guided this choice. The handoff's system secondary label and an opaque grey with higher nominal contrast both failed the audit on small text. The opaque grey failed at Subheadline in the Mac capture panel. Keep the translucent primary ink until the owner rules. On glass, including the Mac sidebar and floating panel, the ink's contrast depends on what lies behind it. WP-40c checks it on those surfaces.
 
 A widget or Live Activity checks a role in both appearances before adopting it.
 

@@ -64,19 +64,20 @@ public struct ColorPalette: Sendable {
         colors[role] ?? .primary
     }
 
-    /// The secondary roles are the primary colour at 72 per cent: the system's own `.secondary`
-    /// fails the accessibility audit's contrast check on small text.
+    /// The small-text ink tested in the Mac accessibility audit.
+    private static let secondaryInk = Color.primary.opacity(0.72)
+
     public static let placeholder = ColorPalette([
         .background: .clear,
         .surface: .secondary.opacity(0.08),
         .textPrimary: .primary,
-        .textSecondary: .primary.opacity(0.72),
+        .textSecondary: secondaryInk,
         .accent: .accentColor,
         .recording: .red,
-        .pending: .primary.opacity(0.72),
+        .pending: secondaryInk,
         .failed: .orange,
         .arrived: .accentColor,
-        .quietMark: .primary.opacity(0.72),
+        .quietMark: secondaryInk,
         .separator: .secondary.opacity(0.3),
     ])
 
@@ -124,7 +125,6 @@ public struct ColorPalette: Sendable {
             let separator = Color.secondary.opacity(0.3)
         #endif
 
-        let secondaryInk = Color(AdaptiveInk.secondary)
         let accent = Color(AdaptiveInk.accent)
         let attention = Color(AdaptiveInk.attention)
         return ColorPalette(

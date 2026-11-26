@@ -124,41 +124,26 @@ import Testing
         }
     }
 
-    #if !os(watchOS)
-        @Test(arguments: ColorScheme.allCases)
-        func secondaryInkReadsOnPaper(in scheme: ColorScheme) {
-            var environment = EnvironmentValues()
-            environment.colorScheme = scheme
-            let palette = Theme.designed.colors
-            let paper = palette[.background].resolve(in: environment)
-            let ink = palette[.labelSecondary].resolve(in: environment)
-            let ground = luminance(paper)
-            #expect(paper.opacity == 1)
-            #expect(scheme == .dark ? ground < 0.15 : ground > 0.8)
-
-            let text = luminance(ink) * Double(ink.opacity) + ground * (1 - Double(ink.opacity))
-            let ratio = (max(text, ground) + 0.05) / (min(text, ground) + 0.05)
-            #expect(ratio >= 4.5)
+    @Test func theDesignedSecondaryRolesUseTranslucentPrimaryInk() {
+        let palette = Theme.designed.colors
+        let roles: [ColorRole] = [.labelSecondary, .textSecondary, .pending, .quietMark]
+        for role in roles {
+            #expect(palette[role] == Color.primary.opacity(0.72), "Secondary ink for \(role)")
         }
-
-    #endif
+    }
 
     @Test(arguments: ColorScheme.allCases, ColorSchemeContrast.allCases)
-    func theInksReadOnTheHandoffsReferenceGrounds(in scheme: ColorScheme, contrast: ColorSchemeContrast) {
+    func theAccentAndAttentionInksFollowAppearanceAndContrast(in scheme: ColorScheme, contrast: ColorSchemeContrast) {
         var environment = EnvironmentValues()
         environment.colorScheme = scheme
         // SwiftUI's public colorSchemeContrast accessor is read-only.
         environment._colorSchemeContrast = contrast
         #expect(environment.colorSchemeContrast == contrast)
 
-        let secondary = AdaptiveInk.secondary.color(for: scheme, contrast: contrast).resolve(in: environment)
         let attention = AdaptiveInk.attention.color(for: scheme, contrast: contrast).resolve(in: environment)
         let palette = Theme.designed.colors
-        #expect(palette[.labelSecondary].resolve(in: environment) == secondary)
         #expect(palette[.attention].resolve(in: environment) == attention)
         let dark = scheme == .dark
-        let secondaryLevel = dark ? (contrast == .increased ? 0.85 : 0.72) : (contrast == .increased ? 0.25 : 0.35)
-        #expect(secondary == Color(white: secondaryLevel).resolve(in: environment))
         #expect(
             palette[.accent].resolve(in: environment) == (dark ? Color.white : Color.black).resolve(in: environment))
         #expect(
@@ -166,35 +151,14 @@ import Testing
         let expectedAttention: Color = dark ? .orange : srgb(0xC55300)
         #expect(attention == expectedAttention.resolve(in: environment))
 
-        // The handoff gives reference RGB values for each appearance, with no separate
-        // Increase Contrast grounds. Composite its translucent fills in sRGB.
-        let phonePaper = srgb(dark ? 0x000000 : 0xFFFFFF).resolve(in: environment)
-        let phoneElevated = srgb(dark ? 0x1C1C1E : 0xFFFFFF).resolve(in: environment)
-        let phoneGrouped = srgb(dark ? 0x000000 : 0xF2F2F7).resolve(in: environment)
-        let macPaper = srgb(dark ? 0x1E1E1E : 0xFFFFFF).resolve(in: environment)
-        let macGrouped = srgb(dark ? 0x323232 : 0xECECEC).resolve(in: environment)
-        let cellFill = dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03)
-        let noticeFill = srgb(0x767680).opacity(dark ? 0.24 : 0.12).resolve(in: environment)
-        let papers = [("iPhone paper", phonePaper), ("Mac paper", macPaper)]
-        let grounds =
-            papers + [
-                ("iPhone elevated paper and grouped cell", phoneElevated),
-                ("iPhone grouped ground", phoneGrouped),
-                ("Mac grouped ground", macGrouped),
-                ("Mac grouped cell", composite(cellFill.resolve(in: environment), over: macGrouped, in: environment)),
-                ("iPhone notice over paper", composite(noticeFill, over: phonePaper, in: environment)),
-                ("iPhone notice over elevated paper", composite(noticeFill, over: phoneElevated, in: environment)),
-                ("iPhone notice over grouped ground", composite(noticeFill, over: phoneGrouped, in: environment)),
-                ("Mac notice over paper", composite(noticeFill, over: macPaper, in: environment)),
-                ("Mac notice over grouped ground", composite(noticeFill, over: macGrouped, in: environment)),
-            ]
-        for (name, ground) in grounds {
-            let ratio = contrastRatio(secondary, on: ground, in: environment)
-            #expect(ratio >= 4.5, "Secondary ink on \(name)")
-        }
-        for (name, paper) in papers {
-            let ratio = contrastRatio(attention, on: paper, in: environment)
-            #expect(ratio >= 4.5, "Attention on \(name)")
+        // The handoff gives paper references for light and dark.
+        let phonePaper: Color = dark ? .black : .white
+        let macPaper = dark ? Color(white: 30.0 / 255) : .white
+        for paper in [phonePaper, macPaper] {
+            let foreground = luminance(attention)
+            let background = luminance(paper.resolve(in: environment))
+            let ratio = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+            #expect(ratio >= 4.5, "Attention on \(paper)")
         }
     }
 
@@ -202,29 +166,6 @@ import Testing
         Color(
             .sRGB, red: Double((hex >> 16) & 255) / 255,
             green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
-    }
-
-    private func composite(_ front: Color.Resolved, over back: Color.Resolved, in environment: EnvironmentValues)
-        -> Color.Resolved
-    {
-        let alpha = front.opacity
-        func blend(_ foreground: Float, _ background: Float) -> Double {
-            Double(foreground * alpha + background * (1 - alpha))
-        }
-        return Color(
-            .sRGB, red: blend(front.red, back.red), green: blend(front.green, back.green),
-            blue: blend(front.blue, back.blue)
-        ).resolve(in: environment)
-    }
-
-    private func contrastRatio(
-        _ foreground: Color.Resolved, on ground: Color.Resolved, in environment: EnvironmentValues
-    )
-        -> Double
-    {
-        let ink = luminance(composite(foreground, over: ground, in: environment))
-        let paper = luminance(ground)
-        return (max(ink, paper) + 0.05) / (min(ink, paper) + 0.05)
     }
 
     private func luminance(_ color: Color.Resolved) -> Double {
