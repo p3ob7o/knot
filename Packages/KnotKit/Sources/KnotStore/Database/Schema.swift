@@ -21,6 +21,7 @@ public enum StoreSchema {
     /// The migrations of this build, in order. Version 1 creates the store.
     public static let migrations: [Migration] = [
         Migration(version: 1, apply: createVersion1), Migration(version: 2, apply: migrateToVersion2),
+        Migration(version: 3, apply: migrateToVersion3),
     ]
 
     /// One numbered step of the schema. It runs inside the migration's transaction.
@@ -63,6 +64,37 @@ public enum StoreSchema {
             OR OLD.conflict_of IS NOT NEW.conflict_of OR OLD.deleted_at IS NOT NEW.deleted_at
             OR OLD.piece IS NOT NEW.piece OR OLD.piece_of IS NOT NEW.piece_of
             OR OLD.recording_peaks IS NOT NEW.recording_peaks) BEGIN
+            INSERT INTO change_log (record_type, record_id) SELECT 'segment', NEW.id
+                WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'segment' AND record_id = NEW.id);
+        END;
+        """
+
+    /// Version 3: a voice segment keeps why its recording ended, `Segment.recordingEnding`, in
+    /// `recording_ending`, the open enum's text, empty for every segment there is. A reason this
+    /// build does not know is kept as it was written. A change of it is a change of the segment
+    /// for sync, so the trigger that logs one is made again with the column; it is version 2's
+    /// otherwise.
+    static func migrateToVersion3(_ db: Database) throws {
+        try db.execute(sql: version3)
+    }
+
+    private static let version3 = """
+        ALTER TABLE segment ADD COLUMN recording_ending TEXT;
+        DROP TRIGGER change_log_segment_update;
+        CREATE TRIGGER change_log_segment_update AFTER UPDATE ON segment
+        WHEN NEW.state NOT IN ('typed.draft', 'voice.recording', 'ink.drawing') AND (
+            OLD.note_id IS NOT NEW.note_id OR OLD.kind IS NOT NEW.kind
+            OR OLD.note_generation IS NOT NEW.note_generation OR OLD.origin IS NOT NEW.origin
+            OR OLD.started_at IS NOT NEW.started_at OR OLD.ended_at IS NOT NEW.ended_at OR OLD.text IS NOT NEW.text
+            OR OLD.text_origin IS NOT NEW.text_origin OR OLD.raw_transcript IS NOT NEW.raw_transcript
+            OR OLD.transcription IS NOT NEW.transcription OR OLD.cleanup IS NOT NEW.cleanup
+            OR OLD.recognition IS NOT NEW.recognition OR OLD.processing_owner IS NOT NEW.processing_owner
+            OR OLD.owner_generation IS NOT NEW.owner_generation OR OLD.state IS NOT NEW.state
+            OR OLD.asset_id IS NOT NEW.asset_id OR OLD.duration IS NOT NEW.duration
+            OR OLD.conflict_of IS NOT NEW.conflict_of OR OLD.deleted_at IS NOT NEW.deleted_at
+            OR OLD.piece IS NOT NEW.piece OR OLD.piece_of IS NOT NEW.piece_of
+            OR OLD.recording_peaks IS NOT NEW.recording_peaks
+            OR OLD.recording_ending IS NOT NEW.recording_ending) BEGIN
             INSERT INTO change_log (record_type, record_id) SELECT 'segment', NEW.id
                 WHERE NOT EXISTS (SELECT 1 FROM change_log WHERE record_type = 'segment' AND record_id = NEW.id);
         END;

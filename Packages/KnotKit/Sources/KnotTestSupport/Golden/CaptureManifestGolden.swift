@@ -31,4 +31,10 @@ public enum CaptureManifestGolden {
     public static let formatOneWithPeaks = #"""
         {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","duration_seconds":42.5,"ended_at":"2026-11-18T11:07:22.500Z","format":1,"kind":"voice","launch_id":"019a9b3c-7e00-7000-8000-000000000002","payload_bytes":21000,"payload_sha256":"abababababababababababababababababababababababababababababababab","peaks":"S05QSwEAAABgCQAAAAz/KA==","placement":"window","revision":3,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"watch"}
         """#
+
+    /// Format 1 with `recording_ending`: the watch recording of `formatOne`, ended by itself when a
+    /// call took the audio session, with the reason as the open enum's text.
+    public static let formatOneWithTheRecordingEnding = #"""
+        {"capture_id":"019a9b3c-7e00-7000-8000-000000000001","duration_seconds":42.5,"ended_at":"2026-11-18T11:07:22.500Z","format":1,"kind":"voice","launch_id":"019a9b3c-7e00-7000-8000-000000000002","payload_bytes":21000,"payload_sha256":"abababababababababababababababababababababababababababababababab","placement":"window","recording_ending":"interrupted","revision":3,"shown_note_id":"019a9b3c-7e00-7000-8000-000000000003","source":"device:019a9b3c-7e00-7000-8000-000000000004","started_at":"2026-11-18T11:06:40.000Z","surface":"watch"}
+        """#
 }

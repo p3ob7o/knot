@@ -325,11 +325,13 @@ public final class LiveRecorder: Recorder {
 
     /// Every working file of an earlier launch that `removeWorkingFile` has not removed, once
     /// each, in the order of their captures: the orphan is the working file. It is read to its
-    /// last complete frame. Its ending comes from its manifest: `recovered` for one that never
-    /// ended, `stopped` for one that ended and was never converted. The manifest keeps that a
-    /// recording ended, not why, so a recording that ended by itself comes back as `stopped` too.
-    /// With a manifest that cannot be read, or none, it comes back as `recovered`, and the
-    /// manifest is left where it is.
+    /// last complete frame. Its ending comes from its manifest, which keeps that a recording
+    /// ended and, when it did not end at its control, why: the reason the manifest keeps, for a
+    /// recording that ended by itself or whose last write failed; `stopped` for one that ended
+    /// at its control, and for a reason this build does not know; and `recovered` for one that
+    /// never ended. So a death after a recording's end and before its conversion loses nothing of
+    /// why it ended. With a manifest that cannot be read, or none, it comes back as `recovered`,
+    /// and the manifest is left where it is.
     ///
     /// A manifest with no working file is a recording with no audio, and comes back with none.
     /// A recording comes back with no audio only then, or when its working file ends before its
@@ -374,7 +376,7 @@ public final class LiveRecorder: Recorder {
             let manifest = usableManifest(files, id)
             // A recording of the current launch is never touched.
             if let manifest, manifest.launchID == currentLaunch { continue }
-            let ending: RecordingEnding = manifest?.endedAt == nil ? .recovered : .stopped
+            let ending = Self.ending(of: manifest)
             switch WorkingFileReader.inspect(files.workingFile) {
             case .read(let contents):
                 // The orphan is the working file: it comes back whether or not its manifest can be read.
@@ -397,6 +399,14 @@ public final class LiveRecorder: Recorder {
             }
         }
         return found
+    }
+
+    /// An orphan's ending, as its manifest gives it: the reason it keeps; `stopped` for the end's
+    /// time with no reason, or with a reason this build does not know; `recovered` with neither,
+    /// and with no manifest that can be read.
+    static func ending(of manifest: CaptureManifest?) -> RecordingEnding {
+        if let reason = manifest?.recordingEnding { return RecordingEnding(reason) ?? .stopped }
+        return manifest?.endedAt == nil ? .recovered : .stopped
     }
 
     /// The manifest of `id` in `Recording/`, when it is there and is the manifest of that

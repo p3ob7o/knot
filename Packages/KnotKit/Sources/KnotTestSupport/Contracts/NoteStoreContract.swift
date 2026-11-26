@@ -119,6 +119,13 @@ public enum NoteStoreContract {
         Check(name: "peaks-deleted", run: aDeletedSegmentKeepsItsPeaks),
         Check(name: "peaks-moved", run: peaksMoveWithTheirSegment),
         Check(name: "peaks-kept", run: peaksOutliveTheSegmentsOtherChanges),
+        Check(name: "recording-ending", run: aVoiceSegmentKeepsWhyItsRecordingEnded),
+        Check(name: "recording-ending-change", run: settingWhyARecordingEndedIsAChangeOfTheSegment),
+        Check(name: "recording-ending-refused", run: whyARecordingEndedIsRefusedWhereItCannotBeKept),
+        Check(name: "recording-ending-deleted", run: aDeletedSegmentKeepsWhyItsRecordingEnded),
+        Check(name: "recording-ending-moved", run: whyARecordingEndedMovesWithItsSegment),
+        Check(name: "recording-ending-purged", run: aPurgeRemovesWhyARecordingEndedWithTheSegment),
+        Check(name: "recording-ending-kept", run: whyARecordingEndedOutlivesTheSegmentsOtherChanges),
         Check(name: "ingest-older-same", run: anOlderIngestOfTheSameTextAppliesNothing),
         Check(name: "run-moves-on", run: aRunThatDoesNotMoveOnIsRefused),
         Check(name: "purge-dates", run: thePurgeKeepsWhatIsYoungAndNamesOldFiles),
@@ -2857,6 +2864,224 @@ public enum NoteStoreContract {
         _ = try await h.store.replaceText(
             TextReplacement(segment: segment, text: "Synthetic words, edited", origin: .edited, writer: .app))
         #expect(try await h.store.peaks(of: segment) == given, "An edit of the text leaves them.")
+    }
+
+    // MARK: Why a recording ended (docs/product-spec.md §4.2 and §4.5)
+
+    /// Why a segment's recording ended, as the store holds it, or `nil`.
+    static func recordingEnding(_ h: Harness, _ segment: SegmentID) async throws -> RecordingEndReason? {
+        try await h.store.segment(segment)?.segment.recordingEnding
+    }
+
+    /// A voice segment keeps why its recording ended: it reads back as given, on the segment and
+    /// in its note, and another reason replaces it; a reason this build does not know is kept as
+    /// it was given. A recording that ended through `end`, stored or failed, takes it once its
+    /// capture is no longer open. A segment that holds none answers none, whatever its kind.
+    public static func aVoiceSegmentKeepsWhyItsRecordingEnded(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await storedRecording(h, at: 0)
+        let segment = receipt.segmentIDs[0]
+        #expect(try await recordingEnding(h, segment) == nil, "A recording holds none until it is set.")
+        try await h.store.setRecordingEnding(.limitReached, of: segment)
+        #expect(try await recordingEnding(h, segment) == .limitReached, "It reads back as given.")
+        let note = try await h.store.note(receipt.noteID)
+        #expect(note?.segments.first { $0.id == segment }?.recordingEnding == .limitReached, "In its note too.")
+        try await h.store.setRecordingEnding(.interrupted, of: segment)
+        #expect(try await recordingEnding(h, segment) == .interrupted, "Another reason replaces it.")
+        try await h.store.setRecordingEnding(.unknown("thermal_shutdown"), of: segment)
+        #expect(
+            try await recordingEnding(h, segment) == .unknown("thermal_shutdown"),
+            "A reason this build does not know is kept as it was given.")
+
+        // Ended through `end`: stored, and failed.
+        let stored = h.recordingStart(at: 100, surface: .control)
+        _ = try await h.store.record(stored)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: stored.id, endedAt: h.at(101),
+                outcome: .stored(.file(h.asset(.audio, for: stored.id), duration: .seconds(60))), revision: 0))
+        try await h.store.setRecordingEnding(.inputLost, of: SegmentID(stored.id))
+        #expect(try await recordingEnding(h, SegmentID(stored.id)) == .inputLost, "A recording ended stored.")
+        let failed = h.recordingStart(at: 200, surface: .app)
+        _ = try await h.store.record(failed)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: failed.id, endedAt: h.at(201), outcome: .failed(KnotError.diskFull.code), revision: 0))
+        try await h.store.setRecordingEnding(.diskFull, of: SegmentID(failed.id))
+        #expect(try await recordingEnding(h, SegmentID(failed.id)) == .diskFull, "A recording ended failed.")
+
+        let typed = try await h.store.record(h.typed("Synthetic words", from: 300, to: 301, placement: .newNote))
+        #expect(try await recordingEnding(h, typed.segmentIDs[0]) == nil, "A typed segment holds none.")
+    }
+
+    /// A reason that differs from the one a segment holds is a change of the segment: the cursor
+    /// moves, `changes` reports its note with the reason, and the segment's own revision does not
+    /// rise, since the reason is not its text. The same reason again changes nothing.
+    public static func settingWhyARecordingEndedIsAChangeOfTheSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let receipt = try await storedRecording(h, at: 0)
+        let segment = receipt.segmentIDs[0]
+        let read = try #require(try await h.store.segment(segment))
+        var cursor = try await h.store.cursor()
+        for reason in [RecordingEndReason.interrupted, .writeFailed] {
+            try await h.store.setRecordingEnding(reason, of: segment)
+            let moved = try await h.store.cursor()
+            #expect(moved.counter > cursor.counter, "A reason that differs moves the cursor.")
+            let changes = try await h.store.changes(after: cursor, limit: 10).changes
+            #expect(changes.map(\.noteID) == [receipt.noteID], "The segment's note is reported changed.")
+            #expect(
+                changes.first?.record?.segments.first { $0.id == segment }?.recordingEnding == reason,
+                "As it is now, with the reason.")
+            #expect(try await h.store.segment(segment)?.revision == read.revision, "The segment's revision stays.")
+            try await h.store.setRecordingEnding(reason, of: segment)
+            #expect(try await h.store.cursor() == moved, "The same reason again changes nothing.")
+            #expect(try await h.store.changes(after: moved, limit: 10).changes.isEmpty, "Nothing is reported.")
+            cursor = moved
+        }
+    }
+
+    /// What cannot hold why a recording ended refuses it, and nothing is written: no segment is
+    /// `not_found`; a segment that is not a voice segment, a typed one or a drawing, and a voice
+    /// segment whose capture is open are `illegal_transition`. Once that capture has ended, it takes
+    /// the reason.
+    public static func whyARecordingEndedIsRefusedWhereItCannotBeKept(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make, window: .off)
+        let typed = try await h.store.record(h.typed("Synthetic words", from: 0, to: 1))
+        let drawing = h.drawingStart(at: 2)
+        _ = try await h.store.record(drawing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: drawing.id, endedAt: h.at(3),
+                outcome: .stored(.file(h.asset(.ink, for: drawing.id), duration: nil)), revision: 0))
+        let open = h.recordingStart(at: 4, surface: .app)
+        _ = try await h.store.record(open)
+        let cursor = try await h.store.cursor()
+        await refuses(.notFound, "No segment.") {
+            try await h.store.setRecordingEnding(.limitReached, of: h.ids.make())
+        }
+        await refuses(.illegalTransition, "A typed segment.") {
+            try await h.store.setRecordingEnding(.limitReached, of: typed.segmentIDs[0])
+        }
+        await refuses(.illegalTransition, "A drawing.") {
+            try await h.store.setRecordingEnding(.limitReached, of: SegmentID(drawing.id))
+        }
+        await refuses(.illegalTransition, "A recording in progress.") {
+            try await h.store.setRecordingEnding(.limitReached, of: SegmentID(open.id))
+        }
+        for segment in [typed.segmentIDs[0], SegmentID(drawing.id), SegmentID(open.id)] {
+            #expect(try await recordingEnding(h, segment) == nil, "Nothing was written.")
+        }
+        #expect(try await h.store.cursor() == cursor, "The cursor did not move.")
+
+        // Once the recording has ended, its segment takes the reason.
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: open.id, endedAt: h.at(5),
+                outcome: .stored(.file(h.asset(.audio, for: open.id), duration: .seconds(60))), revision: 0))
+        try await h.store.setRecordingEnding(.limitReached, of: SegmentID(open.id))
+        #expect(try await recordingEnding(h, SegmentID(open.id)) == .limitReached)
+    }
+
+    /// A deleted segment, in its 30 days, keeps why its recording ended and takes a new reason,
+    /// deleted with its note or on its own, and a restore shows it.
+    public static func aDeletedSegmentKeepsWhyItsRecordingEnded(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let inNote = try await storedRecording(h, at: 0)
+        let alone = try await storedRecording(h, at: 600)
+        let deleted = [
+            (inNote.segmentIDs[0], RestoreTarget.note(inNote.noteID)),
+            (alone.segmentIDs[0], RestoreTarget.segment(alone.segmentIDs[0])),
+        ]
+        for (segment, _) in deleted { try await h.store.setRecordingEnding(.interrupted, of: segment) }
+        _ = try await h.store.delete(.note(inNote.noteID))
+        _ = try await h.store.delete(.segment(alone.segmentIDs[0]))
+        for (segment, target) in deleted {
+            #expect(try await recordingEnding(h, segment) == .interrupted, "A deleted segment keeps it.")
+            let cursor = try await h.store.cursor()
+            try await h.store.setRecordingEnding(.inputLost, of: segment)
+            #expect(try await h.store.cursor().counter > cursor.counter, "A new reason is a change of it.")
+            _ = try await h.store.restore(target)
+            #expect(try await recordingEnding(h, segment) == .inputLost, "And takes a new one, which a restore shows.")
+        }
+    }
+
+    /// The reason is the segment's: a move to a note of its own takes it with it.
+    public static func whyARecordingEndedMovesWithItsSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let first = try await h.store.record(h.typed("Synthetic words", from: 0, to: 0.2))
+        let voice = try await h.store.record(h.watchRecording(from: 1, to: 1.5, arrival: .live))
+        #expect(voice.noteID == first.noteID, "The recording joins the note.")
+        let segment = voice.segmentIDs[0]
+        try await h.store.setRecordingEnding(.limitReached, of: segment)
+        guard case .moved(let moved) = try await h.store.move(segment, from: first.noteID) else {
+            Issue.record("The move moves.")
+            return
+        }
+        #expect(moved.to.note.id != first.noteID)
+        #expect(try await recordingEnding(h, segment) == .limitReached, "The reason goes with the segment.")
+        #expect(try await h.store.segment(segment)?.segment.noteID == moved.to.note.id)
+    }
+
+    /// A purge removes the reason with the segment, of a note deleted and of a segment deleted:
+    /// the segment is gone, and a reason for it is `not_found`.
+    public static func aPurgeRemovesWhyARecordingEndedWithTheSegment(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let inNote = try await storedRecording(h, at: 0)
+        let alone = try await storedRecording(h, at: 600)
+        for segment in [inNote.segmentIDs[0], alone.segmentIDs[0]] {
+            try await h.store.setRecordingEnding(.writeFailed, of: segment)
+        }
+        _ = try await h.store.delete(.note(inNote.noteID))
+        _ = try await h.store.delete(.segment(alone.segmentIDs[0]))
+        h.clock.advance(by: 31 * 86_400)
+        _ = try await h.store.purge(before: h.clock.now().addingTimeInterval(-30 * 86_400))
+        for segment in [inNote.segmentIDs[0], alone.segmentIDs[0]] {
+            #expect(try await h.store.segment(segment) == nil, "The segment is gone.")
+            await refuses(.notFound, "And its reason with it.") {
+                try await h.store.setRecordingEnding(.writeFailed, of: segment)
+            }
+        }
+    }
+
+    /// Why a recording ended outlives the segment's other changes: a transcript, a cleanup that
+    /// replaces the text, a person's edit of it, peaks, and "Remove recording", since the reason
+    /// says why the text stops. A failed recording's reason outlives the retry that stores it.
+    public static func whyARecordingEndedOutlivesTheSegmentsOtherChanges(_ make: NoteStoreFactory) async throws {
+        let h = await Harness(make)
+        let segment = try await storedRecording(h, at: 0).segmentIDs[0]
+        try await h.store.setRecordingEnding(.interrupted, of: segment)
+        let job = try #require(try await h.store.jobs(for: segment).first)
+        _ = try await h.store.appendTranscript(
+            h.run("synthetic spoken words", from: .zero, resumeAt: nil), to: segment, job: job.id)
+        #expect(try await recordingEnding(h, segment) == .interrupted, "A transcript leaves it.")
+        let cleaned = try await h.store.applyCleanup(
+            CleanupResult(
+                outcome: .cleaned(body: "Synthetic spoken words."), title: nil, provenance: .init(osBuild: "b"),
+                modelName: "m"), to: segment)
+        #expect(cleaned.textReplaced, "The cleanup replaced the text.")
+        #expect(try await recordingEnding(h, segment) == .interrupted, "A cleanup leaves it.")
+        _ = try await h.store.replaceText(
+            TextReplacement(segment: segment, text: "Synthetic words, edited", origin: .edited, writer: .app))
+        #expect(try await recordingEnding(h, segment) == .interrupted, "An edit of the text leaves it.")
+        try await h.store.setPeaks(peaks([3, 1, 4]), of: segment)
+        #expect(try await recordingEnding(h, segment) == .interrupted, "Peaks leave it.")
+        _ = try await h.store.removeRecording(of: segment)
+        #expect(try await h.store.segment(segment)?.segment.assetID == nil, "The recording is removed.")
+        #expect(try await recordingEnding(h, segment) == .interrupted, "\"Remove recording\" keeps it.")
+
+        // A failed recording takes it, and keeps it when its retry is stored.
+        let failing = h.recordingStart(at: 100, surface: .app)
+        _ = try await h.store.record(failing)
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: failing.id, endedAt: h.at(101), outcome: .failed(KnotError.writeFailed.code), revision: 0))
+        try await h.store.setRecordingEnding(.writeFailed, of: SegmentID(failing.id))
+        _ = try await h.store.end(
+            CaptureEnd(
+                captureID: failing.id, endedAt: h.at(101),
+                outcome: .stored(.file(h.asset(.audio, for: failing.id), duration: .seconds(60))), revision: 0))
+        #expect(try await h.store.segment(SegmentID(failing.id))?.segment.assetID != nil, "The retry is stored.")
+        #expect(try await recordingEnding(h, SegmentID(failing.id)) == .writeFailed, "The retry keeps it.")
     }
 
     /// Witness 67: an `ingest` at a lower revision with the same text applies nothing and is

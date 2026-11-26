@@ -132,7 +132,8 @@
             }
             if let failure { throw failure.about(capture: request.captureID) }
             // The manifest first, then the working file, before the first sample.
-            try files.place(try request.manifest(startedAt: clock.now()).encoded(), at: manifestURL(request.captureID))
+            let manifest = request.manifest(startedAt: clock.now())
+            try files.place(try manifest.encoded(), at: manifestURL(request.captureID))
             try files.place(Data(), at: workingURL(request.captureID))
             let seconds = Double(request.limit.components.seconds) + Double(request.limit.components.attoseconds) / 1e18
             let session = ScriptedSession(
@@ -149,7 +150,17 @@
                     self.state.withLock { _ = $0.workingFiles.removeValue(forKey: request.captureID) }
                 },
                 readBack: { [layer] in (try? layer.read(self.workingURL(request.captureID))) != nil },
-                ended: { [cues] audio in
+                ended: { [cues, files, clock] audio in
+                    // As the live recorder does: a recording that ended, other than by recovery,
+                    // writes its manifest again with its end, its length and why it ended, when it
+                    // did not end at its control. A failure leaves the manifest the start wrote.
+                    if audio.ending != .recovered {
+                        var ended = manifest
+                        ended.endedAt = clock.now()
+                        ended.duration = audio.duration
+                        ended.recordingEnding = RecordingEndReason(audio.ending)
+                        try? files.place(try ended.encoded(), at: self.manifestURL(request.captureID))
+                    }
                     // A recording that ended leaves its working file until it is removed.
                     self.state.withLock { $0.workingFiles[request.captureID] = (request.launchID, audio) }
                     // On the drive: a recording that ended neither stopped nor recovered stopped early.
@@ -196,10 +207,19 @@
                     found.frames = 0
                     found.workingFile = nil
                 }
-                // The ending is the manifest's when the manifest can be read, else `recovered`.
-                if (try? layer.read(manifest)) == nil { found.ending = .recovered }
+                // The ending is the manifest's when the manifest can be read, as the live recorder
+                // reads it, else `recovered`.
+                found.ending = Self.ending(of: (try? layer.read(manifest)).flatMap { try? CaptureManifest.decode($0) })
                 return found
             }
+        }
+
+        /// An orphan's ending, as its manifest gives it: the reason it keeps; `stopped` for the end's
+        /// time with no reason, or with a reason this build does not know; `recovered` with neither,
+        /// and with no manifest that can be read.
+        static func ending(of manifest: CaptureManifest?) -> RecordingEnding {
+            if let reason = manifest?.recordingEnding { return RecordingEnding(reason) ?? .stopped }
+            return manifest?.endedAt == nil ? .recovered : .stopped
         }
 
         /// Whether the recording's working file, if it is on the drive, can be read now.

@@ -345,7 +345,8 @@ extension KnotError {
         code: "job_died_twice", next: .retry, retry: .safe(times: 1), written: .contentKept,
         exitStatus: .unexpected)
     /// A state machine was asked for a transition it does not have, or the store for a change
-    /// its rules do not allow, such as peaks for a segment with no recording.
+    /// its rules do not allow, such as peaks for a segment with no recording, or why a recording
+    /// ended for a segment that is not a voice segment or whose capture is open.
     public static let illegalTransition = KnotError(
         code: "illegal_transition", next: .reportProblem, retry: .notSafe, written: .nothing,
         exitStatus: .unexpected)

@@ -485,6 +485,28 @@ public final class NoteRepository: NoteStore {
         }
     }
 
+    // MARK: Why a recording ended
+
+    public func setRecordingEnding(_ reason: RecordingEndReason, of segmentID: SegmentID) async throws(KnotError) {
+        try await write { tx in
+            guard var segment = try tx.segment(segmentID) else {
+                throw KnotError.notFound.with(.init(segmentID: segmentID))
+            }
+            // A voice segment whose capture is no longer open: a recording still being made has
+            // not ended.
+            guard segment.kind == .voice, !segment.state.isCapturing, try !tx.isOpen(segmentID) else {
+                throw KnotError.illegalTransition.with(.init(segmentID: segmentID))
+            }
+            // The same reason again changes nothing. Another is a change of the segment, which
+            // moves the cursor and is logged for sync, and leaves its own revision as it is.
+            guard segment.recordingEnding != reason else { return .rollback(()) }
+            segment.recordingEnding = reason
+            try tx.put(segment)
+            try tx.touch(segment.noteID, counter: tx.nextCounter(), at: tx.now())
+            return .commit(())
+        }
+    }
+
     // MARK: Moving
 
     public func move(_ segmentID: SegmentID, from noteID: NoteID) async throws(KnotError) -> MoveResult {

@@ -56,6 +56,13 @@ public struct CaptureManifest: Hashable, Sendable {
     /// to `NoteStore.setPeaks(_:of:)`. A reader that does not know the member keeps it as a field
     /// it does not know. Absent from the bytes when nil.
     public var peaks: Data?
+    /// Why the recording ended, when it did not end at its control: written in the manifest of a
+    /// finished recording, by the recorder as the recording ends, by the engine's `Inbox/` item and
+    /// by the Watch's outbox, as the open enum's text in the JSON member `recording_ending`. A
+    /// reason this build does not know is kept as `unknown` and written back. A reader that does
+    /// not know the member keeps it as a field it does not know. Absent from the bytes when nil,
+    /// so that every manifest written before keeps its bytes.
+    public var recordingEnding: RecordingEndReason?
     /// The fields this build does not know, by key, each as its original JSON text.
     public private(set) var unknownFields: [String: String]
 
@@ -63,7 +70,8 @@ public struct CaptureManifest: Hashable, Sendable {
         captureID: CaptureID, kind: SegmentKind, origin: CaptureOrigin, launchID: LaunchID, startedAt: Date,
         endedAt: Date? = nil, duration: Duration? = nil, placement: CapturePlacement, shownNoteID: NoteID? = nil,
         revision: Int64 = 0, payloadByteCount: Int64? = nil, payloadSHA256: String? = nil,
-        followsCaptureID: CaptureID? = nil, lastSavedAt: Date? = nil, peaks: Data? = nil
+        followsCaptureID: CaptureID? = nil, lastSavedAt: Date? = nil, peaks: Data? = nil,
+        recordingEnding: RecordingEndReason? = nil
     ) {
         self.format = Self.currentFormat
         self.captureID = captureID
@@ -81,6 +89,7 @@ public struct CaptureManifest: Hashable, Sendable {
         self.followsCaptureID = followsCaptureID
         self.lastSavedAt = lastSavedAt
         self.peaks = peaks
+        self.recordingEnding = recordingEnding
         self.unknownFields = [:]
     }
 
@@ -235,6 +244,7 @@ extension CaptureManifest {
         case followsCaptureID = "follows_capture_id"
         case lastSavedAt = "last_saved_at"
         case peaks
+        case recordingEnding = "recording_ending"
     }
 
     private struct AnyKey: CodingKey {
@@ -305,6 +315,7 @@ extension CaptureManifest {
             try Self.date($0, key: .lastSavedAt)
         }
         peaks = try container.decodeIfPresent(Data.self, forKey: AnyKey(.peaks))
+        recordingEnding = try container.decodeIfPresent(RecordingEndReason.self, forKey: AnyKey(.recordingEnding))
     }
 
     fileprivate func encodeFields(to encoder: any Encoder) throws {
@@ -326,6 +337,7 @@ extension CaptureManifest {
         try container.encodeIfPresent(followsCaptureID, forKey: AnyKey(.followsCaptureID))
         try container.encodeIfPresent(lastSavedAt.map(Self.text), forKey: AnyKey(.lastSavedAt))
         try container.encodeIfPresent(peaks, forKey: AnyKey(.peaks))
+        try container.encodeIfPresent(recordingEnding, forKey: AnyKey(.recordingEnding))
     }
 
     /// The longest duration a manifest may carry: far beyond any recording, and well inside
