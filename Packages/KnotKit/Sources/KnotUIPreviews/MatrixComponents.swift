@@ -232,6 +232,12 @@
                 if example == .saved {
                     (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.notInstalled)
                 }
+                if example == .live || example == .blocked {
+                    (environment.recorder as? ScriptedRecorder)?.setScript(
+                        .init(buffers: 30, interval: .milliseconds(30)))
+                    (environment.transcriber as? ScriptedTranscriber)?.scriptLive(
+                        words: ["Ask", "about", "the", "roof", "estimate."])
+                }
                 let frozen = RecordingClock(
                     now: { .zero },
                     sleepUntil: { _ in
