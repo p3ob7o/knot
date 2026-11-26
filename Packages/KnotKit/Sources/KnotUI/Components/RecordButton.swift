@@ -33,6 +33,18 @@ public struct RecordButton: View {
 
     public var body: some View {
         styledButton
+            #if os(iOS)
+                .buttonBorderShape(.circle)
+                .buttonSizing(.flexible)
+                .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                .accessibilityShowsLargeContentViewer {
+                    Label {
+                        label
+                    } icon: {
+                        Image(systemName: symbol)
+                    }
+                }
+            #endif
             .disabled(phase == .starting || phase == .stopping)
             .animation(theme.motion.animation(for: .recordingPhase, reduceMotion: reduceMotion), value: phase)
             .accessibilityLabel(label)
@@ -40,7 +52,7 @@ public struct RecordButton: View {
     }
 
     @ViewBuilder private var styledButton: some View {
-        if phase.isRecording || phase == .stopping {
+        if usesRecordingTint {
             button
                 .buttonStyle(.glassProminent)
                 .tint(theme.colors[.recording])
@@ -52,13 +64,25 @@ public struct RecordButton: View {
         }
     }
 
+    private var usesRecordingTint: Bool {
+        #if os(iOS)
+            phase.isRecording
+        #else
+            phase.isRecording || phase == .stopping
+        #endif
+    }
+
     private var button: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(theme.type[.rowTitle])
-                .frame(
-                    minWidth: toolbar ? RecordControlSize.toolbar : nil,
-                    minHeight: toolbar ? RecordControlSize.toolbar : nil)
+                #if os(iOS)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                #else
+                    .frame(
+                        minWidth: toolbar ? theme.sizes.hitTarget : nil,
+                        minHeight: toolbar ? theme.sizes.hitTarget : nil)
+                #endif
         }
     }
 
@@ -96,11 +120,6 @@ public struct RecordButton: View {
         }
     }
 
-}
-
-/// The toolbar's minimum hit area until the theme supplies control sizes.
-private enum RecordControlSize {
-    static let toolbar: CGFloat = 44
 }
 
 /// A recording's levels, newest last, as bars. It draws from the peaks it is given, so a stored

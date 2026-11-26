@@ -293,11 +293,17 @@ struct ShellView: View {
                     } label: {
                         Label("More", systemImage: "ellipsis")
                     }
+                    .accessibilityShowsLargeContentViewer {
+                        Label("More", systemImage: "ellipsis")
+                    }
                 }
                 DefaultToolbarItem(kind: .search, placement: .bottomBar)
                 ToolbarSpacer(.fixed, placement: .bottomBar)
                 ToolbarItem(placement: .bottomBar) {
                     Button(action: shell.showCapture) {
+                        Label("Capture", systemImage: "square.and.pencil")
+                    }
+                    .accessibilityShowsLargeContentViewer {
                         Label("Capture", systemImage: "square.and.pencil")
                     }
                     .accessibilityIdentifier("shell.compose")
@@ -324,6 +330,9 @@ struct ShellView: View {
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button(action: shell.dismissCapture) {
+                                    Label("Notes", systemImage: "list.bullet")
+                                }
+                                .accessibilityShowsLargeContentViewer {
                                     Label("Notes", systemImage: "list.bullet")
                                 }
                                 .accessibilityIdentifier("shell.notes")
@@ -421,6 +430,9 @@ struct SettingsScreen: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(action: close) {
+                        Label("Close", systemImage: "xmark")
+                    }
+                    .accessibilityShowsLargeContentViewer {
                         Label("Close", systemImage: "xmark")
                     }
                 }

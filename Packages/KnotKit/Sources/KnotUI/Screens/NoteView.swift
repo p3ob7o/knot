@@ -49,7 +49,13 @@
                     banners
                     page
                 }
-                .padding(theme.spacing.surfaceMargin)
+                #if os(iOS)
+                    .padding(.horizontal)
+                    .padding(.top, theme.spacing.space8)
+                    .padding(.bottom, theme.spacing.space6)
+                #else
+                    .padding(theme.spacing.surfaceMargin)
+                #endif
                 .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: model.items)
             }
             #if os(iOS)
@@ -68,7 +74,8 @@
                     // The timer can grow here. A toolbar item constrains its Dynamic Type size.
                     if showsLiveControls {
                         HStack { captureActions }
-                        .padding(theme.spacing.surfaceMargin)
+                        .padding(.horizontal)
+                        .padding(.vertical, theme.spacing.space2)
                     }
                 }
             #else
@@ -113,31 +120,24 @@
             recordingControls
         }
 
-        // Use .appendCaption once the WP-40 theme merges.
-        private var appendCaptionRole: TypeRole {
-            #if os(macOS)
-                .rowPreview
-            #else
-                .caption
-            #endif
-        }
-
         @ViewBuilder private var page: some View {
             if model.mode == .capture {
                 let current = model.activeRecording.map(SegmentID.init)
                 let justSaved = model.lastRecording.map(SegmentID.init)
                 let earlier = model.items.filter { $0.id != current && $0.id != justSaved }
                 if let note = model.record?.note, !earlier.isEmpty {
-                    VStack(alignment: .leading, spacing: theme.spacing.tight) {
+                    VStack(alignment: .leading, spacing: theme.spacing.space2) {
                         Text(
                             "Adding to the note from \(appendCaptionTime(note.createdAt, calendar: calendar, locale: locale))",
                             bundle: .module
                         )
-                        .font(theme.type[appendCaptionRole])
+                        .font(theme.type[.appendCaption])
                         .foregroundStyle(theme.colors[.textSecondary])
                         if model.surface != .macPanel {
-                            ForEach(earlier) { item in
-                                segment(item, secondaryText: true)
+                            VStack(alignment: .leading, spacing: theme.spacing.betweenSegments) {
+                                ForEach(earlier) { item in
+                                    segment(item, secondaryText: true)
+                                }
                             }
                         }
                     }
@@ -160,7 +160,7 @@
             } else {
                 CaptureField(
                     text: model.fieldText, acceptsTyping: model.fieldAcceptsTyping, isFocused: $fieldFocused,
-                    typeRole: model.surface == .macPanel ? .noteTitle : .body,
+                    typeRole: model.surface == .macPanel || model.surface == .app ? .captureField : .body,
                     onChange: model.fieldChanged, onSubmit: model.endCapture)
             }
         }
@@ -176,6 +176,13 @@
             }
             .buttonStyle(.glassProminent)
             .tint(theme.colors[.textPrimary])
+            .accessibilityShowsLargeContentViewer {
+                Label {
+                    Text("Done", bundle: .module)
+                } icon: {
+                    Image(systemName: "checkmark")
+                }
+            }
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!model.fieldAcceptsTyping || (model.typedCapture == nil && model.fieldText.isEmpty))
         }
@@ -195,6 +202,15 @@
                         .labelStyle(.iconOnly)
                     #endif
                 }
+                #if os(iOS)
+                    .accessibilityShowsLargeContentViewer {
+                        Label {
+                            Text("New note", bundle: .module)
+                        } icon: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                    }
+                #endif
                 .keyboardShortcut("n", modifiers: .command)
             }
         }
@@ -211,13 +227,16 @@
             HStack(spacing: theme.spacing.regular) {
                 if let elapsed {
                     elapsedText(elapsed)
-                        .font(theme.type[.body])
+                        .font(theme.type[.recordingTime])
                         .foregroundStyle(theme.colors[.textPrimary])
                         .monospacedDigit()
                         .accessibilityHidden(true)
                 }
                 if model.recordingOutcome == .saved {
-                    Text("Saved", bundle: .module).font(theme.type[.caption]).accessibilityHidden(true)
+                    Text("Saved", bundle: .module)
+                        .font(theme.type[.outcomeBody])
+                        .foregroundStyle(theme.colors[.textPrimary])
+                        .accessibilityHidden(true)
                 }
                 RecordButton(
                     phase: model.recording, elapsed: elapsed, outcome: model.recordingOutcome,
