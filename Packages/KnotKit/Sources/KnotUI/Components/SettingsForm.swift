@@ -135,14 +135,19 @@
                         get: { model.settings.commandLineAccess },
                         set: { on in Task { await model.setCommandLineAccess(on) } }))
             case .exportAll, .recentlyDeleted, .about:
-                Button {
-                    open(row)
-                } label: {
-                    Text(row.title)
-                        #if os(iOS)
+                #if os(iOS)
+                    Button {
+                        open(row)
+                    } label: {
+                        Text(row.title)
                             .foregroundStyle(theme.colors[.textPrimary])
-                        #endif
-                }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                #else
+                    Button(row.title) { open(row) }
+                #endif
             }
         }
     }

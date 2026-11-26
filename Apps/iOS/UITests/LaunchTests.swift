@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The skeleton's UI smoke tests, on the iPhone and the iPad simulators. Every launch goes
@@ -236,7 +237,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.buttons["shell.notes"].tap()
         XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
         XCTAssertTrue(app.buttons["Dismiss Add a Lock Screen control"].exists)
-        try app.auditAccessibility()
+        try XCTContext.runActivity(named: "Audit first-run Notes") { _ in try app.auditAccessibility() }
 
         app.buttons["More"].tap()
         app.buttons["Settings"].tap()
@@ -245,7 +246,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         let about = app.buttons["About"]
         XCTAssertTrue(about.waitForExistence(timeout: limit))
         XCTAssertTrue(about.isEnabled)
-        try app.auditAccessibility()
+        try XCTContext.runActivity(named: "Audit Settings") { _ in try app.auditAccessibility() }
 
         let variant = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "English variant")).firstMatch
         XCTAssertTrue(variant.waitForExistence(timeout: limit))
@@ -286,7 +287,12 @@ final class KnotIOSLaunchTests: XCTestCase {
         let about = app.buttons["About"]
         XCTAssertTrue(about.waitForExistence(timeout: limit))
         XCTAssertTrue(about.isEnabled)
-        app.buttons["Action Button setup"].tap()
+        let actionButtonSetup = app.buttons["Action Button setup"]
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertFalse(actionButtonSetup.exists)
+            return
+        }
+        actionButtonSetup.tap()
         XCTAssertTrue(app.navigationBars["Record with the Action Button"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
@@ -326,9 +332,22 @@ final class KnotIOSLaunchTests: XCTestCase {
     /// Opens the stream and finds the row of `line`, then audits the stream.
     @MainActor
     private func assertStreamShows(_ line: String, in app: XCUIApplication) throws {
+        // The tap itself waits for the app to become idle after it sends the event.
+        let start = ContinuousClock.now
         app.buttons["shell.notes"].tap()
         let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", line)).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: limit), "The stream shows the typed line.")
+        let rowAppeared = row.waitForExistence(timeout: limit)
+        if start.duration(to: .now) > .seconds(10) {
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "Slow transition to Notes"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Slow transition to Notes accessibility hierarchy"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+        }
+        XCTAssertTrue(rowAppeared, "The stream shows the typed line.")
         try app.auditAccessibility()
     }
 }
