@@ -141,7 +141,7 @@ Typed and handwritten segments use the same names. A typed segment is Ready. One
 
 | Trigger | What happens |
 |---|---|
-| App icon, Home Screen widget, Lock Screen widget | Knot opens with the keyboard up. From the Lock Screen this needs Face ID. |
+| App icon, Home Screen widget, Lock Screen widget | Knot opens with the keyboard up when it launches. From the Lock Screen this needs Face ID. A return from the background shows what was left, for now. |
 | Action Button, Lock Screen control, Control Center control | Recording starts without opening the app. A Live Activity shows the timer and a stop button. Pressing the same control again also stops it. |
 | Siri and Shortcuts | "New note", "Append to note", "Start recording", "Search notes". Back Tap and automations come through Shortcuts. |
 | A "Search" control or widget | Knot opens on the stream with search focused. |
