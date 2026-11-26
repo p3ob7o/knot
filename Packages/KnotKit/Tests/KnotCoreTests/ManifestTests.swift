@@ -52,6 +52,13 @@ import Testing
         return finished
     }()
 
+    /// The watch recording of `manifest`, ended by itself when a call took the audio session.
+    static let withTheRecordingEnding: CaptureManifest = {
+        var finished = Self.manifest
+        finished.recordingEnding = .interrupted
+        return finished
+    }()
+
     /// Finding 27: each new field has its golden file, and a manifest without them keeps the
     /// bytes of format 1 as they were.
     @Test func eachNewFieldMatchesItsGoldenFile() throws {
@@ -59,11 +66,12 @@ import Testing
             (Self.following, CaptureManifestGolden.formatOneFollowingACapture),
             (Self.lastSaved, CaptureManifestGolden.formatOneWithTheLastSave),
             (Self.withPeaks, CaptureManifestGolden.formatOneWithPeaks),
+            (Self.withTheRecordingEnding, CaptureManifestGolden.formatOneWithTheRecordingEnding),
         ] {
             #expect(String(decoding: try manifest.encoded(), as: UTF8.self) == golden)
             #expect(try CaptureManifest.decode(Data(golden.utf8)) == manifest)
         }
-        for key in ["follows_capture_id", "last_saved_at", "peaks"] {
+        for key in ["follows_capture_id", "last_saved_at", "peaks", "recording_ending"] {
             #expect(!CaptureManifestGolden.formatOne.contains(key), "\(key) is absent when nil.")
             #expect(!String(decoding: try Self.manifest.encoded(), as: UTF8.self).contains(key))
         }
@@ -72,15 +80,17 @@ import Testing
     /// Finding 27: a build that does not know the new fields keeps them as unknown fields and
     /// writes the manifest back byte for byte, so a build that knows them reads them again.
     @Test func aBuildThatDoesNotKnowTheNewFieldsWritesThemBack() throws {
-        let newer: Set = ["follows_capture_id", "last_saved_at", "peaks"]
+        let newer: Set = ["follows_capture_id", "last_saved_at", "peaks", "recording_ending"]
         for (manifest, golden) in [
             (Self.following, CaptureManifestGolden.formatOneFollowingACapture),
             (Self.lastSaved, CaptureManifestGolden.formatOneWithTheLastSave),
             (Self.withPeaks, CaptureManifestGolden.formatOneWithPeaks),
+            (Self.withTheRecordingEnding, CaptureManifestGolden.formatOneWithTheRecordingEnding),
         ] {
             let older = try CaptureManifest.decode(Data(golden.utf8), notKnowing: newer)
             #expect(
-                older.followsCaptureID == nil && older.lastSavedAt == nil && older.peaks == nil,
+                older.followsCaptureID == nil && older.lastSavedAt == nil && older.peaks == nil
+                    && older.recordingEnding == nil,
                 "It does not read them.")
             #expect(older.unknownFields.count == 1, "It keeps the one it does not know.")
             let written = try older.encoded()
@@ -97,6 +107,43 @@ import Testing
         #expect(throws: KnotError.inboxItemUnreadable.about(capture: Self.capture)) {
             try CaptureManifest.decode(Self.golden(replacing: key, with: value))
         }
+    }
+
+    /// A reason a newer build gives is kept as `unknown` and written back byte for byte, and
+    /// every reason this build knows round-trips.
+    @Test func everyRecordingEndingRoundTripsAndANewerOneIsKept() throws {
+        for reason in RecordingEndReason.allCases {
+            var manifest = Self.manifest
+            manifest.recordingEnding = reason
+            #expect(try CaptureManifest.decode(manifest.encoded()) == manifest)
+        }
+        let golden = CaptureManifestGolden.formatOneWithTheRecordingEnding
+        let newer = golden.replacingOccurrences(of: #""interrupted""#, with: #""thermal_shutdown""#)
+        let read = try CaptureManifest.decode(Data(newer.utf8))
+        #expect(read.recordingEnding == .unknown("thermal_shutdown"), "A reason this build does not know is kept.")
+        #expect(read.unknownFields.isEmpty, "As the member it knows.")
+        #expect(String(decoding: try read.encoded(), as: UTF8.self) == newer, "And written back as it was.")
+    }
+
+    /// A `recording_ending` of the wrong JSON type does not make a good manifest unreadable: the
+    /// manifest is read with no reason, the member is kept as a field this build does not know and
+    /// written back exactly, and a reason set later replaces it, written once.
+    @Test(arguments: ["7", "1.5", "true", "null", #"{"code":"limit_reached"}"#, #"["interrupted"]"#])
+    func aReasonOfTheWrongTypeIsReadAsNoneAndKept(value: String) throws {
+        let data = Self.golden(replacing: "recording_ending", with: value)
+        var manifest = try CaptureManifest.decode(data)
+        #expect(manifest.recordingEnding == nil, "It is read as no reason.")
+        #expect(manifest.unknownFields == ["recording_ending": value], "And kept as it came.")
+        var expected = Self.manifest
+        expected.recordingEnding = nil
+        #expect(manifest.captureID == expected.captureID && manifest.endedAt == expected.endedAt)
+        #expect(manifest.payloadSHA256 == expected.payloadSHA256, "The rest is read as it was.")
+        #expect(try manifest.encoded() == data, "It is written back byte for byte.")
+        manifest.recordingEnding = .interrupted
+        let written = String(decoding: try manifest.encoded(), as: UTF8.self)
+        #expect(written.components(separatedBy: #""recording_ending""#).count == 2, "Written once: \(written)")
+        let again = try CaptureManifest.decode(Data(written.utf8))
+        #expect(again.recordingEnding == .interrupted && again.unknownFields.isEmpty)
     }
 
     @Test func everyPlacementAndAnOpenCaptureRoundTrip() throws {

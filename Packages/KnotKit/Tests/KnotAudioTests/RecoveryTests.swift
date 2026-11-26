@@ -9,6 +9,38 @@ import Testing
 /// Recovery of the recordings that earlier launches left in `Recording/`, read by a recorder
 /// that did not record them, as the next launch's is.
 @Suite struct RecoveryTests {
+    /// The live recorder reads an orphan's ending from its manifest by the port's rule, case by
+    /// case: a reason this build does not know reads as `stopped`, as ruled (pull request 128).
+    @Test func anOrphansEndingIsTheManifests() {
+        for check in OrphanEndingCases.all {
+            #expect(LiveRecorder.ending(of: check.manifest) == check.ending, "\(check.why)")
+        }
+    }
+
+    /// A recorder's manifest whose `recording_ending` is of the wrong JSON type is read without
+    /// the reason: its launch and its end's time survive. A recording of the current launch is left
+    /// alone, and one of an earlier launch comes back `stopped`, whole (pull request 128's review).
+    @Test func aReasonOfTheWrongTypeLeavesTheLaunchAndTheEnd() async throws {
+        let folder = try ScratchFolder()
+        let launch = LaunchID(uuid: UUID())
+        let request = request(launch)
+        try writeManifest(folder.locations, request, endedAt: Date())
+        let manifest = folder.locations.recordingManifest(request.captureID)
+        var object = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any] ?? [:]
+        object["recording_ending"] = 7
+        try JSONSerialization.data(withJSONObject: object, options: .sortedKeys).write(to: manifest)
+        _ = try writeWorkingFile(at: folder.locations.recordingAudio(request.captureID, format: .caf), frames: 8_000)
+
+        let later = recorder(folder.locations, input: injected())
+        #expect(
+            try await later.recoverOrphans(currentLaunch: launch).isEmpty, "The launch is read: it is the current one.")
+        let orphans = try await later.recoverOrphans(currentLaunch: LaunchID(uuid: UUID()))
+        #expect(orphans.map(\.captureID) == [request.captureID])
+        #expect(orphans.first?.ending == .stopped, "The end's time is read: it ended, and did not die.")
+        #expect(orphans.first?.frames == 8_000, "With its audio.")
+        #expect(FileManager.default.fileExists(atPath: manifest.path), "The manifest is left where it is.")
+    }
+
     /// A recording that stopped and was never converted comes back as it ended, `stopped`, read
     /// to its end by a recorder of another launch; one that never ended comes back `recovered`.
     @Test func aStoppedOrphanComesBackStopped() async throws {

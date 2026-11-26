@@ -396,13 +396,15 @@ final class LiveSession: RecordingSession {
         }
     }
 
-    /// Writes the manifest again with the recording's end and length, so that recovery tells a
-    /// recording that ended from one that died. A failure is logged and changes nothing else:
-    /// the manifest the start wrote stays whole.
+    /// Writes the manifest again with the recording's end, its length and, when it did not end
+    /// at its control, why, so that recovery tells a recording that ended from one that died,
+    /// and gives one that ended by itself its reason. A failure is logged and changes nothing
+    /// else: the manifest the start wrote stays whole.
     private func markEnded(_ audio: RecordedAudio) {
         var ended = manifest
         ended.endedAt = clock.now()
         ended.duration = audio.duration
+        ended.recordingEnding = RecordingEndReason(audio.ending)
         do {
             try files.store.place(try ended.encoded(), at: files.manifest)
         } catch {

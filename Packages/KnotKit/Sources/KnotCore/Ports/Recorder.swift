@@ -61,10 +61,18 @@ public protocol Recorder: Sendable {
     /// is tried again at the next launch. An orphan is returned again on each call until its
     /// working file is removed.
     ///
+    /// A recording that ends writes its manifest again with its end's time and, when it did not
+    /// end at its control, why (`CaptureManifest.recordingEnding`), so that a death after the end
+    /// and before the conversion loses neither. A recording discarded leaves no manifest, and one
+    /// that died while it ran has neither.
+    ///
     /// The orphan is the working file. One that can be read is returned with its frames; its
-    /// ending comes from the manifest when the manifest can be read, and is `recovered` when it
-    /// cannot. A manifest that cannot be read does not hide its recording, and it is left where
-    /// it is, for the caller to deal with. A working file that is on the drive and cannot be
+    /// ending comes from the manifest when the manifest can be read: the reason the manifest
+    /// keeps, as the ending it names; `stopped` when the manifest has the end's time and no
+    /// reason, and when its reason is one this build does not know; and `recovered` when it has
+    /// neither. It is `recovered` when the manifest cannot be read. A manifest that cannot be
+    /// read does not hide its recording, and it is left where it is, for the caller to deal
+    /// with. A working file that is on the drive and cannot be
     /// read, such as one protected while the device is locked or that this process may not
     /// open, is not returned, and nothing of the recording is touched: it is returned at a later
     /// call, once it can be read. A manifest with no working file is a recording with no audio.
@@ -243,6 +251,88 @@ public enum RecordingEnding: String, Hashable, Sendable, Codable, CaseIterable {
         switch self {
         case .limitReached, .interrupted, .inputLost, .diskFull, .writeFailed: true
         case .stopped, .recovered, .discarded: false
+        }
+    }
+
+    /// The ending that `reason` keeps, or `nil` for a reason this build does not know, which
+    /// names no ending of this build. A reader then knows only that the recording ended.
+    public init?(_ reason: RecordingEndReason) {
+        switch reason {
+        case .limitReached: self = .limitReached
+        case .interrupted: self = .interrupted
+        case .inputLost: self = .inputLost
+        case .diskFull: self = .diskFull
+        case .writeFailed: self = .writeFailed
+        case .recovered: self = .recovered
+        case .unknown: return nil
+        }
+    }
+}
+
+/// Why a recording ended when it did not end at its control: the part of its `RecordingEnding`
+/// that is kept, and travels between builds (docs/product-spec.md §4.2 and §4.5). A recording
+/// stopped at its control, or discarded, has none. It is kept on the recording's voice segment
+/// (`Segment.recordingEnding`), in a manifest (`CaptureManifest.recordingEnding`) and in the
+/// synced record, so it is open: a reason a newer build gives is kept as `unknown` with its text.
+/// `RecordingEnding` stays the recorder's own closed ending, which every switch over it reads.
+public enum RecordingEndReason: OpenEnum, CaseIterable {
+    /// The 30-minute limit.
+    case limitReached
+    /// A call, Siri or an alarm took the audio session. The recorder does not tell them apart.
+    case interrupted
+    /// The input went away and could not be restarted.
+    case inputLost
+    /// A write failed and the volume has no room.
+    case diskFull
+    /// Any other failed write.
+    case writeFailed
+    /// Cut short by a death, and finished by a later launch's recovery.
+    case recovered
+    case unknown(String)
+
+    public static let allCases: [RecordingEndReason] = [
+        .limitReached, .interrupted, .inputLost, .diskFull, .writeFailed, .recovered,
+    ]
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "limit_reached": self = .limitReached
+        case "interrupted": self = .interrupted
+        case "input_lost": self = .inputLost
+        case "disk_full": self = .diskFull
+        case "write_failed": self = .writeFailed
+        case "recovered": self = .recovered
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .limitReached: "limit_reached"
+        case .interrupted: "interrupted"
+        case .inputLost: "input_lost"
+        case .diskFull: "disk_full"
+        case .writeFailed: "write_failed"
+        case .recovered: "recovered"
+        case .unknown(let raw): raw
+        }
+    }
+
+    public var isUnknown: Bool {
+        if case .unknown = self { return true }
+        return false
+    }
+
+    /// The reason `ending` gives, or `nil` for `stopped` and `discarded`, which have none to give.
+    public init?(_ ending: RecordingEnding) {
+        switch ending {
+        case .stopped, .discarded: return nil
+        case .limitReached: self = .limitReached
+        case .interrupted: self = .interrupted
+        case .inputLost: self = .inputLost
+        case .diskFull: self = .diskFull
+        case .writeFailed: self = .writeFailed
+        case .recovered: self = .recovered
         }
     }
 }

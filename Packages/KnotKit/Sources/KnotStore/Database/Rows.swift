@@ -135,7 +135,7 @@ enum SegmentRows {
         segment.arrived_at AS segment_arrived_at, segment.state AS segment_state, segment.asset_id AS segment_asset_id,
         segment.duration AS segment_duration, segment.conflict_of AS segment_conflict_of,
         segment.deleted_at AS segment_deleted_at, segment.revision AS segment_revision, segment.piece AS segment_piece,
-        segment.piece_of AS segment_piece_of
+        segment.piece_of AS segment_piece_of, segment.recording_ending AS segment_recording_ending
         """
 
     static func decode(_ row: Row) throws -> Segment {
@@ -157,6 +157,8 @@ enum SegmentRows {
             deletedAt: Stored.date(row["segment_deleted_at"]), revision: row["segment_revision"],
             piece: row["segment_piece"], pieceOf: Stored.id(row["segment_piece_of"] as String?))
         segment.recognition = try Stored.json(RecognitionProvenance.self, row["segment_recognition"])
+        // The open enum's text: a reason this build does not know is kept as it was written.
+        segment.recordingEnding = (row["segment_recording_ending"] as String?).map(RecordingEndReason.init(rawValue:))
         return segment
     }
 
@@ -168,8 +170,8 @@ enum SegmentRows {
                 INSERT INTO segment (id, note_id, kind, note_generation, origin, started_at, ended_at, text,
                     text_origin, raw_transcript, transcription, cleanup, recognition, processing_owner,
                     owner_generation, arrived_at, state, asset_id, duration, conflict_of, deleted_at, revision,
-                    piece, piece_of)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    piece, piece_of, recording_ending)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO UPDATE SET note_id = excluded.note_id, kind = excluded.kind,
                     note_generation = excluded.note_generation, origin = excluded.origin,
                     started_at = excluded.started_at, ended_at = excluded.ended_at, text = excluded.text,
@@ -179,7 +181,8 @@ enum SegmentRows {
                     owner_generation = excluded.owner_generation, arrived_at = excluded.arrived_at,
                     state = excluded.state, asset_id = excluded.asset_id, duration = excluded.duration,
                     conflict_of = excluded.conflict_of, deleted_at = excluded.deleted_at,
-                    revision = excluded.revision, piece = excluded.piece, piece_of = excluded.piece_of
+                    revision = excluded.revision, piece = excluded.piece, piece_of = excluded.piece_of,
+                    recording_ending = excluded.recording_ending
                 """,
             arguments: try arguments(segment))
     }
@@ -193,7 +196,7 @@ enum SegmentRows {
             segment.processingOwner?.description, segment.ownerGeneration, segment.arrivedAt?.stored,
             segment.state.rawValue, segment.assetID?.description, Stored.duration(segment.duration),
             segment.conflictOf?.description, segment.deletedAt?.stored, segment.revision, segment.piece,
-            segment.pieceOf?.description,
+            segment.pieceOf?.description, segment.recordingEnding?.rawValue,
         ]
         return StatementArguments(values)
     }

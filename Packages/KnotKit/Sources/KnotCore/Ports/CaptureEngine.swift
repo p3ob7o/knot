@@ -177,10 +177,21 @@ public struct CaptureState: Hashable, Sendable {
     /// in the contract yet: no operation of `NoteStore` makes the strokes of an open drawing
     /// durable, and they come with the ink types.
     public var durableRevision: Int64
+    /// Voice only, and set only once the capture is no longer open: why its recording ended,
+    /// when it did not end at its control (docs/product-spec.md §4.2 and §4.5). `nil` while the
+    /// capture is open, for a recording stopped at its control or discarded, and for every other
+    /// kind. A stored property with a default, so that no initialiser written before it changes.
+    public var recordingEnding: RecordingEndReason? = nil
+    /// Voice only, and set only while the capture is open and its recording is live: when the
+    /// recording went live, by the engine's `WallClock`, so that a surface that did not start it
+    /// can show how long it has run. `nil` before the recording is live, once the capture is no
+    /// longer open, and for every other kind. A stored property with a default, as
+    /// `recordingEnding` is.
+    public var liveSince: Date? = nil
 
     public init(
         captureID: CaptureID, kind: SegmentKind, noteID: NoteID?, outcome: CaptureOutcome, path: CapturePath,
-        durableRevision: Int64
+        durableRevision: Int64, recordingEnding: RecordingEndReason? = nil, liveSince: Date? = nil
     ) {
         self.captureID = captureID
         self.kind = kind
@@ -188,5 +199,7 @@ public struct CaptureState: Hashable, Sendable {
         self.outcome = outcome
         self.path = path
         self.durableRevision = durableRevision
+        self.recordingEnding = recordingEnding
+        self.liveSince = liveSince
     }
 }
