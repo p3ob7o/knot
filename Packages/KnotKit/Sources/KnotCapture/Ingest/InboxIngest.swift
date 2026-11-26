@@ -51,6 +51,7 @@ public actor InboxIngest {
     private let launchID: LaunchID
     private let items: InboxItems
     private let peaks: StoredPeaks
+    private let endings: StoredRecordingEnding
     private let log: KnotLog
     private let holds: @Sendable (CaptureManifest) -> ErrorCode?
     private var running: Set<CaptureID> = []
@@ -72,6 +73,7 @@ public actor InboxIngest {
         self.launchID = launchID
         self.items = InboxItems(locations: locations, layer: layer)
         self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
+        self.endings = StoredRecordingEnding(notes: notes, log: log)
         self.log = log
         self.holds = holds
     }
@@ -315,8 +317,10 @@ public actor InboxIngest {
         let outcome = try finish(manifest, result)
         if case .stored = outcome {
             // The row points to the stored asset: its peaks are kept, those of the item or else
-            // those beside the working file, and the working file and its manifest can go.
+            // those beside the working file, and why it ended, which the item carries, and the
+            // working file and its manifest can go.
             await peaks.keep(manifest.peaks ?? peaks.fromFile(id, frames: manifest.revision), of: id)
+            await endings.keep(manifest.recordingEnding, of: id)
             try? await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
         }

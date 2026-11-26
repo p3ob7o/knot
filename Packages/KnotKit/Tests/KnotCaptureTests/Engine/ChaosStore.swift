@@ -22,6 +22,17 @@ struct ChaosStore: NoteStore {
     var holdPeaks: (@Sendable () async -> Void)? = nil
     /// Awaited before each end the store is asked for, before `beforeEnd`: it may hold it.
     var holdEnd: (@Sendable (CaptureEnd) async -> Void)? = nil
+    /// Run before each set of why a segment's recording ended: it may refuse it.
+    var refuseRecordingEnding: (@Sendable (SegmentID) throws(KnotError) -> Void)? = nil
+    /// Awaited before each set of why a segment's recording ended, and before nothing else: it may
+    /// hold it.
+    var holdRecordingEnding: (@Sendable () async -> Void)? = nil
+
+    func setRecordingEnding(_ reason: RecordingEndReason, of segment: SegmentID) async throws(KnotError) {
+        await holdRecordingEnding?()
+        try refuseRecordingEnding?(segment)
+        try await store.setRecordingEnding(reason, of: segment)
+    }
 
     func setPeaks(_ peaks: Data, of segment: SegmentID) async throws(KnotError) {
         await holdPeaks?()
