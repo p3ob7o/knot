@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 
 struct SetupInstructions: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.knotTheme) private var theme
     let row: SetupRow
     var complete: (() -> Void)?
 
@@ -15,7 +16,11 @@ struct SetupInstructions: View {
         NavigationStack {
             List {
                 Text(instructions)
-                if let complete { Button("Done", action: complete) }
+                if let complete {
+                    Button(action: complete) {
+                        Text("Done").foregroundStyle(theme.colors[.textPrimary])
+                    }
+                }
             }
             .navigationTitle(row.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -41,13 +46,18 @@ struct SetupInstructions: View {
 
 struct ExportScreen: View {
     @Environment(\.timeZone) private var timeZone
+    @Environment(\.knotTheme) private var theme
     @State var model: NotesExport
     @State private var choosingFolder = false
 
     var body: some View {
         List {
-            Button("Choose a folder…") { choosingFolder = true }
-                .disabled(model.isExporting)
+            Button {
+                choosingFolder = true
+            } label: {
+                Text("Choose a folder…").foregroundStyle(theme.colors[.textPrimary])
+            }
+            .disabled(model.isExporting)
             if model.isExporting { ProgressView("Exporting notes…") }
             if model.failed { Text("Couldn’t complete the export.") }
             if let report = model.report {
@@ -129,6 +139,7 @@ final class NotesExport {
 
 struct AboutScreen: View {
     let app: AppComposition
+    @Environment(\.knotTheme) private var theme
     @State private var choosingCopy = false
     @State private var copy: URL?
     @State private var confirmingRestore = false
@@ -147,7 +158,11 @@ struct AboutScreen: View {
             if let text = Bundle.main.object(forInfoDictionaryKey: "KnotSourceURL") as? String,
                 let source = URL(string: text)
             {
-                Link("Source code", destination: source)
+                Link(destination: source) {
+                    Text("Source code")
+                        .underline()
+                        .foregroundStyle(theme.colors[.textPrimary])
+                }
             }
             if let live = app.live, showsTestActions {
                 Section {
@@ -186,7 +201,7 @@ struct AboutScreen: View {
         #if DEBUG
             true
         #else
-            app.live?.configuration.build.milestoneLevel == "M2"
+            app.live?.configuration.milestoneLevel != nil
         #endif
     }
 

@@ -35,8 +35,11 @@
                     rowView(row)
                 }
                 if let actionButtonSetup {
-                    Button(SetupRow.actionButton.title, action: actionButtonSetup)
-                        .accessibilityLabel(Text("Set up Action Button recording", bundle: .module))
+                    Button(action: actionButtonSetup) {
+                        Text("Set up Action Button recording", bundle: .module)
+                            .foregroundStyle(theme.colors[.textPrimary])
+                    }
+                    .accessibilityIdentifier("settings.actionButtonSetup")
                 }
                 if let note = model.lockScreenNote {
                     Text(note)
@@ -109,7 +112,14 @@
                         get: { model.settings.commandLineAccess },
                         set: { on in Task { await model.setCommandLineAccess(on) } }))
             case .exportAll, .recentlyDeleted, .about:
-                Button(row.title) { open(row) }
+                Button {
+                    open(row)
+                } label: {
+                    Text(row.title)
+                        #if os(iOS)
+                            .foregroundStyle(theme.colors[.textPrimary])
+                        #endif
+                }
             }
         }
     }

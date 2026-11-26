@@ -185,13 +185,17 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testSearchLinkShowsFocusedSearchOverNotes() throws {
         let app = KnotLauncher.application(.preview)
+        app.launchEnvironment["KNOT_PREVIEW_LATE_CAPTURE"] = "1"
         let url = try XCTUnwrap(URL(string: "knot-dev://search"))
         app.open(url)
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: limit))
         XCTAssertTrue(captureField(in: app).waitForNonExistence(timeout: limit))
-        app.typeText("Synthetic query")
-        XCTAssertEqual(search.value as? String, "Synthetic query")
+        app.typeText("synthetic late")
+        XCTAssertEqual(search.value as? String, "synthetic late")
+        let previewNote = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "A synthetic late arrival"))
+            .firstMatch
+        XCTAssertTrue(previewNote.waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
 
@@ -242,7 +246,7 @@ final class KnotIOSLaunchTests: XCTestCase {
         let about = app.buttons["About"]
         XCTAssertTrue(about.waitForExistence(timeout: limit))
         XCTAssertTrue(about.isEnabled)
-        app.buttons["Set up Action Button recording"].tap()
+        app.buttons["settings.actionButtonSetup"].tap()
         XCTAssertTrue(app.navigationBars["Record with the Action Button"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
