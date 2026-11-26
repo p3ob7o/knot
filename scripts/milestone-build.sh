@@ -4,6 +4,8 @@
 #
 #   scripts/milestone-build.sh <M1…M7> --commit <sha> [--products ios|mac|both]
 #       [--allow-provisioning-updates] [--install [--device <name>]… [--again] [--mac-folder <folder>]]
+#   scripts/milestone-build.sh <M1…M7> --commit <sha> --archive <folder> [--build-number <n>]
+#       [--products ios|mac|both] [--allow-provisioning-updates]
 #
 #   --products   the iPhone app with its Watch app and widgets (ios), the Mac app (mac), or
 #                both, the default
@@ -17,6 +19,14 @@
 #   --install    after every check has passed: scripts/install.sh for the iPhone app, with
 #                --device and --again passed through, and scripts/install.sh --mac-folder
 #                for the Mac app, which then needs --mac-folder
+#   --archive    an archive instead of a build, for scripts/release.sh: each product is archived
+#                into <folder>, which must be new or empty, as <folder>/Knot-<product>.xcarchive,
+#                from derived data of its own beside it, with its log there. Every check below
+#                runs on the app in the archive; the derived data is removed once they pass, and
+#                the archive stays. It installs nothing.
+#   --build-number
+#                the build number the archive carries, in place of Identifiers.xcconfig's, and
+#                the one the checks compare: App Store Connect takes each build number once
 #
 # Before it builds, it stops, saying what to do, when the worktree has uncommitted changes,
 # when HEAD is not the commit named, when the team's configuration is not linked into
@@ -36,8 +46,10 @@
 # the team's ID as it is written; a run of verify.sh does not move it.
 
 source "$(dirname "$0")/lib/common.sh"
+# shellcheck source=lib/bundle.sh
+source "$KNOT_SCRIPTS/lib/bundle.sh"
 
-usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "milestone-build-usage" "$1" "Run scripts/milestone-build.sh --help." "safe" "nothing"; }
 say() { printf 'milestone-build: %s\n' "$1"; }
 
@@ -45,21 +57,25 @@ say() { printf 'milestone-build: %s\n' "$1"; }
 
 # A build runs in a second process that holds a build slot, under the build limit. It finds
 # its settings in the environment: KNOT_MB_SCHEME, KNOT_MB_DESTINATION, KNOT_MB_DERIVED,
-# KNOT_MB_LEVEL, KNOT_MB_LOG and KNOT_MB_PROVISIONING (1 or 0).
+# KNOT_MB_LEVEL, KNOT_MB_LOG and KNOT_MB_PROVISIONING (1 or 0); for an archive, KNOT_MB_ARCHIVE,
+# its path, and KNOT_MB_BUILD_NUMBER, the build number given, when one was.
 if [[ ${1:-} == --in-build ]]; then
     # The time the build got its slot, so that the build's own time is told from the wait.
     knot_now >"$KNOT_MB_SLOT_TIME"
     knot_select_xcode
     build() {
         local flags=()
+        local action=(build)
         [[ $KNOT_MB_PROVISIONING == 1 ]] && flags+=(-allowProvisioningUpdates)
+        [[ -z ${KNOT_MB_BUILD_NUMBER:-} ]] || flags+=(KNOT_BUILD_NUMBER="$KNOT_MB_BUILD_NUMBER")
+        [[ -z ${KNOT_MB_ARCHIVE:-} ]] || action=(archive -archivePath "$KNOT_MB_ARCHIVE")
         # The log is filtered as it is written: Xcode writes the team's prefix into it.
         { xcodebuild -project "$KNOT_PROJECT" -derivedDataPath "$KNOT_MB_DERIVED" \
             -clonedSourcePackagesDirPath "$KNOT_SOURCE_PACKAGES" -configuration Release \
             -scheme "$KNOT_MB_SCHEME" -destination "$KNOT_MB_DESTINATION" \
             ${flags[@]+"${flags[@]}"} \
             KNOT_FLAVOUR=milestone KNOT_MILESTONE_LEVEL="$KNOT_MB_LEVEL" KNOT_SIGNING=team \
-            COMPILER_INDEX_STORE_ENABLE=NO build 2>&1 | knot_filter_team >>"$KNOT_MB_LOG"; } 2>/dev/null # limit: build
+            COMPILER_INDEX_STORE_ENABLE=NO "${action[@]}" 2>&1 | knot_filter_team >>"$KNOT_MB_LOG"; } 2>/dev/null # limit: build
     }
     knot_run_limited "The milestone build of $KNOT_MB_SCHEME" "$KNOT_BUILD_LIMIT" build
     exit $?
@@ -74,6 +90,8 @@ PROVISIONING=0
 INSTALL=0
 AGAIN=0
 MAC_FOLDER=""
+ARCHIVE_DIR=""
+BUILD_NUMBER=""
 DEVICES=()
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -88,6 +106,11 @@ while [[ $# -gt 0 ]]; do
         --device) [[ -n ${2:-} ]] || usage_fail "--device needs a name or a UDID."; DEVICES+=("$2"); shift 2 ;;
         --again) AGAIN=1; shift ;;
         --mac-folder) MAC_FOLDER=${2:-}; [[ -n $MAC_FOLDER ]] || usage_fail "--mac-folder needs a folder."; shift 2 ;;
+        --archive) ARCHIVE_DIR=${2:-}; [[ -n $ARCHIVE_DIR ]] || usage_fail "--archive needs a folder."; shift 2 ;;
+        --build-number)
+            BUILD_NUMBER=${2:-}
+            [[ $BUILD_NUMBER =~ ^[1-9][0-9]{0,8}$ ]] || usage_fail "--build-number takes a whole number above 0."
+            shift 2 ;;
         -h | --help) usage; exit 0 ;;
         *) usage_fail "Unknown argument: $1" ;;
     esac
@@ -105,9 +128,20 @@ if ((INSTALL)); then
         usage_fail "--device and --again are for the iPhone app, and --products mac builds none."
     [[ $PRODUCTS != ios || -z $MAC_FOLDER ]] || usage_fail "--mac-folder is for the Mac app, and --products ios builds none."
 fi
+if [[ -n $ARCHIVE_DIR ]]; then
+    ((INSTALL == 0)) || usage_fail "--archive makes an archive for scripts/release.sh, and installs nothing: leave out --install."
+else
+    [[ -z $BUILD_NUMBER ]] || usage_fail "--build-number belongs to --archive: a build takes the number in Apps/Config/Identifiers.xcconfig."
+fi
 # A folder named relative to where the script was started is made absolute, so that the
 # command it prints to install again is right wherever it is run.
 [[ -z $MAC_FOLDER || $MAC_FOLDER == /* ]] || MAC_FOLDER="$PWD/$MAC_FOLDER"
+[[ -z $ARCHIVE_DIR || $ARCHIVE_DIR == /* ]] || ARCHIVE_DIR="$PWD/$ARCHIVE_DIR"
+# An archive is never made into a folder that holds anything: no run picks up an earlier one's.
+if [[ -n $ARCHIVE_DIR && -e $ARCHIVE_DIR ]] && [[ ! -d $ARCHIVE_DIR || -n "$(ls -A "$ARCHIVE_DIR" 2>/dev/null)" ]]; then
+    knot_fail "milestone-build-archive-folder" "The archive's folder $(knot_home_path "$ARCHIVE_DIR") is not a new or empty folder: an archive is never made over an earlier one." \
+        "Name a new folder with --archive. Keep what the old one holds if it is evidence, then remove it by its path." "safe" "nothing"
+fi
 WANTED="ios mac"
 [[ $PRODUCTS == both ]] || WANTED=$PRODUCTS
 
@@ -234,7 +268,7 @@ say "Xcode holds $accounts saved account$( ((accounts == 1)) || echo s)"
 identifier() { sed -n -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p" "$KNOT_ROOT/Apps/Config/Identifiers.xcconfig" | head -n 1; }
 WANT_BUNDLE="$(identifier KNOT_BUNDLE_ID_milestone)"
 WANT_VERSION="$(identifier KNOT_MARKETING_VERSION)"
-WANT_BUILD="$(identifier KNOT_BUILD_NUMBER)"
+WANT_BUILD="${BUILD_NUMBER:-$(identifier KNOT_BUILD_NUMBER)}"
 WANT_TOOL="$(identifier KNOT_TOOL_FILE_milestone)"
 [[ -n $WANT_BUNDLE && -n $WANT_VERSION && -n $WANT_BUILD && -n $WANT_TOOL ]] ||
     knot_fail "milestone-build-identifiers" "Apps/Config/Identifiers.xcconfig does not give the milestone's bundle ID, version, build number and tool file." \
@@ -255,21 +289,12 @@ rm -rf "$KNOT_PROJECT"
         "Run KNOT_LOCAL_CONFIG=<the owner's Local.xcconfig> scripts/bootstrap.sh, then rerun." "safe" "Knot.xcodeproj, generated"
 say "project generated, $(knot_xcode_label)"
 
-plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
-info_of() { if [[ -f $1/Contents/Info.plist ]]; then echo "$1/Contents/Info.plist"; else echo "$1/Info.plist"; fi; }
+plist() { knot_plist "$@"; }
+info_of() { knot_info_of "$@"; }
 
-# Every part of a product that carries a signature of its own, innermost first: each app
-# extension, the Watch app and what it embeds, each framework, the Mac app's tool, then the
-# app. Each line is a path relative to the folder that holds the app.
-parts_of() {
-    local app=$1 base
-    base="$(dirname "$app")"
-    {
-        find "$app" -mindepth 1 -type d \( -name '*.app' -o -name '*.appex' -o -name '*.framework' -o -name '*.xpc' \) -print 2>/dev/null || true
-        [[ ! -f $app/Contents/MacOS/$WANT_TOOL ]] || echo "$app/Contents/MacOS/$WANT_TOOL"
-    } | awk -F/ '{ print NF "\t" $0 }' | sort -t "$(printf '\t')" -k1,1rn -k2 | cut -f2- | sed "s|^$base/||"
-    echo "$(basename "$app")"
-}
+# Every part of a product that carries a signature of its own, innermost first, the Mac app's
+# tool among them (knot_parts_of in scripts/lib/bundle.sh).
+parts_of() { knot_parts_of "$1" "$WANT_TOOL"; }
 
 # Checks one product: what it says it is, then each part's signature. Prints a line for each,
 # and returns non-zero at the first failure, having named it. A failure's detail goes to the
@@ -456,26 +481,24 @@ check_signers() {
 # them. It fails when it found no Mach-O file, so that it cannot pass by reading nothing.
 #   check_binaries <ios|mac> <app> <log>
 check_binaries() {
-    local name=$1 app=$2 log=$3 f held list scanned=0
-    list="$(python3 -I "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments)"
-    while IFS= read -r -d '' f; do
-        file -b "$f" | grep -e Mach-O >/dev/null || continue
-        scanned=$((scanned + 1))
-        if held="$(knot_fakes_in "$f")" || held="$(knot_debug_arguments_in "$f" "$list")"; then
-            say "$name: ${f#"$(dirname "$app")"/} holds what a milestone build may not: $(tr '\n' ' ' <<<"$held" | cut -c1-200)"
-            printf 'binary scan %s: %s\n' "${f#"$(dirname "$app")"/}" "$(tr '\n' ' ' <<<"$held")" | knot_filter_team >>"$log"
-            return 1
-        fi
-    done < <(find "$app" -type f -print0)
-    if ((scanned == 0)); then
-        say "$name: no Mach-O file found in the product to scan"
-        return 1
-    fi
-    say "$name: no fakes and no debug launch argument in its $scanned Mach-O files"
+    local name=$1 app=$2 log=$3 status=0
+    knot_scan_binaries "$app" || status=$?
+    case $status in
+        0) say "$name: no fakes and no debug launch argument in its $KNOT_SCAN_COUNT Mach-O files" ;;
+        1)
+            say "$name: $KNOT_SCAN_FILE holds what a milestone build may not: $(tr '\n' ' ' <<<"$KNOT_SCAN_HELD" | cut -c1-200)"
+            printf 'binary scan %s: %s\n' "$KNOT_SCAN_FILE" "$(tr '\n' ' ' <<<"$KNOT_SCAN_HELD")" | knot_filter_team >>"$log"
+            return 1 ;;
+        *)
+            say "$name: no Mach-O file found in the product to scan"
+            return 1 ;;
+    esac
 }
 
 SUMMARY=()
 APPS=()
+# A path as the summary names it: relative to the tree when it lies in it.
+where() { if [[ $1 == "$KNOT_ROOT"/* ]]; then echo "${1#"$KNOT_ROOT"/}"; else knot_home_path "$1"; fi; }
 for product in $WANTED; do
     case $product in
         ios) scheme=Knot-iOS destination=generic/platform=iOS folder=Release-iphoneos ;;
@@ -485,19 +508,28 @@ for product in $WANTED; do
     # The build's log lies beside its derived data, named by level, commit and product: a
     # milestone's evidence, which a later run of verify.sh does not move aside.
     log="$KNOT_BUILD/milestone/milestone-build-$LEVEL-${head:0:12}-$product.log"
+    archive=""
+    if [[ -n $ARCHIVE_DIR ]]; then
+        # An archive, its derived data and its log, all in the folder named, which was new.
+        mkdir -p "$ARCHIVE_DIR"
+        derived="$ARCHIVE_DIR/DerivedData-$product"
+        log="$ARCHIVE_DIR/milestone-build-$LEVEL-${head:0:12}-$product.log"
+        archive="$ARCHIVE_DIR/Knot-$product.xcarchive"
+    fi
     if [[ -d $derived && -n "$(ls -A "$derived" 2>/dev/null)" ]] || [[ -s $log ]]; then
         knot_fail "milestone-build-derived-data" "The derived data folder .build/milestone/$(basename "$derived"), or its log, .build/milestone/$(basename "$log"), holds an earlier build: a milestone build is never incremental." \
             "Keep the log if it is evidence, by copying it out; then remove both by their paths, and rerun." "safe" "nothing"
     fi
     mkdir -p "$derived"
     : >"$log"
-    say "$product: building $scheme, Release, $LEVEL, in fresh derived data .build/milestone/$(basename "$derived")$( ((PROVISIONING)) && echo ', with -allowProvisioningUpdates')"
+    say "$product: $( [[ -n $archive ]] && echo "archiving" || echo "building") $scheme, Release, $LEVEL$( [[ -n $BUILD_NUMBER ]] && echo ", build number $BUILD_NUMBER"), in fresh derived data $(where "$derived")$( ((PROVISIONING)) && echo ', with -allowProvisioningUpdates')"
     started=$(knot_now)
     status=0
-    slot_time="$KNOT_BUILD/milestone/.slot-time-$product"
+    slot_time="$(dirname "$derived")/.slot-time-$product"
     rm -f "$slot_time"
     KNOT_MB_SCHEME=$scheme KNOT_MB_DESTINATION=$destination KNOT_MB_DERIVED=$derived KNOT_MB_LEVEL=$LEVEL \
         KNOT_MB_LOG=$log KNOT_MB_PROVISIONING=$PROVISIONING KNOT_MB_SLOT_TIME=$slot_time \
+        KNOT_MB_ARCHIVE=$archive KNOT_MB_BUILD_NUMBER=$BUILD_NUMBER \
         "$KNOT_SCRIPTS/build-slot.sh" run --label "milestone-build $product" -- "$KNOT_SCRIPTS/milestone-build.sh" --in-build ||
         status=$?
     # The build's own time, from the moment it held its slot; the wait for the slot apart.
@@ -511,7 +543,10 @@ for product in $WANTED; do
     # failed, every app in its derived data leaves LaunchServices; the product stays on disk
     # for the copy.
     unregister() {
-        if knot_unregister_apps "$derived"; then
+        local status=0
+        knot_unregister_apps "$derived" || status=1
+        [[ -z $archive ]] || knot_unregister_apps "$archive" || status=1
+        if ((status == 0)); then
             say "$product: its products are unregistered from LaunchServices; they stay on disk"
         else
             say "$product: its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY. Unregister each by hand with lsregister -u <app>; they stay on disk"
@@ -521,12 +556,13 @@ for product in $WANTED; do
         unregister
         say "$product: the build failed after $took, after waiting $waited for a build slot. The last lines of its log:"
         grep -E 'error:|BUILD FAILED|did not end within' "$log" | tail -n 10 | knot_filter_team | sed 's/^/    /' || true
-        knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is .build/milestone/$(basename "$log")." \
+        knot_fail "milestone-build-failed" "The milestone build of $scheme failed. Its log is $(where "$log")." \
             "Read the log. A signing error that names an account, a profile or a device needs the owner: say so, and do not pass a flag he has not allowed." \
-            "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
+            "safe" "derived data in $(where "$derived"); nothing installed"
     fi
     say "$product: built in $took, after waiting $waited for a build slot"
     app="$derived/Build/Products/$folder/Knot.app"
+    [[ -z $archive ]] || app="$archive/Products/Applications/Knot.app"
     checked=0
     if check_product "$product" "$app" "$log" && check_signers "$product" "$app" "$log" &&
         check_groups "$product" "$app" "$log" && check_binaries "$product" "$app" "$log"; then
@@ -535,11 +571,16 @@ for product in $WANTED; do
     unregister
     if ((checked == 0)); then
         knot_fail "milestone-build-check" "The $product product failed its check, named above. Nothing is installed." \
-            "Do not install it. Read .build/milestone/$(basename "$log"), then build again in fresh derived data." \
-            "safe" "derived data in .build/milestone/$(basename "$derived"); nothing installed"
+            "Do not install it. Read $(where "$log"), then build again in fresh derived data." \
+            "safe" "derived data in $(where "$derived"); nothing installed"
+    fi
+    if [[ -n $archive ]]; then
+        # The archive is the product: the derived data it was made from goes, once checked.
+        rm -rf "$derived"
+        say "$product: the archive passed every check; its derived data is removed"
     fi
     APPS+=("$product=$app")
-    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, built in $took (the wait for a slot apart), every part verified, at ${app#"$KNOT_ROOT"/}, its log .build/milestone/$(basename "$log")")
+    SUMMARY+=("$product: $(plist "$(info_of "$app")" CFBundleIdentifier) $WANT_VERSION ($WANT_BUILD), $LEVEL, $( [[ -n $archive ]] && echo archived || echo built) in $took (the wait for a slot apart), every part verified, at $(where "${archive:-$app}"), its log $(where "$log")")
 done
 
 # The summary comes before any install, so that an install that fails leaves the build's

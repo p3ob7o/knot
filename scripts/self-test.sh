@@ -2526,17 +2526,19 @@ cat >"$mb/stub/xcodebuild" <<'SH'
 #!/bin/bash
 [[ ${1:-} == -version ]] && exec /usr/bin/xcodebuild "$@"
 echo "xcodebuild $*" >>"$KNOT_MB_RECORD"
-derived="" scheme="" level=""
+derived="" scheme="" level="" archive="" number=1
 for ((i = 1; i <= $#; i++)); do
     j=$((i + 1))
     case ${!i} in
         -derivedDataPath) derived=${!j} ;;
         -scheme) scheme=${!j} ;;
         KNOT_MILESTONE_LEVEL=*) level=${!i#KNOT_MILESTONE_LEVEL=} ;;
+        -archivePath) archive=${!j} ;;
+        KNOT_BUILD_NUMBER=*) number=${!i#KNOT_BUILD_NUMBER=} ;;
     esac
 done
 info() { # info <folder> <bundle ID>: a wrong build number or level where asked
-    local build=1 at=$level
+    local build=$number at=$level
     [[ -n ${KNOT_MB_WRONG_BUILD:-} && $1 == *"$KNOT_MB_WRONG_BUILD" ]] && build=2
     [[ -n ${KNOT_MB_WRONG_LEVEL:-} && $1 == *"$KNOT_MB_WRONG_LEVEL" ]] && at=M2
     mkdir -p "$1"
@@ -2557,6 +2559,7 @@ signed() { # signed <part> <group> [<profile>]: the group it is signed with, and
 }
 if [[ $scheme == Knot-iOS ]]; then
     app="$derived/Build/Products/Release-iphoneos/Knot.app"
+    [[ -z $archive ]] || app="$archive/Products/Applications/Knot.app"
     info "$app" com.p3ob7o.knot
     info "$app/PlugIns/Widgets-iOS.appex" com.p3ob7o.knot.widgets
     info "$app/Watch/KnotWatch.app" com.p3ob7o.knot.watchkitapp
@@ -2569,6 +2572,7 @@ if [[ $scheme == Knot-iOS ]]; then
     binary "$app/Frameworks/Synthetic.framework/Synthetic"
 else
     app="$derived/Build/Products/Release/Knot.app"
+    [[ -z $archive ]] || app="$archive/Products/Applications/Knot.app"
     info "$app/Contents" com.p3ob7o.knot
     mkdir -p "$app/Contents/MacOS"
     binary "$app/Contents/MacOS/Knot"
@@ -2808,6 +2812,40 @@ else
     fail "milestone-build.sh: $mb_verdicts; order $mb_order; plain: $(grep -e 'app group' "$mb/plain.out" | tr '\n' '|'); profile: $(grep -e 'app group' "$mb/profile.out" | tail -n 1); install: $(grep -e 'again' "$mb/install.out" | tr '\n' '|')"
 fi
 
+# The archive that scripts/release.sh asks scripts/milestone-build.sh for (--archive): the same
+# stand-ins, at the tree's HEAD. The build is an archive into the folder named, with the build
+# number given passed to xcodebuild and compared on every part, its log in that folder; every
+# check of a build runs on the app in the archive, and the derived data goes once they pass. A
+# folder that holds anything, --install beside --archive, a build number without --archive and
+# one that is not a whole number above 0 are refused before any build; a part with another build
+# number than the one given fails the check.
+mb_head="$(mb_git rev-parse HEAD)"
+mkdir -p "$mb/archives/used"
+echo earlier >"$mb/archives/used/earlier"
+mb_archive="$(mb_run archive M1 --commit "$mb_head" --products ios --archive "$mb/archives/ok" --build-number 7)"
+mb_archive_used="$(mb_run archive-used M1 --commit "$mb_head" --products ios --archive "$mb/archives/used" --build-number 7)"
+mb_archive_install="$(mb_run archive-install M1 --commit "$mb_head" --products ios --archive "$mb/archives/install" --install)"
+mb_archive_number="$(mb_run archive-number M1 --commit "$mb_head" --products ios --build-number 7)"
+mb_archive_zero="$(mb_run archive-zero M1 --commit "$mb_head" --products ios --archive "$mb/archives/zero" --build-number 0)"
+mb_archive_wrong="$(KNOT_MB_WRONG_BUILD=Widgets-iOS.appex mb_run archive-wrong M1 --commit "$mb_head" --products ios --archive "$mb/archives/wrong" --build-number 7)"
+mb_archived() { grep -c -e '^xcodebuild .* archive -archivePath ' "$mb/$1.record" || true; }
+mb_archive_verdicts="ok $mb_archive/$(mb_archived archive) used $mb_archive_used/$(mb_archived archive-used) install $mb_archive_install/$(mb_archived archive-install) number $mb_archive_number/$(mb_builds archive-number) zero $mb_archive_zero/$(mb_archived archive-zero) wrong $mb_archive_wrong/$(mb_archived archive-wrong)"
+if [[ $mb_archive_verdicts == "ok 0/1 used 1/0 install 1/0 number 1/0 zero 1/0 wrong 1/1" ]] &&
+    grep -e "^xcodebuild .* KNOT_BUILD_NUMBER=7 .* archive -archivePath $mb/archives/ok/Knot-ios.xcarchive$" "$mb/archive.record" >/dev/null &&
+    grep -e "-derivedDataPath $mb/archives/ok/DerivedData-ios " "$mb/archive.record" >/dev/null &&
+    [[ -f $mb/archives/ok/Knot-ios.xcarchive/Products/Applications/Knot.app/Info.plist && ! -e $mb/archives/ok/DerivedData-ios ]] &&
+    [[ -s $mb/archives/ok/milestone-build-M1-${mb_head:0:12}-ios.log ]] &&
+    grep -e '^milestone-build: ios: com.p3ob7o.knot 0.3.0 (7), flavour milestone, level M1$' "$mb/archive.out" >/dev/null &&
+    grep -e 'ios: the archive passed every check; its derived data is removed' "$mb/archive.out" >/dev/null &&
+    grep -e "archived in [0-9]*s (the wait for a slot apart), every part verified, at .*/archives/ok/Knot-ios.xcarchive" "$mb/archive.out" >/dev/null &&
+    ! grep -e '^install ' "$mb/archive.record" >/dev/null &&
+    grep -e 'is not a new or empty folder' "$mb/archive-used.out" >/dev/null &&
+    grep -e 'Knot.app/PlugIns/Widgets-iOS.appex is 0.3.0 (2);' "$mb/archive-wrong.out" >/dev/null; then
+    pass "milestone-build.sh --archive archives into a new folder with the build number given, checks the archived app as it checks a build, and refuses a used folder, an install and a build number without an archive"
+else
+    fail "milestone-build.sh --archive: $mb_archive_verdicts; $(tail -n 3 "$mb/archive.out" | tr '\n' ' ')"
+fi
+
 # The gate's packaging check of the milestone flavour builds under the development identifiers
 # (B1): the build is given KNOT_BUNDLE_ID_milestone, KNOT_APP_GROUP_milestone and
 # KNOT_CLOUD_CONTAINER_milestone with their development values before it starts, and a product
@@ -2868,6 +2906,396 @@ if [[ $pk_dev == 0 && $pk_forced == 1 ]] &&
     pass "the gate's milestone-flavour check builds under the development identifiers, and fails a product with the milestone's bundle ID, unregistering it"
 else
     fail "the gate's milestone-flavour check: status $pk_dev, with the milestone's ID $pk_forced: $(head -n 1 "$pk/dev.record" | cut -c1-300) / $(tail -n 2 "$pk/forced.out" | tr '\n' ' ')"
+fi
+
+# scripts/release.sh, on made-up archives, with stand-ins for what it calls: a milestone-build.sh
+# and an xcodebuild that make a synthetic archive, one part of which lacks what KNOT_RL_BREAK
+# names; an xcodebuild -exportArchive that signs the copy for distribution, short of what
+# KNOT_RL_EXPORT_BREAK names, and keeps a file in its TMPDIR that names the key; a codesign -d
+# and a security that read what the stand-ins wrote; and an altool that prints the key's values,
+# leaves a file in its -CDTempDir, and fails where asked. The real nm, strings, assetutil and the
+# catalogues that actool compiles are read. A scratch git tree holds the identifiers, the feature
+# gates, icon sets, an annotated tag m1 and the candidate after it. Nothing signs and nothing
+# reaches App Store Connect. Each check fails on an archive that lacks what it checks and passes
+# on the whole one; the key's three made-up values appear in no line printed and in nothing left
+# in the tree; a failed upload names App Store Connect, is not retried and leaves no value behind.
+rl="$scratch/release"
+mkdir -p "$rl/tree/Apps/Config" "$rl/tree/Packages/KnotKit/Sources/KnotCore/Settings" "$rl/stub" "$rl/slots" "$rl/fx" "$rl/key"
+# Its path resolved, as the scripts resolve the tree: /var is /private/var.
+rl="$(cd "$rl" && pwd -P)"
+cp "$KNOT_SELF/Apps/Config/Identifiers.xcconfig" "$rl/tree/Apps/Config/"
+cp "$KNOT_SELF/Packages/KnotKit/Sources/KnotCore/Settings/FeatureGates.swift" "$rl/tree/Packages/KnotKit/Sources/KnotCore/Settings/"
+cp "$KNOT_SELF/.xcode-version" "$rl/tree/"
+printf '.build/\n*.xcodeproj/\n' >"$rl/tree/.gitignore"
+# The PNG files: the tree's icon sources, with no alpha channel, and the catalogues' sources, an
+# opaque icon and one that is transparent.
+python3 -I - "$rl" <<'PY'
+import json, os, struct, sys, zlib
+rl = sys.argv[1]
+def png(path, size, alpha):
+    pixel = bytes([30, 60, 90, 0]) if alpha else bytes([30, 60, 90])
+    raw = (b"\0" + pixel * size) * size
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6 if alpha else 2, 0, 0, 0))
+                           + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+for platform in ("iOS", "watchOS"):
+    png("%s/tree/Apps/%s/Assets.xcassets/AppIcon.appiconset/icon-1024.png" % (rl, platform), 16, False)
+png(rl + "/fx/alpha-icon.png", 16, True)
+for name, alpha, platform in (("ios-opaque", False, "ios"), ("watch-opaque", False, "watchos"), ("watch-clear", True, "watchos")):
+    folder = "%s/fx/%s.xcassets" % (rl, name)
+    png(folder + "/AppIcon.appiconset/icon.png", 1024, alpha)
+    json.dump({"images": [{"filename": "icon.png", "idiom": "universal", "platform": platform, "size": "1024x1024"}],
+               "info": {"author": "xcode", "version": 1}}, open(folder + "/AppIcon.appiconset/Contents.json", "w"))
+    json.dump({"info": {"author": "xcode", "version": 1}}, open(folder + "/Contents.json", "w"))
+PY
+for catalogue in ios-opaque:iphoneos:iphone watch-opaque:watchos:watch watch-clear:watchos:watch; do
+    IFS=: read -r name platform device <<<"$catalogue"
+    mkdir -p "$rl/fx/$name"
+    xcrun actool --compile "$rl/fx/$name" --platform "$platform" --minimum-deployment-target 27.0 --app-icon AppIcon \
+        --output-partial-info-plist "$rl/fx/$name.plist" --target-device "$device" "$rl/fx/$name.xcassets" >>"$rl/fx/actool.log" 2>&1 ||
+        echo "the catalogue $name was not compiled" >>"$rl/fx/actool.log"
+done
+# The binaries: the milestone build's plain, fakes and debug ones, and one that uses
+# AVAudioApplication, which asks for the microphone.
+cp "$mb/bin/plain" "$mb/bin/fakes" "$mb/bin/debug" "$rl/fx/"
+printf 'extern char microphone[] __asm__("_OBJC_CLASS_$_AVAudioApplication");\nint main(void) { return microphone[0]; }\n' >"$rl/fx/mic.c"
+xcrun clang -o "$rl/fx/mic" "$rl/fx/mic.c" -framework AVFAudio 2>>"$rl/fx/clang.log" || echo "the binary mic was not made" >>"$rl/fx/clang.log"
+# The archive, as the milestone build or the rehearsal makes it, signed for development:
+#   make-archive.py <folder> <milestone|dev> <level> <build number>
+cat >"$rl/make-archive.py" <<'PY'
+import os, plistlib, shutil, sys
+out, family, level, build = sys.argv[1:5]
+broken, fx = os.environ.get("KNOT_RL_BREAK", ""), os.environ["KNOT_RL_FIXTURES"]
+base = {"milestone": "com.p3ob7o.knot", "dev": "com.p3ob7o.knot.dev"}[family]
+archive = os.path.join(out, "Knot-ios.xcarchive")
+app = os.path.join(archive, "Products", "Applications", "Knot.app")
+parts = [("app", app, "", "iphoneos"), ("widget", app + "/PlugIns/Widgets-iOS.appex", ".widgets", "iphoneos")]
+if broken != "no-watch":
+    parts += [("watch", app + "/Watch/Knot.app", ".watchkitapp", "watchos"),
+              ("watch-widget", app + "/Watch/Knot.app/PlugIns/Widgets-watchOS.appex", ".watchkitapp.widgets", "watchos")]
+def dump(value, path):
+    with open(path, "wb") as f:
+        plistlib.dump(value, f)
+for name, path, suffix, platform in parts:
+    os.makedirs(path, exist_ok=True)
+    is_app = path.endswith(".app")
+    info = {"CFBundleIdentifier": base + suffix, "CFBundleShortVersionString": "0.3.0", "CFBundleVersion": build,
+            "CFBundleExecutable": "Knot", "KnotFlavour": family, "KnotAppGroup": "group." + base,
+            "DTPlatformName": platform, "DTXcodeBuild": "27B52"}
+    if is_app:
+        info.update(KnotMilestoneLevel=level, ITSAppUsesNonExemptEncryption=False,
+                    NSMicrophoneUsageDescription="Synthetic: says why it records.")
+    if name == "app":
+        info["KnotCloudContainer"] = "iCloud." + base
+    if name == "watch":
+        info["WKCompanionAppBundleIdentifier"] = base
+    edits = {
+        "family": ("watch", "CFBundleIdentifier", "com.example.watchkitapp"),
+        "version": ("widget", "CFBundleShortVersionString", "0.3.1"),
+        "build": ("widget", "CFBundleVersion", "1"),
+        "flavour": ("watch-widget", "KnotFlavour", "dev"),
+        "level": ("watch", "KnotMilestoneLevel", "M3"),
+        "group": ("widget", "KnotAppGroup", "group.com.example"),
+        "simulator": ("watch", "DTPlatformName", "watchsimulator"),
+        "beta": ("app", "DTXcodeBuild", "27C5035i"),
+        "encryption-true": ("app", "ITSAppUsesNonExemptEncryption", True),
+    }
+    if broken in edits and edits[broken][0] == name:
+        info[edits[broken][1]] = edits[broken][2]
+    if broken == "retired":
+        info["CFBundleShortVersionString"] = "0.2.0"
+    if broken == "usage" and name == "watch":
+        del info["NSMicrophoneUsageDescription"]
+    if broken == "encryption" and name == "watch":
+        del info["ITSAppUsesNonExemptEncryption"]
+    dump(info, path + "/Info.plist")
+    if not (broken == "privacy" and name == "watch-widget"):
+        dump({"NSPrivacyTracking": broken == "tracking" and name == "widget", "NSPrivacyTrackingDomains": [],
+              "NSPrivacyCollectedDataTypes": [], "NSPrivacyAccessedAPITypes": []}, path + "/PrivacyInfo.xcprivacy")
+    binary = "mic" if is_app else "plain"
+    if broken == "fakes" and name == "widget":
+        binary = "fakes"
+    if broken == "debug" and name == "watch":
+        binary = "debug"
+    shutil.copy(os.path.join(fx, binary), path + "/Knot")
+    if is_app and not (broken == "no-car" and name == "app"):
+        car = {"app": "ios-opaque", "watch": "watch-clear" if broken == "icon" else "watch-opaque"}[name]
+        shutil.copy(os.path.join(fx, car, "Assets.car"), path + "/Assets.car")
+    # Signed for development, as an archive is: the export signs again for distribution.
+    entitlements = {"application-identifier": "ZZ9QX42K7T." + base + suffix, "get-task-allow": True,
+                    "com.apple.security.application-groups": ["group." + base]}
+    if name == "app":
+        entitlements.update({"aps-environment": "development", "com.apple.developer.icloud-services": ["CloudKit"],
+                             "com.apple.developer.icloud-container-identifiers": ["iCloud." + base],
+                             "com.apple.developer.icloud-container-environment": "Development"})
+    dump(entitlements, path + "/signed-entitlements.plist")
+    dump({"Name": "Synthetic development", "ProvisionedDevices": ["00008000-0000000000000001"],
+          "Entitlements": {"get-task-allow": True, "aps-environment": "development"}}, path + "/embedded.mobileprovision")
+if broken == "debug-dylib":
+    open(app + "/Knot.debug.dylib", "w").write("synthetic")
+if broken == "xctest":
+    os.makedirs(app + "/PlugIns/Knot-iOS-Tests.xctest")
+if broken != "no-dsym":
+    os.makedirs(os.path.join(archive, "dSYMs", "Knot.app.dSYM"), exist_ok=True)
+dump({"Name": "Knot", "ApplicationProperties": {"CFBundleIdentifier": base}}, os.path.join(archive, "Info.plist"))
+PY
+# The export, as xcodebuild -exportArchive makes Knot.ipa: the app signed again for distribution.
+#   export.py <archive> <export folder>
+cat >"$rl/export.py" <<'PY'
+import os, plistlib, shutil, subprocess, sys
+archive, export = sys.argv[1:3]
+broken = os.environ.get("KNOT_RL_EXPORT_BREAK", "")
+stage = os.path.join(export, "stage")
+shutil.copytree(os.path.join(archive, "Products", "Applications", "Knot.app"), os.path.join(stage, "Payload", "Knot.app"))
+for folder, dirs, _ in os.walk(os.path.join(stage, "Payload")):
+    for part in [folder] if folder.endswith((".app", ".appex")) else []:
+        top = part.endswith("Payload/Knot.app")
+        with open(part + "/signed-entitlements.plist", "rb") as f:
+            e = plistlib.load(f)
+        e.pop("get-task-allow")
+        if broken == "get-task-allow" and "Watch" in part and part.endswith(".app"):
+            e["get-task-allow"] = True
+        if top:
+            e["aps-environment"] = "development" if broken == "push" else "production"
+            e["com.apple.developer.icloud-container-environment"] = "Development" if broken == "container-environment" else "Production"
+            if broken == "container":
+                e["com.apple.developer.icloud-container-identifiers"] = ["iCloud.com.example"]
+        if broken == "group" and part.endswith("Widgets-iOS.appex"):
+            e["com.apple.security.application-groups"] = ["group.com.example"]
+        with open(part + "/signed-entitlements.plist", "wb") as f:
+            plistlib.dump(e, f)
+        profile = {"Name": "Synthetic App Store", "Entitlements": {"aps-environment": "production"}}
+        if broken == "devices" and part.endswith("Widgets-iOS.appex"):
+            profile["ProvisionedDevices"] = ["00008000-0000000000000001"]
+        with open(part + "/embedded.mobileprovision", "wb") as f:
+            plistlib.dump(profile, f)
+subprocess.run(["ditto", "-c", "-k", os.path.join(stage, "Payload"), os.path.join(export, "Knot.ipa")], check=True)
+shutil.rmtree(stage)
+PY
+# Knot.ipa holds Payload/ at its root: ditto -k of a folder keeps its name only with --keepParent.
+sed -i '' 's|\["ditto", "-c", "-k", |["ditto", "-c", "-k", "--keepParent", |' "$rl/export.py"
+cat >"$rl/stub/xcodebuild" <<'SH'
+#!/bin/bash
+[[ ${1:-} == -version ]] && exec /usr/bin/xcodebuild "$@"
+echo "xcodebuild $*" >>"$KNOT_RL_RECORD"
+archive="" export="" flavour="" level="" number=""
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in
+        -archivePath) archive=${!j} ;;
+        -exportPath) export=${!j} ;;
+        -exportOptionsPlist) echo "options $(tr -d '\n\t' <"${!j}")" >>"$KNOT_RL_RECORD" ;;
+        KNOT_FLAVOUR=*) flavour=${!i#KNOT_FLAVOUR=} ;;
+        KNOT_MILESTONE_LEVEL=*) level=${!i#KNOT_MILESTONE_LEVEL=} ;;
+        KNOT_BUILD_NUMBER=*) number=${!i#KNOT_BUILD_NUMBER=} ;;
+    esac
+done
+if [[ $1 == -exportArchive ]]; then
+    # What xcodebuild keeps while it runs, in its TMPDIR, and what it prints: both name the key.
+    mkdir -p "${TMPDIR}Knot.xcdistributionlogs"
+    echo "authenticated with $KNOT_ASC_KEY_ID of $KNOT_ASC_ISSUER_ID" >"${TMPDIR}Knot.xcdistributionlogs/IDEDistribution.log"
+    echo "Exporting with the key $KNOT_ASC_KEY_ID, issuer $KNOT_ASC_ISSUER_ID, from $KNOT_ASC_KEY_PATH"
+    python3 -I "$KNOT_RL_EXPORT" "$archive" "$export" || exit 1
+    echo "** EXPORT SUCCEEDED **"
+    exit 0
+fi
+python3 -I "$KNOT_RL_MAKE" "$(dirname "$archive")" "${KNOT_RL_REHEARSAL_FAMILY:-$flavour}" "$level" "$number"
+echo "** ARCHIVE SUCCEEDED **"
+SH
+cat >"$rl/stub/codesign" <<'SH'
+#!/bin/bash
+echo "codesign $*" >>"$KNOT_RL_RECORD"
+[[ "$1 $2 $3 $4" == "-d --entitlements - --xml" ]] || exec /usr/bin/codesign "$@"
+cat "$5/signed-entitlements.plist"
+SH
+cat >"$rl/stub/security" <<'SH'
+#!/bin/bash
+[[ "$1 $2 $3" == "cms -D -i" ]] || exec /usr/bin/security "$@"
+cat "$4"
+SH
+cat >"$rl/stub/altool" <<'SH'
+#!/bin/bash
+echo "altool $*" >>"$KNOT_RL_RECORD"
+temporary=""
+for ((i = 1; i <= $#; i++)); do j=$((i + 1)); [[ ${!i} == -CDTempDir ]] && temporary=${!j}; done
+echo "chunks of the key $KNOT_ASC_KEY_ID" >"$temporary/upload-chunk"
+echo "Authenticating with the key $KNOT_ASC_KEY_ID, issuer $KNOT_ASC_ISSUER_ID, from $KNOT_ASC_KEY_PATH"
+if [[ $1 == --validate-app && -n ${KNOT_RL_VALIDATE_FAIL:-} ]] || [[ $1 == --upload-package && -n ${KNOT_RL_UPLOAD_FAIL:-} ]]; then
+    echo "ERROR: synthetic: the server did not answer"
+    exit 1
+fi
+echo "No errors $( [[ $1 == --upload-package ]] && echo uploading || echo validating) Knot.ipa"
+SH
+cat >"$rl/milestone-build.sh" <<'SH'
+#!/bin/bash
+echo "milestone-build $*" >>"$KNOT_RL_RECORD"
+level=$1 folder="" number=""
+for ((i = 1; i <= $#; i++)); do
+    j=$((i + 1))
+    case ${!i} in --archive) folder=${!j} ;; --build-number) number=${!j} ;; esac
+done
+[[ -z ${KNOT_RL_MB_FAIL:-} ]] || { echo "milestone-build: ios: the build failed"; exit 1; }
+mkdir -p "$folder"
+python3 -I "$KNOT_RL_MAKE" "$folder" milestone "$level" "$number"
+echo "milestone-build: summary, $level"
+SH
+printf '#!/bin/sh\n[ "$1" = --version ] && echo "Version: %s"\nexit 0\n' "$KNOT_XCODEGEN_VERSION" >"$rl/stub/xcodegen"
+printf '#!/bin/bash\necho "lsregister $*" >>"$KNOT_RL_RECORD"\n' >"$rl/stub/lsregister"
+chmod +x "$rl/stub/"* "$rl/milestone-build.sh"
+cp -R "$KNOT_SCRIPTS" "$rl/scripts"
+cp "$rl/milestone-build.sh" "$rl/scripts/milestone-build.sh"
+rl_git() { git -C "$rl/tree" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+rl_git init -q
+rl_git add .gitignore .xcode-version Apps Packages
+rl_git commit -q -m "the first milestone's commit"
+rl_git tag -a m1 -m "M1: a synthetic milestone"
+printf 'after the milestone\n' >"$rl/tree/later.txt"
+rl_git add later.txt
+rl_git commit -q -m "the candidate"
+rl_head="$(rl_git rev-parse HEAD)"
+# A candidate whose iPhone icon carries an alpha channel, on a branch of its own.
+rl_git switch -q -c alpha-icon
+cp "$rl/fx/alpha-icon.png" "$rl/tree/Apps/iOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png"
+rl_git add Apps/iOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+rl_git commit -q -m "an icon with alpha"
+rl_alpha="$(rl_git rev-parse HEAD)"
+rl_git switch -q -
+# The key's made-up values: a file whose path, an ID and an issuer appear in no output.
+rl_key_id="SYNTHKEY42" rl_issuer="5ynth371-1ssu-3r00-0000-5ynth371c001"
+rl_key_path="$rl/key/AuthKey_$rl_key_id.p8"
+printf 'not a key\n' >"$rl_key_path"
+rl_key=(KNOT_ASC_KEY_PATH="$rl_key_path" KNOT_ASC_KEY_ID="$rl_key_id" KNOT_ASC_ISSUER_ID="$rl_issuer")
+rl_run() { # rl_run <name> [NAME=value…] -- <arguments…>: runs release.sh with a fresh record; prints its status
+    local name=$1 status=0 settings=()
+    shift
+    while [[ $1 != -- ]]; do settings+=("$1"); shift; done
+    shift
+    : >"$rl/$name.record"
+    env -u KNOT_LOCAL_CONFIG -u KNOT_ASC_KEY_PATH -u KNOT_ASC_KEY_ID -u KNOT_ASC_ISSUER_ID PATH="$rl/stub:$PATH" \
+        KNOT_TREE="$rl/tree" KNOT_XCODEGEN="$rl/stub/xcodegen" KNOT_SLOT_DIR="$rl/slots" KNOT_LSREGISTER="$rl/stub/lsregister" \
+        KNOT_ALTOOL="$rl/stub/altool" KNOT_RL_RECORD="$rl/$name.record" KNOT_RL_MAKE="$rl/make-archive.py" \
+        KNOT_RL_EXPORT="$rl/export.py" KNOT_RL_FIXTURES="$rl/fx" ${settings[@]+"${settings[@]}"} \
+        "$rl/scripts/release.sh" "$@" >"$rl/$name.out" 2>&1 || status=$?
+    echo "$status"
+}
+rl_has() { grep -F -e "$2" "$rl/$1.out" >/dev/null; } # rl_has <name> <text>: the run printed it
+rl_calls() { grep -c -e "^$2" "$rl/$1.record" || true; } # rl_calls <name> <tool>: how often it ran
+# Nothing a run printed or left in the tree holds a value of the key.
+rl_clean() { ! grep -r -F -e "$rl_key_id" -e "$rl_issuer" -e "$rl_key_path" "$rl/$1.out" "$rl/tree/.build/release" >/dev/null 2>&1; }
+# A whole archive, by a dry run, with a tmp/ that a killed run left; and with the key's values set.
+mkdir -p "$rl/tree/.build/release/killed/tmp"
+echo "a killed run's chunk" >"$rl/tree/.build/release/killed/tmp/left"
+rl_good="$(rl_run good -- M2 --commit "$rl_head" --build-number 7)"
+rl_swept="$( [[ -e $rl/tree/.build/release/killed/tmp ]] && echo left || echo swept)"
+rl_names="$(rl_run names "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7)"
+rl_verdicts="good $rl_good/$rl_swept names $rl_names/$(rl_clean names && echo clean || echo leaked)"
+# Each check on the archive, against an archive that lacks what it checks.
+rl_cases="fakes|binaries: Knot.app/PlugIns/Widgets-iOS.appex/Knot holds what a release may not: the module KnotFakes
+debug|binaries: Knot.app/Watch/Knot.app/Knot holds what a release may not: -KnotPreview
+debug-dylib|configuration: Knot.app/Knot.debug.dylib: the debug dylib of Xcode's Debug configuration
+xctest|configuration: Knot.app/PlugIns/Knot-iOS-Tests.xctest: a test bundle
+no-dsym|configuration: dSYMs: the archive holds no dSYM
+simulator|configuration: Knot.app/Watch/Knot.app: built for watchsimulator, not for a device
+beta|configuration: Knot.app: built with Xcode 27C5035i, a beta or none
+family|identity: Knot.app/Watch/Knot.app: bundle ID com.example.watchkitapp, which is not of the family com.p3ob7o.knot
+no-watch|identity: Knot.app: holds no Watch app
+version|identity: Knot.app/PlugIns/Widgets-iOS.appex: version 0.3.1, not the app's 0.3.0
+retired|identity: Knot.app: version 0.2.0, which is not above 0.2.0
+build|identity: Knot.app/PlugIns/Widgets-iOS.appex: build number 1, not 7
+flavour|identity: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: flavour dev, not milestone
+level|identity: Knot.app/Watch/Knot.app: level M3, not M2
+group|identity: Knot.app/PlugIns/Widgets-iOS.appex: KnotAppGroup group.com.example, not group.com.p3ob7o.knot
+privacy|privacy: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: no privacy manifest
+tracking|privacy: Knot.app/PlugIns/Widgets-iOS.appex: its privacy manifest does not say NSPrivacyTracking false
+usage|usage: Knot.app/Watch/Knot.app: asks for the microphone (AVAudioApplication) and has no usage string: NSMicrophoneUsageDescription
+encryption|encryption: Knot.app/Watch/Knot.app: no ITSAppUsesNonExemptEncryption
+encryption-true|encryption: Knot.app: ITSAppUsesNonExemptEncryption is not false
+icon|icons: Knot.app/Watch/Knot.app: its App Store icon icon.png (watch) is not opaque
+no-car|icons: Knot.app: no asset catalogue"
+rl_broken=""
+while IFS='|' read -r broken expected; do
+    status="$(rl_run "broken-$broken" KNOT_RL_BREAK="$broken" -- M2 --commit "$rl_head" --build-number 7)"
+    if [[ $status != 1 ]] || ! rl_has "broken-$broken" "FAIL  $expected" || ! rl_has "broken-$broken" "release-archive-check"; then
+        rl_broken="$rl_broken $broken($status)"
+    fi
+done <<<"$rl_cases"
+# What it refuses before anything is built: a level that opens sync, a milestone below with no
+# tag or a tag that is not annotated, an icon source with alpha, the Mac, and the key not set for
+# a validation. A failed milestone build stops it.
+rl_sync="$(rl_run sync -- M4 --commit "$rl_head" --build-number 7)"
+rl_no_tag="$(rl_run no-tag -- M3 --commit "$rl_head" --build-number 7)"
+rl_git tag m2 "$rl_head"
+rl_light="$(rl_run light -- M3 --commit "$rl_head" --build-number 7)"
+rl_git tag -d m2 >/dev/null
+rl_alpha_icon="$(rl_run alpha-icon -- M2 --commit "$rl_alpha" --build-number 7)"
+rl_mac="$(rl_run mac -- M2 --commit "$rl_head" --build-number 7 --products mac)"
+rl_no_key="$(rl_run no-key KNOT_ASC_KEY_ID="$rl_key_id" -- M2 --commit "$rl_head" --build-number 7 --validate)"
+rl_mb_fail="$(rl_run mb-fail KNOT_RL_MB_FAIL=1 -- M2 --commit "$rl_head" --build-number 7)"
+rl_verdicts="$rl_verdicts before sync $rl_sync/$(rl_calls sync milestone-build) no-tag $rl_no_tag light $rl_light alpha $rl_alpha_icon mac $rl_mac no-key $rl_no_key/$(rl_calls no-key milestone-build)/$(rl_clean no-key && echo clean || echo leaked) mb-fail $rl_mb_fail"
+# A validation and an upload; what would be uploaded, short of each thing the export checks.
+rl_validate="$(rl_run validate "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --validate)"
+rl_validate_run="$(ls -d "$rl/tree/.build/release/validate-"* | head -n 1)"
+rl_upload="$(rl_run upload "${rl_key[@]}" -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_upload_fail="$(rl_run upload-fail "${rl_key[@]}" KNOT_RL_UPLOAD_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_validate_fail="$(rl_run validate-fail "${rl_key[@]}" KNOT_RL_VALIDATE_FAIL=1 -- M2 --commit "$rl_head" --build-number 7 --upload)"
+rl_verdicts="$rl_verdicts validate $rl_validate/$(rl_calls validate 'altool --validate-app')/$(rl_calls validate 'altool --upload-package')/$(rl_clean validate && echo clean || echo leaked) upload $rl_upload/$(rl_calls upload 'altool --upload-package') upload-fail $rl_upload_fail/$(rl_calls upload-fail 'altool --upload-package')/$(rl_clean upload-fail && echo clean || echo leaked) validate-fail $rl_validate_fail/$(rl_calls validate-fail 'altool --upload-package')"
+rl_export_cases="push|entitlements: Knot.app: aps-environment development, not production
+container-environment|entitlements: Knot.app: iCloud container environment Development, not Production
+container|entitlements: Knot.app: iCloud containers iCloud.com.example, not iCloud.com.p3ob7o.knot alone
+group|entitlements: Knot.app/PlugIns/Widgets-iOS.appex: app groups group.com.example, not group.com.p3ob7o.knot alone
+get-task-allow|entitlements: Knot.app/Watch/Knot.app: get-task-allow
+devices|entitlements: Knot.app/PlugIns/Widgets-iOS.appex: its provisioning profile lists 1 devices"
+while IFS='|' read -r broken expected; do
+    status="$(rl_run "export-$broken" "${rl_key[@]}" KNOT_RL_EXPORT_BREAK="$broken" -- M2 --commit "$rl_head" --build-number 7 --upload)"
+    if [[ $status != 1 ]] || ! rl_has "export-$broken" "FAIL  $expected" || ! rl_has "export-$broken" "release-export-check" ||
+        [[ $(rl_calls "export-$broken" altool) != 0 ]]; then
+        rl_broken="$rl_broken export-$broken($status)"
+    fi
+done <<<"$rl_export_cases"
+# The rehearsal: the development flavour, signed by nothing, and no signature read; and one whose
+# archive carries the milestone's bundle ID.
+rl_rehearsal="$(rl_run rehearsal -- --rehearsal M2 --build-number 7)"
+rl_rehearsal_milestone="$(rl_run rehearsal-milestone KNOT_RL_REHEARSAL_FAMILY=milestone -- --rehearsal M2 --build-number 7)"
+rl_verdicts="$rl_verdicts rehearsal $rl_rehearsal/$(rl_calls rehearsal milestone-build)/$(rl_calls rehearsal codesign)/$(rl_calls rehearsal altool) rehearsal-milestone $rl_rehearsal_milestone"
+if [[ $rl_verdicts == "good 0/swept names 0/clean before sync 1/0 no-tag 1 light 1 alpha 1 mac 1 no-key 1/0/clean mb-fail 1 validate 0/1/0/clean upload 0/1 upload-fail 1/1/clean validate-fail 1/0 rehearsal 0/0/0/0 rehearsal-milestone 1" && -z $rl_broken ]] &&
+    grep -e "^milestone-build M2 --commit $rl_head --products ios --archive $rl/tree/.build/release/dry-run-M2-${rl_head:0:12}-b7-[0-9TZ]*-[A-Za-z0-9]*/candidate --build-number 7$" "$rl/good.record" >/dev/null &&
+    rl_has good "dry run passed" && rl_has good "ok    evidence: the annotated tags of the milestones below M2, at or before ${rl_head:0:12}: m1" &&
+    rl_has good "ok    level: M2 keeps sync shut, which opens at M4" && rl_has good "ok    icons: the iPhone's and the Watch's icon sources" &&
+    rl_has good "Knot.app asks for the microphone (AVAudioApplication), and says why in NSMicrophoneUsageDescription" &&
+    rl_has good "Knot.app/Watch/Knot.app asks for the microphone (AVAudioApplication)" &&
+    rl_has good "ok    icons: an opaque App Store icon in Knot.app, Knot.app/Watch/Knot.app" &&
+    rl_has good "ok    binaries: no fakes and no debug launch argument in its 4 Mach-O files" &&
+    rl_has good "KNOT_ASC_KEY_PATH (not set), KNOT_ASC_KEY_ID (not set), KNOT_ASC_ISSUER_ID (not set)" &&
+    rl_has names "KNOT_ASC_KEY_PATH (set, a readable file), KNOT_ASC_KEY_ID (set), KNOT_ASC_ISSUER_ID (set)" &&
+    [[ $(rl_calls good xcodebuild) == 0 && $(rl_calls good altool) == 0 ]] &&
+    rl_has sync "M4 opens sync, which opens at M4, and the tree has no committed CloudKit schema file" &&
+    rl_has no-tag "evidence: M2 has no evidence: the repository holds no annotated tag m2" &&
+    rl_has light "only a tag that is not annotated" &&
+    rl_has alpha-icon "icons: Apps/iOS/Assets.xcassets/AppIcon.appiconset/icon-1024.png carries an alpha channel" &&
+    rl_has mac "release-mac-sp3" && rl_has mac "SP-3" &&
+    rl_has no-key "key: KNOT_ASC_KEY_PATH is not set" && rl_has no-key "key: KNOT_ASC_ISSUER_ID is not set" &&
+    rl_has mb-fail "release-candidate" &&
+    grep -e "^xcodebuild -exportArchive .* -allowProvisioningUpdates -authenticationKeyPath $rl_key_path -authenticationKeyID $rl_key_id -authenticationKeyIssuerID $rl_issuer$" "$rl/validate.record" >/dev/null &&
+    grep -e "^altool --validate-app $rl_validate_run/export/Knot.ipa --api-key $rl_key_id --api-issuer $rl_issuer --p8-file-path $rl_key_path -CDTempDir " "$rl/validate.record" >/dev/null &&
+    grep -F -e "Exporting with the key <KEY-ID>, issuer <ISSUER-ID>, from <KEY-PATH>" "$rl_validate_run/release.log" >/dev/null &&
+    grep -F -e "Authenticating with the key <KEY-ID>, issuer <ISSUER-ID>, from <KEY-PATH>" "$rl_validate_run/release.log" >/dev/null &&
+    rl_has validate "ok    entitlements: each of its 4 parts" && rl_has validate "validation passed" &&
+    [[ ! -e $rl_validate_run/tmp && -f $rl_validate_run/export/Knot.ipa ]] &&
+    grep -e '^options .*<key>method</key><string>app-store-connect</string>.*<key>destination</key><string>export</string>.*<key>iCloudContainerEnvironment</key><string>Production</string>.*<key>manageAppVersionAndBuildNumber</key><false/>.*<key>testFlightInternalTestingOnly</key><true/>' "$rl/validate.record" >/dev/null &&
+    ! grep -e '^options .*teamID' "$rl/validate.record" >/dev/null &&
+    rl_has upload "uploaded: Knot 0.3.0 (7), M2" &&
+    rl_has upload-fail "FAIL release-upload" && rl_has upload-fail "Check App Store Connect, the app's TestFlight builds, for build 7, before any retry" &&
+    rl_has upload-fail "retry:   unsafe" && [[ -z "$(ls -d "$rl/tree/.build/release/upload-"*/tmp 2>/dev/null)" ]] &&
+    rl_has validate-fail "release-validation" &&
+    grep -e '^xcodebuild .* KNOT_FLAVOUR=dev KNOT_MILESTONE_LEVEL=M2 KNOT_SIGNING=local KNOT_BUILD_NUMBER=7 DEVELOPMENT_TEAM= CODE_SIGNING_ALLOWED=NO .* archive -archivePath ' "$rl/rehearsal.record" >/dev/null &&
+    ! grep -e 'KNOT_FLAVOUR=milestone' "$rl/rehearsal.record" >/dev/null &&
+    rl_has rehearsal "rehearsal passed" && rl_has rehearsal "ok    identity: 4 parts of com.p3ob7o.knot.dev, 0.3.0 (7), flavour dev, level M2" &&
+    rl_has rehearsal-milestone "release-rehearsal-identifiers"; then
+    pass "release.sh refuses an archive that lacks any thing it checks, naming the part, and passes the whole one; refuses before any build a level that opens sync, a milestone with no evidence, an icon with alpha, the Mac and a missing key; prints and leaves no value of the key; exports, validates and uploads the checked file once, refusing a distribution signature short of production; after a failed upload names App Store Connect and does not retry; and rehearses the development flavour unsigned"
+else
+    fail "release.sh: $rl_verdicts; broken:${rl_broken:- none}; good: $(grep -e FAIL "$rl/good.out" | head -n 3 | tr '\n' ' ')"
 fi
 
 if ((FAILED)); then
