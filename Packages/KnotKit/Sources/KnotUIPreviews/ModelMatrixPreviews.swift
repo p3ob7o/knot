@@ -300,11 +300,10 @@
                     origin: origin)
                 newer.state = .unknown("preview.newer")
                 segments.append(newer)
-                var unreadable = try Build.typed(
-                    ids.make(), in: note, from: date.addingTimeInterval(2), text: "Unreadable example",
-                    origin: origin)
-                unreadable.text = ""
-                unreadable.state = .unknown("preview.newer")
+                let later = date.addingTimeInterval(2)
+                let unreadable = try Segment(
+                    id: ids.make(), noteID: note, kind: .typed, origin: origin,
+                    startedAt: later, endedAt: later, textOrigin: newer.textOrigin, state: .unknown("preview.newer"))
                 segments.append(unreadable)
             } else if example == .voiceStates {
                 if voiceState != nil { segments = [] }
