@@ -47,7 +47,7 @@ public struct CaptureField: View {
         .accessibilityHint(
             acceptsTyping
                 ? Text("Type to add to this note.", bundle: .module)
-                : Text("Recording. Typing waits until you stop.", bundle: .module))
+                : Text(verbatim: ""))
     }
 }
 

@@ -537,7 +537,7 @@ public final class NoteViewModel {
                 problem = .couldNotStartRecording(error.code)
                 announcer.announce(.recordingCouldNotStart)
             } else if before.isRecording {
-                showRecordingOutcome(.saveFailed)
+                announceFailedStop()
             }
         }
     }
@@ -630,11 +630,16 @@ public final class NoteViewModel {
             showRecordingOutcome(.discarded)
             announcer.announce(.recordingDiscarded)
         case .failed:
-            showRecordingOutcome(.saveFailed)
+            announceFailedStop()
         case .open:
             break
         }
         await refresh()
+    }
+
+    private func announceFailedStop() {
+        showRecordingOutcome(.saveFailed)
+        announcer.announce(.recordingSaveFailed)
     }
 
     private func showRecordingOutcome(_ outcome: RecordingOutcome?) {

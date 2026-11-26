@@ -40,6 +40,20 @@ import Testing
         #expect(stored?.kind == .voice)
     }
 
+    @Test(arguments: [false, true])
+    func aFailedStopAnnouncesThatTheRecordingCouldNotBeSaved(throwsOnStop: Bool) async {
+        let rig = StoreRig()
+        rig.environment.engine = FailedStopEngine(id: rig.ids.make(), throwsOnStop: throwsOnStop)
+        let model = rig.capture()
+        model.toggleRecording()
+        await settled(model)
+        model.toggleRecording()
+        await settled(model)
+        #expect(model.recordingOutcome == .saveFailed)
+        #expect(rig.announcer.heard == [.recordingStarted, .recordingSaveFailed])
+        #expect(Announcement.recordingSaveFailed.text == "Knot couldn’t finish saving the recording.")
+    }
+
     @Test func aRecordingStartedByAnotherSurfaceDisablesTheFieldAndCanBeStoppedHere() async throws {
         let rig = await PreviewRig.make()
         defer { rig.remove() }
@@ -226,5 +240,37 @@ import Testing
         await settled(model)
         #expect(model.fieldText == "keep me")
         #expect(model.problem == .couldNotSave(KnotError.portUnavailable.code))
+    }
+}
+
+private actor FailedStopEngine: CaptureEngine {
+    let id: CaptureID
+    let throwsOnStop: Bool
+    private var started = false
+
+    init(id: CaptureID, throwsOnStop: Bool) {
+        self.id = id
+        self.throwsOnStop = throwsOnStop
+    }
+
+    nonisolated func states() -> AsyncStream<CaptureState> { AsyncStream { $0.finish() } }
+    func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+    func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+        throw .portUnavailable
+    }
+    func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+    func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState { throw .portUnavailable }
+
+    func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError) -> RecordingPressOutcome {
+        if !started {
+            started = true
+            return .started(state(.open))
+        }
+        if throwsOnStop { throw .writeFailed }
+        return .stopped(state(.failed(KnotError.writeFailed.code)))
+    }
+
+    private func state(_ outcome: CaptureOutcome) -> CaptureState {
+        CaptureState(captureID: id, kind: .voice, noteID: nil, outcome: outcome, path: .store, durableRevision: 1)
     }
 }

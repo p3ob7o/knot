@@ -125,7 +125,8 @@
             }
             if model.recording.isRecording || model.recording == .stopping {
                 LiveCaptureSegment(
-                    transcript: model.liveTranscript, levels: model.surface == .macPanel ? [] : model.liveLevels)
+                    transcript: model.liveTranscript, levels: model.surface == .macPanel ? [] : model.liveLevels,
+                    isLive: model.recording.isRecording)
             } else {
                 CaptureField(
                     text: model.fieldText, acceptsTyping: model.fieldAcceptsTyping, isFocused: $fieldFocused,
@@ -219,7 +220,7 @@
             }
             if model.recordingOutcome == .saveFailed {
                 Banner(
-                    String(localized: "Knot couldn’t finish saving the recording.", bundle: .module),
+                    Announcement.recordingSaveFailed.text,
                     symbol: "exclamationmark.triangle", role: .failed
                 ) {
                     Button {

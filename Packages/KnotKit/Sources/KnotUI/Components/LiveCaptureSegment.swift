@@ -6,10 +6,12 @@ public struct LiveCaptureSegment: View {
     @Environment(\.knotTheme) private var theme
     let transcript: LiveTranscript
     let levels: [Float]
+    let isLive: Bool
 
-    public init(transcript: LiveTranscript, levels: [Float]) {
+    public init(transcript: LiveTranscript, levels: [Float], isLive: Bool = true) {
         self.transcript = transcript
         self.levels = levels
+        self.isLive = isLive
     }
 
     public var body: some View {
@@ -24,9 +26,11 @@ public struct LiveCaptureSegment: View {
                 Text("\(final)\(provisional)", bundle: .module)
                     .font(theme.type[.body])
             }
-            Text("Recording. Typing waits until you stop.", bundle: .module)
-                .font(theme.type[.caption])
-                .foregroundStyle(theme.colors[.textSecondary])
+            if isLive {
+                Text("Recording. Typing waits until you stop.", bundle: .module)
+                    .font(theme.type[.caption])
+                    .foregroundStyle(theme.colors[.textSecondary])
+            }
         }
     }
 }
