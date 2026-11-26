@@ -164,9 +164,15 @@ final class KnotIOSLaunchTests: XCTestCase {
         let first = "First synthetic segment"
         let second = "Second synthetic segment"
         try openTwoSegmentNote(first, second, in: app)
-        let menus = app.buttons.matching(identifier: "Segment actions")
-        XCTAssertTrue(menus.element(boundBy: 1).waitForExistence(timeout: limit))
-        menus.element(boundBy: 1).tap()
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let menus = app.buttons.matching(identifier: "Segment actions")
+            XCTAssertTrue(menus.element(boundBy: 1).waitForExistence(timeout: limit))
+            menus.element(boundBy: 1).tap()
+        } else {
+            let secondSegment = segment(second, in: app)
+            XCTAssertTrue(secondSegment.waitForExistence(timeout: limit))
+            secondSegment.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 1)
+        }
         app.buttons["Move to its own note"].tap()
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: limit))

@@ -378,6 +378,7 @@
                 seek: { position in Task { await player.seek(to: position) } },
                 beginEdit: { model.beginEditing(item.id) },
                 endEdit: { model.endEditing(item.id) },
+                recordingPeaks: { await model.recordingPeaks(of: item) },
                 drawing: { scale throws(KnotError) in try await model.drawing(of: item, scale: scale) })
         }
     }

@@ -795,7 +795,7 @@ public final class NoteViewModel {
         case .showOriginal: toggleOriginal(segment)
         case .retry: retry(segment)
         case .moveWorkHere: problem = .notAvailableYet
-        case .play, .shareFile:
+        case .play, .shareFile, .copy, .shareText:
             // The view plays and shares the file itself, through the player and the system.
             break
         }
@@ -943,6 +943,15 @@ public final class NoteViewModel {
     }
 
     /// The file of a segment's recording or drawing on this device, for the player and Share.
+    /// The stored peaks for the waveform. Older recordings or recordings from other devices
+    /// can have no peaks. Playback remains available in either case.
+    public func recordingPeaks(of item: SegmentItem) async -> [UInt8] {
+        guard item.kind == .voice, case .here = item.attachment,
+            let data = try? await environment.notes.peaks(of: item.id)
+        else { return [] }
+        return RecordingPeaks(reading: data)?.values ?? []
+    }
+
     public func file(of item: SegmentItem) async -> URL? {
         guard case .here(let asset) = item.attachment else { return nil }
         return try? await environment.assets.find(asset.id, kind: asset.kind)?.url

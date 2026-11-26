@@ -55,7 +55,7 @@ public struct OriginMarkView: View {
         Label {
             Text(mark.label)
         } icon: {
-            Image(systemName: mark == .mcp ? "sparkle" : "terminal")
+            Image(systemName: "apple.terminal")
         }
         .font(theme.type[.caption])
         .foregroundStyle(theme.colors[.quietMark])
@@ -74,16 +74,28 @@ public struct SegmentStateLabel: View {
     public var body: some View {
         if state != .ready {
             HStack(spacing: theme.spacing.tight) {
-                if state == .needsYou {
-                    FailedMarker()
-                } else if state.isPendingMark {
-                    PendingMarker()
+                if let symbol {
+                    Image(systemName: symbol)
+                        .foregroundStyle(theme.colors[state == .needsYou ? .attention : .textSecondary])
+                        .accessibilityHidden(true)
                 }
                 Text(state.label)
+                    .foregroundStyle(theme.colors[.textSecondary])
             }
-            .font(theme.type[.caption])
-            .foregroundStyle(state == .needsYou ? theme.colors[.failed] : theme.colors[.textSecondary])
+            .font(theme.type[state == .needsYou ? .emphasizedStateLine : .stateLine])
             .accessibilityElement(children: .combine)
         }
     }
+
+    private var symbol: String? {
+        switch state {
+        case .savedOnWatch: "applewatch"
+        case .savedTextOnItsWay: "ellipsis.circle"
+        case .savedTextBeingMadeElsewhere: "rectangle.on.rectangle"
+        case .needsYou: "exclamationmark.triangle.fill"
+        case .madeByNewerKnot: "arrow.down.circle"
+        case .ready, .keptNoText: nil
+        }
+    }
+
 }

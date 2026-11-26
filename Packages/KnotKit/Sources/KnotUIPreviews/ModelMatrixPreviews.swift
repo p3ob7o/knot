@@ -148,6 +148,9 @@
                 let playing = try await fixture.recordFile(kind: .voice, note: note)
                 let removed = try await fixture.recordFile(kind: .voice, note: note)
                 try await fixture.readyVoice(playing, text: "Ask about the estimate.")
+                let levels = PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                let peaks = RecordingPeaks.header(framesPerValue: 800) + Data(levels)
+                try await environment.notes.setPeaks(peaks, of: playing)
                 try await fixture.readyVoice(removed, text: "This recording was removed.")
                 await model.refresh()
                 model.toggleOriginal(playing)

@@ -2,12 +2,19 @@ import ImageIO
 import KnotCore
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#elseif os(macOS)
+    import AppKit
+#endif
+
 /// What a segment view calls when the person acts on it.
 public struct SegmentHandlers {
     public var edit: (String) -> Void
     public var action: (SegmentAction) -> Void
     public var togglePlay: () -> Void
     public var seek: (Duration) -> Void
+    public var recordingPeaks: () async -> [UInt8]
     public var drawing: (Double) async throws(KnotError) -> RenderedDrawing?
     /// The person began editing the text: the edit carries the revision read now.
     public var beginEdit: () -> Void
@@ -18,6 +25,7 @@ public struct SegmentHandlers {
         edit: @escaping (String) -> Void, action: @escaping (SegmentAction) -> Void,
         togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in },
         beginEdit: @escaping () -> Void = {}, endEdit: @escaping () -> Void = {},
+        recordingPeaks: @escaping () async -> [UInt8] = { [] },
         drawing: @escaping (Double) async throws(KnotError) -> RenderedDrawing? = { _ in nil }
     ) {
         self.beginEdit = beginEdit
@@ -27,6 +35,7 @@ public struct SegmentHandlers {
         self.togglePlay = togglePlay
         self.seek = seek
         self.drawing = drawing
+        self.recordingPeaks = recordingPeaks
     }
 
     /// Handlers that do nothing, for previews of a still state.
@@ -69,8 +78,8 @@ public struct SegmentView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing.tight) {
-            header
+        VStack(alignment: .leading, spacing: theme.spacing.space2) {
+            if showsActionMenu { actionMenu }
             switch item.kind {
             case .voice:
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers, playbackAllowed: playbackAllowed)
@@ -98,8 +107,11 @@ public struct SegmentView: View {
             case .unknown:
                 EmptyView()
             }
+            stateLine
             if let mark = item.originMark { OriginMarkView(mark) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
         .task(id: DrawingRequest(attachment: item.attachment, scale: displayScale)) {
             guard item.kind == .ink else { return }
             drawing = nil
@@ -115,62 +127,94 @@ public struct SegmentView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityActions {
-            ForEach(availableActions) { action in
-                Button(actionLabel(action)) { perform(action) }
-            }
+            actionButtons
         }
         #if !os(watchOS)
             .contextMenu { actionButtons }
         #endif
     }
 
-    @ViewBuilder private var header: some View {
-        HStack(spacing: theme.spacing.regular) {
+    private var stateLine: some View {
+        VStack(alignment: .leading, spacing: theme.spacing.space1) {
             if item.hasArrived { ArrivedMarker() }
             if item.kind == .ink, item.state == .savedTextOnItsWay {
                 Text("Recognising handwriting…", bundle: .module)
-                    .font(theme.type[.caption])
+                    .font(theme.type[.stateLine])
                     .foregroundStyle(theme.colors[.textSecondary])
             } else if drawingUnreadable {
                 SegmentStateLabel(.keptNoText)
             } else if item.state != .ready {
-                SegmentStateLabel(item.state)
+                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
+                    SegmentStateLabel(item.state)
+                    #if os(iOS)
+                        if availableActions.contains(.retry) {
+                            Button(actionLabel(.retry)) { perform(.retry) }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(theme.colors[.textPrimary])
+                        }
+                    #endif
+                }
             }
             if item.isConflictCopy {
                 Text("Edited on another device at the same time", bundle: .module)
-                    .font(theme.type[.caption])
+                    .font(theme.type[.stateLine])
                     .foregroundStyle(theme.colors[.quietMark])
             }
-            Spacer(minLength: 0)
-            #if !os(watchOS)
-                if !availableActions.isEmpty {
-                    // Every segment action is reachable from the keyboard: the menu is a control
-                    // in the focus order, on the Mac and the iPad.
-                    Menu {
-                        actionButtons
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            #if os(iOS)
-                                .padding(theme.spacing.loose)
-                                .contentShape(.rect)
-                            #endif
-                    }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .accessibilityLabel(Text("Segment actions", bundle: .module))
-                }
-            #endif
         }
+    }
+
+    private var showsActionMenu: Bool {
+        guard !availableActions.isEmpty else { return false }
+        #if os(iOS)
+            return UIDevice.current.userInterfaceIdiom == .pad
+        #elseif os(macOS)
+            return true
+        #else
+            return false
+        #endif
+    }
+
+    @ViewBuilder private var actionMenu: some View {
+        #if !os(watchOS)
+            HStack {
+                Spacer()
+                Menu {
+                    actionButtons
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        #if os(iOS)
+                            .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
+                            .contentShape(.rect)
+                        #endif
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .fixedSize()
+                .accessibilityLabel(Text("Segment actions", bundle: .module))
+            }
+        #endif
     }
 
     @ViewBuilder private var actionButtons: some View {
         ForEach(availableActions) { action in
-            Button(role: action == .delete ? .destructive : nil) {
-                perform(action)
-            } label: {
-                Text(actionLabel(action))
-            }
+            #if !os(watchOS)
+                if action == .shareText {
+                    ShareLink(item: text) { Text(actionLabel(action)) }
+                } else {
+                    actionButton(action)
+                }
+            #else
+                actionButton(action)
+            #endif
+        }
+    }
+
+    private func actionButton(_ action: SegmentAction) -> some View {
+        Button(role: action == .delete ? .destructive : nil) {
+            perform(action)
+        } label: {
+            Text(actionLabel(action))
         }
     }
 
@@ -182,7 +226,19 @@ public struct SegmentView: View {
     }
 
     private func perform(_ action: SegmentAction) {
-        if action == .play { handlers.togglePlay() } else { handlers.action(action) }
+        switch action {
+        case .play:
+            handlers.togglePlay()
+        case .copy:
+            #if os(iOS)
+                UIPasteboard.general.string = text
+            #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            #endif
+        default:
+            handlers.action(action)
+        }
     }
 }
 
@@ -241,13 +297,22 @@ struct VoiceSegmentBody: View {
     let playback: PlaybackState
     let handlers: SegmentHandlers
     let playbackAllowed: Bool
+    @State private var peaks: [UInt8] = []
 
     var body: some View {
         switch item.attachment {
         case .here:
             if playbackAllowed {
                 AudioPlayerView(
-                    state: playback, length: item.duration, onToggle: handlers.togglePlay, onSeek: handlers.seek)
+                    state: playback, length: item.duration, peaks: peaks,
+                    onToggle: handlers.togglePlay, onSeek: handlers.seek
+                )
+                #if os(iOS)
+                    .task(id: item.attachment) {
+                        let read = await handlers.recordingPeaks()
+                        if !Task.isCancelled { peaks = read }
+                    }
+                #endif
             }
         case .onAnotherDevice(let asset):
             if asset.availability == .downloading {

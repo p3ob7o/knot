@@ -4,6 +4,8 @@ import KnotCore
 /// What a person can do to a segment. Every action is reachable from the keyboard on the Mac
 /// and the iPad, and is a VoiceOver action (docs/product-spec.md §13).
 public enum SegmentAction: String, Hashable, Sendable, CaseIterable, Identifiable {
+    case copy
+    case shareText
     case play
     /// Switches a voice segment between its cleaned and its raw text.
     case showOriginal
@@ -22,11 +24,12 @@ public enum SegmentAction: String, Hashable, Sendable, CaseIterable, Identifiabl
 
     public var label: String {
         switch self {
+        case .copy: localized("Copy")
+        case .shareText, .shareFile: localized("Share…")
         case .play: localized("Play")
         case .showOriginal: localized("Show original")
         case .retry: localized("Retry")
         case .moveWorkHere: localized("Move the work to this device")
-        case .shareFile: localized("Share file")
         case .removeRecording: localized("Remove recording")
         case .moveToOwnNote: localized("Move to its own note")
         case .delete: localized("Delete")
@@ -198,25 +201,29 @@ public enum SegmentPresenter {
         let hasFile: Bool
         if case .here = attachment { hasFile = true } else { hasFile = false }
 
+        let hasText = !CaptureText.isEmpty(segment.text)
+        let canShareFile = hasFile && (state == .keptNoText || state == .ready)
+        if hasText { actions.append(.copy) }
+        if hasText, !canShareFile { actions.append(.shareText) }
         if segment.kind == .voice, hasFile { actions.append(.play) }
         if segment.kind == .voice, let raw = segment.rawTranscript, segment.textOrigin != .rawTranscript,
             raw != segment.text
         {
             actions.append(.showOriginal)
         }
-        if state == .needsYou, segment.kind == .voice || segment.kind == .ink, segment.conflictOf == nil {
-            actions.append(.retry)
-        }
-        if state == .savedTextBeingMadeElsewhere { actions.append(.moveWorkHere) }
-        if hasFile, state == .keptNoText || state == .ready { actions.append(.shareFile) }
-        // "Remove recording" once the segment has text: until then the recording is all there is.
-        if segment.kind == .voice, hasFile, !CaptureText.isEmpty(segment.text) { actions.append(.removeRecording) }
         // "Move to its own note" when the note holds another capture that is not deleted, never
         // on a conflict copy (docs/product-spec.md §7).
         let capture = segment.pieceOf ?? segment.id
         if segment.conflictOf == nil, noteCaptures.contains(capture), noteCaptures.count > 1 {
             actions.append(.moveToOwnNote)
         }
+        if canShareFile { actions.append(.shareFile) }
+        // "Remove recording" stays available once the segment has text.
+        if segment.kind == .voice, hasFile, hasText { actions.append(.removeRecording) }
+        if state == .needsYou, segment.kind == .voice || segment.kind == .ink, segment.conflictOf == nil {
+            actions.append(.retry)
+        }
+        if state == .savedTextBeingMadeElsewhere { actions.append(.moveWorkHere) }
         actions.append(.delete)
         return actions
     }

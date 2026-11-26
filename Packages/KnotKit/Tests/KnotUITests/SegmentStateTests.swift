@@ -42,6 +42,20 @@ import Testing
         return (model, segment)
     }
 
+    @Test func playbackReadsOnlyTheStoredPeaks() async throws {
+        let rig = StoreRig()
+        let (model, id) = try await noteViewModel(.ready, rig: rig)
+        let item = try #require(model.items.first { $0.id == id })
+        #expect(await model.recordingPeaks(of: item).isEmpty)
+        let values: [UInt8] = [0, 125, 255]
+        let peaks = RecordingPeaks.header(framesPerValue: 800) + Data(values)
+        try await rig.notes.setPeaks(peaks, of: id)
+        #expect(await model.recordingPeaks(of: item) == values)
+        var missing = item
+        missing.attachment = .missing
+        #expect(await model.recordingPeaks(of: missing).isEmpty)
+    }
+
     @Test("voice-segment-six-states-view-model", .tags(.named), arguments: Case.allCases)
     func sixStates(_ which: Case) async throws {
         let rig = StoreRig()
@@ -78,6 +92,7 @@ import Testing
             #expect(item.actions.contains(.removeRecording))
             #expect(item.actions.contains(.shareFile))
             #expect(item.actions.contains(.delete))
+            #expect(item.actions == [.copy, .play, .shareFile, .removeRecording, .delete])
             #expect(item.isEditable)
         case .needsYou:
             // Retry. The recording is kept.
