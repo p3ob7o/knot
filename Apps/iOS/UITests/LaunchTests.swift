@@ -18,13 +18,17 @@ final class KnotIOSLaunchTests: XCTestCase {
         let app = KnotLauncher.launch(.preview)
 
         let field = captureField(in: app)
-        XCTAssertTrue(field.waitForExistence(timeout: limit), "The capture surface is on screen at launch.")
-        try app.auditAccessibility()
+        assertCaptureIsReady(in: app)
+        let firstScreen = XCTAttachment(screenshot: app.screenshot())
+        firstScreen.name = "Launch capture"
+        firstScreen.lifetime = .keepAlways
+        add(firstScreen)
 
         // No tap: the field has the keyboard's focus when the surface appears
         // (docs/product-spec.md §4.1), so the keystrokes reach it as they are.
         app.typeText(line)
         XCTAssertEqual(field.value as? String, line)
+        try app.auditAccessibility()
 
         // The stream is one step away. Leaving the surface ends the capture, and the stream
         // shows the line.
@@ -55,10 +59,10 @@ final class KnotIOSLaunchTests: XCTestCase {
         app.launch()
 
         let field = captureField(in: app)
-        XCTAssertTrue(field.waitForExistence(timeout: limit), "The capture surface is on screen at launch.")
-        try app.auditAccessibility()
+        assertCaptureIsReady(in: app)
         app.typeText(line)
         XCTAssertEqual(field.value as? String, line)
+        try app.auditAccessibility()
 
         XCUIDevice.shared.press(.home)
         app.activate()
@@ -194,6 +198,13 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     private func captureField(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["Capture field"]
+    }
+
+    @MainActor
+    private func assertCaptureIsReady(in app: XCUIApplication) {
+        XCTAssertTrue(captureField(in: app).waitForExistence(timeout: limit))
+        XCTAssertTrue(app.buttons["shell.notes"].exists)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: limit))
     }
 
     @MainActor

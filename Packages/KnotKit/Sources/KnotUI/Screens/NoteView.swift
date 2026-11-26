@@ -29,6 +29,8 @@
         private let initialFocus: InitialFocus
         private let shareSegment: ((SegmentID) -> Void)?
 
+        private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
+
         public init(
             model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus = .capture,
             shareSegment: ((SegmentID) -> Void)? = nil
@@ -49,12 +51,22 @@
                 .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: model.items)
             }
             #if os(iOS)
+                .defaultFocus($fieldFocused, initialFocus == .capture, priority: .userInitiated)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { done }
-                    if fieldFocused {
-                        ToolbarItemGroup(placement: .keyboard) { captureActions }
-                    } else {
-                        ToolbarItemGroup(placement: .bottomBar) { captureActions }
+                    if !showsLiveControls {
+                        if fieldFocused {
+                            ToolbarItemGroup(placement: .keyboard) { captureActions }
+                        } else {
+                            ToolbarItemGroup(placement: .bottomBar) { captureActions }
+                        }
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // The timer can grow here. A toolbar item constrains its Dynamic Type size.
+                    if showsLiveControls {
+                        HStack { captureActions }
+                        .padding(theme.spacing.surfaceMargin)
                     }
                 }
             #else
@@ -194,7 +206,7 @@
         private func recordControl(elapsed: Duration?) -> some View {
             HStack(spacing: theme.spacing.regular) {
                 if let elapsed {
-                    Text(ClockText.of(elapsed))
+                    elapsedText(elapsed)
                         .font(theme.type[.body])
                         .foregroundStyle(theme.colors[.textPrimary])
                         .monospacedDigit()
@@ -211,6 +223,17 @@
                     model.toggleRecording()
                 }
             }
+        }
+
+        private func elapsedText(_ elapsed: Duration) -> Text {
+            #if os(iOS)
+                if model.recording.isRecording {
+                    let value = elapsed.components
+                    let seconds = Double(value.seconds) + Double(value.attoseconds) / 1e18
+                    return Text(Date.now.addingTimeInterval(-seconds), style: .timer)
+                }
+            #endif
+            return Text(ClockText.of(elapsed))
         }
 
         @ViewBuilder private var banners: some View {

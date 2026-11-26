@@ -150,6 +150,10 @@ public struct SegmentView: View {
                         actionButtons
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            #if os(iOS)
+                                .padding(theme.spacing.loose)
+                                .contentShape(.rect)
+                            #endif
                     }
                     .menuStyle(.button)
                     .buttonStyle(.plain)

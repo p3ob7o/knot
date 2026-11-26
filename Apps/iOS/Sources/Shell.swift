@@ -271,6 +271,7 @@ struct ShellView: View {
                 }
             }
         }
+        .opacity(shell.presentsCaptureAtLaunch ? 0 : 1)
         .sheet(item: $shell.sheet) { sheet in
             switch sheet {
             case .capture:

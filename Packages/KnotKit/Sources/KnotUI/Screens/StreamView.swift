@@ -41,11 +41,20 @@
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Text("Show", bundle: .module)
+                                    #if os(iOS)
+                                        .foregroundStyle(theme.colors[.textPrimary])
+                                        .padding(theme.spacing.loose)
+                                        .contentShape(.rect)
+                                    #endif
                             }
                             Button {
                                 stream.dismissArrivalNotice()
                             } label: {
                                 Image(systemName: "xmark")
+                                    #if os(iOS)
+                                        .padding(theme.spacing.loose)
+                                        .contentShape(.rect)
+                                    #endif
                             }
                             .accessibilityLabel(Text("Dismiss", bundle: .module))
                         }
