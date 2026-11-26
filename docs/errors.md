@@ -804,7 +804,7 @@ A job was found running at launch twice. The process died inside it each time.
 
 ### `illegal_transition`
 
-A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed.
+A state machine was asked for a transition it does not have, or the store for a change its rules do not allow: `replaceText` with the typed origin, which only a capture's own saves write, a transcription run whose resume point is not after its start, or `setPeaks` on a segment that is not a voice segment, or that has no recording, none yet or one removed, or `setRecordingEnding` on a segment that is not a voice segment or whose capture is open.
 
 - Class: failure
 - Next: report_problem
