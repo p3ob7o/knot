@@ -3,9 +3,10 @@
 # their Info.plists, and the fakes and debug launch arguments in its Mach-O files. Source it
 # after common.sh.
 
-# The value of a key of a plist, or nothing.
+# The value of a key of a plist, or nothing, also when the plist is not there: PlistBuddy would
+# print its own message, "File Doesn't Exist, Will Create", as if it were the value.
 #   knot_plist <plist> <key, as PlistBuddy takes it>
-knot_plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
+knot_plist() { [[ -f $1 ]] || return 0; /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
 
 # The Info.plist of a bundle: Contents/Info.plist for a Mac bundle, Info.plist otherwise.
 knot_info_of() { if [[ -f $1/Contents/Info.plist ]]; then echo "$1/Contents/Info.plist"; else echo "$1/Info.plist"; fi; }
@@ -57,6 +58,8 @@ knot_scan_binaries() {
         case $part in *.app | *.appex | *.framework) ;; *) continue ;; esac
         info="$(knot_info_of "$base/$part")"
         executable="$(knot_plist "$info" CFBundleExecutable)"
+        # A framework that carries no Info.plist names its executable after itself.
+        [[ -n $executable || $part != *.framework || -f $info ]] || executable="$(basename "$part" .framework)"
         f="$base/$part/$executable"
         [[ -f $base/$part/Contents/Info.plist ]] && f="$base/$part/Contents/MacOS/$executable"
         if [[ -z $executable || ! -f $f ]]; then

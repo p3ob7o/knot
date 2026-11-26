@@ -3129,6 +3129,8 @@ for part in sorted(parts, key=lambda p: -p.count("/")):
         permits["get-task-allow"] = True
     if "not-allowed" in broken and part.endswith("Widgets-iOS.appex"):
         del permits["beta-reports-active"]
+    if "value-not-allowed" in broken and part.endswith("Widgets-watchOS.appex"):
+        permits["com.apple.security.application-groups"] = ["group.com.p3ob7o.other"]
     profile = {"Name": "Synthetic App Store", "TeamIdentifier": [team], "Entitlements": permits}
     if "devices" in broken and part.endswith("Widgets-iOS.appex"):
         profile["ProvisionedDevices"] = []
@@ -3436,7 +3438,7 @@ rl_export_fail="$(rl_run export-fail "${rl_key[@]}" KNOT_RL_EXPORT_FAIL=1 -- M2 
 rl_export_fail_run="$rl/tree/.build/release/$(rl_folder export-fail)"
 rl_tampered="$(rl_run tamper "${rl_key[@]}" KNOT_RL_TAMPER=1 -- M2 --commit "$rl_head" --build-number 7 --upload)"
 rl_verdicts="$rl_verdicts validate $rl_validate/$(rl_calls validate 'altool --validate-app')/$(rl_calls validate 'altool --upload-package')/$(rl_clean validate) upload $rl_upload/$(rl_calls upload 'altool --upload-package')/$(rl_clean upload) upload-fail $rl_upload_fail/$(rl_calls upload-fail 'altool --upload-package')/$(rl_clean upload-fail) validate-fail $rl_validate_fail/$(rl_calls validate-fail 'altool --upload-package')/$(rl_clean validate-fail) export-fail $rl_export_fail/$(rl_calls export-fail altool)/$(rl_clean export-fail) tamper $rl_tampered/$(rl_calls tamper 'altool --upload-package')"
-rl_e1="push,container-environment,container,group,get-task-allow,devices,not-allowed,team,tampered"
+rl_e1="push,container-environment,container,group,get-task-allow,devices,not-allowed,value-not-allowed,team,tampered"
 rl_e2="unreadable-profile,unsigned"
 rl_export_cases="$rl_e1|signatures: Knot.app: aps-environment development, not production
 $rl_e1|signatures: Knot.app: iCloud container environment Development, not Production
@@ -3445,6 +3447,7 @@ $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: app groups group.com.exam
 $rl_e1|signatures: Knot.app/Watch/Knot.app: get-task-allow
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: its provisioning profile has a device list
 $rl_e1|signatures: Knot.app/PlugIns/Widgets-iOS.appex: it is signed with beta-reports-active, which its provisioning profile does not allow
+$rl_e1|signatures: Knot.app/Watch/Knot.app/PlugIns/Widgets-watchOS.appex: it is signed with com.apple.security.application-groups ["group.com.p3ob7o.knot"], which its provisioning profile does not allow
 $rl_e1|signatures: Knot.app/Watch/Knot.app: its application identifier is not its profile's team and its bundle ID
 $rl_e1|signatures: Knot.app/Watch/Knot.app: codesign --verify --strict failed on it
 $rl_e2|signatures: Knot.app/Watch/Knot.app: no provisioning profile that security can read
