@@ -101,7 +101,7 @@ import Testing
         let duration: Duration = discard ? .seconds(3) : .seconds(1)
         let expected: RecordingOutcome = discard ? .discarded : .saved
         try #require(await eventually("the outcome to schedule its expiry") { timer.deadline != nil })
-        #expect(timer.deadline == .seconds(1) + duration)
+        try #require(timer.deadline == .seconds(1) + duration)
         #expect(model.recordingOutcome == expected)
         timer.advance(by: duration - .milliseconds(50))
         #expect(model.recordingOutcome == expected)

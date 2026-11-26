@@ -172,7 +172,8 @@ import Testing
 }
 
 @MainActor
-@Test func aCaptureEndedByAnotherSurfaceLeavesOnlyUnsavedTextInTheField() async throws {
+@Test(arguments: [("first and more", " and more"), ("rewritten entirely", "rewritten entirely")])
+func aCaptureEndedByAnotherSurfaceLeavesOnlyUnsavedTextInTheField(draft: String, remainder: String) async throws {
     let rig = await PreviewRig.make()
     defer { rig.remove() }
     let engine = rig.environment.engine
@@ -185,20 +186,20 @@ import Testing
     let id = try #require(model.typedCapture)
 
     flaky.failUpdates(true)
-    model.fieldChanged("first and more")
+    model.fieldChanged(draft)
     await settled(model)
     let other = try await engine.begin(CaptureRequest(kind: .typed, surface: .macWindow, text: "on the other surface"))
     _ = try await engine.end(other.captureID)
     #expect(await eventually("the earlier field to receive its terminal state") { model.typedCapture == nil })
-    #expect(model.fieldText == " and more")
+    #expect(model.fieldText == remainder)
     #expect(try await environment.notes.segment(SegmentID(id))?.text == "first")
 
     flaky.failUpdates(false)
-    model.fieldChanged(" and more.")
+    model.fieldChanged(remainder + ".")
     await settled(model)
     let next = try #require(model.typedCapture)
     #expect(next != id)
     model.endCapture()
     await settled(model)
-    #expect(try await environment.notes.segment(SegmentID(next))?.text == " and more.")
+    #expect(try await environment.notes.segment(SegmentID(next))?.text == remainder + ".")
 }
