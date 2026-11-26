@@ -13,6 +13,8 @@
         @Environment(\.knotTheme) private var theme
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.openURL) private var openURL
+        @Environment(\.calendar) private var calendar
+        @Environment(\.locale) private var locale
         @FocusState private var fieldFocused: Bool
         let model: NoteViewModel
         let player: PlayerViewModel
@@ -80,6 +82,15 @@
             .task { await player.observe() }
         }
 
+        // Use .appendCaption once the WP-40 theme merges.
+        private var appendCaptionRole: TypeRole {
+            #if os(macOS)
+                .rowPreview
+            #else
+                .caption
+            #endif
+        }
+
         @ViewBuilder private var page: some View {
             if model.mode == .capture {
                 let current = model.activeRecording.map(SegmentID.init)
@@ -88,10 +99,10 @@
                 if let note = model.record?.note, !earlier.isEmpty {
                     VStack(alignment: .leading, spacing: theme.spacing.tight) {
                         Text(
-                            "Adding to the note from \(note.createdAt.formatted(date: .omitted, time: .shortened))",
+                            "Adding to the note from \(appendCaptionTime(note.createdAt, calendar: calendar, locale: locale))",
                             bundle: .module
                         )
-                        .font(theme.type[model.surface == .macPanel ? .rowPreview : .caption])
+                        .font(theme.type[appendCaptionRole])
                         if model.surface != .macPanel {
                             ForEach(earlier) { item in
                                 let text = model.displayedText(of: item)
