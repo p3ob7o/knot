@@ -104,20 +104,20 @@
             }
         }
     }
+
+    /// The status below the iCloud sync toggle.
+    public struct SettingsSyncStatusView: View {
+        @Environment(\.knotTheme) private var theme
+        let state: SettingsSyncState
+
+        public init(_ state: SettingsSyncState) {
+            self.state = state
+        }
+
+        public var body: some View {
+            Text(state.label)
+                .font(theme.type[.caption])
+                .foregroundStyle(theme.colors[.textSecondary])
+        }
+    }
 #endif
-
-/// The status below the iCloud sync toggle.
-public struct SettingsSyncStatusView: View {
-    @Environment(\.knotTheme) private var theme
-    let state: SettingsSyncState
-
-    public init(_ state: SettingsSyncState) {
-        self.state = state
-    }
-
-    public var body: some View {
-        Text(state.label)
-            .font(theme.type[.caption])
-            .foregroundStyle(theme.colors[.textSecondary])
-    }
-}

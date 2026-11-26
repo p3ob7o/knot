@@ -661,6 +661,8 @@ public final class NoteViewModel {
         }
     }
 
+    public func canKeepEdit(_ target: EditConflict.Target) -> Bool { conflictBases[target] != nil }
+
     /// Commits the kept draft of `target` over what arrived.
     public func keepMyEdit(_ target: EditConflict.Target) {
         guard let conflict = editConflicts[target] else { return }

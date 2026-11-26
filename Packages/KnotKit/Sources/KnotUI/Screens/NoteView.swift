@@ -61,7 +61,6 @@
                         }
                         newNote
                         Spacer()
-                        done
                         recordingControls
                     }
                     .padding(theme.spacing.surfaceMargin)
@@ -82,29 +81,28 @@
         }
 
         @ViewBuilder private var page: some View {
-            if model.mode == .capture, let note = model.record?.note {
-                VStack(alignment: .leading, spacing: theme.spacing.tight) {
-                    Text(
-                        "Adding to the note from \(note.createdAt.formatted(date: .omitted, time: .shortened))",
-                        bundle: .module
-                    )
-                    .font(theme.type[model.surface == .macPanel ? .rowPreview : .caption])
-                    if model.surface != .macPanel {
-                        ForEach(model.items) { item in
-                            if item.id == model.lastRecording.map(SegmentID.init) {
-                                segment(item)
-                            } else if item.id != model.activeRecording.map(SegmentID.init) {
+            if model.mode == .capture {
+                let current = model.activeRecording.map(SegmentID.init)
+                let justSaved = model.lastRecording.map(SegmentID.init)
+                let earlier = model.items.filter { $0.id != current && $0.id != justSaved }
+                if let note = model.record?.note, !earlier.isEmpty {
+                    VStack(alignment: .leading, spacing: theme.spacing.tight) {
+                        Text(
+                            "Adding to the note from \(note.createdAt.formatted(date: .omitted, time: .shortened))",
+                            bundle: .module
+                        )
+                        .font(theme.type[model.surface == .macPanel ? .rowPreview : .caption])
+                        if model.surface != .macPanel {
+                            ForEach(earlier) { item in
                                 let text = model.displayedText(of: item)
                                 Text(text.isEmpty ? item.kind.holding(duration: item.duration) : text)
                                     .font(theme.type[.body])
                             }
                         }
                     }
+                    .foregroundStyle(theme.colors[.textSecondary])
                 }
-                .foregroundStyle(theme.colors[.textSecondary])
-                if model.surface == .macPanel, let last = model.lastRecording,
-                    let item = model.items.first(where: { $0.id == SegmentID(last) })
-                {
+                if let item = model.items.first(where: { $0.id == justSaved }) {
                     segment(item)
                 }
             } else {
@@ -156,7 +154,9 @@
                     } icon: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .labelStyle(.iconOnly)
+                    #if os(iOS)
+                        .labelStyle(.iconOnly)
+                    #endif
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }
@@ -249,12 +249,13 @@
             // Each conflict keeps its own draft until the person decides it. How this looks is
             // the design round's.
             ForEach(Array(model.editConflicts.values), id: \.target) { conflict in
-                Banner(conflict.message, symbol: "arrow.triangle.2.circlepath", role: .failed) {
+                Banner(conflictMessage(conflict), symbol: "arrow.triangle.2.circlepath", role: .failed) {
                     Button {
                         model.keepMyEdit(conflict.target)
                     } label: {
                         Text("Keep mine", bundle: .module)
                     }
+                    .disabled(!model.canKeepEdit(conflict.target))
                     Button {
                         model.dropMyEdit(conflict.target)
                     } label: {
@@ -274,6 +275,12 @@
                     .keyboardShortcut("z", modifiers: .command)
                 }
             }
+        }
+
+        private func conflictMessage(_ conflict: EditConflict) -> String {
+            guard let arrived = conflict.arrived, !arrived.isEmpty else { return conflict.message }
+            let comparison = String(localized: "Changed to: \(arrived)", bundle: .module)
+            return "\(conflict.message)\n\(comparison)"
         }
 
         private func segment(_ item: SegmentItem) -> some View {

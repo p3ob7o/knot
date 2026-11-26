@@ -160,3 +160,4 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-21 PR 2 | Account or zone changes, export outcomes, a shortcut already taken and model downloading | The matrix previews pair inline notices or a system progress view with the settings or first-run controls. |
 | 2026-11-26 | WP-21 PR 2 | The recording destination, low storage and a dimmed Watch screen | The matrix previews show the shared controls with a text-only destination and storage notice, and dim the live example. |
 | 2026-11-26 | WP-21 PR 2 | Note title editing and the largest-text or compact column examples | The matrix previews use a plain title field, system accessibility text sizing and the shared capture column at compact width. |
+| 2026-11-26 | WP-21 PR 2 | What a conflict shows before “Keep mine” | The notice shows the changed text that the conditional write would replace. |

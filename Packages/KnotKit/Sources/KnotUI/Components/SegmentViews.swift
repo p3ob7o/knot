@@ -72,10 +72,9 @@ public struct SegmentView: View {
                     beginEdit: handlers.beginEdit, endEdit: handlers.endEdit)
             case .ink:
                 if let drawing {
-                    Image(decorative: drawing, scale: displayScale)
+                    Image(drawing, scale: displayScale, label: Text("Sketch", bundle: .module))
                         .resizable()
                         .scaledToFit()
-                        .accessibilityLabel(Text("Sketch", bundle: .module))
                 } else {
                     InkSegmentPlaceholder(item: item)
                 }
