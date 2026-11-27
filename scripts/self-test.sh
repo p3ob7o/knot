@@ -3470,10 +3470,13 @@ rl_env() { # rl_env <name>: the environment of a run, as the stand-ins need it
     printf '%s\n' "KNOT_RL_RECORD=$rl/$1.record" "KNOT_RL_MAKE=$rl/make-archive.py" \
         "KNOT_RL_EXPORT=$rl/export.py" "KNOT_RL_FIXTURES=$rl/fx" "KNOT_RL_TEAM=$rl_team" "KNOT_RL_XCODE_BUILD=$KNOT_XCODE_BUILD"
 }
-# What no run inherits from the self-test: its tree, a key, a stand-in or a toolchain.
+# What no run inherits from the self-test: its tree, a key, a stand-in or a toolchain, and the
+# team's configuration that a gate names for its team-ID check. With KNOT_TEAM_CONFIG left set,
+# the filter masks the owner's team and not the made-up one of this case's tree, which then shows
+# in every run that reads a signature.
 rl_unset=(-u KNOT_LOCAL_CONFIG -u KNOT_TREE -u KNOT_TREE_SET_BY -u KNOT_TREE_EXPORTED -u KNOT_ASC_KEY_PATH -u KNOT_ASC_KEY_ID
     -u KNOT_ASC_ISSUER_ID -u KNOT_XCODEGEN -u KNOT_SLOT_DIR -u KNOT_LSREGISTER -u KNOT_XCODE -u TOOLCHAINS -u KNOT_FAIL_LOG
-    -u KNOT_BUILD_FOLDER)
+    -u KNOT_BUILD_FOLDER -u KNOT_TEAM_CONFIG)
 rl_run() { # rl_run <name> [NAME=value…] -- <arguments…>: runs release.sh with a fresh record; prints its status
     local name=$1 status=0 settings=() entry
     shift
