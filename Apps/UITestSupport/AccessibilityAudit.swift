@@ -267,12 +267,12 @@ extension XCUIApplication {
         launch()
     }
 
-    /// Runs every audit type on the current screen. Each issue fails the test, unless the lists
+    /// Runs the selected audit types on the current screen. Each issue fails the test, unless the lists
     /// above exclude it, and the failure names the element: its kind, its identifier, its label
     /// and its frame. Every UI smoke test calls it after its launch: the named test
     /// `accessibility-audit-in-every-ui-smoke-test`.
     @MainActor
-    func auditAccessibility() throws {
+    func auditAccessibility(types: XCUIAccessibilityAuditType = .all) throws {
         for exclusion in AccessibilityAudit.malformed(AccessibilityAudit.exclusions) {
             XCTFail(
                 "An accessibility audit exclusion must name its element and give its reason: "
@@ -283,7 +283,7 @@ extension XCUIApplication {
         #else
             let structural = AccessibilityAudit.structuralExclusions
         #endif
-        try performAccessibilityAudit(for: .all) { issue in
+        try performAccessibilityAudit(for: types) { issue in
             let element = issue.element.map { self.auditedElement($0) }
             if AccessibilityAudit.isExcluded(issue.auditType, on: element, structural: structural) { return true }
             XCTFail(

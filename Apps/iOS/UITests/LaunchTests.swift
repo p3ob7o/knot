@@ -323,7 +323,11 @@ final class KnotIOSLaunchTests: XCTestCase {
         variant.tap()
         let unitedKingdom = app.descendants(matching: .any).matching(identifier: "UK").firstMatch
         XCTAssertTrue(unitedKingdom.waitForExistence(timeout: limit))
-        try XCTContext.runActivity(named: "Audit English variant choices") { _ in try app.auditAccessibility() }
+        try XCTContext.runActivity(named: "Audit English variant choices") { _ in
+            // The native menu covers part of the Settings controls. The settled form's audits
+            // measure their contrast without the menu over them.
+            try app.auditAccessibility(types: .all.subtracting(.contrast))
+        }
         if !unitedKingdom.exists {
             variant.tap()
             XCTAssertTrue(
