@@ -31,7 +31,7 @@ public struct StreamRowView: View {
         let time = compactStreamTime(row.time, now: .now, calendar: calendar, locale: locale)
         VStack(alignment: .leading, spacing: theme.spacing.tight) {
             HStack(alignment: .firstTextBaseline, spacing: theme.spacing.regular) {
-                if size == .regular, parts.contains(.arrivedMarker) { ArrivedMarker() }
+                if parts.contains(.arrivedMarker) { ArrivedMarker() }
                 // The title is never clipped, at any text size: the row grows to hold it.
                 Text(row.title)
                     .font(theme.type[.rowTitle])
@@ -78,7 +78,6 @@ public struct StreamRowView: View {
             if size != .regular {
                 if parts.contains(.failedMarker) { FailedMarker() }
                 if parts.contains(.pendingMarker) { PendingMarker() }
-                if parts.contains(.arrivedMarker) { ArrivedMarker() }
             }
         }
     }

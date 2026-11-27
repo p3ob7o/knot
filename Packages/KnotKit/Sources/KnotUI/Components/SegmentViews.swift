@@ -115,7 +115,6 @@ public struct SegmentView: View {
                     endEdit: handlers.endEdit, editingChanged: handlers.editingChanged)
             }
             stateLine
-            if let mark = item.originMark { OriginMarkView(mark) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
@@ -157,34 +156,24 @@ public struct SegmentView: View {
     private var stateLine: some View {
         VStack(alignment: .leading, spacing: theme.spacing.space1) {
             if item.hasArrived { ArrivedMarker() }
-            if item.kind == .voice, item.attachment == .missing {
-                Label {
-                    Text("Recording missing", bundle: .module)
-                } icon: {
-                    Image(systemName: "waveform.slash")
-                }
-                .font(theme.type[.stateLine])
-                .foregroundStyle(theme.colors[.textSecondary])
-            }
-            if item.kind == .ink, item.state == .savedTextOnItsWay {
-                Text("Recognising handwriting…", bundle: .module)
-                    .font(theme.type[.stateLine])
-                    .foregroundStyle(theme.colors[.textSecondary])
+            if let attachmentNotice, item.state != .needsYou {
+                attachmentStatus(attachmentNotice.title, symbol: attachmentNotice.symbol)
             } else if drawingUnreadable {
                 SegmentStateLabel(.keptNoText)
             } else if item.state != .ready {
-                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
-                    SegmentStateLabel(item.state, label: item.stateLabel)
-                    #if os(iOS)
+                #if os(iOS)
+                    NoticeLayout(horizontalGap: theme.spacing.space2, verticalGap: theme.spacing.space1) {
+                        SegmentStateLabel(item.state, label: item.stateLabel)
                         if availableActions.contains(.retry) {
                             Button(actionLabel(.retry)) { perform(.retry) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .tint(theme.colors[.textPrimary])
+                                .modifier(NoticeActionStyle())
                         }
-                    #endif
-                }
+                    }
+                #else
+                    SegmentStateLabel(item.state, label: item.stateLabel)
+                #endif
             }
+            if let mark = item.originMark { OriginMarkView(mark) }
             if item.isConflictCopy {
                 Label {
                     Text("Edited on another device at the same time", bundle: .module)
@@ -195,6 +184,28 @@ public struct SegmentView: View {
                 .foregroundStyle(theme.colors[.quietMark])
             }
         }
+    }
+
+    private var attachmentNotice: (title: LocalizedStringKey, symbol: String)? {
+        guard item.kind == .voice else { return nil }
+        switch item.attachment {
+        case .onAnotherDevice:
+            return ("Downloading recording…", "icloud.and.arrow.down")
+        case .missing:
+            return ("Recording missing", "waveform.slash")
+        case .here, .none:
+            return nil
+        }
+    }
+
+    private func attachmentStatus(_ title: LocalizedStringKey, symbol: String) -> some View {
+        Label {
+            Text(title, bundle: .module)
+        } icon: {
+            Image(systemName: symbol)
+        }
+        .font(theme.type[.stateLine])
+        .foregroundStyle(theme.colors[.textSecondary])
     }
 
     private var showsActionMenu: Bool {
@@ -354,27 +365,9 @@ struct VoiceSegmentBody: View {
                     }
                 #endif
             }
-        case .onAnotherDevice(let asset):
-            if asset.availability == .downloading {
-                notice(Text("Downloading recording…", bundle: .module), symbol: "icloud.and.arrow.down")
-            } else {
-                notice(
-                    Text("The recording downloads when this note opens.", bundle: .module),
-                    symbol: "icloud.and.arrow.down")
-            }
-        case .missing, .none:
+        case .onAnotherDevice, .missing, .none:
             EmptyView()
         }
-    }
-
-    private func notice(_ text: Text, symbol: String) -> some View {
-        Label {
-            text
-        } icon: {
-            Image(systemName: symbol)
-        }
-        .font(theme.type[.caption])
-        .foregroundStyle(theme.colors[.textSecondary])
     }
 }
 

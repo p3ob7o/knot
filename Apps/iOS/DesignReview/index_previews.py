@@ -20,7 +20,7 @@ DRAWINGS = {
     "Stream, notes could not be opened": "system/components/Notice/preview.html",
     "Note, mixed segments": "system/components/Segment/preview.html",
     "Voice segment, each of its six states": "system/components/VoiceStates/preview.html",
-    "Segment from the command line; from a newer Knot": "screens/States.dc.html",
+    "Segment from the command line; from a newer Knot": "system/components/Segment/preview.html",
     "Delete with undo; share": "system/components/SegmentMenu/preview.html",
 }
 
@@ -84,8 +84,9 @@ def write_index(catalog, output, repo):
     lines = [
         "# WP-40a iPhone preview renders",
         "",
-        "The standalone host renders the keyboard-up capture cells (empty, typing, adding,",
-        "and capture inside an older note) without the app's native keyboard accessory bar.",
+        "The note menu, segment menu and share sheet are system presentations that the previews cannot open.",
+        "",
+        "The matrix's phone-sized iPad cell, “Two columns do not fit; keyboard up”, is a stand-in until WP-40b.",
         "",
         "The stopped-at-the-limit cell is a dismissible stand-in until WP-21 wires the engine reason.",
         "",
@@ -109,6 +110,14 @@ def write_index(catalog, output, repo):
             if not (output / filename).is_file():
                 raise FileNotFoundError(filename)
             lines.append(f"| [{filename}]({filename}) | {name} | {handoff} |")
+    keyboard_proofs = [
+        ("capture-keyboard-controls-live-light-default.png", "Default text size"),
+        ("capture-keyboard-controls-live-light-ax5.png", "Largest accessibility text size"),
+    ]
+    present = [(filename, size) for filename, size in keyboard_proofs if (output / filename).is_file()]
+    if present:
+        lines.extend(["", "## Capture controls in the running iPhone app", ""])
+        lines.extend(f"- [{size}]({filename})" for filename, size in present)
     lines.extend(["", "## Coverage recorded in the handoff check", ""])
     for cell, (status, paths) in coverage.items():
         evidence = ", ".join(f"`{HANDOFF / path}`" for path in paths)

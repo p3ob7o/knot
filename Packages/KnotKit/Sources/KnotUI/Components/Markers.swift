@@ -84,7 +84,7 @@ public struct SegmentStateLabel: View {
                         .accessibilityHidden(true)
                 }
                 Text(label)
-                    .foregroundStyle(theme.colors[.textSecondary])
+                    .foregroundStyle(theme.colors[state == .needsYou ? .attention : .textSecondary])
             }
             .font(theme.type[state == .needsYou ? .emphasizedStateLine : .stateLine])
             .accessibilityElement(children: .combine)

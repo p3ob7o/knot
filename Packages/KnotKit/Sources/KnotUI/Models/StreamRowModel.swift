@@ -104,7 +104,7 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
     }
 
     /// The parts the row shows at `size`. At large text sizes the preview gives way.
-    /// The title or first line, time, kinds and state marks stay
+    /// Then the kinds give way at the largest sizes. The title, time and failed mark stay
     /// (docs/product-spec.md §7).
     public func visibleParts(at size: RowTextSize) -> Set<RowPart> {
         var parts: Set<RowPart> = [.title, .time]
@@ -114,7 +114,7 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             parts.insert(.pendingMarker)
         }
         if hasArrived { parts.insert(.arrivedMarker) }
-        if !kinds.isEmpty { parts.insert(.kinds) }
+        if size < .largest, !kinds.isEmpty { parts.insert(.kinds) }
         if size < .large, preview != nil { parts.insert(.preview) }
         return parts
     }

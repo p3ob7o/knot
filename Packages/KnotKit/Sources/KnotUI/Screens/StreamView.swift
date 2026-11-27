@@ -38,7 +38,9 @@
                             .listRowSeparator(.hidden)
                     }
                     if let arrival = stream.arrival {
-                        Banner(arrival.message, symbol: "tray.and.arrow.down", role: .textPrimary) {
+                        Banner(
+                            arrival.message, symbol: "tray.and.arrow.down", dismiss: stream.dismissArrivalNotice
+                        ) {
                             Button {
                                 if let first = arrival.notes.first { open(first) }
                                 stream.dismissArrivalNotice()
@@ -49,26 +51,25 @@
                                     #endif
                             }
                             .modifier(NoticeActionStyle())
-                            Button {
-                                stream.dismissArrivalNotice()
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(theme.type[.stateLine])
-                                    .imageScale(.small)
-                                    .foregroundStyle(theme.colors[.textSecondary])
-                                    #if os(iOS)
-                                        .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
-                                        .contentShape(.rect)
-                                    #endif
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(Text("Dismiss", bundle: .module))
+
                         }
                         .listRowSeparator(.hidden)
                     }
                 }
                 if let results = search.results {
-                    ForEach(results) { row in rowButton(row) }
+                    if let query = search.emptyResultsQuery, !showsInlineSearch {
+                        ContentUnavailableView {
+                            Label {
+                                Text("No Results for “\(query)”", bundle: .module)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } icon: {
+                                Image(systemName: "magnifyingglass")
+                            }
+                        }
+                        .listRowSeparator(.hidden)
+                    } else {
+                        ForEach(results) { row in rowButton(row) }
+                    }
                 } else if isRestoring, stream.rows.isEmpty {
                     ProgressView {
                         Text("Syncing notes…", bundle: .module)
@@ -99,23 +100,6 @@
             #if os(iOS)
                 .listStyle(.plain)
             #endif
-            .overlay {
-                if let query = search.emptyResultsQuery, !showsInlineSearch {
-                    GeometryReader { geometry in
-                        ScrollView {
-                            ContentUnavailableView {
-                                Label {
-                                    Text("No Results for “\(query)”", bundle: .module)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                } icon: {
-                                    Image(systemName: "magnifyingglass")
-                                }
-                            }
-                            .frame(minHeight: geometry.size.height)
-                        }
-                    }
-                }
-            }
             .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: stream.rows)
             .task { await stream.load() }
             .task { await stream.observeChanges() }

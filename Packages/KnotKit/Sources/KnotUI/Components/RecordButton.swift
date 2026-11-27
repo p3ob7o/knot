@@ -59,7 +59,7 @@ public struct RecordButton: View {
         } else {
             #if os(iOS)
                 if toolbar {
-                    // The keyboard and bottom toolbars already supply the glass behind the control.
+                    // The bottom toolbar already supplies the glass behind the control.
                     button.foregroundStyle(idleInk)
                 } else {
                     button.buttonStyle(.glass).foregroundStyle(idleInk)

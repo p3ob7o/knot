@@ -9,25 +9,34 @@ public struct Banner<Actions: View>: View {
     let role: ColorRole
     let open: (() -> Void)?
     let openAccessibilityLabel: String?
+    let dismiss: (() -> Void)?
     let actions: Actions
 
     public init(
         _ message: String, symbol: String, role: ColorRole = .textPrimary,
-        open: (() -> Void)? = nil, openAccessibilityLabel: String? = nil, @ViewBuilder actions: () -> Actions
+        open: (() -> Void)? = nil, openAccessibilityLabel: String? = nil,
+        dismiss: (() -> Void)? = nil, @ViewBuilder actions: () -> Actions
     ) {
         self.message = message
         self.symbol = symbol
         self.role = role
         self.open = open
         self.openAccessibilityLabel = openAccessibilityLabel
+        self.dismiss = dismiss
         self.actions = actions()
     }
 
     public var body: some View {
         #if os(iOS)
-            NoticeLayout(horizontalGap: theme.spacing.space3, verticalGap: theme.spacing.space2) {
-                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
-                NoticeLayout(horizontalGap: theme.spacing.space2, verticalGap: theme.spacing.space2) { actions }
+            HStack(alignment: .top, spacing: theme.spacing.space3) {
+                glyph.padding(.top, theme.spacing.space1)
+                NoticeLayout(
+                    horizontalGap: theme.spacing.space3, verticalGap: theme.spacing.space2, trailingActions: true
+                ) {
+                    sentence
+                    NoticeLayout(horizontalGap: theme.spacing.space2, verticalGap: theme.spacing.space2) { actions }
+                }
+                close
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, theme.spacing.space4)
@@ -36,8 +45,10 @@ public struct Banner<Actions: View>: View {
             .accessibilityElement(children: .contain)
         #else
             HStack(alignment: .firstTextBaseline, spacing: theme.spacing.regular) {
+                glyph
                 sentence
                 actions
+                close
             }
             .padding(theme.spacing.regular)
             .background(theme.colors[.surface], in: RoundedRectangle(cornerRadius: theme.radii.regular))
@@ -45,10 +56,30 @@ public struct Banner<Actions: View>: View {
         #endif
     }
 
-    @ViewBuilder private var sentence: some View {
+    @ViewBuilder private var close: some View {
+        if let dismiss {
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(theme.type[.stateLine])
+                    .imageScale(.small)
+                    .foregroundStyle(theme.colors[.textSecondary])
+                    #if os(iOS)
+                        .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                        .contentShape(.rect)
+                    #endif
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Dismiss", bundle: .module))
+        }
+    }
+
+    private var glyph: some View {
         Image(systemName: symbol)
             .foregroundStyle(theme.colors[role])
             .accessibilityHidden(true)
+    }
+
+    private var sentence: some View {
         Group {
             if let open {
                 Button(action: open) {
@@ -74,17 +105,19 @@ public struct Banner<Actions: View>: View {
 #if os(iOS)
     /// Measure the same views before choosing a row or column, so Dynamic Type can resize the
     /// existing accessibility elements as the notice changes layout.
-    private struct NoticeLayout: Layout {
+    struct NoticeLayout: Layout {
         let horizontalGap: CGFloat
         let verticalGap: CGFloat
+        var trailingActions = false
 
         func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
             let layout = measure(width: proposal.width, subviews: subviews)
             let sizes = layout.sizes
-            let gaps = CGFloat(max(0, sizes.count - 1))
+            let gaps = CGFloat(max(0, sizes.filter { $0 != .zero }.count - 1))
             if layout.inline {
                 return CGSize(
-                    width: sizes.reduce(0) { $0 + $1.width } + gaps * horizontalGap,
+                    width: trailingActions && proposal.width?.isFinite == true
+                        ? proposal.width ?? 0 : sizes.reduce(0) { $0 + $1.width } + gaps * horizontalGap,
                     height: sizes.map(\.height).max() ?? 0)
             }
             return CGSize(
@@ -95,7 +128,12 @@ public struct Banner<Actions: View>: View {
         func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
             let layout = measure(width: proposal.width, subviews: subviews)
             var offset: CGFloat = 0
-            for (view, size) in zip(subviews, layout.sizes) {
+            for (index, pair) in zip(subviews, layout.sizes).enumerated() {
+                let (view, size) = pair
+                guard size != .zero else { continue }
+                if layout.inline, trailingActions, index == 1 {
+                    offset = bounds.width - size.width
+                }
                 let origin =
                     layout.inline
                     ? CGPoint(x: bounds.minX + offset, y: bounds.midY - size.height / 2)
@@ -107,7 +145,7 @@ public struct Banner<Actions: View>: View {
 
         private func measure(width: CGFloat?, subviews: Subviews) -> (inline: Bool, sizes: [CGSize]) {
             let ideal = subviews.map { $0.sizeThatFits(.unspecified) }
-            let gaps = CGFloat(max(0, ideal.count - 1))
+            let gaps = CGFloat(max(0, ideal.filter { $0 != .zero }.count - 1))
             let total = ideal.reduce(0) { $0 + $1.width } + gaps * horizontalGap
             guard let width, width.isFinite, total > width else { return (true, ideal) }
             let column = ProposedViewSize(width: width, height: nil)
@@ -117,8 +155,8 @@ public struct Banner<Actions: View>: View {
 #endif
 
 extension Banner where Actions == EmptyView {
-    public init(_ message: String, symbol: String, role: ColorRole = .textPrimary) {
-        self.init(message, symbol: symbol, role: role) { EmptyView() }
+    public init(_ message: String, symbol: String, role: ColorRole = .textPrimary, dismiss: (() -> Void)? = nil) {
+        self.init(message, symbol: symbol, role: role, dismiss: dismiss) { EmptyView() }
     }
 }
 
@@ -147,7 +185,6 @@ public struct NoticeActionStyle: ViewModifier {
     /// An undo action sits in its own capsule above the toolbar on iPhone and iPad.
     public struct UndoCapsule: View {
         @Environment(\.knotTheme) private var theme
-        @Environment(\.dynamicTypeSize) private var typeSize
         let offer: UndoOffer
         let undo: () -> Void
 
@@ -157,26 +194,44 @@ public struct NoticeActionStyle: ViewModifier {
         }
 
         public var body: some View {
-            let layout =
-                typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: theme.spacing.space1))
-                : AnyLayout(HStackLayout(spacing: theme.spacing.space3))
-            layout {
-                Label(offer.label, systemImage: "arrow.uturn.backward")
-                    .font(theme.type[.notice])
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(action: undo) {
-                    Text("Undo", bundle: .module)
-                        .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
-                        .contentShape(.rect)
+            ViewThatFits(in: .horizontal) {
+                capsule(cornerRadius: theme.radii.radiusFull) {
+                    HStack(spacing: theme.spacing.space3) {
+                        message.fixedSize(horizontal: true, vertical: false)
+                        undoButton
+                    }
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut("z", modifiers: .command)
+                capsule(cornerRadius: theme.radii.radiusLg) {
+                    VStack(alignment: .leading, spacing: theme.spacing.space1) {
+                        message.fixedSize(horizontal: false, vertical: true)
+                        undoButton
+                    }
+                }
             }
-            .padding(.horizontal, theme.spacing.space4)
-            .foregroundStyle(theme.colors[.textPrimary])
-            .glassEffect(.regular, in: Capsule())
             .padding(.horizontal)
+        }
+
+        private var message: some View {
+            Label(offer.label, systemImage: "arrow.uturn.backward")
+                .font(theme.type[.notice])
+        }
+
+        private var undoButton: some View {
+            Button(action: undo) {
+                Text("Undo", bundle: .module)
+                    .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.bordered)
+            .keyboardShortcut("z", modifiers: .command)
+        }
+
+        private func capsule<Content: View>(cornerRadius: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+            content()
+                .foregroundStyle(theme.colors[.textPrimary])
+                .padding(.horizontal, theme.spacing.space4)
+                .padding(.vertical, theme.spacing.space2)
+                .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         }
     }
 #endif
@@ -203,9 +258,14 @@ public struct FirstRunView: View {
                 Text("No notes yet.", bundle: .module)
                     .font(theme.type[.body])
                 if let line = content.syncLine {
-                    Label(line, systemImage: "icloud")
-                        .font(theme.type[.metaLine])
-                        .foregroundStyle(theme.colors[.textSecondary])
+                    HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
+                        Image(systemName: "icloud")
+                            .frame(width: theme.spacing.space6, alignment: .leading)
+                            .accessibilityHidden(true)
+                        Text(line)
+                    }
+                    .font(theme.type[.metaLine])
+                    .foregroundStyle(theme.colors[.textSecondary])
                 }
             }
             .listRowSeparator(.hidden)
@@ -260,6 +320,7 @@ public struct FirstRunView: View {
                 }
             return HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
                 Image(systemName: icon)
+                    .frame(width: theme.spacing.space6, alignment: .leading)
                     .accessibilityHidden(true)
                 Text(row.title)
                     .lineLimit(nil)

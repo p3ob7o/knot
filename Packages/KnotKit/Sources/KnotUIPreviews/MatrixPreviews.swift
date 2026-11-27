@@ -1,4 +1,5 @@
 #if DEBUG || KNOT_FAKES
+    import KnotCore
     import SwiftUI
 
     // Preview names follow the cells in docs/design/brief.md §6.
@@ -156,13 +157,23 @@
         }
 
         #Preview("iPhone | Sync: off, syncing, error, storage full, no account") {
-            SettingsMatrixPreview(surface: .phone, example: .sync)
+            Group {
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .off)
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .idle(lastSuccess: nil))
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .fetching)
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncFinal.code))
+                SettingsMatrixPreview(
+                    surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncQuotaExceeded.code))
+                SettingsMatrixPreview(
+                    surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncSignedOut.code))
+            }
         }
 
         #Preview("iPhone | Prompts: account changed; notes removed from iCloud") {
             Group {
                 StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .accountChanged)
                 StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .zoneRemoved(.purged))
+                StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .zoneRemoved(.deleted))
             }
         }
 
@@ -212,7 +223,7 @@
         }
 
         #Preview("iPad | Two columns do not fit; keyboard up") {
-            // WP-30 owns the split view. Its compact capture detail uses the iPhone layout.
+            // The phone-sized frame is a stand-in for the compact iPad layout in WP-40b.
             CaptureMatrixPreview(surface: .compactPad, example: .blank)
         }
 

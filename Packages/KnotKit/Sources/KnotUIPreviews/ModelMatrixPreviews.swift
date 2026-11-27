@@ -41,10 +41,23 @@
         @ViewBuilder private func stream(_ loaded: Loaded) -> some View {
             #if os(iOS)
                 if surface == .phone {
-                    StreamView(
-                        stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
-                        isRestoring: example == .restoring, openSetupRow: { _ in }, open: { _ in }
-                    )
+                    Group {
+                        if example == .unavailable {
+                            List {
+                                Banner(
+                                    StoreProblem(KnotError.storeDamaged).message,
+                                    symbol: "exclamationmark.icloud", role: .failed
+                                )
+                                .listRowSeparator(.hidden)
+                            }
+                            .listStyle(.plain)
+                        } else {
+                            StreamView(
+                                stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
+                                isRestoring: example == .restoring, openSetupRow: { _ in }, open: { _ in }
+                            )
+                        }
+                    }
                     .searchable(text: Binding(get: { loaded.search.query }, set: loaded.search.setQuery))
                     .toolbar(removing: .search)
                     .toolbar {
@@ -53,7 +66,6 @@
                     .safeAreaInset(edge: .top) {
                         if let syncQuestion {
                             SyncPresentation(question: syncQuestion) { _ in }
-                                .padding(.horizontal)
                         }
                     }
                 } else {
@@ -72,13 +84,25 @@
         }
 
         func makeModels(in previewRoot: URL = FileManager.default.temporaryDirectory) async throws -> Loaded {
-            let fixture = MatrixFixture(in: previewRoot)
+            let now = Date.now
+            let fixture = MatrixFixture(in: previewRoot, date: now)
             var environment = fixture.environment
             let context = fixture.context
             switch example {
-            case .populated, .search, .largest:
-                _ = try await fixture.typed(
-                    "Call the roofer about the estimate for the northwest corner of the house.")
+            case .populated, .largest:
+                let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now
+                let earlier = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
+                let mixed = try await fixture.typed("Roof repair\nAsk about the estimate.", at: now)
+                _ = try await fixture.recordFile(kind: .voice, note: mixed, at: now.addingTimeInterval(2))
+                _ = try await fixture.typed("Buy stamps and envelopes", at: now.addingTimeInterval(-60))
+                let voice = try await fixture.recordFile(kind: .voice, note: nil, at: yesterday)
+                try await fixture.readyVoice(voice, text: "Book the van. Pick it up before nine.")
+                let drawing = try await fixture.recordFile(kind: .ink, note: nil, at: earlier)
+                _ = try await environment.notes.replaceText(
+                    TextReplacement(segment: drawing, text: "Garden plan", origin: .edited, writer: .app))
+                _ = try await environment.notes.setState(.ink(.ready), of: drawing)
+            case .search:
+                _ = try await fixture.typed("Call the roofer about the estimate.")
                 _ = try await fixture.typed("Buy stamps and envelopes")
             case .noText:
                 _ = try await fixture.recordFile(kind: .voice, note: nil)
@@ -193,8 +217,10 @@
                 note = try await fixture.typed("Ask about the roof estimate.")
             }
             let environment = fixture.environment
+            var context = fixture.context
+            if example == .voiceStates { context.thisDevice = environment.ids.make() }
             let model = NoteViewModel(
-                environment: environment, context: fixture.context, surface: surface.captureSurface, opening: note,
+                environment: environment, context: context, surface: surface.captureSurface, opening: note,
                 announcer: RecordingAnnouncer())
             let player = PlayerViewModel(player: environment.player)
 
@@ -208,9 +234,6 @@
                 let playing = try await fixture.recordFile(kind: .voice, note: note)
                 let removed = try await fixture.recordFile(kind: .voice, note: note)
                 try await fixture.readyVoice(playing, text: "Ask about the estimate.")
-                let levels = PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
-                let peaks = RecordingPeaks.header(framesPerValue: 800) + Data(levels)
-                try await environment.notes.setPeaks(peaks, of: playing)
                 try await fixture.readyVoice(removed, text: "This recording was removed.")
                 await model.refresh()
                 model.toggleOriginal(playing)
@@ -258,11 +281,11 @@
 
         private func seedVoiceStates(in note: NoteID, fixture: MatrixFixture) async throws {
             let notes = fixture.environment.notes
-            if voiceState == nil || voiceState == .savedOnWatch {
-                let watch = try await fixture.recordFile(kind: .voice, note: note)
-                _ = try await notes.setState(.voice(.onWatch), of: watch)
-            }
             if voiceState == nil || voiceState == .savedTextOnItsWay {
+                let delivered = try await fixture.recordFile(kind: .voice, note: note)
+                _ = try await notes.setState(.voice(.delivered), of: delivered)
+            }
+            if voiceState == nil || voiceState == .savedTextBeingMadeElsewhere {
                 _ = try await fixture.recordFile(kind: .voice, note: note)
             }
             if voiceState == nil || voiceState == .ready {
@@ -306,16 +329,18 @@
                     startedAt: later, endedAt: later, textOrigin: newer.textOrigin, state: .unknown("preview.newer"))
                 segments.append(unreadable)
             } else if example == .voiceStates {
-                // The store needs a live capture in the note before a named append can join it.
-                if voiceState == nil || voiceState == .savedTextBeingMadeElsewhere {
-                    var elsewhere = try Build.voice(
-                        ids.make(), in: note, from: date, transcript: "", device: ids.make())
-                    elsewhere.state = .voice(.recorded)
-                    segments.append(elsewhere)
+                if voiceState == nil || voiceState == .savedOnWatch {
+                    let start = date.addingTimeInterval(3)
+                    let watch = try Segment(
+                        id: ids.make(), noteID: note, kind: .voice, origin: .device(ids.make()),
+                        startedAt: start, endedAt: start.addingTimeInterval(1), textOrigin: .rawTranscript,
+                        state: .voice(.onWatch))
+                    segments.append(watch)
                 }
             } else if example == .attachments {
                 var missing = try Build.voice(
-                    ids.make(), in: note, from: date, transcript: "Audio unavailable.", device: base.context.thisDevice)
+                    ids.make(), in: note, from: date.addingTimeInterval(3), transcript: "Audio unavailable.",
+                    device: base.context.thisDevice)
                 missing.assetID = ids.make()
                 segments.append(missing)
             }
@@ -328,7 +353,7 @@
             let record = NoteRecord(
                 note: Build.note(note, at: date, title: title, titleOrigin: titleOrigin),
                 segments: segments, storeID: ids.make(), generation: 0)
-            return MatrixFixture(in: previewRoot, seed: [record], existingNote: note)
+            return MatrixFixture(in: previewRoot, seed: [record], existingNote: note, date: date)
         }
     }
 
@@ -337,19 +362,20 @@
         let environment: AppEnvironment
         let context: UIContext
         let date: Date
+        let captureClock: FakeClock
         let existingNote: NoteID?
         let launch: LaunchID
 
-        init(in previewRoot: URL, seed: [NoteRecord] = [], existingNote: NoteID? = nil) {
+        init(
+            in previewRoot: URL, seed: [NoteRecord] = [], existingNote: NoteID? = nil, date: Date = Date.now
+        ) {
             let root = previewRoot.appending(
                 path: "KnotMatrix-\(UUID().uuidString)", directoryHint: .isDirectory)
             var environment = AppEnvironment.makePreview(root: root)
-            let clock = FakeClock()
-            if !seed.isEmpty {
-                let device: DeviceID = environment.ids.make()
-                environment.clock = clock
-                environment.notes = InMemoryNoteStore(clock: clock, ids: environment.ids, deviceID: device, seed: seed)
-            }
+            let clock = FakeClock(date)
+            let device: DeviceID = environment.ids.make()
+            environment.clock = clock
+            environment.notes = InMemoryNoteStore(clock: clock, ids: environment.ids, deviceID: device, seed: seed)
             var context = KnotUIPreviews.context(for: environment)
             context.sync = .available(signedInToICloud: true)
             environment.player = FakeAudioPlayer()
@@ -357,39 +383,55 @@
             environment.gates = ScriptedFeatureGates()
             self.environment = environment
             self.context = context
-            self.date = clock.now()
+            self.date = date
+            self.captureClock = FakeClock(date.addingTimeInterval(15))
             self.existingNote = existingNote
             self.launch = environment.ids.make()
         }
 
-        func typed(_ text: String, in note: NoteID? = nil) async throws -> NoteID {
-            try await environment.notes.record(
+        private func nextStart() -> Date {
+            captureClock.advance(by: 2)
+            return captureClock.now()
+        }
+
+        func typed(_ text: String, in note: NoteID? = nil, at start: Date? = nil) async throws -> NoteID {
+            let startedAt = start ?? nextStart()
+            return try await environment.notes.record(
                 NewCapture(
                     id: environment.ids.make(), kind: .typed,
                     origin: CaptureOrigin(source: .device(context.thisDevice), surface: .app), launchID: launch,
-                    placement: note.map(CapturePlacement.named) ?? .newNote, startedAt: date, endedAt: date,
+                    placement: note.map(CapturePlacement.named) ?? .newNote, startedAt: startedAt, endedAt: startedAt,
                     body: .text(text))
             ).noteID
         }
 
         func recordFile(
-            kind: SegmentKind, note: NoteID?, availability: AssetAvailability = .local, arrival: Arrival = .live
+            kind: SegmentKind, note: NoteID?, availability: AssetAvailability = .local,
+            arrival: Arrival = .live, at start: Date? = nil
         ) async throws -> SegmentID {
+            let startedAt = start ?? nextStart()
             let id: CaptureID = environment.ids.make()
             let assetID: AssetID = environment.ids.make()
             let assetKind: AssetKind = kind == .ink ? .ink : .audio
-            let stored = try await environment.assets.place(Data([1, 2, 3]), as: assetID, kind: assetKind)
+            let bytes = Data([1, 2, 3])
+            let stored = try await environment.assets.place(bytes, as: assetID, kind: assetKind)
+            let segment = SegmentID(id)
             let asset = Asset(
-                id: assetID, segmentID: SegmentID(id), kind: assetKind, byteCount: stored.byteCount,
-                sha256: stored.sha256,
-                availability: availability)
+                id: assetID, segmentID: segment, kind: assetKind, byteCount: stored.byteCount,
+                sha256: stored.sha256, availability: availability)
             _ = try await environment.notes.record(
                 NewCapture(
                     id: id, kind: kind, origin: CaptureOrigin(source: .device(context.thisDevice), surface: .app),
                     launchID: launch, placement: note.map(CapturePlacement.named) ?? .newNote, arrival: arrival,
-                    startedAt: date, endedAt: date.addingTimeInterval(1),
+                    startedAt: startedAt, endedAt: startedAt.addingTimeInterval(1),
                     body: .file(asset, duration: kind == .voice ? .seconds(42) : nil)))
-            return SegmentID(id)
+            if kind == .voice, availability == .local {
+                let levels = PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                let peaks = RecordingPeaks.header(framesPerValue: 800) + Data(levels)
+                try await environment.notes.setPeaks(peaks, of: segment)
+                (environment.player as? FakeAudioPlayer)?.script(stored.url, length: .seconds(42))
+            }
+            return segment
         }
 
         func readyVoice(_ segment: SegmentID, text: String) async throws {

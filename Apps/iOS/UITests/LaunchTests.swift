@@ -44,6 +44,26 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "One more thought")
     }
 
+    @MainActor
+    func testCaptureKeepsItsControlsAboveTheKeyboard() throws {
+        let app = KnotLauncher.launch(.preview)
+        assertCaptureIsReady(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let record = app.buttons["Record"]
+        let newNote = app.buttons["New note"]
+        app.typeText("Ask for the roof estimate.")
+        XCTAssertTrue(newNote.waitForExistence(timeout: limit))
+        XCTAssertTrue(newNote.isHittable)
+        XCTAssertTrue(record.isHittable)
+        XCTAssertLessThanOrEqual(newNote.frame.maxY, keyboard.frame.minY)
+        XCTAssertLessThanOrEqual(record.frame.maxY, keyboard.frame.minY)
+        let controls = XCTAttachment(screenshot: app.screenshot())
+        controls.name = "capture-keyboard-controls"
+        controls.lifetime = .keepAlways
+        add(controls)
+        try app.auditAccessibility()
+    }
+
     /// `live-smoke-type-kill-relaunch-read-iphone`: on `.live` with a temporary store, type,
     /// kill, relaunch, read (docs/architecture.md §17), with the accessibility audit.
     ///
@@ -113,15 +133,26 @@ final class KnotIOSLaunchTests: XCTestCase {
 
         let track = app.descendants(matching: .any).matching(identifier: "recording.position").firstMatch
         XCTAssertTrue(track.waitForExistence(timeout: limit))
+        app.buttons["Play"].tap()
+        let pause = app.buttons["Pause"]
+        XCTAssertTrue(pause.waitForExistence(timeout: limit))
+        pause.tap()
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: limit))
         XCTAssertTrue(track.isHittable)
         let trackY = track.frame.midY
-        let initialPosition = track.value as? String
+        let initialPosition = try XCTUnwrap(track.value as? String)
+        XCTAssertEqual(initialPosition, "0:00 / 0:42")
         let start = track.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
-        let earlier = start.withOffset(CGVector(dx: 0, dy: -160))
-        start.press(forDuration: 0.1, thenDragTo: earlier)
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -160)))
 
         XCTAssertTrue(!track.isHittable || track.frame.midY < trackY - 20)
-        if track.exists { XCTAssertEqual(track.value as? String, initialPosition) }
+        if !track.isHittable { app.scrollViews.firstMatch.swipeDown() }
+        XCTAssertTrue(track.isHittable)
+        XCTAssertEqual(track.value as? String, initialPosition)
+        let left = track.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let right = track.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        left.press(forDuration: 0.1, thenDragTo: right)
+        XCTAssertNotEqual(track.value as? String, initialPosition)
         try app.auditAccessibility()
     }
 
@@ -283,10 +314,10 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(variant.waitForExistence(timeout: limit))
         XCTAssertEqual(variant.value as? String, "Follow the region")
         variant.tap()
-        let choices = app.navigationBars["English variant"]
-        XCTAssertTrue(choices.waitForExistence(timeout: limit))
+        let followRegion = app.descendants(matching: .any).matching(identifier: "Follow the region").firstMatch
+        XCTAssertTrue(followRegion.waitForExistence(timeout: limit))
         try app.auditAccessibility()
-        choices.buttons["Settings"].tap()
+        followRegion.tap()
 
         about.tap()
         let aboutPage = app.navigationBars["About Knot"]

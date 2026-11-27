@@ -164,7 +164,30 @@
                     Group {
                         if let loaded {
                             #if os(iOS)
-                                if surface == .phone, example != .older {
+                                if surface == .phone, example == .older {
+                                    NavigationStack {
+                                        Color.clear
+                                            .navigationTitle("Notes")
+                                            .navigationDestination(isPresented: $presentsCapture) {
+                                                note(loaded)
+                                                    .navigationBarTitleDisplayMode(.inline)
+                                                    .toolbar {
+                                                        PhoneNoteToolbar {
+                                                            Button("Copy note", systemImage: "document.on.document") {}
+                                                            ShareLink(
+                                                                item: loaded.model.items.map(\.text).joined(
+                                                                    separator: "\n")
+                                                            ) {
+                                                                Label("Share note…", systemImage: "square.and.arrow.up")
+                                                            }
+                                                            Button(
+                                                                "Delete note", systemImage: "trash", role: .destructive
+                                                            ) {}
+                                                        }
+                                                    }
+                                            }
+                                    }
+                                } else if surface == .phone {
                                     NavigationStack {
                                         Color.clear
                                             .navigationTitle("Notes")
@@ -198,9 +221,6 @@
 
             private func note(_ loaded: Loaded) -> some View {
                 NoteView(model: loaded.model, player: loaded.player, initialFocus: focusForPreview)
-                    .safeAreaInset(edge: .top) {
-                        if showsSpeechDownload { SpeechDownloadNotice() }
-                    }
                     .modifier(MatrixReady())
                     .onDisappear {
                         loaded.releaseStart?.finish()
@@ -221,6 +241,9 @@
                 let folder = FileManager.default.temporaryDirectory.appending(
                     path: "KnotMatrix-\(UUID().uuidString)", directoryHint: .isDirectory)
                 var environment = AppEnvironment.makePreview(root: folder)
+                if showsSpeechDownload {
+                    (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.installing)
+                }
                 let engine = environment.engine
                 let pressClock = FakeClock(.now)
                 var note: NoteID?
@@ -415,20 +438,9 @@
             private var page: some View {
                 VStack(alignment: .leading) {
                     if example == .limit, showsLimitNotice {
-                        Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill") {
-                            Button {
-                                showsLimitNotice = false
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(theme.type[.stateLine])
-                                    .imageScale(.small)
-                                    .foregroundStyle(theme.colors[.textSecondary])
-                                    .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Dismiss")
-                        }
+                        Banner(
+                            "Recording stopped at 30 minutes and was saved.", symbol: "stop.fill",
+                            dismiss: { showsLimitNotice = false })
                     }
                     if example.outcome == .saved {
                         SegmentView(
@@ -487,13 +499,14 @@
         struct SettingsMatrixPreview: View {
             let surface: PreviewSurface
             let example: SettingsExample
+            var syncStatus: SyncStatus = .idle(lastSuccess: nil)
 
             var body: some View {
                 matrixFrame(surface) {
                     switch example {
-                    case .full:
+                    case .full, .sync:
                         NavigationStack {
-                            SettingsMatrixForm(surface: surface)
+                            SettingsMatrixForm(surface: surface, syncStatus: syncStatus)
                                 .navigationTitle("Settings")
                                 #if os(iOS)
                                     .navigationBarTitleDisplayMode(.inline)
@@ -504,11 +517,6 @@
                                     }
                                 #endif
                         }
-                    case .sync:
-                        Form {
-                            ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
-                        }
-                        .modifier(MatrixReady())
                     case .export:
                         List {
                             ExportResultRows(.exporting)
@@ -528,6 +536,7 @@
 
         private struct SettingsMatrixForm: View {
             let surface: PreviewSurface
+            let syncStatus: SyncStatus
             @State private var model: SettingsViewModel?
 
             var body: some View {
@@ -544,11 +553,9 @@
                     var environment = KnotUIPreviews.environment
                     environment.gates = ScriptedFeatureGates()
                     var settings = Settings.defaults
-                    settings.syncEnabled = true
+                    settings.syncEnabled = syncStatus != .off
                     environment.settings = InMemorySettingsStore(settings)
-                    let sync = ScriptedSyncEngine(clock: environment.clock)
-                    await sync.start()
-                    environment.sync = sync
+                    environment.sync = PreviewSettingsSync(status: syncStatus)
                     var context = KnotUIPreviews.context(for: environment)
                     context.sync = .available(signedInToICloud: true)
                     let model = SettingsViewModel(
@@ -558,6 +565,21 @@
                     self.model = model
                 }
             }
+        }
+        private struct PreviewSettingsSync: SyncEngine {
+            let status: SyncStatus
+
+            func statusUpdates() -> AsyncStream<SyncStatus> {
+                AsyncStream { continuation in
+                    continuation.yield(status)
+                    continuation.finish()
+                }
+            }
+
+            func start() async {}
+            func stop() async {}
+            func syncNow() async throws(KnotError) {}
+            func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async {}
         }
     #endif
 #endif

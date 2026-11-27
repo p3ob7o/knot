@@ -20,14 +20,14 @@
                     ? localized("The iCloud account changed.") : localized("Notes were removed from iCloud."),
                 symbol: accountChanged ? "person.crop.circle" : "icloud.slash"
             ) {
-                if accountChanged {
+                if !Self.prefersKeepingSyncPaused(for: question) {
                     keepPaused.modifier(NoticeActionStyle())
                 } else {
                     keepPaused
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
-                        .tint(theme.colors[.textPrimary])
+                        .tint(theme.colors[.accent])
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                 }
@@ -38,6 +38,13 @@
                 }
                 .modifier(NoticeActionStyle())
             }
+            #if os(iOS)
+                .padding(.horizontal)
+            #endif
+        }
+
+        static func prefersKeepingSyncPaused(for question: SyncQuestion) -> Bool {
+            question == .zoneRemoved(.purged) || question == .zoneRemoved(.encryptedDataReset)
         }
 
         private var keepPaused: some View {
@@ -45,6 +52,8 @@
                 answer(.keepPaused)
             } label: {
                 Text("Keep sync paused", bundle: .module)
+                    .foregroundStyle(
+                        theme.colors[Self.prefersKeepingSyncPaused(for: question) ? .onAccent : .textPrimary])
             }
         }
     }

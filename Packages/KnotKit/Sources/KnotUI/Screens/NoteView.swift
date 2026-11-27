@@ -34,7 +34,13 @@
         private let observesRecordings: Bool
 
         private var showsLiveControls: Bool { model.recording.isRecording || model.recording == .stopping }
-        private var showsInsetControls: Bool { showsLiveControls }
+        private var showsInsetControls: Bool {
+            #if os(iOS)
+                showsLiveControls || (fieldFocused && !editsExistingText)
+            #else
+                showsLiveControls
+            #endif
+        }
         private var editsExistingText: Bool { titleFocused || !focusedSegments.isEmpty }
         private var focusOnAppear: InitialFocus {
             initialFocus ?? (model.mode == .capture || model.surface != .app ? .capture : .none)
@@ -42,11 +48,6 @@
         private var showsDone: Bool {
             model.mode == .capture || showsLiveControls || model.typedCapture != nil || !model.fieldText.isEmpty
         }
-        private var hasBanners: Bool {
-            model.isDeletedElsewhere || model.recordingOutcome == .discarded || model.recordingOutcome == .saveFailed
-                || model.problem != nil || !model.editConflicts.isEmpty
-        }
-
         public init(
             model: NoteViewModel, player: PlayerViewModel, initialFocus: InitialFocus? = nil,
             shareSegment: ((SegmentID) -> Void)? = nil, observesRecordings: Bool = true
@@ -62,10 +63,11 @@
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.spacing.betweenSegments) {
                     #if os(iOS)
-                        if model.mode != .capture { banners }
-                    #else
-                        banners
+                        if model.mode == .capture, model.speechDownloading {
+                            SpeechDownloadNotice()
+                        }
                     #endif
+                    banners
                     page
                 }
                 #if os(iOS)
@@ -84,26 +86,17 @@
                         ToolbarItem(placement: .topBarTrailing) { done }
                     }
                     if !showsInsetControls, !editsExistingText {
-                        ToolbarItemGroup(placement: .keyboard) { captureActions }
-                        if !fieldFocused {
-                            ToolbarItemGroup(placement: .bottomBar) { captureActions }
-                        }
+                        ToolbarItemGroup(placement: .bottomBar) { captureActions }
                     }
                 }
-                .toolbarVisibility(editsExistingText ? .hidden : .automatic, for: .bottomBar)
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if model.mode == .capture, hasBanners {
-                        VStack(alignment: .leading, spacing: theme.spacing.space2) { banners }
-                        .padding(.horizontal)
-                        .background(theme.colors[.surface])
-                    }
-                }
+                .toolbarVisibility(editsExistingText || showsInsetControls ? .hidden : .automatic, for: .bottomBar)
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: theme.spacing.space2) {
                         if let offer = model.undoOffer {
                             UndoCapsule(offer, undo: model.undo)
                         }
                         if showsInsetControls {
+                            // The scroll view's bottom inset follows the keyboard's own safe area.
                             HStack { captureActions }
                             .buttonStyle(.glass)
                             .padding(.horizontal)
@@ -138,6 +131,9 @@
                 }
             }
             .onDisappear { model.endCapture() }
+            #if os(iOS)
+                .task(id: model.mode) { await model.observeSpeechReadiness() }
+            #endif
             .task { await model.refresh() }
             .task { await model.observeStore() }
             .task {
@@ -223,7 +219,12 @@
         }
 
         @ViewBuilder private var newNote: some View {
-            if model.offersNewNote {
+            #if os(iOS)
+                let showsNewNote = model.offersNewNote || showsLiveControls
+            #else
+                let showsNewNote = model.offersNewNote
+            #endif
+            if showsNewNote {
                 Button {
                     model.newNote()
                     fieldFocused = true
@@ -251,6 +252,9 @@
                     }
                 #endif
                 .keyboardShortcut("n", modifiers: .command)
+                #if os(iOS)
+                    .disabled(showsLiveControls)
+                #endif
             }
         }
 
@@ -308,18 +312,14 @@
             if model.recordingOutcome == .saveFailed {
                 Banner(
                     Announcement.recordingSaveFailed.text,
-                    symbol: "exclamationmark.triangle", role: .failed
-                ) {
-                    Button {
-                        model.dismissRecordingOutcome()
-                    } label: {
-                        Text("Dismiss", bundle: .module)
-                    }
-                }
+                    symbol: "exclamationmark.triangle", role: .failed, dismiss: model.dismissRecordingOutcome)
             }
             if let problem = model.problem {
                 let permission = problem == .couldNotStartRecording(KnotError.microphonePermissionRefused.code)
-                Banner(problem.message, symbol: permission ? "mic.slash" : "exclamationmark.triangle", role: .failed) {
+                Banner(
+                    problem.message, symbol: permission ? "mic.slash" : "exclamationmark.triangle",
+                    role: .failed, dismiss: model.dismissProblem
+                ) {
                     #if os(iOS)
                         if permission,
                             let settings = URL(string: UIApplication.openSettingsURLString)
@@ -332,20 +332,7 @@
                             .modifier(NoticeActionStyle())
                         }
                     #endif
-                    Button {
-                        model.dismissProblem()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(theme.type[.stateLine])
-                            .imageScale(.small)
-                            .foregroundStyle(theme.colors[.textSecondary])
-                            #if os(iOS)
-                                .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
-                                .contentShape(.rect)
-                            #endif
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Dismiss", bundle: .module))
+
                 }
             }
             // Each conflict keeps its own draft until the person decides it. How this looks is

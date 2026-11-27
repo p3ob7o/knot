@@ -157,22 +157,14 @@
                     }
                 }
             case .englishVariant:
-                Picker(
-                    row.title,
-                    selection: Binding(
-                        get: { model.settings.englishVariant.rawValue },
-                        set: { raw in Task { await model.setEnglishVariant(EnglishVariant(rawValue: raw)) } })
-                ) {
-                    ForEach(SettingsViewModel.englishVariants, id: \.rawValue) { variant in
-                        Text(SettingsViewModel.label(of: variant))
-                            #if os(iOS)
-                                .foregroundStyle(theme.colors[.textPrimary])
-                            #endif
-                            .tag(variant.rawValue)
-                    }
-                }
                 #if os(iOS)
-                    .pickerStyle(.navigationLink)
+                    if dynamicTypeSize.isAccessibilitySize {
+                        englishPicker(row.title).pickerStyle(.navigationLink)
+                    } else {
+                        englishPicker(row.title).pickerStyle(.menu)
+                    }
+                #else
+                    englishPicker(row.title)
                 #endif
             case .sync:
                 VStack(alignment: .leading) {
@@ -207,6 +199,23 @@
                 #else
                     Button(row.title) { open(row) }
                 #endif
+            }
+        }
+
+        private func englishPicker(_ title: String) -> some View {
+            Picker(
+                title,
+                selection: Binding(
+                    get: { model.settings.englishVariant.rawValue },
+                    set: { raw in Task { await model.setEnglishVariant(EnglishVariant(rawValue: raw)) } })
+            ) {
+                ForEach(SettingsViewModel.englishVariants, id: \.rawValue) { variant in
+                    Text(SettingsViewModel.label(of: variant))
+                        #if os(iOS)
+                            .foregroundStyle(theme.colors[.textPrimary])
+                        #endif
+                        .tag(variant.rawValue)
+                }
             }
         }
     }

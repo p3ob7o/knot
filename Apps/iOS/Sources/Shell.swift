@@ -28,6 +28,7 @@ final class Shell {
     let player: PlayerViewModel
     #if DEBUG
         private let previewSettings = InMemorySettingsStore()
+        private let previewTrackPlayer: FakeAudioPlayer?
     #endif
     /// The screens pushed from Notes.
     var path: [Screen] = []
@@ -73,7 +74,15 @@ final class Shell {
                 }
             })
         search = SearchViewModel(environment: environment, context: context)
-        player = PlayerViewModel(player: environment.player)
+        #if DEBUG
+            previewTrackPlayer =
+                app.live == nil && ProcessInfo.processInfo.environment["KNOT_PREVIEW_SCROLL_RECORDING"] == "1"
+                ? FakeAudioPlayer() : nil
+            let scriptedPlayer: (any AudioPlayer)? = previewTrackPlayer
+            player = PlayerViewModel(player: scriptedPlayer ?? environment.player)
+        #else
+            player = PlayerViewModel(player: environment.player)
+        #endif
         KnotIntentEnvironment.register(environment, in: .shared)
     }
 
@@ -88,8 +97,8 @@ final class Shell {
                 if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_LATE_CAPTURE"] == "1" {
                     await injectPreviewArrival(into: app.environment)
                 }
-                if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_SCROLL_RECORDING"] == "1" {
-                    try? await injectPreviewRecordingNote(into: app.environment)
+                if let previewTrackPlayer {
+                    try? await injectPreviewRecordingNote(into: app.environment, player: previewTrackPlayer)
                 }
             #endif
             _ = await app.runLaunchSequence()
@@ -364,7 +373,9 @@ private struct RecordingNotice: View {
 }
 
 #if DEBUG
-    private func injectPreviewRecordingNote(into environment: AppEnvironment) async throws {
+    private func injectPreviewRecordingNote(
+        into environment: AppEnvironment, player: FakeAudioPlayer
+    ) async throws {
         let recording: CaptureID = environment.ids.make()
         let assetID: AssetID = environment.ids.make()
         let stored = try await environment.assets.place(Data([1, 2, 3]), as: assetID, kind: .audio)
@@ -380,7 +391,10 @@ private struct RecordingNotice: View {
                 startedAt: start, endedAt: start.addingTimeInterval(42), body: .file(asset, duration: .seconds(42)))
         ).noteID
         _ = try await environment.notes.setState(.voice(.ready), of: SegmentID(recording))
-        for index in 1...20 {
+        if let file = try await environment.assets.find(assetID, kind: .audio) {
+            player.script(file.url, length: .seconds(42))
+        }
+        for index in 1...64 {
             let date = start.addingTimeInterval(Double(42 + index))
             _ = try await environment.notes.record(
                 NewCapture(
@@ -460,12 +474,6 @@ struct NoteScreen: View {
 
     var body: some View {
         NoteView(model: model, player: player, shareSegment: shareSegment, observesRecordings: model.mode != .capture)
-            .safeAreaInset(edge: .top) {
-                if model.speechDownloading, model.mode == .capture {
-                    SpeechDownloadNotice()
-                }
-            }
-            .task { await model.observeSpeechReadiness() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { Flush.run(model) }
             }

@@ -147,7 +147,8 @@ import Testing
         #expect(large.isSuperset(of: [.title, .time, .failedMarker, .kinds]))
         let largest = model.visibleParts(at: .largest)
         #expect(!largest.contains(.preview))
-        #expect(largest.isSuperset(of: [.title, .time, .failedMarker, .kinds]))
+        #expect(!largest.contains(.kinds))
+        #expect(largest.isSuperset(of: [.title, .time, .failedMarker]))
         // VoiceOver reads every part, whatever the size.
         let label = model.accessibilityLabel(time: "now")
         #expect(label.contains("second"))

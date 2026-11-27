@@ -13,7 +13,8 @@ def phone_previews(source):
         raise ValueError("Could not read all iPhone #Preview declarations")
     for cell, body in matches:
         group = re.fullmatch(r"\s*Group \{\n(.*?)\n\s*}\s*", body, re.DOTALL)
-        variants = group[1].strip().splitlines() if group else [body]
+        # A formatter can put a child view's arguments on continuation lines.
+        variants = re.split(r"\n(?= {16}[A-Z])", group[1]) if group else [body]
         for index, variant in enumerate(variants, 1):
             name = cell if len(variants) == 1 else f"{cell} ({index})"
             yield name, cell, variant.strip()
@@ -31,7 +32,7 @@ def catalog(source, destination):
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "catalog.json").write_text(json.dumps(rows, indent=2) + "\n")
     (destination / "PhonePreviewCatalog.swift").write_text(
-        "import SwiftUI\n\n"
+        "import KnotCore\nimport SwiftUI\n\n"
         "@MainActor func phonePreview(_ index: Int) -> AnyView {\n"
         "    switch index {\n"
         + "\n".join(branches)

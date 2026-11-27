@@ -2,8 +2,9 @@ import Foundation
 import KnotCore
 import KnotFakes
 import KnotTestSupport
-import KnotUI
 import Testing
+
+@testable import KnotUI
 
 /// Settings (docs/product-spec.md §11), the player, and the theme layer.
 @MainActor
@@ -151,3 +152,12 @@ import Testing
 func settingsShowsTheStatusTheSyncEngineReports(status: SyncStatus, expected: SettingsSyncState) {
     #expect(SettingsSyncState(status) == expected)
 }
+
+#if !os(watchOS)
+    @MainActor @Test func onlyIntentionalZoneLossMakesKeepingSyncPausedProminent() {
+        #expect(SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.purged)))
+        #expect(SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.encryptedDataReset)))
+        #expect(!SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.deleted)))
+        #expect(!SyncPresentation.prefersKeepingSyncPaused(for: .accountChanged))
+    }
+#endif
