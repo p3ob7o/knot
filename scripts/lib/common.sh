@@ -70,7 +70,7 @@ knot_check_xcodegen() {
     local version where
     knot_resolve_xcodegen
     where="the build folder's tools/xcodegen-$KNOT_XCODEGEN_VERSION/ ($KNOT_BUILD_FOLDER/tools/xcodegen-$KNOT_XCODEGEN_VERSION/xcodegen/bin/xcodegen)"
-    KNOT_XCODEGEN_FIX="Unpack the XcodeGen $KNOT_XCODEGEN_VERSION release, checked against its SHA-256 in docs/dev-setup.md, under $where, or name a copy with KNOT_XCODEGEN. Do not change Homebrew for the project."
+    KNOT_XCODEGEN_FIX="Unpack the XcodeGen $KNOT_XCODEGEN_VERSION release, checked against its SHA-256 in docs/dev-setup.md, under $where, where a release takes it from. A development run may name another copy with KNOT_XCODEGEN, which a release refuses. Do not change Homebrew for the project."
     if [[ -z $KNOT_XCODEGEN_PATH ]]; then
         KNOT_XCODEGEN_CODE="infra-xcodegen-missing"
         if [[ $KNOT_XCODEGEN_FROM == KNOT_XCODEGEN ]]; then
@@ -387,6 +387,28 @@ knot_swift_test_limited() {
     return "$status"
 }
 
+# grep over a text handed to it through a pipe, and its answer from every status of the pipe: 0,
+# a match; 1, none, and the whole text was handed over; 2, the search could not be made. A match
+# is a match even when grep stopped reading early. Neither end says anything of its own: a writer
+# whose reader went away dies of SIGPIPE, 141, or, when SIGPIPE was ignored at its start, fails
+# with 1 and would print a write error; both are a text not handed over.
+#   knot_grep_text <text> <grep arguments…>
+knot_grep_text() {
+    local text=$1 statuses
+    shift
+    { printf '%s\n' "$text" 2>/dev/null | grep "$@" 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    ((statuses[1] == 0)) && return 0
+    ((statuses[1] == 1 && statuses[0] == 0)) && return 1
+    return 2
+}
+# The lines of a text, sorted and unique, through a pipe: fails when either end of it failed.
+#   knot_sort_text <text>
+knot_sort_text() {
+    local statuses
+    { printf '%s\n' "$1" 2>/dev/null | sort -u 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    ((statuses[0] == 0 && statuses[1] == 0))
+}
+
 # Prints the fakes that a Mach-O file holds, one a line, and returns 0 when it holds any: the
 # KnotFakes module, by its mangled name in a symbol or its name in a string, as the scan has
 # looked for it since WP-01, and any type of one of this project's modules whose name begins
@@ -401,15 +423,45 @@ knot_swift_test_limited() {
 # of these. An optimised build can keep no symbol of a type at all, a private or local one
 # above all, or keep its bare name with no module, which this scan does not count; the lint
 # is what catches a fake whose guard was lost (fake-unguarded).
+#
+# An inspection that fails is neither a clean file nor a find: when nm, strings, swift-demangle,
+# grep or sort fails, it prints "the inspection failed: …" and returns 2, which every caller
+# reads as a check that could not look. Every text reaches grep and sort through a pipe, whose
+# every status is read: a text that could not be handed over is a failed inspection, never
+# "none". (/bin/bash 3.2 writes a here-string to a temporary file, and when that write fails the
+# command never runs and its status, 1, is grep's "none".)
 #   knot_fakes_in <Mach-O file>
 knot_fakes_in() {
-    local file=$1 symbols strings found
-    symbols="$(nm -a "$file" 2>/dev/null || true)"
-    strings="$(strings -a "$file" 2>/dev/null || true)"
-    found="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle |
-        grep -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*' |
-        sort -u || true)"
-    if grep -e 9KnotFakes <<<"$symbols" >/dev/null || grep -e KnotFakes <<<"$strings" >/dev/null; then
+    local file=$1 symbols strings demangled matches found status=0
+    if ! symbols="$(nm -a "$file" 2>/dev/null)"; then
+        echo "the inspection failed: nm could not read the file"
+        return 2
+    fi
+    if ! strings="$(strings -a "$file" 2>/dev/null)"; then
+        echo "the inspection failed: strings could not read the file"
+        return 2
+    fi
+    if ! demangled="$(printf '%s\n%s\n' "$symbols" "$strings" | xcrun swift-demangle 2>/dev/null)"; then
+        echo "the inspection failed: swift-demangle failed on the file's names"
+        return 2
+    fi
+    matches="$(knot_grep_text "$demangled" -o -E '\b[Kk]not[A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\.\(?Fake[A-Za-z0-9_]*|\bFake[A-Za-z0-9_]* #[0-9]+ in [Kk]not[A-Za-z0-9_]*|\(extension in [Kk]not[A-Za-z0-9_]*\):[^ ]*\.Fake[A-Za-z0-9_]*|[0-9][Kk]not[A-Za-z0-9_]*[0-9]Fake[A-Za-z0-9_]*')" ||
+        status=$?
+    if ((status > 1)) || ! found="$(knot_sort_text "$matches")"; then
+        echo "the inspection failed: grep or sort failed on the file's names"
+        return 2
+    fi
+    status=0
+    knot_grep_text "$symbols" -e 9KnotFakes >/dev/null || status=$?
+    if ((status == 1)); then
+        status=0
+        knot_grep_text "$strings" -e KnotFakes >/dev/null || status=$?
+    fi
+    if ((status > 1)); then
+        echo "the inspection failed: grep failed on the file's names"
+        return 2
+    fi
+    if ((status == 0)); then
         found="${found:+$found$'\n'}the module KnotFakes"
     fi
     [[ -n $found ]] || return 1
@@ -420,11 +472,32 @@ knot_fakes_in() {
 # when it holds any (item 99): the packaging step looks for them in every Release binary,
 # since a release build must ignore them. The names are matched whole, as strings of the file.
 # An optimised build can keep a string of 15 bytes or fewer inside the code, where this
-# cannot see it.
+# cannot see it. As knot_fakes_in does, it prints "the inspection failed: …" and returns 2 when
+# strings, grep or sort fails, or when the list is empty, which would match nothing.
 #   knot_debug_arguments_in <file> <list, one name a line>
 knot_debug_arguments_in() {
-    local found
-    found="$(strings -a "$1" 2>/dev/null | grep -x -F -f <(printf '%s\n' "$2") | sort -u || true)"
+    local found strings matches status=0
+    if [[ -z ${2//[[:space:]]/} ]]; then
+        echo "the inspection failed: the list of debug launch arguments is empty"
+        return 2
+    fi
+    if ! strings="$(strings -a "$1" 2>/dev/null)"; then
+        echo "the inspection failed: strings could not read the file"
+        return 2
+    fi
+    # The names, as grep's patterns: a pattern file of process substitution does not reach grep
+    # inside a pipe in /bin/bash 3.2.
+    local name patterns=()
+    while IFS= read -r name; do [[ -z $name ]] || patterns+=(-e "$name"); done < <(printf '%s\n' "$2")
+    if ((${#patterns[@]} == 0)); then
+        echo "the inspection failed: the list of debug launch arguments could not be read"
+        return 2
+    fi
+    matches="$(knot_grep_text "$strings" -x -F "${patterns[@]}")" || status=$?
+    if ((status > 1)) || ! found="$(knot_sort_text "$matches")"; then
+        echo "the inspection failed: grep or sort failed on the file's strings"
+        return 2
+    fi
     [[ -n $found ]] || return 1
     printf '%s\n' "$found"
 }
@@ -666,6 +739,7 @@ knot_start_tool() {
 #   … | knot_filter_team
 KNOT_TEAM_FILTER='
     BEGIN {
+        $| = 1;
         my $config = $ENV{KNOT_FILTER_CONFIG} || "";
         if ($config ne "" && open(my $file, "<", $config)) {
             local $/;
@@ -743,24 +817,54 @@ KNOT_LSREGISTER="${KNOT_LSREGISTER:-/System/Library/Frameworks/CoreServices.fram
 
 # Unregisters from LaunchServices every app bundle under a folder, the folder's own products,
 # before they are removed or kept aside. A folder that does not exist holds none. It returns
-# non-zero when the tool is missing or an unregister failed, and says why in
-# KNOT_UNREGISTER_WHY, so that a caller never claims what did not happen.
+# non-zero when the tool is missing, the folder cannot be read or an unregister failed, and says
+# why in KNOT_UNREGISTER_WHY, each failure in turn, so that a caller never claims what did not
+# happen.
 #   knot_unregister_apps <folder>
 knot_unregister_apps() {
-    local app status=0
+    local app status=0 found
     KNOT_UNREGISTER_WHY=""
     [[ -d $1 ]] || return 0
     if [[ ! -x $KNOT_LSREGISTER ]]; then
         KNOT_UNREGISTER_WHY="LaunchServices' tool is not at $KNOT_LSREGISTER"
         return 1
     fi
+    found="$(mktemp)"
+    if ! find "$1" -type d -name '*.app' -prune -print0 >"$found" 2>/dev/null; then
+        KNOT_UNREGISTER_WHY="the folder $(basename "$1") could not be read whole"
+        status=1
+    fi
     while IFS= read -r -d '' app; do
         if ! "$KNOT_LSREGISTER" -u "$app" >/dev/null 2>&1; then
             status=1
-            KNOT_UNREGISTER_WHY="lsregister -u failed on $(basename "$app")"
+            KNOT_UNREGISTER_WHY="${KNOT_UNREGISTER_WHY:+$KNOT_UNREGISTER_WHY; }lsregister -u failed on $(basename "$app")"
         fi
-    done < <(find "$1" -type d -name '*.app' -prune -print0 2>/dev/null)
+    done <"$found"
+    rm -f "$found"
     return "$status"
+}
+
+# Whether LaunchServices' list names anything under a folder, after knot_unregister_apps failed:
+# an app it never registered, such as an iOS app on the Mac, fails lsregister -u (-10814), and
+# that failure asks for nothing. Returns 1 only when the list was read and names nothing under
+# the folder; 0 when it names something, or could not be read.
+#   knot_registered_under <folder>
+knot_registered_under() {
+    local listed
+    [[ -x $KNOT_LSREGISTER ]] || return 0
+    listed="$("$KNOT_LSREGISTER" -dump 2>/dev/null)" || return 0
+    grep -F -e "$1/" <<<"$listed" >/dev/null
+}
+
+# What a caller says after knot_unregister_apps failed on a folder: that LaunchServices registers
+# none of its products, or that they could not be unregistered, why, and what to do by hand.
+#   knot_unregister_report <folder>
+knot_unregister_report() {
+    if knot_registered_under "$1"; then
+        echo "its products could not be unregistered from LaunchServices: $KNOT_UNREGISTER_WHY. Unregister each by hand with lsregister -u <app>"
+    else
+        echo "LaunchServices registers none of its products ($KNOT_UNREGISTER_WHY, as for an app it never registered)"
+    fi
 }
 
 # Prints why the XCTest cases of a test run failed, for the step's own log: XCTest's error

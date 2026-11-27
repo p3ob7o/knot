@@ -15,6 +15,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>KnotAppGroup</key>
 	<string>$(KNOT_APP_GROUP)</string>
 	<key>KnotCloudContainer</key>

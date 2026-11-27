@@ -774,18 +774,24 @@ step_packaging() {
     # cannot pass by finding no file. `want` is "none" for a release build and "some" for
     # the debug control.
     scan_for_fakes() {
-        local app=$1 want=$2 f main scanned=0 main_seen=0 found=0 held
+        local app=$1 want=$2 f main scanned=0 main_seen=0 found=0 unread=0 held held_status
         main="$(main_executable "$app")"
         while IFS= read -r -d '' f; do
             scanned=$((scanned + 1))
             [[ $f == "$main" ]] && main_seen=1
-            if held="$(knot_fakes_in "$f")"; then
+            # knot_fakes_in answers 0, found; 1, none; 2, could not look, which fails the check.
+            held_status=0
+            held="$(knot_fakes_in "$f")" || held_status=$?
+            if ((held_status == 0)); then
                 echo "      fakes in $f: $(tr '\n' ' ' <<<"$held" | cut -c1-200)"
                 found=$((found + 1))
+            elif ((held_status > 1)); then
+                echo "      could not look at $f: ${held#the inspection failed: }"
+                unread=$((unread + 1))
             fi
         done < <(macho_files "$app")
         echo "      scanned $scanned Mach-O files in $app, main executable $( ((main_seen)) && echo included || echo MISSING)"
-        ((scanned > 0 && main_seen)) || return 1
+        ((scanned > 0 && main_seen && unread == 0)) || return 1
         if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
     }
     check "Release Mac app free of KnotFakes" scan_for_fakes "$(products Release)/Knot.app" none || failed=1
@@ -797,16 +803,23 @@ step_packaging() {
     # bytes or fewer inside the code, where the scan cannot see it, and the scan says which
     # those are. The Debug iOS app, whose shells read them, is the control.
     scan_for_debug_arguments() {
-        local app=$1 want=$2 f found=0 held list short
+        local app=$1 want=$2 f found=0 unread=0 held held_status list short
         list="$(tool debug-arguments)"
         short="$(awk 'length($0) <= 15' <<<"$list" | tr '\n' ' ')"
         while IFS= read -r -d '' f; do
-            if held="$(knot_debug_arguments_in "$f" "$list")"; then
+            # knot_debug_arguments_in answers 0, found; 1, none; 2, could not look, which fails the check.
+            held_status=0
+            held="$(knot_debug_arguments_in "$f" "$list")" || held_status=$?
+            if ((held_status == 0)); then
                 echo "      debug arguments in ${f#"$app"/}: $(tr '\n' ' ' <<<"$held")"
                 found=$((found + 1))
+            elif ((held_status > 1)); then
+                echo "      could not look at ${f#"$app"/}: ${held#the inspection failed: }"
+                unread=$((unread + 1))
             fi
         done < <(macho_files "$app")
         echo "      the names of 15 bytes or fewer, which an optimised build can keep inside the code, the scan may not see: ${short:-none}"
+        ((unread == 0)) || return 1
         if [[ $want == none ]]; then ((found == 0)); else ((found > 0)); fi
     }
     check "Release Mac app free of the debug launch arguments" \
