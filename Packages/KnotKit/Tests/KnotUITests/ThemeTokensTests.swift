@@ -12,6 +12,7 @@ import Testing
         #expect(theme.spacing.betweenSegments == theme.spacing.space6)
         #expect(theme.radii.regular == theme.radii.radiusMd)
         #expect(theme.sizes.hitTarget == 44)
+        #expect(theme.sizes.insetGlassLabel == 30)
         #expect(theme.motion.animation(for: .recordingPhase, reduceMotion: false) == .snappy)
     }
 
@@ -132,6 +133,28 @@ import Testing
         }
     }
 
+    #if os(iOS) || os(macOS)
+        @Test(arguments: ColorScheme.allCases, [ColorRole.background, .backgroundGrouped])
+        func secondaryInkMeetsTextContrast(in scheme: ColorScheme, on ground: ColorRole) {
+            var environment = EnvironmentValues()
+            environment.colorScheme = scheme
+            let palette = Theme.designed.colors
+            let ink = palette[.textSecondary].resolve(in: environment)
+            let paper = palette[ground].resolve(in: environment)
+            #expect(paper.opacity == 1)
+
+            // Composite in the view's sRGB space, then measure linear luminance.
+            let visibleInk = Color.Resolved(
+                red: ink.red * ink.opacity + paper.red * (1 - ink.opacity),
+                green: ink.green * ink.opacity + paper.green * (1 - ink.opacity),
+                blue: ink.blue * ink.opacity + paper.blue * (1 - ink.opacity))
+            let foreground = luminance(visibleInk)
+            let background = luminance(paper)
+            let ratio = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+            #expect(ratio >= 4.5, "Secondary ink on \(ground) in \(scheme) has a contrast ratio of \(ratio)")
+        }
+    #endif
+
     @Test(arguments: ColorScheme.allCases, ColorSchemeContrast.allCases)
     func theAccentAndAttentionInksFollowAppearanceAndContrast(in scheme: ColorScheme, contrast: ColorSchemeContrast) {
         var environment = EnvironmentValues()
@@ -200,6 +223,7 @@ import Testing
         #expect(theme.sizes.readableWidth == 672)
         #expect(theme.sizes.macPanelWidth == 640)
         #expect(theme.sizes.waveformBar == 2)
+        #expect(theme.sizes.arrivalDot == 8)
     }
 
     @Test func theEnvironmentCarriesCustomMetrics() {
@@ -221,6 +245,7 @@ import Testing
         #expect(theme.radii.radiusLg == 21)
         #expect(theme.radii.control == 3)
         #expect(theme.sizes.hitTarget == 52)
+        #expect(theme.sizes.insetGlassLabel == 38)
         #expect(theme.sizes.waveformBar == 3)
         #expect(theme.sizes.hitTargetMac == 28)
     }

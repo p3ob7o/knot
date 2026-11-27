@@ -23,11 +23,11 @@ public struct StoreProblem: Hashable, Sendable {
             case KnotError.storeNewerThanBuild.code:
                 localized("Your notes were saved by a newer Knot. Update Knot to open them.")
             case KnotError.storeDamaged.code:
-                localized("Knot can't read your notes. Nothing was deleted.")
+                localized("Knot can’t read your notes. Nothing was deleted.")
             case KnotError.diskFull.code:
-                localized("This device is out of space, so Knot can't open your notes.")
+                localized("This device is out of space, so Knot can’t open your notes.")
             default:
-                localized("Knot can't open your notes right now.")
+                localized("Knot can’t open your notes right now.")
             }
         return cause + " " + kept
     }
@@ -51,7 +51,7 @@ public enum SurfaceProblem: Hashable, Sendable {
     public var message: String {
         switch self {
         case .couldNotSave:
-            localized("Knot couldn't save this text. It stays here until it can.")
+            localized("Knot couldn’t save this text. It stays here until it can.")
         case .couldNotStartRecording(let code):
             switch code {
             case KnotError.microphonePermissionRefused.code:
@@ -59,16 +59,16 @@ public enum SurfaceProblem: Hashable, Sendable {
             case KnotError.noInputDevice.code:
                 localized("No microphone is connected. You can still type.")
             case KnotError.tooLittleSpace.code:
-                localized("There isn't enough space to record.")
+                localized("There isn’t enough space to record.")
             default:
-                localized("The recording couldn't start.")
+                localized("The recording couldn’t start.")
             }
         case .actionRefused:
-            localized("That didn't work. Nothing was changed.")
+            localized("That didn’t work. Nothing was changed.")
         case .undoRefused:
-            localized("The note it came from has changed or is gone, so the move can't be undone.")
+            localized("The note it came from has changed or is gone, so the move can’t be undone.")
         case .notAvailableYet:
-            localized("This isn't available yet.")
+            localized("This isn’t available yet.")
         }
     }
 }

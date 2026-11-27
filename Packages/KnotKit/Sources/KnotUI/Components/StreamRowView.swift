@@ -17,6 +17,8 @@ extension RowTextSize {
 public struct StreamRowView: View {
     @Environment(\.knotTheme) private var theme
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.calendar) private var calendar
+    @Environment(\.locale) private var locale
     let row: StreamRowModel
 
     public init(_ row: StreamRowModel) {
@@ -24,7 +26,9 @@ public struct StreamRowView: View {
     }
 
     public var body: some View {
-        let parts = row.visibleParts(at: RowTextSize(typeSize))
+        let size = RowTextSize(typeSize)
+        let parts = row.visibleParts(at: size)
+        let time = compactStreamTime(row.time, now: .now, calendar: calendar, locale: locale)
         VStack(alignment: .leading, spacing: theme.spacing.tight) {
             HStack(alignment: .firstTextBaseline, spacing: theme.spacing.regular) {
                 if parts.contains(.arrivedMarker) { ArrivedMarker() }
@@ -34,8 +38,10 @@ public struct StreamRowView: View {
                     .foregroundStyle(theme.colors[.textPrimary])
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: theme.spacing.regular)
-                if parts.contains(.failedMarker) { FailedMarker() }
-                if parts.contains(.pendingMarker) { PendingMarker() }
+                if size == .regular {
+                    if parts.contains(.failedMarker) { FailedMarker() }
+                    if parts.contains(.pendingMarker) { PendingMarker() }
+                }
             }
             if parts.contains(.preview), let preview = row.preview {
                 // The preview is short by design: the model cuts it to an excerpt, and the row shows
@@ -45,23 +51,35 @@ public struct StreamRowView: View {
                     .foregroundStyle(theme.colors[.textSecondary])
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: theme.spacing.regular) {
-                // The time always stays on the row (docs/product-spec.md §7): it wraps rather
-                // than being clipped at large text sizes.
-                Text(row.time.formatted(.relative(presentation: .named)))
-                    .fixedSize(horizontal: false, vertical: true)
-                if parts.contains(.kinds) {
-                    ForEach(row.kinds, id: \.rawValue) { kind in
-                        Image(systemName: kind.symbol)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: theme.spacing.space1) {
+                    Text(time)
+                    markers(parts, size: size)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: theme.spacing.space1) {
+                    Text(time)
+                    markers(parts, size: size)
                 }
             }
-            .font(theme.type[.caption])
+            .font(theme.type[.metaLine])
             .foregroundStyle(theme.colors[.textSecondary])
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            row.accessibilityLabel(time: row.time.formatted(.relative(presentation: .named))))
+        .accessibilityLabel(row.accessibilityLabel(time: time))
+    }
+    private func markers(_ parts: Set<RowPart>, size: RowTextSize) -> some View {
+        HStack(spacing: theme.spacing.space1) {
+            if parts.contains(.kinds) {
+                ForEach(row.kinds, id: \.rawValue) { kind in
+                    Image(systemName: kind.symbol)
+                }
+            }
+            if size != .regular {
+                if parts.contains(.failedMarker) { FailedMarker() }
+                if parts.contains(.pendingMarker) { PendingMarker() }
+            }
+        }
     }
 }
 

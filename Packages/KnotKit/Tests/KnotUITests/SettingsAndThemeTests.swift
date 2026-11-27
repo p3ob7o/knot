@@ -2,8 +2,9 @@ import Foundation
 import KnotCore
 import KnotFakes
 import KnotTestSupport
-import KnotUI
 import Testing
+
+@testable import KnotUI
 
 /// Settings (docs/product-spec.md §11), the player, and the theme layer.
 @MainActor
@@ -44,6 +45,16 @@ import Testing
         await model.setSyncEnabled(true)
         #expect(try await rig.settings.load().commandLineAccess == false)
         #expect(try await rig.settings.load().syncEnabled == nil)
+    }
+
+    @Test(arguments: [
+        (EnglishVariant.followRegion, "Follow the region"),
+        (.locale("en_US"), "US"),
+        (.locale("en_GB"), "UK"),
+        (.locale("en_AU"), "Australia"),
+    ])
+    func regionalChoicesUseShortLabels(_ variant: EnglishVariant, expected: String) {
+        #expect(SettingsViewModel.label(of: variant, locale: Locale(identifier: "en_US")) == expected)
     }
 
     @Test func aFailedSaveLeavesTheSettingsAsTheyWere() async throws {
@@ -141,3 +152,12 @@ import Testing
 func settingsShowsTheStatusTheSyncEngineReports(status: SyncStatus, expected: SettingsSyncState) {
     #expect(SettingsSyncState(status) == expected)
 }
+
+#if !os(watchOS)
+    @MainActor @Test func onlyIntentionalZoneLossMakesKeepingSyncPausedProminent() {
+        #expect(SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.purged)))
+        #expect(SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.encryptedDataReset)))
+        #expect(!SyncPresentation.prefersKeepingSyncPaused(for: .zoneRemoved(.deleted)))
+        #expect(!SyncPresentation.prefersKeepingSyncPaused(for: .accountChanged))
+    }
+#endif

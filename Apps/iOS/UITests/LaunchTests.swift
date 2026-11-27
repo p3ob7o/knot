@@ -44,6 +44,34 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "One more thought")
     }
 
+    @MainActor
+    func testCaptureKeepsItsControlsAboveTheKeyboard() throws {
+        let app = KnotLauncher.launch(.preview)
+        assertCaptureIsReady(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let record = app.buttons["Record"]
+        let newNote = app.buttons["New note"]
+        app.typeText("Ask for the roof estimate.")
+        XCTAssertTrue(newNote.waitForExistence(timeout: limit))
+        XCTAssertTrue(newNote.isHittable)
+        XCTAssertTrue(record.isHittable)
+        XCTAssertEqual(newNote.frame.width, record.frame.width, accuracy: 1)
+        XCTAssertEqual(newNote.frame.height, record.frame.height, accuracy: 1)
+        for control in [newNote, record] {
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44, "\(control.label) is at least 44 points wide.")
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44, "\(control.label) is at least 44 points high.")
+        }
+        XCTAssertLessThanOrEqual(newNote.frame.maxY, keyboard.frame.minY)
+        XCTAssertLessThanOrEqual(record.frame.maxY, keyboard.frame.minY)
+        let controls = XCTAttachment(screenshot: app.screenshot())
+        let size = UIApplication.shared.preferredContentSizeCategory
+        XCTAssertTrue(size == .large || size == .accessibilityExtraExtraExtraLarge)
+        controls.name = "capture-keyboard-controls-live-light-\(size == .large ? "default" : "ax5")"
+        controls.lifetime = .keepAlways
+        add(controls)
+        try app.auditAccessibility()
+    }
+
     /// `live-smoke-type-kill-relaunch-read-iphone`: on `.live` with a temporary store, type,
     /// kill, relaunch, read (docs/architecture.md §17), with the accessibility audit.
     ///
@@ -80,11 +108,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testRecordsInjectedAudioAndShowsItsVoiceSegment() throws {
         let app = KnotLauncher.launch(.preview)
-        let record = app.buttons["Record"]
-        XCTAssertTrue(record.waitForExistence(timeout: limit))
-        record.tap()
-
-        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+        let stop = startRecording(in: app)
         XCTAssertTrue(stop.waitForExistence(timeout: limit))
         XCTAssertTrue(captureField(in: app).waitForNonExistence(timeout: limit))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: limit))
@@ -101,17 +125,56 @@ final class KnotIOSLaunchTests: XCTestCase {
     }
 
     @MainActor
+    func testOpeningANoteKeepsItsKeyboardDownAndItsRecordingTrackAllowsScrolling() throws {
+        let app = KnotLauncher.application(.preview)
+        app.launchEnvironment["KNOT_PREVIEW_SCROLL_RECORDING"] = "1"
+        app.launch()
+        // At the audit's larger text sizes, a long note's lines can run under the floating controls.
+        // The detector reads the cut glyphs as text without an accessibility element.
+        try assertStreamShows("Synthetic speech follow-up", in: app)
+        let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Synthetic speech follow-up"))
+            .firstMatch
+        note.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: limit))
+
+        let track = app.descendants(matching: .any).matching(identifier: "recording.position").firstMatch
+        XCTAssertTrue(track.waitForExistence(timeout: limit))
+        app.buttons["Play"].tap()
+        let pause = app.buttons["Pause"]
+        XCTAssertTrue(pause.waitForExistence(timeout: limit))
+        pause.tap()
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: limit))
+        XCTAssertTrue(track.isHittable)
+        let trackY = track.frame.midY
+        let initialPosition = try XCTUnwrap(track.value as? String)
+        XCTAssertEqual(initialPosition, "0:00 / 0:42")
+        let start = track.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -160)))
+
+        XCTAssertTrue(!track.isHittable || track.frame.midY < trackY - 20)
+        if !track.isHittable { app.scrollViews.firstMatch.swipeDown() }
+        XCTAssertTrue(track.isHittable)
+        XCTAssertEqual(track.value as? String, initialPosition)
+        let left = track.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let right = track.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        left.press(forDuration: 0.1, thenDragTo: right)
+        let sought = NSPredicate(format: "exists == YES AND value MATCHES %@", "0:(0[1-9]|[1-3][0-9]|4[0-2]) / 0:42")
+        XCTAssertTrue(
+            waitFor(sought, on: track),
+            "The recording track still exists and reports a positive position within the same 42-second recording.")
+    }
+
+    @MainActor
     func testNotesShowsLiveRecordingAfterClosingCapture() throws {
         let app = KnotLauncher.launch(.preview)
-        let record = app.buttons["Record"]
-        XCTAssertTrue(record.waitForExistence(timeout: limit))
         let notice = app.buttons["shell.recordingNotice"]
         XCTAssertFalse(notice.exists)
-        record.tap()
-
-        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+        let stop = startRecording(in: app)
         XCTAssertTrue(stop.waitForExistence(timeout: limit))
-        app.buttons["shell.notes"].tap()
+        let newNote = app.buttons["New note"]
+        XCTAssertTrue(newNote.exists)
+        XCTAssertFalse(newNote.isEnabled)
+        showNotes(in: app, keyboardVisible: false)
 
         XCTAssertTrue(notice.waitForExistence(timeout: limit))
         XCTAssertTrue(stop.waitForNonExistence(timeout: limit))
@@ -126,7 +189,8 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Recording. Typing waits until you stop."].waitForExistence(timeout: limit))
         stop.tap()
         XCTAssertTrue(segment("a scripted transcript of a recording", in: app).waitForExistence(timeout: limit))
-        app.buttons["shell.notes"].tap()
+        // Returning to the capture field can restore focus after Stop.
+        showNotes(in: app, keyboardVisible: nil)
         XCTAssertTrue(app.buttons["shell.compose"].waitForExistence(timeout: limit))
         XCTAssertTrue(notice.waitForNonExistence(timeout: limit))
     }
@@ -164,9 +228,15 @@ final class KnotIOSLaunchTests: XCTestCase {
         let first = "First synthetic segment"
         let second = "Second synthetic segment"
         try openTwoSegmentNote(first, second, in: app)
-        let menus = app.buttons.matching(identifier: "Segment actions")
-        XCTAssertTrue(menus.element(boundBy: 1).waitForExistence(timeout: limit))
-        menus.element(boundBy: 1).tap()
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let menus = app.buttons.matching(identifier: "Segment actions")
+            XCTAssertTrue(menus.element(boundBy: 1).waitForExistence(timeout: limit))
+            menus.element(boundBy: 1).tap()
+        } else {
+            let secondSegment = segment(second, in: app)
+            XCTAssertTrue(secondSegment.waitForExistence(timeout: limit))
+            secondSegment.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 1)
+        }
         app.buttons["Move to its own note"].tap()
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: limit))
@@ -234,8 +304,8 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testAuditsTheFirstRunAndSettingsScreens() throws {
         let app = KnotLauncher.launch(.preview)
-        app.buttons["shell.notes"].tap()
-        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        showNotes(in: app)
+        XCTAssertTrue(app.staticTexts["No notes yet."].waitForExistence(timeout: limit))
         XCTAssertTrue(app.buttons["Dismiss Add a Lock Screen control"].exists)
         try XCTContext.runActivity(named: "Audit first-run Notes") { _ in try app.auditAccessibility() }
 
@@ -252,17 +322,30 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(variant.waitForExistence(timeout: limit))
         XCTAssertEqual(variant.value as? String, "Follow the region")
         variant.tap()
-        let choices = app.navigationBars["English variant"]
-        XCTAssertTrue(choices.waitForExistence(timeout: limit))
+        let unitedKingdom = app.descendants(matching: .any).matching(identifier: "UK").firstMatch
+        XCTAssertTrue(unitedKingdom.waitForExistence(timeout: limit))
+        try XCTContext.runActivity(named: "Audit English variant choices") { _ in
+            // The native menu covers part of the Settings controls. The settled form's audits
+            // measure their contrast without the menu over them.
+            try app.auditAccessibility(types: .all.subtracting(.contrast))
+        }
+        if !unitedKingdom.exists {
+            variant.tap()
+            XCTAssertTrue(
+                unitedKingdom.waitForExistence(timeout: limit), "The reopened English variant picker shows UK.")
+        }
+        unitedKingdom.tap()
+        XCTAssertTrue(
+            waitFor(NSPredicate(format: "exists == YES AND value == %@", "UK"), on: variant),
+            "The English variant row shows UK after the setting is saved.")
         try app.auditAccessibility()
-        choices.buttons["Settings"].tap()
 
         about.tap()
         let aboutPage = app.navigationBars["About Knot"]
         XCTAssertTrue(aboutPage.waitForExistence(timeout: limit))
         try app.auditAccessibility()
         aboutPage.buttons["Settings"].tap()
-        app.buttons["Export all notes"].tap()
+        app.buttons["Export all notes…"].tap()
         XCTAssertTrue(app.buttons["Choose a folder…"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
     }
@@ -270,8 +353,8 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testFirstRunSetupRowOpensItsSheet() throws {
         let app = KnotLauncher.launch(.preview)
-        app.buttons["shell.notes"].tap()
-        XCTAssertTrue(app.staticTexts["No notes yet"].waitForExistence(timeout: limit))
+        showNotes(in: app)
+        XCTAssertTrue(app.staticTexts["No notes yet."].waitForExistence(timeout: limit))
         app.buttons["Add a Lock Screen control"].tap()
         XCTAssertTrue(app.navigationBars["Add a Lock Screen control"].waitForExistence(timeout: limit))
         try app.auditAccessibility()
@@ -280,7 +363,7 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     func testSettingsActionButtonRowOpensItsSheet() throws {
         let app = KnotLauncher.launch(.preview)
-        app.buttons["shell.notes"].tap()
+        showNotes(in: app)
         app.buttons["More"].tap()
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: limit))
@@ -321,20 +404,109 @@ final class KnotIOSLaunchTests: XCTestCase {
         let field = captureField(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: limit))
         app.typeText(first)
-        app.navigationBars.buttons["Done"].tap()
-        XCTAssertTrue(segment(first, in: app).waitForExistence(timeout: limit))
-        field.tap()
+        app.typeKey(.return, modifierFlags: .command)
+        let saved = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ AND value == %@", "Typed", first)
+        ).firstMatch
+        let hasDraft = { field.exists && field.value as? String == first && !saved.exists }
+        let needsTap = hasDraft()
+        if needsTap {
+            tapCaptureControl(
+                app.navigationBars.buttons["Done"], named: "Done", in: app, keyboardVisible: true,
+                expecting: "the first saved typed segment before the next capture starts", while: hasDraft
+            ) {
+                saved.exists
+            }
+        }
+        let route = needsTap ? "the settled Done tap" : "Command-Return"
+        XCTAssertTrue(
+            saved.waitForExistence(timeout: limit),
+            "Ending the first capture via \(route) must show its saved typed segment before the next capture starts.")
+        let keyboard = app.keyboards.firstMatch
+        if !keyboard.exists {
+            tapCaptureControl(field, named: "Capture field", in: app, keyboardVisible: false, expecting: "the keyboard")
+            {
+                keyboard.exists
+            }
+        }
         app.typeText(second)
         try assertStreamShows(second, in: app)
         app.buttons.containing(NSPredicate(format: "label CONTAINS %@", second)).firstMatch.tap()
     }
 
+    @MainActor
+    private func waitFor(_ predicate: NSPredicate, on object: Any? = nil) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: object)
+        return XCTWaiter.wait(for: [expectation], timeout: limit) == .completed
+    }
+
+    @MainActor
+    private func startRecording(in app: XCUIApplication) -> XCUIElement {
+        let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
+        tapCaptureControl(
+            app.buttons["Record"], named: "Record", in: app, keyboardVisible: true,
+            expecting: "Stop recording"
+        ) {
+            stop.isHittable
+        }
+        return stop
+    }
+
+    @MainActor
+    private func showNotes(in app: XCUIApplication, keyboardVisible: Bool? = true) {
+        let notes = app.buttons["shell.notes"]
+        let compose = app.buttons["shell.compose"]
+        tapCaptureControl(
+            notes, named: "Notes", in: app, keyboardVisible: keyboardVisible,
+            expecting: "the Notes stream after the capture sheet closes"
+        ) {
+            !notes.exists && compose.isHittable
+        }
+    }
+
+    @MainActor
+    private func tapCaptureControl(
+        _ control: XCUIElement, named controlName: String, in app: XCUIApplication, keyboardVisible: Bool?,
+        expecting destinationName: String, while canTap: @escaping () -> Bool = { true },
+        reachedDestination: @escaping () -> Bool
+    ) {
+        let message = "Tapping \(controlName) shows \(destinationName)."
+        let keyboard = app.keyboards.firstMatch
+        for _ in 0..<3 {
+            // A missed tap can leave the sheet in place, but neither a moving sheet nor a
+            // transition whose source control is gone can authorize another tap.
+            var previousFrame: CGRect?
+            var previousKeyboard: Bool?
+            let settled = NSPredicate { _, _ in
+                if reachedDestination() { return true }
+                let visible = keyboard.exists
+                guard canTap(), control.isHittable, control.isEnabled,
+                    keyboardVisible == nil || keyboardVisible == visible
+                else {
+                    previousFrame = nil
+                    previousKeyboard = nil
+                    return false
+                }
+                let frame = control.frame
+                defer {
+                    previousFrame = frame
+                    previousKeyboard = visible
+                }
+                return !frame.isEmpty && previousFrame == frame && previousKeyboard == visible
+            }
+            guard waitFor(settled) else { break }
+            if reachedDestination() { return }
+            guard canTap(), control.isHittable, control.isEnabled else { break }
+            control.tap()
+        }
+        XCTAssertTrue(waitFor(NSPredicate { _, _ in reachedDestination() }), message)
+    }
+
     /// Opens the stream and finds the row of `line`, then audits the stream.
     @MainActor
     private func assertStreamShows(_ line: String, in app: XCUIApplication) throws {
-        // The tap itself waits for the app to become idle after it sends the event.
         let start = ContinuousClock.now
-        app.buttons["shell.notes"].tap()
+        showNotes(in: app)
         let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", line)).firstMatch
         let rowAppeared = row.waitForExistence(timeout: limit)
         if start.duration(to: .now) > .seconds(10) {

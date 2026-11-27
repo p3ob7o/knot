@@ -6,11 +6,11 @@
     import SwiftUI
 
     enum PreviewSurface {
-        case phone, pad, panel, window, watch
+        case phone, compactPad, pad, panel, compactWindow, window, watch
 
         var size: CGSize {
             switch self {
-            case .phone: CGSize(width: 390, height: 844)
+            case .phone, .compactPad, .compactWindow: CGSize(width: 390, height: 844)
             case .pad: CGSize(width: 700, height: 900)
             case .panel: CGSize(width: 640, height: 280)
             case .window: CGSize(width: 1024, height: 700)
@@ -21,23 +21,55 @@
         var captureSurface: CaptureSurface {
             switch self {
             case .panel: .macPanel
-            case .window: .macWindow
+            case .window, .compactWindow: .macWindow
             default: .app
             }
         }
 
         var settingsPlatform: SettingsPlatform {
             switch self {
-            case .pad: .iPad
-            case .panel, .window: .mac
+            case .pad, .compactPad: .iPad
+            case .panel, .compactWindow, .window: .mac
             default: .iPhone
             }
         }
     }
 
-    @MainActor
+    extension EnvironmentValues {
+        @Entry var matrixReadyFile: URL?
+    }
+
+    struct MatrixReady: ViewModifier {
+        @Environment(\.matrixReadyFile) private var readyFile
+        var diagnostic: () -> String = { "" }
+
+        func body(content: Content) -> some View {
+            content.task {
+                guard let readyFile else { return }
+                do {
+                    // Wait for the native sheet or keyboard transition after the model appears.
+                    try await Task.sleep(for: .seconds(1))
+                    try Data(diagnostic().utf8).write(to: readyFile, options: .atomic)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    assertionFailure("Could not mark the preview as ready")
+                }
+            }
+        }
+    }
+
+    @MainActor @ViewBuilder
     func matrixFrame(_ surface: PreviewSurface, @ViewBuilder contents: () -> some View) -> some View {
-        contents().frame(width: surface.size.width, height: surface.size.height)
+        #if os(iOS)
+            if surface == .phone {
+                contents().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                contents().frame(width: surface.size.width, height: surface.size.height)
+            }
+        #else
+            contents().frame(width: surface.size.width, height: surface.size.height)
+        #endif
     }
 
     enum RecordingExample {
@@ -119,6 +151,10 @@
             let surface: PreviewSurface
             let example: CaptureExample
             @State private var loaded: Loaded?
+            @State private var presentsCapture = true
+            @State private var offsetFromTop: CGFloat?
+            var showsSpeechDownload = false
+            var scrollsToEnd = false
 
             private struct Loaded {
                 let model: NoteViewModel
@@ -130,11 +166,54 @@
                 matrixFrame(surface) {
                     Group {
                         if let loaded {
-                            if surface == .panel {
-                                note(loaded)
-                            } else {
-                                NavigationStack { note(loaded) }
-                            }
+                            #if os(iOS)
+                                if surface == .phone, example == .older {
+                                    NavigationStack {
+                                        Color.clear
+                                            .navigationTitle("Notes")
+                                            .navigationDestination(isPresented: $presentsCapture) {
+                                                note(loaded)
+                                                    .navigationBarTitleDisplayMode(.inline)
+                                                    .toolbar {
+                                                        PhoneNoteToolbar {
+                                                            Button("Copy note", systemImage: "document.on.document") {}
+                                                            ShareLink(
+                                                                item: loaded.model.items.map(\.text).joined(
+                                                                    separator: "\n")
+                                                            ) {
+                                                                Label("Share note…", systemImage: "square.and.arrow.up")
+                                                            }
+                                                            Button(
+                                                                "Delete note", systemImage: "trash", role: .destructive
+                                                            ) {}
+                                                        }
+                                                    }
+                                            }
+                                    }
+                                } else if surface == .phone {
+                                    NavigationStack {
+                                        Color.clear
+                                            .navigationTitle("Notes")
+                                    }
+                                    .sheet(isPresented: $presentsCapture) {
+                                        NavigationStack {
+                                            note(loaded)
+                                                .toolbar {
+                                                    CaptureSheetToolbar { presentsCapture = false }
+                                                }
+                                        }
+                                        .presentationDetents([.large])
+                                    }
+                                } else {
+                                    NavigationStack { note(loaded) }
+                                }
+                            #else
+                                if surface == .panel {
+                                    note(loaded)
+                                } else {
+                                    NavigationStack { note(loaded) }
+                                }
+                            #endif
                         } else {
                             ProgressView()
                         }
@@ -144,11 +223,37 @@
             }
 
             private func note(_ loaded: Loaded) -> some View {
-                NoteView(model: loaded.model, player: loaded.player)
-                    .onDisappear {
-                        loaded.releaseStart?.finish()
-                        if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
+                ScrollViewReader { scroll in
+                    NoteView(model: loaded.model, player: loaded.player, initialFocus: focusForPreview)
+                        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.contentOffset.y + geometry.contentInsets.top
+                        } action: { _, offset in
+                            offsetFromTop = offset
+                        }
+                        .task(id: loaded.model.speechDownloading) {
+                            if scrollsToEnd, loaded.model.speechDownloading {
+                                scroll.scrollTo(NoteView.captureFieldScrollID, anchor: .bottom)
+                            }
+                        }
+                }
+                .modifier(
+                    MatrixReady {
+                        guard example == .older || scrollsToEnd, let offsetFromTop else { return "" }
+                        return "Scroll offset from top: \(offsetFromTop) points"
                     }
+                )
+                .onDisappear {
+                    loaded.releaseStart?.finish()
+                    if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
+                }
+            }
+
+            private var focusForPreview: NoteView.InitialFocus? {
+                switch example {
+                case .older: .capture
+                case .permission, .saveFailure, .saved, .discarded: .some(.none)
+                default: nil
+                }
             }
 
             private func load() async {
@@ -156,6 +261,9 @@
                 let folder = FileManager.default.temporaryDirectory.appending(
                     path: "KnotMatrix-\(UUID().uuidString)", directoryHint: .isDirectory)
                 var environment = AppEnvironment.makePreview(root: folder)
+                if showsSpeechDownload {
+                    (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.installing)
+                }
                 let engine = environment.engine
                 let pressClock = FakeClock(.now)
                 var note: NoteID?
@@ -177,6 +285,13 @@
                 if example == .discarded { environment.clock = pressClock }
                 if example == .saved {
                     (environment.transcriber as? ScriptedTranscriber)?.setReadiness(.notInstalled)
+                    (environment.recorder as? ScriptedRecorder)?.setScript(
+                        .init(framesPerBuffer: 192_000, buffers: 1))
+                }
+                if example == .live || example == .blocked {
+                    (environment.recorder as? ScriptedRecorder)?.setScript(
+                        .init(buffers: 30, interval: .milliseconds(30)))
+                    environment.engine = PreviewLiveWords(base: engine)
                 }
                 let frozen = RecordingClock(
                     now: { .zero },
@@ -209,9 +324,20 @@
                     loaded = Loaded(model: model, player: player, releaseStart: pendingStart?.continuation)
                     return
                 case .saved:
+                    let states = engine.states()
                     model.press(.holdStart)
                     await model.settle()
-                    model.press(.holdRelease)
+                    if let id = model.activeRecording {
+                        for await state in states where state.captureID == id {
+                            if state.durableRevision >= 192_000 || state.outcome != .open { break }
+                        }
+                        model.press(.holdRelease)
+                        await model.settle()
+                        let values = PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                        let peaks = RecordingPeaks.header(framesPerValue: 4_000) + Data(values)
+                        try? await environment.notes.setPeaks(peaks, of: SegmentID(id))
+                        await model.refresh()
+                    }
                 case .discarded:
                     model.toggleRecording()
                     await model.settle()
@@ -243,11 +369,59 @@
             }
         }
 
-        // WP-33 owns the panel’s capture destination. The limit notice waits for the recording contract.
+        /// The common preview engine emits audio levels. Supply sample words on that same
+        /// feed so the phone preview draws the real live transcript view.
+        private struct PreviewLiveWords: CaptureEngine {
+            let base: any CaptureEngine
+
+            func states() -> AsyncStream<CaptureState> { base.states() }
+            func begin(_ request: CaptureRequest) async throws(KnotError) -> CaptureState {
+                try await base.begin(request)
+            }
+            func update(_ capture: CaptureID, with content: CaptureUpdate) async throws(KnotError) -> CaptureState {
+                try await base.update(capture, with: content)
+            }
+            func end(_ capture: CaptureID) async throws(KnotError) -> CaptureState { try await base.end(capture) }
+            func discard(_ capture: CaptureID) async throws(KnotError) -> CaptureState {
+                try await base.discard(capture)
+            }
+            func press(_ press: Press, recording request: CaptureRequest) async throws(KnotError)
+                -> RecordingPressOutcome
+            {
+                try await base.press(press, recording: request)
+            }
+
+            func live(_ capture: CaptureID) -> AsyncStream<LiveCaptureEvent> {
+                let events = base.live(capture)
+                return AsyncStream(bufferingPolicy: .bufferingNewest(32)) { continuation in
+                    continuation.yield(
+                        .transcript(LiveTranscript(final: "Ask about the roof ", volatile: "estimate.")))
+                    let task = Task {
+                        let levels = PreviewSamples.levels
+                        var index = 0
+                        for await event in events {
+                            if case .level = event, !levels.isEmpty {
+                                let peak = levels[index % levels.count]
+                                continuation.yield(.level(peak: peak, average: peak * 0.7))
+                                index += 1
+                            } else {
+                                continuation.yield(event)
+                            }
+                        }
+                        continuation.finish()
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
+        }
+
+        // WP-33 owns the panel’s capture destination. The limit notice is a stand-in until WP-21 wires it.
         struct RecordingMatrixPreview: View {
             let surface: PreviewSurface
             let example: RecordingExample
             @FocusState private var focused: Bool
+            @State private var showsLimitNotice = true
+            @Environment(\.knotTheme) private var theme
 
             var body: some View {
                 matrixFrame(surface) {
@@ -256,31 +430,46 @@
                             .safeAreaInset(edge: .bottom) { controls }
                     } else {
                         NavigationStack {
-                            page
-                                .toolbar {
-                                    ToolbarItem(placement: .confirmationAction) {
-                                        Button("Done", systemImage: "checkmark") {}
-                                            .labelStyle(.iconOnly)
-                                            .disabled(true)
-                                    }
-                                    #if os(iOS)
-                                        ToolbarItem(placement: .bottomBar) { controls }
-                                    #else
-                                        ToolbarItem(placement: .automatic) { controls }
-                                    #endif
+                            Group {
+                                if example == .limit {
+                                    ScrollView { page }
+                                } else {
+                                    page
                                 }
+                            }
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button("Done", systemImage: "checkmark") {}
+                                        .labelStyle(.iconOnly)
+                                        .disabled(true)
+                                }
+                                #if os(iOS)
+                                    ToolbarItem(placement: .bottomBar) { controls }
+                                #else
+                                    ToolbarItem(placement: .automatic) { controls }
+                                #endif
+                            }
                         }
                     }
                 }
+                .modifier(MatrixReady())
             }
 
             private var page: some View {
                 VStack(alignment: .leading) {
-                    if example == .limit {
-                        Banner("Recording stopped at 30 minutes and was saved.", symbol: "stop.fill")
+                    if example == .limit, showsLimitNotice {
+                        Banner(
+                            "Recording stopped at 30 minutes and was saved.", symbol: "stop.fill",
+                            dismiss: { showsLimitNotice = false })
                     }
                     if example.outcome == .saved {
-                        SegmentView(PreviewSamples.pendingRecording, handlers: .none)
+                        SegmentView(
+                            savedSample,
+                            handlers: SegmentHandlers(
+                                edit: { _ in }, action: { _ in },
+                                recordingPeaks: {
+                                    PreviewSamples.levels.map { RecordingPeaks.value(peak: $0) }
+                                }))
                     }
                     if example.phase.isRecording {
                         if example == .destination || example == .newDestination, let message = example.notice {
@@ -297,6 +486,12 @@
                     Spacer()
                 }
                 .padding()
+            }
+
+            private var savedSample: SegmentItem {
+                var sample = PreviewSamples.pendingRecording
+                if example == .limit { sample.duration = .seconds(1_800) }
+                return sample
             }
 
             private var controls: some View {
@@ -318,52 +513,44 @@
         }
 
         enum SettingsExample {
-            case full, sync, prompts, export, firstRun
+            case full, sync, export
         }
 
         struct SettingsMatrixPreview: View {
             let surface: PreviewSurface
             let example: SettingsExample
+            var syncStatus: SyncStatus = .idle(lastSuccess: nil)
 
             var body: some View {
                 matrixFrame(surface) {
                     switch example {
-                    case .full:
-                        SettingsMatrixForm(surface: surface)
-                    case .sync:
-                        Form {
-                            ForEach(SettingsSyncState.allCases, id: \.self) { SettingsSyncStatusView($0) }
-                        }
-                    case .prompts:
-                        // WP-16 owns sync prompts. These are examples of their shared notice.
-                        Form {
-                            Banner("The iCloud account changed.", symbol: "person.crop.circle") {
-                                Button("Keep sync paused") {}
-                            }
-                            Banner("Notes were removed from iCloud.", symbol: "icloud.slash") {
-                                Button("Keep sync paused") {}
-                            }
+                    case .full, .sync:
+                        NavigationStack {
+                            SettingsMatrixForm(
+                                surface: surface, syncStatus: syncStatus, showsSyncFirst: example == .sync
+                            )
+                            .navigationTitle("Settings")
+                            #if os(iOS)
+                                .navigationBarTitleDisplayMode(.inline)
+                                .toolbar {
+                                    ToolbarItem(placement: .cancellationAction) {
+                                        Button("Close", systemImage: "xmark") {}
+                                    }
+                                }
+                            #endif
                         }
                     case .export:
-                        // WP-20 owns the export flow. This shows the shared notice and progress controls.
-                        Form {
-                            ProgressView("Exporting notes…")
-                            Banner("Export complete", symbol: "checkmark")
-                            Banner("One recording could not be fetched.", symbol: "icloud.slash")
+                        List {
+                            ExportResultRows(.exporting)
+                            ExportResultRows(
+                                .complete(
+                                    notes: 2,
+                                    missing: [
+                                        .init(id: PreviewSamples.ids.make(), kind: .audio, noteLabel: "Roof repair")
+                                    ]))
                         }
-                    case .firstRun:
-                        // WP-30 owns first-run routing and the model download states.
-                        FirstRunView(FirstRunContent(syncLine: nil, setupRows: [.actionButton])) { _ in }
-                            .safeAreaInset(edge: .bottom) {
-                                VStack {
-                                    Banner(
-                                        SurfaceProblem.couldNotStartRecording(
-                                            KnotError.microphonePermissionRefused.code
-                                        ).message,
-                                        symbol: "mic.slash")
-                                    ProgressView("Downloading the speech model…")
-                                }
-                            }
+                        .modifier(MatrixReady())
+
                     }
                 }
             }
@@ -371,24 +558,59 @@
 
         private struct SettingsMatrixForm: View {
             let surface: PreviewSurface
+            let syncStatus: SyncStatus
+            let showsSyncFirst: Bool
+            @Environment(\.dynamicTypeSize) private var typeSize
             @State private var model: SettingsViewModel?
 
             var body: some View {
                 Group {
-                    if let model { SettingsForm(model) }
+                    if let model {
+                        ScrollViewReader { scroll in
+                            SettingsForm(model, actionButtonSetup: surface == .phone ? {} : nil)
+                                .task {
+                                    if showsSyncFirst, surface == .phone, typeSize == .accessibility5 {
+                                        scroll.scrollTo(SettingsRow.sync, anchor: .top)
+                                    }
+                                }
+                        }
+                        .modifier(MatrixReady())
+                    } else {
+                        ProgressView()
+                    }
                 }
                 .task {
                     guard model == nil else { return }
                     var environment = KnotUIPreviews.environment
                     environment.gates = ScriptedFeatureGates()
+                    var settings = Settings.defaults
+                    settings.syncEnabled = syncStatus != .off
+                    environment.settings = InMemorySettingsStore(settings)
+                    environment.sync = PreviewSettingsSync(status: syncStatus)
                     var context = KnotUIPreviews.context(for: environment)
                     context.sync = .available(signedInToICloud: true)
                     let model = SettingsViewModel(
-                        environment: environment, context: context, platform: surface.settingsPlatform)
+                        environment: environment, context: context, platform: surface.settingsPlatform,
+                        liveActivitiesEnabled: surface == .phone ? false : nil)
                     await model.load()
                     self.model = model
                 }
             }
+        }
+        private struct PreviewSettingsSync: SyncEngine {
+            let status: SyncStatus
+
+            func statusUpdates() -> AsyncStream<SyncStatus> {
+                AsyncStream { continuation in
+                    continuation.yield(status)
+                    continuation.finish()
+                }
+            }
+
+            func start() async {}
+            func stop() async {}
+            func syncNow() async throws(KnotError) {}
+            func answer(_ question: SyncQuestion, _ answer: SyncAnswer) async {}
         }
     #endif
 #endif

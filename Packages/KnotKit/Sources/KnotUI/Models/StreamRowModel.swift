@@ -34,7 +34,7 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
     /// The text of the note's latest segment, or what that segment holds when it has no text
     /// yet. `nil` when it would only repeat the title.
     public var preview: String?
-    /// The kinds of segment the note holds, in the order typed, voice, ink.
+    /// The kinds of segment the note holds, in order of first use.
     public var kinds: [SegmentKind]
     /// The time of the note's latest capture, which orders the stream (rule 9).
     public var time: Date
@@ -93,10 +93,9 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             }
         }
 
-        let order: [SegmentKind] = [.typed, .voice, .ink]
-        let present = Set(shown.map(\.kind))
-        var kinds = order.filter(present.contains)
-        if shown.contains(where: { $0.kind.isUnknown }) { kinds.append(.unknown("")) }
+        var seenKinds: Set<SegmentKind> = []
+        let kinds = shown.map { $0.kind.isUnknown ? .unknown("") : $0.kind }
+            .filter { seenKinds.insert($0).inserted }
 
         self.init(
             id: record.note.id, title: title, preview: preview, kinds: kinds, time: record.note.lastCaptureEndedAt,
@@ -104,17 +103,18 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
             hasArrived: record.liveSegments.contains { $0.arrivedAt != nil })
     }
 
-    /// The parts the row shows at `size`. At large text sizes the preview gives way first,
-    /// then the kinds. The title or first line, the time and a failed marker always stay
+    /// The parts the row shows at `size`. At large text sizes the preview gives way.
+    /// Then the kinds give way at the largest sizes. The title, time and failed mark stay
     /// (docs/product-spec.md §7).
     public func visibleParts(at size: RowTextSize) -> Set<RowPart> {
         var parts: Set<RowPart> = [.title, .time]
-        if hasFailed { parts.insert(.failedMarker) }
-        if hasArrived { parts.insert(.arrivedMarker) }
-        if size < .largest {
-            if !kinds.isEmpty { parts.insert(.kinds) }
-            if hasPending { parts.insert(.pendingMarker) }
+        if hasFailed {
+            parts.insert(.failedMarker)
+        } else if hasPending {
+            parts.insert(.pendingMarker)
         }
+        if hasArrived { parts.insert(.arrivedMarker) }
+        if size < .largest, !kinds.isEmpty { parts.insert(.kinds) }
         if size < .large, preview != nil { parts.insert(.preview) }
         return parts
     }
@@ -125,8 +125,11 @@ public struct StreamRowModel: Hashable, Sendable, Identifiable {
         if let preview { parts.append(preview) }
         parts.append(timeText)
         if !kinds.isEmpty { parts.append(kinds.map(\.label).joined(separator: ", ")) }
-        if hasFailed { parts.append(localized("Needs you")) }
-        if hasPending { parts.append(localized("Text on its way")) }
+        if hasFailed {
+            parts.append(localized("Needs you"))
+        } else if hasPending {
+            parts.append(localized("Text on its way"))
+        }
         if hasArrived { parts.append(localized("Arrived")) }
         return parts.joined(separator: ". ")
     }

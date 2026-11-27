@@ -28,6 +28,7 @@ final class Shell {
     let player: PlayerViewModel
     #if DEBUG
         private let previewSettings = InMemorySettingsStore()
+        private let previewTrackPlayer: FakeAudioPlayer?
     #endif
     /// The screens pushed from Notes.
     var path: [Screen] = []
@@ -73,7 +74,15 @@ final class Shell {
                 }
             })
         search = SearchViewModel(environment: environment, context: context)
-        player = PlayerViewModel(player: environment.player)
+        #if DEBUG
+            previewTrackPlayer =
+                app.live == nil && ProcessInfo.processInfo.environment["KNOT_PREVIEW_SCROLL_RECORDING"] == "1"
+                ? FakeAudioPlayer() : nil
+            let scriptedPlayer: (any AudioPlayer)? = previewTrackPlayer
+            player = PlayerViewModel(player: scriptedPlayer ?? environment.player)
+        #else
+            player = PlayerViewModel(player: environment.player)
+        #endif
         KnotIntentEnvironment.register(environment, in: .shared)
         #if DEBUG
             // Every UI test's launch (KnotLauncher). UIKit's keyboard animations can start and never
@@ -94,6 +103,9 @@ final class Shell {
             #if DEBUG
                 if app.live == nil, ProcessInfo.processInfo.environment["KNOT_PREVIEW_LATE_CAPTURE"] == "1" {
                     await injectPreviewArrival(into: app.environment)
+                }
+                if let previewTrackPlayer {
+                    try? await injectPreviewRecordingNote(into: app.environment, player: previewTrackPlayer)
                 }
             #endif
             _ = await app.runLaunchSequence()
@@ -250,7 +262,7 @@ struct ShellView: View {
         NavigationStack(path: $shell.path) {
             StreamView(
                 stream: shell.stream, search: shell.search, showsInlineSearch: false,
-                openSetupRow: { shell.setupRow = $0 }
+                isRestoring: shell.syncStatus == .fetching, openSetupRow: { shell.setupRow = $0 }
             ) { id in
                 shell.path.append(.note(id))
             }
@@ -265,23 +277,12 @@ struct ShellView: View {
                     if let question = shell.syncQuestion {
                         SyncPresentation(question: question) { shell.answer(question, $0) }
                     }
-                    if shell.syncStatus == .fetching, shell.stream.rows.isEmpty {
-                        ProgressView("Syncing notes…")
-                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 if let deleted = shell.deletedNote {
                     if let offer = deleted.undoOffer {
-                        Banner(offer.label, symbol: "arrow.uturn.backward") {
-                            Button(action: shell.undoNoteDeletion) {
-                                Text("Undo")
-                                    .foregroundStyle(theme.colors[.textPrimary])
-                                    .padding(theme.spacing.loose)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.borderless)
-                        }
+                        UndoCapsule(offer, undo: shell.undoNoteDeletion)
                     } else if let problem = deleted.problem {
                         Banner(problem.message, symbol: "exclamationmark.triangle", role: .failed)
                     }
@@ -293,22 +294,10 @@ struct ShellView: View {
             )
             .toolbar(removing: .search)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Settings") { shell.sheet = .settings }
-                        Button(SettingsRow.recentlyDeleted.title, action: shell.showRecentlyDeleted)
-                    } label: {
-                        Label("More", systemImage: "ellipsis")
-                    }
-                }
-                DefaultToolbarItem(kind: .search, placement: .bottomBar)
-                ToolbarSpacer(.fixed, placement: .bottomBar)
-                ToolbarItem(placement: .bottomBar) {
-                    Button(action: shell.showCapture) {
-                        Label("Capture", systemImage: "square.and.pencil")
-                    }
-                    .accessibilityIdentifier("shell.compose")
-                }
+                PhoneNotesToolbar(
+                    openSettings: { shell.sheet = .settings },
+                    showRecentlyDeleted: shell.showRecentlyDeleted,
+                    showCapture: shell.showCapture)
             }
             .navigationDestination(for: Shell.Screen.self) { screen in
                 switch screen {
@@ -328,14 +317,7 @@ struct ShellView: View {
             case .capture:
                 NavigationStack {
                     NoteScreen(model: shell.capture, player: shell.player)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button(action: shell.dismissCapture) {
-                                    Label("Notes", systemImage: "list.bullet")
-                                }
-                                .accessibilityIdentifier("shell.notes")
-                            }
-                        }
+                        .toolbar { CaptureSheetToolbar(showNotes: shell.dismissCapture) }
                 }
                 .presentationDetents([.large])
                 .interactiveDismissDisabled(shell.capture.isEnding)
@@ -382,7 +364,7 @@ private struct RecordingNotice: View {
                         .foregroundStyle(theme.colors[.textPrimary])
                 }
                 .monospacedDigit()
-                .frame(minHeight: 44)
+                .frame(minHeight: theme.sizes.hitTarget)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -398,6 +380,41 @@ private struct RecordingNotice: View {
 }
 
 #if DEBUG
+    private func injectPreviewRecordingNote(
+        into environment: AppEnvironment, player: FakeAudioPlayer
+    ) async throws {
+        let recording: CaptureID = environment.ids.make()
+        let assetID: AssetID = environment.ids.make()
+        let stored = try await environment.assets.place(Data([1, 2, 3]), as: assetID, kind: .audio)
+        let asset = Asset(
+            id: assetID, segmentID: SegmentID(recording), kind: .audio, byteCount: stored.byteCount,
+            sha256: stored.sha256, availability: .local)
+        let start = environment.clock.now().addingTimeInterval(-120)
+        let origin = CaptureOrigin(source: .device(environment.ids.make()), surface: .app)
+        let launch: LaunchID = environment.ids.make()
+        let note = try await environment.notes.record(
+            NewCapture(
+                id: recording, kind: .voice, origin: origin, launchID: launch, placement: .newNote,
+                startedAt: start, endedAt: start.addingTimeInterval(42), body: .file(asset, duration: .seconds(42)))
+        ).noteID
+        let segment = SegmentID(recording)
+        _ = try await environment.notes.replaceText(
+            TextReplacement(
+                segment: segment, text: "Synthetic speech follow-up recording.", origin: .edited, writer: .app))
+        _ = try await environment.notes.setState(.voice(.ready), of: segment)
+        if let file = try await environment.assets.find(assetID, kind: .audio) {
+            player.script(file.url, length: .seconds(42))
+        }
+        for index in 1...64 {
+            let date = start.addingTimeInterval(Double(42 + index))
+            _ = try await environment.notes.record(
+                NewCapture(
+                    id: environment.ids.make(), kind: .typed, origin: origin, launchID: launch,
+                    placement: .named(note), startedAt: date, endedAt: date,
+                    body: .text("Synthetic speech follow-up \(index).")))
+        }
+    }
+
     private func injectPreviewArrival(into environment: AppEnvironment) async {
         let end = environment.clock.now().addingTimeInterval(-3600)
         let capture = NewCapture(
@@ -428,6 +445,9 @@ struct SettingsScreen: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(action: close) {
+                        Label("Close", systemImage: "xmark")
+                    }
+                    .accessibilityShowsLargeContentViewer {
                         Label("Close", systemImage: "xmark")
                     }
                 }
@@ -465,12 +485,6 @@ struct NoteScreen: View {
 
     var body: some View {
         NoteView(model: model, player: player, shareSegment: shareSegment, observesRecordings: model.mode != .capture)
-            .safeAreaInset(edge: .top) {
-                if model.speechDownloading, model.mode == .capture {
-                    ProgressView("Downloading the speech model…")
-                }
-            }
-            .task { await model.observeSpeechReadiness() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { Flush.run(model) }
             }

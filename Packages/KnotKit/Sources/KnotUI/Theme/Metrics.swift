@@ -71,12 +71,15 @@ public struct Radii: Sendable {
 /// Control and layout sizes, in points.
 public struct Sizes: Sendable {
     public let hitTarget: CGFloat
+    /// The label box inside an inset glass button. The system adds the glass padding.
+    var insetGlassLabel: CGFloat { max(0, hitTarget - 14) }
     public let hitTargetMac: CGFloat
     public let recordControlWatch: CGFloat
     /// Fallback at the default text size. Prefer the system's scalable readable width.
     public let readableWidth: CGFloat
     public let macPanelWidth: CGFloat
     public let waveformBar: CGFloat
+    public let arrivalDot: CGFloat
 
     public init(
         hitTarget: CGFloat = 44,
@@ -84,7 +87,8 @@ public struct Sizes: Sendable {
         recordControlWatch: CGFloat = 88,
         readableWidth: CGFloat = 672,
         macPanelWidth: CGFloat = 640,
-        waveformBar: CGFloat = 2
+        waveformBar: CGFloat = 2,
+        arrivalDot: CGFloat = 8
     ) {
         self.hitTarget = hitTarget
         self.hitTargetMac = hitTargetMac
@@ -92,6 +96,7 @@ public struct Sizes: Sendable {
         self.readableWidth = readableWidth
         self.macPanelWidth = macPanelWidth
         self.waveformBar = waveformBar
+        self.arrivalDot = arrivalDot
     }
 }
 

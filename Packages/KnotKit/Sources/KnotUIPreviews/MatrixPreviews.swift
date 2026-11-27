@@ -1,4 +1,5 @@
 #if DEBUG || KNOT_FAKES
+    import KnotCore
     import SwiftUI
 
     // Preview names follow the cells in docs/design/brief.md §6.
@@ -108,7 +109,14 @@
         }
 
         #Preview("iPhone | Voice segment, each of its six states") {
-            NoteMatrixPreview(surface: .phone, example: .voiceStates)
+            Group {
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .savedOnWatch)
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .savedTextOnItsWay)
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .savedTextBeingMadeElsewhere)
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .ready)
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .needsYou)
+                NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: .keptNoText)
+            }
         }
 
         #Preview("iPhone | Voice segment: playing, show original, recording removed") {
@@ -116,7 +124,12 @@
         }
 
         #Preview("iPhone | Ink segment: shown, being recognised, failed, nothing recognised") {
-            NoteMatrixPreview(surface: .phone, example: .ink)
+            Group {
+                NoteMatrixPreview(surface: .phone, example: .ink, inkState: .ready)
+                NoteMatrixPreview(surface: .phone, example: .ink, inkState: .savedTextOnItsWay)
+                NoteMatrixPreview(surface: .phone, example: .ink, inkState: .needsYou)
+                NoteMatrixPreview(surface: .phone, example: .ink, inkState: .keptNoText)
+            }
         }
 
         #Preview("iPhone | Conflict copy") {
@@ -144,11 +157,24 @@
         }
 
         #Preview("iPhone | Sync: off, syncing, error, storage full, no account") {
-            SettingsMatrixPreview(surface: .phone, example: .sync)
+            Group {
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .off)
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .idle(lastSuccess: nil))
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .fetching)
+                SettingsMatrixPreview(surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncFinal.code))
+                SettingsMatrixPreview(
+                    surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncQuotaExceeded.code))
+                SettingsMatrixPreview(
+                    surface: .phone, example: .sync, syncStatus: .failed(KnotError.syncSignedOut.code))
+            }
         }
 
         #Preview("iPhone | Prompts: account changed; notes removed from iCloud") {
-            SettingsMatrixPreview(surface: .phone, example: .prompts)
+            Group {
+                StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .accountChanged)
+                StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .zoneRemoved(.purged))
+                StreamMatrixPreview(surface: .phone, example: .populated, syncQuestion: .zoneRemoved(.deleted))
+            }
         }
 
         #Preview("iPhone | Export: in progress, done, with what it could not fetch") {
@@ -156,7 +182,12 @@
         }
 
         #Preview("iPhone | First run: microphone, model downloading, Action Button") {
-            SettingsMatrixPreview(surface: .phone, example: .firstRun)
+            Group {
+                StreamMatrixPreview(surface: .phone, example: .empty)
+                CaptureMatrixPreview(surface: .phone, example: .permission, showsSpeechDownload: true)
+                CaptureMatrixPreview(
+                    surface: .phone, example: .permission, showsSpeechDownload: true, scrollsToEnd: true)
+            }
         }
 
     #endif
@@ -194,8 +225,8 @@
         }
 
         #Preview("iPad | Two columns do not fit; keyboard up") {
-            // WP-30 owns the split view. Its compact capture detail uses the iPhone layout.
-            CaptureMatrixPreview(surface: .phone, example: .blank)
+            // The phone-sized frame is a stand-in for the compact iPad layout in WP-40b.
+            CaptureMatrixPreview(surface: .compactPad, example: .blank)
         }
 
     #endif
@@ -303,7 +334,7 @@
 
         #Preview("Mac window | Two columns do not fit; keyboard up") {
             // WP-33 owns column collapse. This shows the shared capture page at compact width.
-            CaptureMatrixPreview(surface: .phone, example: .blank)
+            CaptureMatrixPreview(surface: .compactWindow, example: .blank)
         }
 
     #endif

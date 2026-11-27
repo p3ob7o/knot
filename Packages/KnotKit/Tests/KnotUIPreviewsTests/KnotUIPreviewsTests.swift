@@ -101,6 +101,13 @@ func everyDesignedCellHasOneNamedPreview() throws {
     defer { try? FileManager.default.removeItem(at: root) }
     let arrived = try await StreamMatrixPreview(surface: .phone, example: .arrived).makeModels(in: root)
     #expect(arrived.stream.arrival != nil)
+    let damaged = try await StreamMatrixPreview(surface: .phone, example: .unavailable).makeModels(in: root)
+    #expect(damaged.stream.problem?.code == KnotError.storeDamaged.code)
+    let populated = try await StreamMatrixPreview(surface: .phone, example: .populated).makeModels(in: root)
+    let rows = populated.stream.rows
+    #expect(rows.contains { $0.kinds == [.typed, .voice] && $0.preview != nil })
+    #expect(Set(rows.flatMap(\.kinds)) == [.typed, .voice, .ink])
+    #expect(Set(rows.map { Calendar.current.startOfDay(for: $0.time) }).count == 3)
     let results = try await StreamMatrixPreview(surface: .phone, example: .search, query: "roof").makeModels(in: root)
     #expect(results.search.results?.count == 1)
     let empty = try await StreamMatrixPreview(surface: .phone, example: .search, query: "stapler").makeModels(in: root)
@@ -113,8 +120,27 @@ func everyDesignedCellHasOneNamedPreview() throws {
     #expect(playback.note.items.contains { $0.kind == .voice && $0.attachment == .none })
     let voice = try await NoteMatrixPreview(surface: .phone, example: .voiceStates).makeModels(in: root)
     #expect(Set(voice.note.items.filter { $0.kind == .voice }.map(\.state)).count == 6)
+    for state in PreviewSamples.voiceStates.map(\.state) {
+        let variant = try await NoteMatrixPreview(surface: .phone, example: .voiceStates, voiceState: state)
+            .makeModels(in: root)
+        let items = variant.note.items.filter { $0.kind == .voice }
+        #expect(items.map(\.state) == [state])
+        let item = try #require(items.first)
+        if state == .savedOnWatch {
+            #expect(item.attachment == .none)
+        } else {
+            #expect(await variant.note.file(of: item) != nil)
+            let peaks = await variant.note.recordingPeaks(of: item)
+            #expect(!peaks.isEmpty)
+        }
+    }
     let attachments = try await NoteMatrixPreview(surface: .phone, example: .attachments).makeModels(in: root)
     #expect(attachments.note.items.contains { $0.attachment == .missing })
+    let conflict = try await NoteMatrixPreview(surface: .phone, example: .conflict).makeModels(in: root)
+    for model in [attachments.note, conflict.note] {
+        let segments = try #require(model.record?.segments)
+        #expect(Set(segments.map(\.startedAt)).count == segments.count)
+    }
     let ink = try await NoteMatrixPreview(surface: .phone, example: .ink).makeModels(in: root)
     #expect(Set(ink.note.items.filter { $0.kind == .ink }.map(\.state)).count == 4)
     let moved = try await NoteMatrixPreview(surface: .window, example: .moved).makeModels(in: root)

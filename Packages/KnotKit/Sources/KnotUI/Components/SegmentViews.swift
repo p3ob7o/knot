@@ -2,31 +2,43 @@ import ImageIO
 import KnotCore
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#elseif os(macOS)
+    import AppKit
+#endif
+
 /// What a segment view calls when the person acts on it.
 public struct SegmentHandlers {
     public var edit: (String) -> Void
     public var action: (SegmentAction) -> Void
     public var togglePlay: () -> Void
     public var seek: (Duration) -> Void
+    public var recordingPeaks: () async -> [UInt8]
     public var drawing: (Double) async throws(KnotError) -> RenderedDrawing?
     /// The person began editing the text: the edit carries the revision read now.
     public var beginEdit: () -> Void
     /// The person left the text unchanged: the edit's base ends with it.
     public var endEdit: () -> Void
+    public var editingChanged: (Bool) -> Void
 
     public init(
         edit: @escaping (String) -> Void, action: @escaping (SegmentAction) -> Void,
         togglePlay: @escaping () -> Void = {}, seek: @escaping (Duration) -> Void = { _ in },
         beginEdit: @escaping () -> Void = {}, endEdit: @escaping () -> Void = {},
+        editingChanged: @escaping (Bool) -> Void = { _ in },
+        recordingPeaks: @escaping () async -> [UInt8] = { [] },
         drawing: @escaping (Double) async throws(KnotError) -> RenderedDrawing? = { _ in nil }
     ) {
         self.beginEdit = beginEdit
         self.endEdit = endEdit
+        self.editingChanged = editingChanged
         self.edit = edit
         self.action = action
         self.togglePlay = togglePlay
         self.seek = seek
         self.drawing = drawing
+        self.recordingPeaks = recordingPeaks
     }
 
     /// Handlers that do nothing, for previews of a still state.
@@ -40,6 +52,9 @@ public struct SegmentView: View {
     @Environment(\.displayScale) private var displayScale
     @State private var drawing: CGImage?
     @State private var drawingUnreadable = false
+    #if os(iOS)
+        @State private var sharingText = false
+    #endif
     @Environment(\.knotTheme) private var theme
     let item: SegmentItem
     let text: String
@@ -69,37 +84,40 @@ public struct SegmentView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing.tight) {
-            header
+        VStack(alignment: .leading, spacing: theme.spacing.space2) {
+            if showsActionMenu { actionMenu }
             switch item.kind {
             case .voice:
                 VoiceSegmentBody(item: item, playback: playback, handlers: handlers, playbackAllowed: playbackAllowed)
                 SegmentText(
                     item: item, text: text, isShowingOriginal: isShowingOriginal, edit: handlers.edit,
                     secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
-                    endEdit: handlers.endEdit)
+                    endEdit: handlers.endEdit, editingChanged: handlers.editingChanged)
             case .ink:
                 if let drawing {
                     Image(drawing, scale: displayScale, label: Text("Sketch", bundle: .module))
+                        .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
+                        .foregroundStyle(theme.colors[.textPrimary])
+                        .frame(maxWidth: CGFloat(drawing.width) / displayScale, alignment: .leading)
                 } else {
                     InkSegmentPlaceholder(item: item)
                 }
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
                     secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
-                    endEdit: handlers.endEdit)
-            case .typed:
+                    endEdit: handlers.endEdit, editingChanged: handlers.editingChanged)
+            case .typed, .unknown:
                 SegmentText(
                     item: item, text: text, isShowingOriginal: false, edit: handlers.edit,
                     secondaryText: secondaryText, initiallyEditing: initiallyEditing, beginEdit: handlers.beginEdit,
-                    endEdit: handlers.endEdit)
-            case .unknown:
-                EmptyView()
+                    endEdit: handlers.endEdit, editingChanged: handlers.editingChanged)
             }
-            if let mark = item.originMark { OriginMarkView(mark) }
+            stateLine
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
         .task(id: DrawingRequest(attachment: item.attachment, scale: displayScale)) {
             guard item.kind == .ink else { return }
             drawing = nil
@@ -115,62 +133,132 @@ public struct SegmentView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityActions {
-            ForEach(availableActions) { action in
-                Button(actionLabel(action)) { perform(action) }
-            }
+            #if os(iOS)
+                ForEach(availableActions) { action in
+                    if action == .shareText {
+                        Button(actionLabel(action)) { sharingText = true }
+                    } else {
+                        actionButton(action)
+                    }
+                }
+            #else
+                actionButtons
+            #endif
         }
+        #if os(iOS)
+            .sheet(isPresented: $sharingText) { SegmentTextShareSheet(text: text) }
+        #endif
         #if !os(watchOS)
             .contextMenu { actionButtons }
         #endif
     }
 
-    @ViewBuilder private var header: some View {
-        HStack(spacing: theme.spacing.regular) {
+    private var stateLine: some View {
+        VStack(alignment: .leading, spacing: theme.spacing.space1) {
             if item.hasArrived { ArrivedMarker() }
-            if item.kind == .ink, item.state == .savedTextOnItsWay {
-                Text("Recognising handwriting…", bundle: .module)
-                    .font(theme.type[.caption])
-                    .foregroundStyle(theme.colors[.textSecondary])
+            if let attachmentNotice, item.state != .needsYou {
+                attachmentStatus(attachmentNotice.title, symbol: attachmentNotice.symbol)
             } else if drawingUnreadable {
                 SegmentStateLabel(.keptNoText)
             } else if item.state != .ready {
-                SegmentStateLabel(item.state)
-            }
-            if item.isConflictCopy {
-                Text("Edited on another device at the same time", bundle: .module)
-                    .font(theme.type[.caption])
-                    .foregroundStyle(theme.colors[.quietMark])
-            }
-            Spacer(minLength: 0)
-            #if !os(watchOS)
-                if !availableActions.isEmpty {
-                    // Every segment action is reachable from the keyboard: the menu is a control
-                    // in the focus order, on the Mac and the iPad.
-                    Menu {
-                        actionButtons
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            #if os(iOS)
-                                .padding(theme.spacing.loose)
-                                .contentShape(.rect)
-                            #endif
+                #if os(iOS)
+                    NoticeLayout(horizontalGap: theme.spacing.space2, verticalGap: theme.spacing.space1) {
+                        SegmentStateLabel(item.state, label: item.stateLabel)
+                        if availableActions.contains(.retry) {
+                            Button(actionLabel(.retry)) { perform(.retry) }
+                                .modifier(NoticeActionStyle())
+                        }
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .accessibilityLabel(Text("Segment actions", bundle: .module))
+                #else
+                    SegmentStateLabel(item.state, label: item.stateLabel)
+                #endif
+            }
+            if let mark = item.originMark { OriginMarkView(mark) }
+            if item.isConflictCopy {
+                Label {
+                    Text("Edited on another device at the same time", bundle: .module)
+                } icon: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
                 }
-            #endif
+                .font(theme.type[.stateLine])
+                .foregroundStyle(theme.colors[.quietMark])
+            }
         }
+    }
+
+    private var attachmentNotice: (title: LocalizedStringKey, symbol: String)? {
+        guard item.kind == .voice else { return nil }
+        switch item.attachment {
+        case .onAnotherDevice:
+            return ("Downloading recording…", "icloud.and.arrow.down")
+        case .missing:
+            return ("Recording missing", "waveform.slash")
+        case .here, .none:
+            return nil
+        }
+    }
+
+    private func attachmentStatus(_ title: LocalizedStringKey, symbol: String) -> some View {
+        Label {
+            Text(title, bundle: .module)
+        } icon: {
+            Image(systemName: symbol)
+        }
+        .font(theme.type[.stateLine])
+        .foregroundStyle(theme.colors[.textSecondary])
+    }
+
+    private var showsActionMenu: Bool {
+        guard !availableActions.isEmpty else { return false }
+        #if os(iOS)
+            return UIDevice.current.userInterfaceIdiom == .pad
+        #elseif os(macOS)
+            return true
+        #else
+            return false
+        #endif
+    }
+
+    @ViewBuilder private var actionMenu: some View {
+        #if !os(watchOS)
+            HStack {
+                Spacer()
+                Menu {
+                    actionButtons
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        #if os(iOS)
+                            .frame(minWidth: theme.sizes.hitTarget, minHeight: theme.sizes.hitTarget)
+                            .contentShape(.rect)
+                        #endif
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .fixedSize()
+                .accessibilityLabel(Text("Segment actions", bundle: .module))
+            }
+        #endif
     }
 
     @ViewBuilder private var actionButtons: some View {
         ForEach(availableActions) { action in
-            Button(role: action == .delete ? .destructive : nil) {
-                perform(action)
-            } label: {
-                Text(actionLabel(action))
-            }
+            #if !os(watchOS)
+                if action == .shareText {
+                    ShareLink(item: text) { Text(actionLabel(action)) }
+                } else {
+                    actionButton(action)
+                }
+            #else
+                actionButton(action)
+            #endif
+        }
+    }
+
+    private func actionButton(_ action: SegmentAction) -> some View {
+        Button(role: action == .delete ? .destructive : nil) {
+            perform(action)
+        } label: {
+            Text(actionLabel(action))
         }
     }
 
@@ -182,7 +270,19 @@ public struct SegmentView: View {
     }
 
     private func perform(_ action: SegmentAction) {
-        if action == .play { handlers.togglePlay() } else { handlers.action(action) }
+        switch action {
+        case .play:
+            handlers.togglePlay()
+        case .copy:
+            #if os(iOS)
+                UIPasteboard.general.string = text
+            #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            #endif
+        default:
+            handlers.action(action)
+        }
     }
 }
 
@@ -200,6 +300,7 @@ struct SegmentText: View {
     let initiallyEditing: Bool
     var beginEdit: () -> Void = {}
     var endEdit: () -> Void = {}
+    var editingChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
         if item.isEditable, !isShowingOriginal {
@@ -215,7 +316,13 @@ struct SegmentText: View {
                 isEditing = initiallyEditing
             }
             .onChange(of: text) { _, new in if !isEditing { draft = new } }
-            .onChange(of: isEditing) { _, editing in if editing { beginEdit() } else { commit() } }
+            .onChange(of: isEditing) { _, editing in
+                editingChanged(editing)
+                if editing { beginEdit() } else { commit() }
+            }
+            .onDisappear {
+                if isEditing { editingChanged(false) }
+            }
             .onSubmit(commit)
             .accessibilityLabel(Text(item.kind.label))
         } else if !CaptureText.isEmpty(text) {
@@ -241,38 +348,26 @@ struct VoiceSegmentBody: View {
     let playback: PlaybackState
     let handlers: SegmentHandlers
     let playbackAllowed: Bool
+    @State private var peaks: [UInt8] = []
 
     var body: some View {
         switch item.attachment {
         case .here:
             if playbackAllowed {
                 AudioPlayerView(
-                    state: playback, length: item.duration, onToggle: handlers.togglePlay, onSeek: handlers.seek)
+                    state: playback, length: item.duration, peaks: peaks,
+                    onToggle: handlers.togglePlay, onSeek: handlers.seek
+                )
+                #if os(iOS)
+                    .task(id: item.attachment) {
+                        let read = await handlers.recordingPeaks()
+                        if !Task.isCancelled { peaks = read }
+                    }
+                #endif
             }
-        case .onAnotherDevice(let asset):
-            if asset.availability == .downloading {
-                notice(Text("Downloading recording…", bundle: .module), symbol: "icloud.and.arrow.down")
-            } else {
-                notice(
-                    Text("The recording downloads when this note opens.", bundle: .module),
-                    symbol: "icloud.and.arrow.down")
-            }
-        case .missing:
-            // A recording purged after the restored copy was made: missing, never a broken player.
-            notice(Text("Recording missing", bundle: .module), symbol: "waveform.slash")
-        case .none:
+        case .onAnotherDevice, .missing, .none:
             EmptyView()
         }
-    }
-
-    private func notice(_ text: Text, symbol: String) -> some View {
-        Label {
-            text
-        } icon: {
-            Image(systemName: symbol)
-        }
-        .font(theme.type[.caption])
-        .foregroundStyle(theme.colors[.textSecondary])
     }
 }
 
@@ -299,3 +394,17 @@ struct InkSegmentPlaceholder: View {
                 item.attachment == .missing ? Text("Sketch missing", bundle: .module) : Text("Sketch", bundle: .module))
     }
 }
+
+#if os(iOS)
+    private struct SegmentTextShareSheet: UIViewControllerRepresentable {
+        let text: String
+
+        func makeUIViewController(context: Context) -> UIActivityViewController {
+            let controller = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+            controller.popoverPresentationController?.sourceView = controller.view
+            return controller
+        }
+
+        func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+    }
+#endif

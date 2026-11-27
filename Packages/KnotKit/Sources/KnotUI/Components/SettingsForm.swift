@@ -26,32 +26,99 @@
 
         public var body: some View {
             Form {
-                if !model.isAvailable {
-                    Text("Settings can't be read right now. They show their defaults.", bundle: .module)
-                        .foregroundStyle(theme.colors[.textSecondary])
-                }
-                if model.saveProblem != nil {
-                    Text("That change couldn't be saved.", bundle: .module)
-                        .foregroundStyle(theme.colors[.failed])
-                }
-                if let actionButtonSetup {
+                #if os(iOS)
                     Section {
-                        Button(String(localized: "Action Button setup", bundle: .module), action: actionButtonSetup)
-                            .tint(theme.colors[.textPrimary])
+                        if let actionButtonSetup {
+                            navigationRow(
+                                String(localized: "Action Button setup", bundle: .module),
+                                action: actionButtonSetup)
+                        }
+                        ForEach(model.rows.filter { !isDestination($0) }) { row in
+                            rowView(row).id(row)
+                        }
+                    } footer: {
+                        if !model.isAvailable {
+                            Text("Settings can’t be read right now.", bundle: .module)
+                                .foregroundStyle(theme.colors[.textSecondary])
+                        } else if let note = model.lockScreenNote {
+                            Text(note)
+                                .foregroundStyle(theme.colors[.textSecondary])
+                        }
                     }
-                }
-                ForEach(model.rows) { row in
-                    rowView(row)
-                }
-                if let note = model.lockScreenNote {
-                    Text(note)
-                        .font(theme.type[.caption])
-                        .foregroundStyle(theme.colors[.textSecondary])
-                }
+                    Section {
+                        ForEach(model.rows.filter(isDestination)) { row in
+                            rowView(row)
+                        }
+                    } footer: {
+                        if model.saveProblem != nil {
+                            Label {
+                                Text("That change couldn’t be saved.", bundle: .module)
+                                    .foregroundStyle(theme.colors[.textSecondary])
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(theme.colors[.attention])
+                            }
+                        }
+                    }
+                #else
+                    if !model.isAvailable {
+                        Text("Settings can't be read right now. They show their defaults.", bundle: .module)
+                            .foregroundStyle(theme.colors[.textSecondary])
+                    }
+                    if model.saveProblem != nil {
+                        Text("That change couldn't be saved.", bundle: .module)
+                            .foregroundStyle(theme.colors[.failed])
+                    }
+                    if let actionButtonSetup {
+                        Section {
+                            Button(String(localized: "Action Button setup", bundle: .module), action: actionButtonSetup)
+                                .tint(theme.colors[.textPrimary])
+                        }
+                    }
+                    ForEach(model.rows) { row in
+                        rowView(row)
+                    }
+                    if let note = model.lockScreenNote {
+                        Text(note)
+                            .font(theme.type[.caption])
+                            .foregroundStyle(theme.colors[.textSecondary])
+                    }
+                #endif
             }
+            #if os(iOS)
+                .formStyle(.grouped)
+            #endif
             .disabled(!model.isAvailable)
             .task { await model.observeSync() }
         }
+
+        #if os(iOS)
+            private func isDestination(_ row: SettingsRow) -> Bool {
+                row == .about || row == .recentlyDeleted || row == .exportAll
+            }
+
+            private func navigationRow(
+                _ title: String, showsDisclosure: Bool = true, action: @escaping () -> Void
+            ) -> some View {
+                Button(action: action) {
+                    HStack {
+                        Text(title)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        if showsDisclosure {
+                            Image(systemName: "chevron.right")
+                                .font(theme.type[.stateLine])
+                                .foregroundStyle(theme.colors[.textSecondary])
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .foregroundStyle(theme.colors[.textPrimary])
+                    .frame(maxWidth: .infinity, minHeight: theme.sizes.hitTarget, alignment: .leading)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        #endif
 
         @ViewBuilder private func rowView(_ row: SettingsRow) -> some View {
             switch row {
@@ -90,22 +157,27 @@
                     }
                 }
             case .englishVariant:
-                Picker(
-                    row.title,
-                    selection: Binding(
-                        get: { model.settings.englishVariant.rawValue },
-                        set: { raw in Task { await model.setEnglishVariant(EnglishVariant(rawValue: raw)) } })
-                ) {
-                    ForEach(SettingsViewModel.englishVariants, id: \.rawValue) { variant in
-                        Text(SettingsViewModel.label(of: variant))
-                            #if os(iOS)
-                                .foregroundStyle(theme.colors[.textPrimary])
-                            #endif
-                            .tag(variant.rawValue)
-                    }
-                }
                 #if os(iOS)
-                    .pickerStyle(.navigationLink)
+                    LabeledContent {
+                        Group {
+                            if dynamicTypeSize.isAccessibilitySize {
+                                englishPicker(row.title).pickerStyle(.navigationLink)
+                            } else {
+                                englishPicker(row.title).pickerStyle(.menu)
+                            }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel(Text(row.title))
+                        .accessibilityValue(Text(SettingsViewModel.label(of: model.settings.englishVariant)))
+                    } label: {
+                        // At accessibility sizes the navigation picker supplies its own visible title.
+                        Text(row.title)
+                            .accessibilityHidden(true)
+                            .opacity(dynamicTypeSize.isAccessibilitySize ? 0 : 1)
+                            .frame(height: dynamicTypeSize.isAccessibilitySize ? 0 : nil)
+                    }
+                #else
+                    englishPicker(row.title)
                 #endif
             case .sync:
                 VStack(alignment: .leading) {
@@ -136,18 +208,27 @@
                         set: { on in Task { await model.setCommandLineAccess(on) } }))
             case .exportAll, .recentlyDeleted, .about:
                 #if os(iOS)
-                    Button {
-                        open(row)
-                    } label: {
-                        Text(row.title)
-                            .foregroundStyle(theme.colors[.textPrimary])
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
+                    navigationRow(row.title, showsDisclosure: row != .exportAll) { open(row) }
                 #else
                     Button(row.title) { open(row) }
                 #endif
+            }
+        }
+
+        private func englishPicker(_ title: String) -> some View {
+            Picker(
+                title,
+                selection: Binding(
+                    get: { model.settings.englishVariant.rawValue },
+                    set: { raw in Task { await model.setEnglishVariant(EnglishVariant(rawValue: raw)) } })
+            ) {
+                ForEach(SettingsViewModel.englishVariants, id: \.rawValue) { variant in
+                    Text(SettingsViewModel.label(of: variant))
+                        #if os(iOS)
+                            .foregroundStyle(theme.colors[.textPrimary])
+                        #endif
+                        .tag(variant.rawValue)
+                }
             }
         }
     }

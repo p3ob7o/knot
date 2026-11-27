@@ -2,9 +2,10 @@ import Foundation
 import KnotCore
 import KnotFakes
 import KnotTestSupport
-import KnotUI
 import Synchronization
 import Testing
+
+@testable import KnotUI
 
 /// The stream and its rows (docs/product-spec.md §7 and §12).
 @MainActor
@@ -59,6 +60,45 @@ import Testing
         #expect(row(record([short], in: note)).preview == "line two line three")
     }
 
+    @Test func kindGlyphsFollowFirstUseWithoutRepeats() throws {
+        let note: NoteID = ids.make()
+        let now = clock.now()
+        let voice = try Build.voice(ids.make(), in: note, from: now, transcript: "first", device: device)
+        let typed = try Build.typed(
+            ids.make(), in: note, from: now.addingTimeInterval(30), text: "second", origin: .device(device))
+        let again = try Build.voice(
+            ids.make(), in: note, from: now.addingTimeInterval(60), transcript: "third", device: device)
+        #expect(row(record([voice, typed, again], in: note)).kinds == [.voice, .typed])
+    }
+
+    @Test(arguments: RowTextSize.allCases)
+    func arrivalStaysBesideTheMostUrgentProcessingMark(at size: RowTextSize) {
+        var row = StreamRowModel(
+            id: ids.make(), title: "Synthetic note", preview: nil, kinds: [], time: clock.now(),
+            hasPending: true, hasFailed: true, hasArrived: true)
+        let marks: Set<RowPart> = [.failedMarker, .pendingMarker, .arrivedMarker]
+        #expect(row.visibleParts(at: size).intersection(marks) == [.failedMarker, .arrivedMarker])
+        row.hasFailed = false
+        #expect(row.visibleParts(at: size).intersection(marks) == [.pendingMarker, .arrivedMarker])
+        row.hasPending = false
+        #expect(row.visibleParts(at: size).intersection(marks) == [.arrivedMarker])
+    }
+
+    @Test(arguments: [
+        (6, "09:41"), (5, "Yesterday"), (4, "Wed"), (2, "Mon"), (1, "1 Nov"), (7, "7 Nov"),
+    ])
+    func compactTimeDistinguishesTheDayAndWeek(day: Int, expected: String) throws {
+        let locale = Locale(identifier: "en_GB")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        calendar.firstWeekday = 2
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 6, hour: 12)))
+        let date = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: 9, minute: 41)))
+        #expect(compactStreamTime(date, now: now, calendar: calendar, locale: locale) == expected)
+    }
+
     @Test func aTitleWinsOverTheFirstLine() throws {
         let note: NoteID = ids.make()
         let only = try Build.typed(ids.make(), in: note, from: clock.now(), text: "one line", origin: .device(device))
@@ -91,7 +131,7 @@ import Testing
         #expect(row(record([sketch], in: note)).title == "Sketch")
     }
 
-    @Test func atLargeSizesThePreviewGivesWayFirstThenTheKinds() throws {
+    @Test func atLargeSizesThePreviewGivesWayAndTheKindsStay() throws {
         let note: NoteID = ids.make()
         let first = try Build.typed(ids.make(), in: note, from: clock.now(), text: "first", origin: .device(device))
         var failed = try Build.voice(
@@ -108,7 +148,6 @@ import Testing
         let largest = model.visibleParts(at: .largest)
         #expect(!largest.contains(.preview))
         #expect(!largest.contains(.kinds))
-        // The title or first line, the time and a failed marker always stay.
         #expect(largest.isSuperset(of: [.title, .time, .failedMarker]))
         // VoiceOver reads every part, whatever the size.
         let label = model.accessibilityLabel(time: "now")
@@ -194,7 +233,7 @@ import Testing
             environment: rig.environment, context: rig.context(sync: .available(signedInToICloud: true)),
             setupRows: [.actionButton, .lockScreenControl, .watchComplication])
         await on.load()
-        #expect(on.firstRun?.syncLine == "Sync is on. You can turn it off in Settings.")
+        #expect(on.firstRun?.syncLine == "iCloud sync is on. You can turn it off in Settings.")
         #expect(on.firstRun?.setupRows == [.actionButton, .lockScreenControl, .watchComplication])
 
         // Not available in this build, as for an agent's local configuration: nothing about sync.

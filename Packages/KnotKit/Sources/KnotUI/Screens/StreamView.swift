@@ -10,17 +10,19 @@
         let stream: StreamViewModel
         let search: SearchViewModel
         let showsInlineSearch: Bool
+        let isRestoring: Bool
         let openSetupRow: ((SetupRow) -> Void)?
         let open: (NoteID) -> Void
 
         public init(
             stream: StreamViewModel, search: SearchViewModel, showsInlineSearch: Bool = true,
-            openSetupRow: ((SetupRow) -> Void)? = nil,
+            isRestoring: Bool = false, openSetupRow: ((SetupRow) -> Void)? = nil,
             open: @escaping (NoteID) -> Void
         ) {
             self.stream = stream
             self.search = search
             self.showsInlineSearch = showsInlineSearch
+            self.isRestoring = isRestoring
             self.openSetupRow = openSetupRow
             self.open = open
         }
@@ -33,9 +35,12 @@
                     }
                     if let problem = search.displayedProblem(streamProblem: stream.problem) {
                         Banner(problem.message, symbol: "exclamationmark.icloud", role: .failed)
+                            .listRowSeparator(.hidden)
                     }
                     if let arrival = stream.arrival {
-                        Banner(arrival.message, symbol: "tray.and.arrow.down", role: .arrived) {
+                        Banner(
+                            arrival.message, symbol: "tray.and.arrow.down", dismiss: stream.dismissArrivalNotice
+                        ) {
                             Button {
                                 if let first = arrival.notes.first { open(first) }
                                 stream.dismissArrivalNotice()
@@ -43,40 +48,58 @@
                                 Text("Show", bundle: .module)
                                     #if os(iOS)
                                         .foregroundStyle(theme.colors[.textPrimary])
-                                        .padding(theme.spacing.loose)
-                                        .contentShape(.rect)
                                     #endif
                             }
-                            Button {
-                                stream.dismissArrivalNotice()
-                            } label: {
-                                Image(systemName: "xmark")
-                                    #if os(iOS)
-                                        .padding(theme.spacing.loose)
-                                        .contentShape(.rect)
-                                    #endif
-                            }
-                            .accessibilityLabel(Text("Dismiss", bundle: .module))
+                            .modifier(NoticeActionStyle())
+
                         }
-                        .buttonStyle(.borderless)
+                        .listRowSeparator(.hidden)
                     }
                 }
                 if let results = search.results {
                     if let query = search.emptyResultsQuery, !showsInlineSearch {
-                        ContentUnavailableView.search(text: query)
+                        ContentUnavailableView {
+                            Label {
+                                Text("No Results for “\(query)”", bundle: .module)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } icon: {
+                                Image(systemName: "magnifyingglass")
+                            }
+                        }
+                        .listRowSeparator(.hidden)
                     } else {
                         ForEach(results) { row in rowButton(row) }
                     }
+                } else if isRestoring, stream.rows.isEmpty {
+                    ProgressView {
+                        Text("Syncing notes…", bundle: .module)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .listRowSeparator(.hidden)
                 } else if let firstRun = stream.firstRun {
                     FirstRunView(firstRun, onOpen: openSetupRow, onDismiss: stream.dismissSetupRow)
                 } else {
-                    ForEach(stream.rows) { row in rowButton(row) }
-                    if stream.hasMore {
-                        ProgressView()
-                            .task { await stream.loadMore() }
-                    }
+                    #if os(iOS)
+                        ForEach(stream.rows) { row in
+                            rowButton(row)
+                                .task(id: row.id == stream.rows.last?.id && stream.hasMore) {
+                                    if row.id == stream.rows.last?.id, stream.hasMore {
+                                        await stream.loadMore()
+                                    }
+                                }
+                        }
+                    #else
+                        ForEach(stream.rows) { row in rowButton(row) }
+                        if stream.hasMore {
+                            ProgressView()
+                                .task { await stream.loadMore() }
+                        }
+                    #endif
                 }
             }
+            #if os(iOS)
+                .listStyle(.plain)
+            #endif
             .animation(theme.motion.animation(for: .listChange, reduceMotion: reduceMotion), value: stream.rows)
             .task { await stream.load() }
             .task { await stream.observeChanges() }

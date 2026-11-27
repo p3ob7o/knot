@@ -42,6 +42,50 @@ import Testing
         return (model, segment)
     }
 
+    @Test(arguments: [false, true])
+    func typedSegmentActionsAreInMenuOrder(hasAnotherCapture: Bool) throws {
+        let ids = SeededIDGenerator(seed: 32, clock: FakeClock())
+        let device: DeviceID = ids.make()
+        let date = Date(timeIntervalSince1970: 1_795_000_000)
+        let note: NoteID = ids.make()
+        let first = try Build.typed(ids.make(), in: note, from: date, text: "First sentence", origin: .device(device))
+        let second = try Build.typed(ids.make(), in: note, from: date, text: "Second sentence", origin: .device(device))
+        let record = NoteRecord(
+            note: Build.note(note, at: date), segments: hasAnotherCapture ? [first, second] : [first],
+            storeID: ids.make(), generation: 0)
+        let items = SegmentPresenter.items(for: record, assets: [:], thisDevice: device, speech: .ready)
+        let item = try #require(items.first { $0.id == first.id })
+        let expected: [SegmentAction] =
+            hasAnotherCapture
+            ? [.copy, .shareText, .moveToOwnNote, .delete] : [.copy, .shareText, .delete]
+        #expect(item.actions == expected)
+        #expect(SegmentAction.shareText.label == "Share…")
+    }
+
+    @Test func aFailedVoiceSegmentWithTextKeepsBothTextAndRecordingActions() async throws {
+        let rig = StoreRig()
+        let (model, segment) = try await noteViewModel(.needsYou, rig: rig)
+        _ = try await rig.notes.replaceText(
+            TextReplacement(segment: segment, text: "Partial transcript", origin: .edited, writer: .app))
+        await model.refresh()
+        let item = try #require(model.items.first { $0.id == segment })
+        #expect(item.actions == [.copy, .shareText, .play, .removeRecording, .retry, .delete])
+    }
+
+    @Test func playbackReadsOnlyTheStoredPeaks() async throws {
+        let rig = StoreRig()
+        let (model, id) = try await noteViewModel(.ready, rig: rig)
+        let item = try #require(model.items.first { $0.id == id })
+        #expect(await model.recordingPeaks(of: item).isEmpty)
+        let values: [UInt8] = [0, 125, 255]
+        let peaks = RecordingPeaks.header(framesPerValue: 800) + Data(values)
+        try await rig.notes.setPeaks(peaks, of: id)
+        #expect(await model.recordingPeaks(of: item) == values)
+        var missing = item
+        missing.attachment = .missing
+        #expect(await model.recordingPeaks(of: missing).isEmpty)
+    }
+
     @Test("voice-segment-six-states-view-model", .tags(.named), arguments: Case.allCases)
     func sixStates(_ which: Case) async throws {
         let rig = StoreRig()
@@ -78,6 +122,7 @@ import Testing
             #expect(item.actions.contains(.removeRecording))
             #expect(item.actions.contains(.shareFile))
             #expect(item.actions.contains(.delete))
+            #expect(item.actions == [.copy, .play, .shareFile, .removeRecording, .delete])
             #expect(item.isEditable)
         case .needsYou:
             // Retry. The recording is kept.
@@ -91,10 +136,7 @@ import Testing
             #expect(item.state == .keptNoText)
             #expect(item.stateLabel == "Kept, no text")
             #expect(item.actions.contains(.play))
-            #expect(item.actions.contains(.shareFile))
-            #expect(item.actions.contains(.delete))
-            #expect(!item.actions.contains(.retry))
-            #expect(!item.actions.contains(.removeRecording))
+            #expect(item.actions == [.play, .shareFile, .delete])
         }
     }
 
@@ -108,7 +150,7 @@ import Testing
         model.perform(.moveWorkHere, on: segment)
         await settled(model)
         #expect(model.problem == .notAvailableYet)
-        #expect(model.problem?.message == "This isn't available yet.")
+        #expect(model.problem?.message == "This isn’t available yet.")
         #expect(try await rig.notes.segment(segment) == before)
         #expect(rig.queue.segments.isEmpty)
         #expect(model.items.first { $0.id == segment }?.state == .savedTextBeingMadeElsewhere)
@@ -216,8 +258,11 @@ import Testing
             note: Build.note(noteID, at: clock.now()), segments: [newer, other], storeID: ids.make(), generation: 0)
         let items = SegmentPresenter.items(for: record, assets: [:], thisDevice: device, speech: .ready)
         #expect(items[0].state == .madeByNewerKnot)
-        #expect(items[0].stateLabel == "Made by a newer Knot. Update Knot to see it.")
+        #expect(items[0].stateLabel == "Made by a newer Knot.")
         #expect(items[0].actions.isEmpty)
         #expect(!items[0].isEditable)
+        var unreadable = items[0]
+        unreadable.text = ""
+        #expect(unreadable.stateLabel == "Made by a newer Knot. Update Knot to see it.")
     }
 }

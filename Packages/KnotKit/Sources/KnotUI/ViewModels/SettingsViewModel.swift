@@ -33,7 +33,7 @@ public enum SettingsRow: String, Hashable, Sendable, CaseIterable, Identifiable 
         case .hotkey: localized("Hotkey")
         case .launchAtLogin: localized("Launch at login")
         case .commandLineAccess: localized("Command-line access")
-        case .exportAll: localized("Export all notes")
+        case .exportAll: localized("Export all notes…")
         case .recentlyDeleted: localized("Recently deleted")
         case .about: localized("About")
         }
@@ -131,11 +131,18 @@ public final class SettingsViewModel {
         .locale("en_IN"), .locale("en_NZ"), .locale("en_ZA"),
     ]
 
-    public static func label(of variant: EnglishVariant) -> String {
+    public static func label(of variant: EnglishVariant, locale: Locale = .current) -> String {
         switch variant {
         case .followRegion: return localized("Follow the region")
+        case .locale("en_US"): return localized("US")
+        case .locale("en_GB"): return localized("UK")
         case .locale(let identifier):
-            return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
+            if let region = Locale(identifier: identifier).region?.identifier,
+                let name = locale.localizedString(forRegionCode: region)
+            {
+                return name
+            }
+            return locale.localizedString(forIdentifier: identifier) ?? identifier
         case .unknown(let raw): return raw
         }
     }
