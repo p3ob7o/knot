@@ -11,6 +11,11 @@ trap '"$repo/scripts/sim.sh" shutdown' EXIT
 "$repo/scripts/sim.sh" boot iphone
 udid=$("$repo/scripts/sim.sh" udid iphone)
 id=app.knot.design-review
+keyboard_domain=com.apple.keyboard.preferences
+keyboard_key=DidShowContinuousPathIntroduction
+keyboard_value=
+restore_keyboard=0
+installed=0
 simctl() { knot_limit 120 xcrun simctl "$@"; }
 # Reset an earlier run's overrides even when it was killed before cleanup.
 reset_appearance() {
@@ -26,6 +31,16 @@ reset_appearance() {
 }
 restore_simulator() {
     local result=$?
+    if (( installed )); then
+        simctl uninstall "$udid" "$id" || result=1
+    fi
+    if (( restore_keyboard )); then
+        if [[ -n "$keyboard_value" ]]; then
+            simctl spawn "$udid" defaults write "$keyboard_domain" "$keyboard_key" -bool "$keyboard_value" || result=1
+        else
+            simctl spawn "$udid" defaults delete "$keyboard_domain" "$keyboard_key" || result=1
+        fi
+    fi
     reset_appearance || result=1
     "$repo/scripts/sim.sh" shutdown || result=1
     exit "$result"
@@ -35,8 +50,11 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 reset_appearance
 # Keep a new simulator's keyboard tutorial out of the capture-state screenshots.
-simctl spawn "$udid" defaults write com.apple.keyboard.preferences DidShowContinuousPathIntroduction -bool true
+keyboard_value=$(simctl spawn "$udid" defaults read "$keyboard_domain" "$keyboard_key" 2>/dev/null || true)
+simctl spawn "$udid" defaults write "$keyboard_domain" "$keyboard_key" -bool true
+restore_keyboard=1
 simctl install "$udid" "$scratch/DerivedData/Build/Products/Debug-iphonesimulator/KnotDesignReview.app"
+installed=1
 container=$(simctl get_app_container "$udid" "$id" data)
 preview_rows="$scratch/rows.tsv"
 render_id=$(basename "$scratch")

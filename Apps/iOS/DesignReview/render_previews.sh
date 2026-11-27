@@ -15,6 +15,7 @@ cleanup_build() {
     local status=$?
     # The generated project and its logs can be inspected after rendering. The
     # scratch build is specific to this run and does not need to stay on disk.
+    # SIGKILL skips this trap. The printed build-log path identifies the scratch directory.
     (
         cd -- "$scratch"
         if [[ -d ./DerivedData ]]; then /usr/bin/find ./DerivedData -depth -delete; fi

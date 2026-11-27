@@ -190,3 +190,4 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-40a | The Action Button instructions entry in Settings | “Action Button setup” comes first in the first group, with a disclosure chevron. It opens the Record with the Action Button instructions sheet. |
 | 2026-11-26 | WP-40a | Capture controls while editing an existing segment or title | Hide New note and Record until that edit ends. |
 | 2026-11-27 | WP-40a | A recording file that is not on this device | An open note shows one footnote. Needs you takes priority. Otherwise the footnote shows Downloading recording… or Recording missing. |
+| 2026-11-26 | WP-40a | Which glyph represents work on another device when its type is unknown | Overlapping rectangles represent another device until the source identifies the device type. |
