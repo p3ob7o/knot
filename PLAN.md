@@ -282,7 +282,8 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-40 | 40d | The Watch's screens matched to the handoff | the ruling; the accepted handoff; WP-40 PR 1; WP-32 PR 3 |
 | WP-41 | 1 | The audit made clean, and the accessibility behaviour confirmed | the ruling; WP-40a; WP-40b; WP-40c; WP-40d |
 | WP-42 | 1 | The measurements, and the report that sets them against the targets | the ruling; WP-22 PR 2 |
-| WP-43 | 1 | The release script, the privacy manifest, the audit, the icon sets, the documents and the notices | the ruling; M5 or, if M5 is cut, M4 |
+| WP-43 | 43a | The release script and what App Store Connect checks at an upload, so that the iPhone app, with its Watch app and its widgets, can go to TestFlight on the owner's word: `scripts/release.sh` with a rehearsal, a dry run, a validation and an upload, the milestone build's archive, an App Store icon with no alpha channel, and the encryption declaration of the three apps | the owner's word of 2026-11-26 on TestFlight; the milestone build's script, on main since pull request 116 |
+| WP-43 | 1 | The rest of release readiness, after WP-43a: the privacy manifests, the usage strings, the entitlement audit, the icon sets for every platform, the release script's levels that open sync and its Mac product, the documents and the notices | WP-43a; the ruling; M5 or, if M5 is cut, M4 |
 | WP-44 | Campaign | QA at each milestone, continuously from M1 | M1 |
 
 <!-- start-table:end -->
