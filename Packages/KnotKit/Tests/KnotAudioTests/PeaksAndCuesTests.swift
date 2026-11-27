@@ -8,8 +8,12 @@ import Testing
 
 @testable import KnotAudio
 
-/// A recording's level peaks, beside it, and the cues the recorder gives.
-@Suite struct PeaksAndCuesTests {
+extension AudioBufferTests {
+    /// A recording's level peaks, beside it, and the cues the recorder gives.
+    @Suite struct PeaksAndCuesTests {}
+}
+
+extension AudioBufferTests.PeaksAndCuesTests {
     /// The recorder writes a recording's peaks beside it, in the format of `RecordingPeaks`: one
     /// value for each 50 ms of the file's frames, the largest absolute sample of its stretch, the
     /// last stretch's too, which ends part way. They are the audio the file holds and nothing
@@ -213,10 +217,11 @@ import Testing
         defer { suite.remove() }
         let store = WatchedStateStore(DefaultsRecordingStateStore(defaults: suite.defaults))
         let cues = RecordingCueEmitter()
-        let (input, engine, _) = InterruptionTests.standInMicrophone(InputShape(sampleRate: 48_000, channels: 1))
+        let (input, engine, _) = AudioBufferTests.InterruptionTests.standInMicrophone(
+            InputShape(sampleRate: 48_000, channels: 1))
         let wrongRate = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false))
-        let buffer = try #require(HardwareInputTests.silence(wrongRate))
+        let buffer = try #require(AudioBufferTests.HardwareInputTests.silence(wrongRate))
         engine.whenAt(.starting) { engine in engine.deliver(buffer) }
         let folder = try ScratchFolder()
         let live = LiveRecorder(
