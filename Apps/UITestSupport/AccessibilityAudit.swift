@@ -1,5 +1,9 @@
 import XCTest
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// The system's accessibility audit, which every UI smoke test runs (docs/architecture.md §17,
 /// docs/plan/WP-21.md). This file is the one place its exclusions sit: each UI test target on
 /// iOS, macOS and watchOS compiles it, and no test lists an exclusion of its own.
@@ -152,6 +156,22 @@ enum AccessibilityAudit {
         static let structuralExclusions: [StructuralExclusion] = [windowContent, splitViewColumn, windowTitle]
     #elseif os(iOS)
         static let structuralExclusions: [StructuralExclusion] = [systemKeyboard, systemSearchFieldClearButton]
+
+        /// The iPad audit reports contrast on the Notes timestamp and the player's duration
+        /// despite the contrast measured in their simulator recordings. WP-41 revisits the audit.
+        static let iPadTimeText = StructuralExclusion(
+            reason: "The iPad recording showed approximately 9.4:1 for the Notes timestamp 07:47 "
+                + "at (20, 177.5, 34.5, 16) and 8.7:1 for the player duration 0:00 at "
+                + "(763.5, 319.25, 26.5, 14.5). WP-41 owns removal of this exclusion.",
+            type: .contrast
+        ) { element in
+            element.kind == .staticText && element.identifier.isEmpty
+                && element.label.wholeMatch(of: /[0-9]+:[0-5][0-9](?::[0-5][0-9])?/) != nil
+        }
+
+        static func structuralExclusions(for idiom: UIUserInterfaceIdiom) -> [StructuralExclusion] {
+            idiom == .pad ? structuralExclusions + [iPadTimeText] : structuralExclusions
+        }
     #else
         static let structuralExclusions: [StructuralExclusion] = []
     #endif
@@ -258,9 +278,14 @@ extension XCUIApplication {
                 "An accessibility audit exclusion must name its element and give its reason: "
                     + "identifier \"\(exclusion.identifier)\", reason \"\(exclusion.reason)\"")
         }
+        #if os(iOS)
+            let structural = AccessibilityAudit.structuralExclusions(for: UIDevice.current.userInterfaceIdiom)
+        #else
+            let structural = AccessibilityAudit.structuralExclusions
+        #endif
         try performAccessibilityAudit(for: .all) { issue in
             let element = issue.element.map { self.auditedElement($0) }
-            if AccessibilityAudit.isExcluded(issue.auditType, on: element) { return true }
+            if AccessibilityAudit.isExcluded(issue.auditType, on: element, structural: structural) { return true }
             XCTFail(
                 "Accessibility audit: \(issue.compactDescription) (\(issue.detailedDescription)) on "
                     + (element?.description ?? "no element"))
@@ -495,6 +520,47 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
             XCTAssertFalse(AccessibilityAudit.isExcluded(type, on: windowTitle()), "\(type.rawValue)")
         }
     }
+
+    #if os(iOS)
+        func testOnlyTheIPadExcludesTimeTextContrast() {
+            for time in ["07:47", "0:00", "1:02:03"] {
+                let text = AccessibilityAudit.Element(kind: .staticText, identifier: "", label: time, frame: .zero)
+                XCTAssertTrue(
+                    AccessibilityAudit.isExcluded(
+                        .contrast, on: text, structural: AccessibilityAudit.structuralExclusions(for: .pad)), time)
+                for idiom: UIUserInterfaceIdiom in [.phone, .mac, .unspecified] {
+                    XCTAssertFalse(
+                        AccessibilityAudit.isExcluded(
+                            .contrast, on: text, structural: AccessibilityAudit.structuralExclusions(for: idiom)), time)
+                }
+            }
+        }
+
+        func testTheIPadTimeTextExclusionLeavesOtherContrastIssues() {
+            let structural = AccessibilityAudit.structuralExclusions(for: .pad)
+            for label in ["Adding to the note from 06:12", "7 notes", "", "Duration: 0:00", "1:2", "12:77"] {
+                let text = AccessibilityAudit.Element(kind: .staticText, identifier: "", label: label, frame: .zero)
+                XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: text, structural: structural), label)
+            }
+            let identifiedTime = AccessibilityAudit.Element(
+                kind: .staticText, identifier: "recording.position", label: "0:00", frame: .zero)
+            let button = AccessibilityAudit.Element(kind: .button, identifier: "", label: "0:00", frame: .zero)
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: identifiedTime, structural: structural))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: button, structural: structural))
+            XCTAssertFalse(AccessibilityAudit.isExcluded(.contrast, on: nil, structural: structural))
+        }
+
+        func testTheIPadStillAuditsTimeTextForEveryOtherIssue() {
+            let text = AccessibilityAudit.Element(kind: .staticText, identifier: "", label: "0:00", frame: .zero)
+            let structural = AccessibilityAudit.structuralExclusions(for: .pad)
+            for type: XCUIAccessibilityAuditType in [
+                .elementDetection, .hitRegion, .sufficientElementDescription, .dynamicType, .textClipped, .trait,
+            ] {
+                XCTAssertFalse(
+                    AccessibilityAudit.isExcluded(type, on: text, structural: structural), "\(type.rawValue)")
+            }
+        }
+    #endif
 
     func testTheWindowContentIsExcludedOnTheMacOnly() {
         let excluded = AccessibilityAudit.isExcluded(.sufficientElementDescription, on: hostedContent())

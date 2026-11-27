@@ -137,6 +137,7 @@ final class KnotIOSLaunchTests: XCTestCase {
 
         let track = app.descendants(matching: .any).matching(identifier: "recording.position").firstMatch
         XCTAssertTrue(track.waitForExistence(timeout: limit))
+        try app.auditAccessibility()
         app.buttons["Play"].tap()
         let pause = app.buttons["Pause"]
         XCTAssertTrue(pause.waitForExistence(timeout: limit))
@@ -160,7 +161,6 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(
             waitFor(sought, on: track),
             "The recording track still exists and reports a positive position within the same 42-second recording.")
-        try app.auditAccessibility()
     }
 
     @MainActor
