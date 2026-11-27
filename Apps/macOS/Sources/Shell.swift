@@ -185,6 +185,11 @@ final class Shell {
         for model in models { await model.settle() }
     }
 
+    func prepareRestore() async {
+        await recording.stopAndSettle()
+        await flush()
+    }
+
     /// What is wrong, by its code, so that a build with no usable place for its store says which
     /// error it met and the surface assumes no store (docs/product-spec.md §4.4).
     var problemCode: ErrorCode? {
@@ -299,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let reply = QuitReply(sender)
         Task { @MainActor in
-            await self.shell.recording.finishForQuit()
+            await self.shell.recording.stopAndSettle()
             await self.shell.flush()
             reply.send()
         }

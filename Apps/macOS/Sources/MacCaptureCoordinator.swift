@@ -289,7 +289,7 @@ final class MacCaptureCoordinator {
         panel.updateOutcome(record, for: finished.captureID)
     }
 
-    func finishForQuit() async {
+    func stopAndSettle() async {
         let model = recordingModel ?? panel.model
         stop()
         await startTask?.value

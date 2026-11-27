@@ -30,6 +30,10 @@ struct MacSettings: View {
                 .formStyle(.grouped)
             Divider()
             Form {
+                if !model.isAvailable {
+                    // Diagnostics and recovery must remain reachable if Settings cannot read the store.
+                    Button("About") { destination = .about }
+                }
                 LabeledContent("Microphone") {
                     switch permission {
                     case .authorized: Text("Allowed")
@@ -72,7 +76,7 @@ struct MacSettings: View {
             case .recentlyDeleted:
                 RecentlyDeleted()
             case .about:
-                MacAbout(app: shell.composition, flush: shell.flush)
+                MacAbout(app: shell.composition, prepareRestore: shell.prepareRestore)
             default:
                 EmptyView()
             }

@@ -327,7 +327,9 @@ private struct CapturePanelPage: View {
         .fixedSize(horizontal: false, vertical: true)
         .glassEffect(in: RoundedRectangle(cornerRadius: 26))
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panel.resize($0) }
-        .onChange(of: panel.focusRequest) { _, _ in fieldFocused = true }
+        .onChange(of: panel.focusRequest, initial: true) { _, request in
+            if request > 0 { fieldFocused = true }
+        }
         .onChange(of: panel.finalSegment?.state) { _, _ in panel.updateAutoHide() }
         .task { await model.observeStore() }
         .task { await model.followWindow(every: .seconds(5)) }

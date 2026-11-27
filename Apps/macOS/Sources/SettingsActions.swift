@@ -84,7 +84,7 @@ struct MacNotesExport: View {
 
 struct MacAbout: View {
     let app: AppComposition
-    let flush: () async -> Void
+    let prepareRestore: () async -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var message: String?
     @State private var busy = false
@@ -168,7 +168,7 @@ struct MacAbout: View {
         restoreCopy = nil
         busy = true
         Task {
-            await flush()
+            await prepareRestore()
             let accessed = copy.startAccessingSecurityScopedResource()
             defer {
                 if accessed { copy.stopAccessingSecurityScopedResource() }
