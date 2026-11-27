@@ -771,7 +771,7 @@ SWIFT_TESTS = ("Packages/KnotKit/Tests/",)
 DEBUG_ARGUMENTS = (
     "-KnotPreview", "-KnotTemporaryStore", "-KnotEnterLine", "-KnotInjectedAudio",
     "-KnotPreviewEndsAtLimit", "-KnotPreviewHoldsFirstConversion", "-KnotPreviewPressGap",
-    "-KnotPreviewStartFails",
+    "-KnotPreviewStartFails", "-KnotWithoutAnimations",
 )
 DEBUG_ARGUMENT = re.compile(r'"(-Knot[A-Za-z]+)"')
 STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
