@@ -32,6 +32,16 @@ final class ManualDeadline: Sendable {
         for continuation in waiting { continuation.resume() }
     }
 
+    /// Runs out one deadline that waits now, the one that began to wait first: a store call that
+    /// waits for a deadline of its own beside it still waits.
+    func expireOne() {
+        let first = state.withLock { state -> CheckedContinuation<Void, Never>? in
+            guard let key = state.waiting.keys.min() else { return nil }
+            return state.waiting.removeValue(forKey: key)
+        }
+        first?.resume()
+    }
+
     /// Waits until a store call waits for its deadline, then runs it out.
     func expireNext(sourceLocation: SourceLocation = #_sourceLocation) async {
         _ = await SuiteWait.until("a store call to wait for its deadline", sourceLocation: sourceLocation) {

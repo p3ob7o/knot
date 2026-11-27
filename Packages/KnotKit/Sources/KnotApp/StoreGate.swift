@@ -253,6 +253,10 @@ struct GatedNoteStore: NoteStore {
 
     func peaks(of segment: SegmentID) async throws(KnotError) -> Data? { try await notes().peaks(of: segment) }
 
+    func setRecordingEnding(_ reason: RecordingEndReason, of segment: SegmentID) async throws(KnotError) {
+        try await notes().setRecordingEnding(reason, of: segment)
+    }
+
     func clearArrivalMarks(in note: NoteID) async throws(KnotError) { try await notes().clearArrivalMarks(in: note) }
 
     func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult {

@@ -51,6 +51,7 @@ public actor InboxIngest {
     private let launchID: LaunchID
     private let items: InboxItems
     private let peaks: StoredPeaks
+    private let endings: StoredRecordingEnding
     private let log: KnotLog
     private let holds: @Sendable (CaptureManifest) -> ErrorCode?
     private var running: Set<CaptureID> = []
@@ -72,6 +73,7 @@ public actor InboxIngest {
         self.launchID = launchID
         self.items = InboxItems(locations: locations, layer: layer)
         self.peaks = StoredPeaks(notes: notes, locations: locations, layer: layer, log: log)
+        self.endings = StoredRecordingEnding(notes: notes, log: log)
         self.log = log
         self.holds = holds
     }
@@ -312,11 +314,21 @@ public actor InboxIngest {
             try await assets.remove(assetID, kind: .audio)
             return outcome
         }
+        if result.storedRevision >= manifest.revision {
+            // The row points to the stored asset: its peaks are kept, those of the item or else
+            // those beside the working file, and why it ended, which the item carries, before the
+            // item goes. For an item that recovery handed over, or that the Watch delivered, the
+            // item is the reason's only copy on a drive: a death before the set leaves the item,
+            // and the next run sets the same reason again, which writes nothing. A refusal is
+            // logged and dropped, and the item goes all the same (the review of pull request 130,
+            // B1). Known: the two sets wait with no deadline, as the peaks' did before them, so a
+            // store call that never returns holds the ingest run, and now the item with it.
+            await peaks.keep(manifest.peaks ?? peaks.fromFile(id, frames: manifest.revision), of: id)
+            await endings.keep(manifest.recordingEnding, of: id)
+        }
         let outcome = try finish(manifest, result)
         if case .stored = outcome {
-            // The row points to the stored asset: its peaks are kept, those of the item or else
-            // those beside the working file, and the working file and its manifest can go.
-            await peaks.keep(manifest.peaks ?? peaks.fromFile(id, frames: manifest.revision), of: id)
+            // The working file and its manifest can go.
             try? await recorder.removeWorkingFile(of: id)
             try? await queue.enqueue(SegmentID(id))
         }
