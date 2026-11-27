@@ -84,6 +84,13 @@ final class Shell {
             player = PlayerViewModel(player: environment.player)
         #endif
         KnotIntentEnvironment.register(environment, in: .shared)
+        #if DEBUG
+            // Every UI test's launch (KnotLauncher). UIKit's keyboard animations can start and never
+            // report their end, and XCTest then waits a minute for them on every interaction.
+            if ProcessInfo.processInfo.arguments.contains("-KnotWithoutAnimations") {
+                UIView.setAnimationsEnabled(false)
+            }
+        #endif
     }
 
     /// Starts the launch sequence, once, when the capture surface is on screen. Typing never

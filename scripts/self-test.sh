@@ -1610,7 +1610,7 @@ printf 'some code\0-KnotSomethingElse\0more code\n' >"$da/clean"
 debug_list="$(python3 -I -B "$KNOT_SCRIPTS/lib/knot_tool.py" debug-arguments 2>&1 || true)"
 debug_holds="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3"' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/holds" "$debug_list" 2>&1 || true)"
 debug_clean="$(bash -c 'source "$1"; knot_debug_arguments_in "$2" "$3" && echo found' _ "$KNOT_SCRIPTS/lib/common.sh" "$da/clean" "$debug_list" 2>&1 || true)"
-if [[ $(grep -c . <<<"$debug_list") == 8 && $debug_list == *"-KnotPreview"*"-KnotEnterLine"* &&
+if [[ $(grep -c . <<<"$debug_list") == 9 && $debug_list == *"-KnotPreview"*"-KnotEnterLine"* &&
     $debug_holds == "-KnotTemporaryStore" && -z $debug_clean ]]; then
     pass "the scan for debug launch arguments finds one of the list's names in a file, by name, and nothing in a clean one"
 else

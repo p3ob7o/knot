@@ -40,9 +40,22 @@ enum KnotLauncher {
     /// by trial on the build Mac (the orchestrator's, 2026-11-21): after such a flag AppKit does
     /// not see the pair, and the app opens no window, though Foundation's argument domain reads
     /// the pair in either order.
+    ///
+    /// On iOS, the app turns UIKit's view animations off (`-KnotWithoutAnimations`, which only a
+    /// debug build honours). Known by trial on the build Mac (WP-30, 2026-11-26), with the iPhone
+    /// and the iPad simulators running at once: some launches ended in a state where every
+    /// interaction waited sixty seconds and went on with "App animations complete notification
+    /// not received", while the app sat idle, in 11 of 480 launches before and none of 320 after.
+    /// In each of the six such launches that were traced, a keyboard animation of UIKit
+    /// (`_UIInputViewAnimationFactory`, a 0.3833 s spring on the input view's size or position)
+    /// reported its start to XCTest's count of the app's animations and never its end; the other
+    /// five showed the same symptom and were not traced. The price: the iOS UI tests no longer
+    /// see a fault that needs UIKit's own animation timing.
     static var everyLaunch: [String] {
         #if os(macOS)
             ["-ApplePersistenceIgnoreState", "YES"]
+        #elseif os(iOS)
+            ["-KnotWithoutAnimations"]
         #else
             []
         #endif
@@ -101,6 +114,9 @@ final class KnotLauncherTests: XCTestCase {
         XCTAssertEqual(
             KnotLauncher.application(.live(temporaryStore: "smoke-1")).launchArguments,
             KnotLauncher.everyLaunch + ["-KnotTemporaryStore", "smoke-1"])
+        #if os(iOS)
+            XCTAssertEqual(KnotLauncher.everyLaunch, ["-KnotWithoutAnimations"])
+        #endif
         #if os(macOS)
             XCTAssertEqual(KnotLauncher.everyLaunch, ["-ApplePersistenceIgnoreState", "YES"])
             XCTAssertEqual(
