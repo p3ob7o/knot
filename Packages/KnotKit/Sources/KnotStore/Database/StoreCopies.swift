@@ -110,7 +110,7 @@ public enum StoreCopies {
     /// dropped; without it, a copy there is replaced. The partial file of a copy is never
     /// another's to remove: the app removes what a dead writer left when it opens the store.
     static func makeCopy(
-        of reader: any DatabaseReader, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        of reader: any DatabaseReader, to destination: URL, files: some CopyFiles, publishing: StoreFiles? = nil,
         hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         try reader.read { db in
@@ -122,7 +122,7 @@ public enum StoreCopies {
     /// Writes a checked copy of the database as `db` sees it, in its transaction, to
     /// `destination`, as `makeCopy(of:to:files:publishing:hooks:killPoint:)` does.
     static func makeCopy(
-        of db: Database, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        of db: Database, to destination: URL, files: some CopyFiles, publishing: StoreFiles? = nil,
         hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         let folder = destination.deletingLastPathComponent()
@@ -558,7 +558,36 @@ struct RestoreJournal: Codable, Hashable, Sendable {
     }
 }
 
+// The kept copies use the store's roots. An export uses a durable file rooted at its destination.
+protocol CopyFiles {
+    func makeFolder(_ url: URL) throws(KnotError)
+    func move(_ source: URL, to destination: URL) throws(KnotError)
+}
+
+extension StoreFiles: CopyFiles {}
+extension DurableFile: CopyFiles {}
+
 extension StoreDatabase {
+    /// Writes a checked SQLite backup with no WAL, outside the live store's roots.
+    /// Call from a blocking I/O thread.
+    public func writeCopy(to destination: URL) throws(KnotError) {
+        guard destination.isFileURL else { throw KnotError.writeFailed.with(.init(posixError: EINVAL)) }
+        let path = PathForm.real(destination)
+        let parent = PathForm.real(destination.deletingLastPathComponent())
+        for root in [locations.storeRoot, locations.sharedRoot].map(PathForm.real)
+        where path.starts(with: root) || parent.starts(with: root) {
+            throw KnotError.writeFailed.with(.init(posixError: EINVAL))
+        }
+        do {
+            let folder = URL(fileURLWithPath: "/" + parent.joined(separator: "/"), isDirectory: true)
+            let target = folder.appending(path: destination.lastPathComponent, directoryHint: .notDirectory)
+            let exportFiles = DurableFile(layer: fileLayer, root: folder)
+            try StoreCopies.makeCopy(of: pool, to: target, files: exportFiles, hooks: hooks)
+        } catch {
+            throw StoreErrors.knotError(error)
+        }
+    }
+
     /// Makes today's copy, once a day, and keeps the newest seven (docs/architecture.md §7).
     /// Returns the copy, made now or earlier today, once it and its folder are on the drive: a
     /// copy whose folder's sync failed is found in place by the retry, which syncs it before it
