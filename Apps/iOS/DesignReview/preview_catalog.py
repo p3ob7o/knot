@@ -25,7 +25,13 @@ def catalog(source, destination):
     branches = []
     for index, (name, cell, body) in enumerate(phone_previews(source.read_text())):
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-        rows.append((index, name, cell, slug))
+        appearances = ["light-default", "dark-default", "light-ax5"]
+        if body == "StreamMatrixPreview(surface: .phone, example: .empty)":
+            appearances.append("dark-ax5")
+        if "scrollsToEnd: true" in body:
+            name += " — scrolled to the end"
+            appearances = ["light-ax5"]
+        rows.append((index, name, cell, slug, appearances))
         branches.append(f"        case {index}:\n            AnyView({body})")
     if len({row[3] for row in rows}) != len(rows):
         raise ValueError("Generated screenshot file names must be unique")

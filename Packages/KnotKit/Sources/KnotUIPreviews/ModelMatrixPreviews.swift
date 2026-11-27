@@ -41,23 +41,10 @@
         @ViewBuilder private func stream(_ loaded: Loaded) -> some View {
             #if os(iOS)
                 if surface == .phone {
-                    Group {
-                        if example == .unavailable {
-                            List {
-                                Banner(
-                                    StoreProblem(KnotError.storeDamaged).message,
-                                    symbol: "exclamationmark.icloud", role: .failed
-                                )
-                                .listRowSeparator(.hidden)
-                            }
-                            .listStyle(.plain)
-                        } else {
-                            StreamView(
-                                stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
-                                isRestoring: example == .restoring, openSetupRow: { _ in }, open: { _ in }
-                            )
-                        }
-                    }
+                    StreamView(
+                        stream: loaded.stream, search: loaded.search, showsInlineSearch: false,
+                        isRestoring: example == .restoring, openSetupRow: { _ in }, open: { _ in }
+                    )
                     .searchable(text: Binding(get: { loaded.search.query }, set: loaded.search.setQuery))
                     .toolbar(removing: .search)
                     .toolbar {
@@ -116,7 +103,7 @@
             case .arrived:
                 _ = try await fixture.recordFile(kind: .voice, note: nil, arrival: .late)
             case .unavailable:
-                environment.notes = UnavailableNoteStore()
+                environment.notes = DamagedPreviewStore()
             case .restoring:
                 break
             case .empty:
@@ -132,6 +119,62 @@
             await stream.load()
             return Loaded(stream: stream, search: search)
         }
+    }
+
+    private struct DamagedPreviewStore: NoteStore {
+        private var missing: KnotError { KnotError.storeDamaged }
+
+        func cursor() async throws(KnotError) -> StoreCursor { throw missing }
+        func changeSignals() -> AsyncStream<StoreCursor> { AsyncStream { $0.finish() } }
+        func predictPlacement(_ request: AppendRequest, kind: SegmentKind, surface: CaptureSurface)
+            async throws(KnotError) -> AppendDecision
+        { throw missing }
+        func ingest(_ capture: NewCapture) async throws(KnotError) -> IngestResult { throw missing }
+        func recordKeptItem(_ item: KeptInboxItem) async throws(KnotError) -> IngestResult { throw missing }
+        func record(_ capture: NewCapture) async throws(KnotError) -> CaptureReceipt { throw missing }
+        func checkpoint(_ checkpoint: CaptureCheckpoint) async throws(KnotError) -> CheckpointResult {
+            throw missing
+        }
+        func end(_ end: CaptureEnd) async throws(KnotError) -> CaptureReceipt { throw missing }
+        func openCaptures() async throws(KnotError) -> [Capture] { throw missing }
+        func capture(_ id: CaptureID) async throws(KnotError) -> Capture? { throw missing }
+        func note(_ id: NoteID) async throws(KnotError) -> NoteRecord? { throw missing }
+        func segment(_ id: SegmentID) async throws(KnotError) -> SegmentRead? { throw missing }
+        func asset(_ id: AssetID) async throws(KnotError) -> Asset? { throw missing }
+        func stream(after position: StreamPosition?, limit: Int) async throws(KnotError) -> StreamPage {
+            throw missing
+        }
+        func search(_ query: String, limit: Int) async throws(KnotError) -> [NoteID] { throw missing }
+        func changes(after cursor: StoreCursor?, limit: Int) async throws(KnotError) -> ChangePage {
+            throw missing
+        }
+        func replaceText(_ replacement: TextReplacement) async throws(KnotError) -> TextReplacementResult {
+            throw missing
+        }
+        func setTitle(_ title: String?, of note: NoteID, ifRevision: StampedRevision?) async throws(KnotError)
+            -> NoteRead
+        { throw missing }
+        func delete(_ target: StoreTarget) async throws(KnotError) -> StoreCursor { throw missing }
+        func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor { throw missing }
+        func clearArrivalMarks(in note: NoteID) async throws(KnotError) { throw missing }
+        func move(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveResult { throw missing }
+        func returnToFormerNote(_ segment: SegmentID, from note: NoteID) async throws(KnotError) -> MoveOutcome {
+            throw missing
+        }
+        func setState(_ state: SegmentState, of segment: SegmentID) async throws(KnotError) -> SegmentRead {
+            throw missing
+        }
+        func appendTranscript(_ run: TranscriptionRun, to segment: SegmentID, job: JobID) async throws(KnotError)
+            -> SegmentRead
+        { throw missing }
+        func applyCleanup(_ result: CleanupResult, to segment: SegmentID) async throws(KnotError)
+            -> CleanupApplied
+        { throw missing }
+        @discardableResult
+        func saveJob(_ job: Job) async throws(KnotError) -> Job { throw missing }
+        func jobs(for segment: SegmentID?) async throws(KnotError) -> [Job] { throw missing }
+        func purge(before date: Date) async throws(KnotError) -> PurgeResult { throw missing }
+        func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset { throw missing }
     }
 
     enum NoteExample {
@@ -315,7 +358,10 @@
                 ids.make(), in: note, from: date, text: "Ask about the roof estimate.", origin: origin)
             var segments = [first]
             if example == .conflict {
-                segments.append(try Build.conflictCopy(of: first, losingDevice: ids.make(), text: "Ask on Thursday."))
+                var copy = try Build.conflictCopy(of: first, losingDevice: ids.make(), text: "Ask on Thursday.")
+                copy.startedAt = first.startedAt.addingTimeInterval(1)
+                copy.endedAt = first.endedAt?.addingTimeInterval(1)
+                segments.append(copy)
             } else if example == .marked {
                 segments = [
                     try Build.typed(ids.make(), in: note, from: date, text: "Added a follow-up.", origin: .cli)

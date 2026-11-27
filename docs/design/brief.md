@@ -235,6 +235,8 @@ Design for the Ultra 2 first, then the smaller sizes.
 | First run: choosing the hotkey, tap versus hold | – | – | Yes | – | – | – |
 | Two columns do not fit; keyboard up | – | Yes | – | Yes | – | – |
 
+The iPad cell “Two columns do not fit; keyboard up” is a stand-in until WP-40b.
+
 ## 7. Questions to answer
 
 1. On iPhone, how do the capture field and the stream relate? Is it one screen or two, and which way does time run?

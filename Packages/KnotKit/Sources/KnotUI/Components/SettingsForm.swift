@@ -34,7 +34,7 @@
                                 action: actionButtonSetup)
                         }
                         ForEach(model.rows.filter { !isDestination($0) }) { row in
-                            rowView(row)
+                            rowView(row).id(row)
                         }
                     } footer: {
                         if !model.isAvailable {

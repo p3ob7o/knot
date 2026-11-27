@@ -101,6 +101,8 @@ func everyDesignedCellHasOneNamedPreview() throws {
     defer { try? FileManager.default.removeItem(at: root) }
     let arrived = try await StreamMatrixPreview(surface: .phone, example: .arrived).makeModels(in: root)
     #expect(arrived.stream.arrival != nil)
+    let damaged = try await StreamMatrixPreview(surface: .phone, example: .unavailable).makeModels(in: root)
+    #expect(damaged.stream.problem?.code == KnotError.storeDamaged.code)
     let populated = try await StreamMatrixPreview(surface: .phone, example: .populated).makeModels(in: root)
     let rows = populated.stream.rows
     #expect(rows.contains { $0.kinds == [.typed, .voice] && $0.preview != nil })
@@ -134,8 +136,11 @@ func everyDesignedCellHasOneNamedPreview() throws {
     }
     let attachments = try await NoteMatrixPreview(surface: .phone, example: .attachments).makeModels(in: root)
     #expect(attachments.note.items.contains { $0.attachment == .missing })
-    let segments = try #require(attachments.note.record?.segments)
-    #expect(Set(segments.map(\.startedAt)).count == segments.count)
+    let conflict = try await NoteMatrixPreview(surface: .phone, example: .conflict).makeModels(in: root)
+    for model in [attachments.note, conflict.note] {
+        let segments = try #require(model.record?.segments)
+        #expect(Set(segments.map(\.startedAt)).count == segments.count)
+    }
     let ink = try await NoteMatrixPreview(surface: .phone, example: .ink).makeModels(in: root)
     #expect(Set(ink.note.items.filter { $0.kind == .ink }.map(\.state)).count == 4)
     let moved = try await NoteMatrixPreview(surface: .window, example: .moved).makeModels(in: root)

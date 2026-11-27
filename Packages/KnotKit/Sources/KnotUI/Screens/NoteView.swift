@@ -22,6 +22,8 @@
         @State private var titleFocused = false
         @State private var focusedSegments: Set<SegmentID> = []
 
+        public static var captureFieldScrollID: String { "capture-field" }
+
         public enum InitialFocus: Equatable, Sendable {
             case capture
             case none
@@ -192,7 +194,9 @@
                 CaptureField(
                     text: model.fieldText, acceptsTyping: model.fieldAcceptsTyping, isFocused: $fieldFocused,
                     typeRole: model.surface == .macPanel || model.surface == .app ? .captureField : .body,
-                    onChange: model.fieldChanged, onSubmit: model.endCapture)
+                    onChange: model.fieldChanged, onSubmit: model.endCapture
+                )
+                .id(Self.captureFieldScrollID)
             }
         }
 

@@ -260,9 +260,7 @@ public struct FirstRunView: View {
                     .font(theme.type[.body])
                 if let line = content.syncLine {
                     HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
-                        Image(systemName: "icloud")
-                            .frame(width: theme.spacing.space6, alignment: .leading)
-                            .accessibilityHidden(true)
+                        firstRunIcon("icloud")
                         Text(line)
                     }
                     .font(theme.type[.metaLine])
@@ -312,17 +310,34 @@ public struct FirstRunView: View {
     }
 
     #if os(iOS)
-        private func setupLabel(_ row: SetupRow) -> some View {
-            let icon: String =
-                switch row {
-                case .actionButton: "button.programmable"
-                case .lockScreenControl: "lock"
-                case .watchComplication: "applewatch"
+        private func setupIcon(_ row: SetupRow) -> String {
+            switch row {
+            case .actionButton: "button.programmable"
+            case .lockScreenControl: "lock"
+            case .watchComplication: "applewatch"
+            }
+        }
+
+        private func firstRunIcon(_ symbol: String) -> some View {
+            ZStack {
+                if content.syncLine != nil {
+                    Image(systemName: "icloud").font(theme.type[.metaLine])
                 }
-            return HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
-                Image(systemName: icon)
-                    .frame(width: theme.spacing.space6, alignment: .leading)
-                    .accessibilityHidden(true)
+                ForEach(content.setupRows) { row in
+                    Image(systemName: setupIcon(row)).font(theme.type[.body])
+                }
+            }
+            .fixedSize()
+            .hidden()
+            .overlay(alignment: .leading) {
+                Image(systemName: symbol).fixedSize()
+            }
+            .accessibilityHidden(true)
+        }
+
+        private func setupLabel(_ row: SetupRow) -> some View {
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space2) {
+                firstRunIcon(setupIcon(row))
                 Text(row.title)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)

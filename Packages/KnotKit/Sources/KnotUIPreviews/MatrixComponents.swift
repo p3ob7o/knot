@@ -41,6 +41,7 @@
 
     struct MatrixReady: ViewModifier {
         @Environment(\.matrixReadyFile) private var readyFile
+        var diagnostic: () -> String = { "" }
 
         func body(content: Content) -> some View {
             content.task {
@@ -48,7 +49,7 @@
                 do {
                     // Wait for the native sheet or keyboard transition after the model appears.
                     try await Task.sleep(for: .seconds(1))
-                    try Data().write(to: readyFile, options: .atomic)
+                    try Data(diagnostic().utf8).write(to: readyFile, options: .atomic)
                 } catch is CancellationError {
                     return
                 } catch {
@@ -151,7 +152,9 @@
             let example: CaptureExample
             @State private var loaded: Loaded?
             @State private var presentsCapture = true
+            @State private var offsetFromTop: CGFloat?
             var showsSpeechDownload = false
+            var scrollsToEnd = false
 
             private struct Loaded {
                 let model: NoteViewModel
@@ -220,12 +223,29 @@
             }
 
             private func note(_ loaded: Loaded) -> some View {
-                NoteView(model: loaded.model, player: loaded.player, initialFocus: focusForPreview)
-                    .modifier(MatrixReady())
-                    .onDisappear {
-                        loaded.releaseStart?.finish()
-                        if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
+                ScrollViewReader { scroll in
+                    NoteView(model: loaded.model, player: loaded.player, initialFocus: focusForPreview)
+                        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.contentOffset.y + geometry.contentInsets.top
+                        } action: { _, offset in
+                            offsetFromTop = offset
+                        }
+                        .task(id: loaded.model.speechDownloading) {
+                            if scrollsToEnd, loaded.model.speechDownloading {
+                                scroll.scrollTo(NoteView.captureFieldScrollID, anchor: .bottom)
+                            }
+                        }
+                }
+                .modifier(
+                    MatrixReady {
+                        guard example == .older || scrollsToEnd, let offsetFromTop else { return "" }
+                        return "Scroll offset from top: \(offsetFromTop) points"
                     }
+                )
+                .onDisappear {
+                    loaded.releaseStart?.finish()
+                    if loaded.model.recording.isRecording { loaded.model.press(.holdRelease) }
+                }
             }
 
             private var focusForPreview: NoteView.InitialFocus? {
@@ -506,16 +526,18 @@
                     switch example {
                     case .full, .sync:
                         NavigationStack {
-                            SettingsMatrixForm(surface: surface, syncStatus: syncStatus)
-                                .navigationTitle("Settings")
-                                #if os(iOS)
-                                    .navigationBarTitleDisplayMode(.inline)
-                                    .toolbar {
-                                        ToolbarItem(placement: .cancellationAction) {
-                                            Button("Close", systemImage: "xmark") {}
-                                        }
+                            SettingsMatrixForm(
+                                surface: surface, syncStatus: syncStatus, showsSyncFirst: example == .sync
+                            )
+                            .navigationTitle("Settings")
+                            #if os(iOS)
+                                .navigationBarTitleDisplayMode(.inline)
+                                .toolbar {
+                                    ToolbarItem(placement: .cancellationAction) {
+                                        Button("Close", systemImage: "xmark") {}
                                     }
-                                #endif
+                                }
+                            #endif
                         }
                     case .export:
                         List {
@@ -537,13 +559,22 @@
         private struct SettingsMatrixForm: View {
             let surface: PreviewSurface
             let syncStatus: SyncStatus
+            let showsSyncFirst: Bool
+            @Environment(\.dynamicTypeSize) private var typeSize
             @State private var model: SettingsViewModel?
 
             var body: some View {
                 Group {
                     if let model {
-                        SettingsForm(model, actionButtonSetup: surface == .phone ? {} : nil)
-                            .modifier(MatrixReady())
+                        ScrollViewReader { scroll in
+                            SettingsForm(model, actionButtonSetup: surface == .phone ? {} : nil)
+                                .task {
+                                    if showsSyncFirst, surface == .phone, typeSize == .accessibility5 {
+                                        scroll.scrollTo(SettingsRow.sync, anchor: .top)
+                                    }
+                                }
+                        }
+                        .modifier(MatrixReady())
                     } else {
                         ProgressView()
                     }

@@ -185,6 +185,8 @@
             Group {
                 StreamMatrixPreview(surface: .phone, example: .empty)
                 CaptureMatrixPreview(surface: .phone, example: .permission, showsSpeechDownload: true)
+                CaptureMatrixPreview(
+                    surface: .phone, example: .permission, showsSpeechDownload: true, scrollsToEnd: true)
             }
         }
 

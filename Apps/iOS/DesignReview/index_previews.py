@@ -1,8 +1,8 @@
 """Index rendered PNGs by matrix cell and the handoff check's iPhone evidence."""
 
+import argparse
 import json
 import re
-import sys
 from pathlib import Path
 
 
@@ -79,7 +79,7 @@ def handoff_references(repo):
     return files
 
 
-def write_index(catalog, output, repo):
+def write_index(catalog, output, repo, *, previews_only=False):
     references = handoff_references(repo)
     lines = [
         "# WP-40a iPhone preview renders",
@@ -94,7 +94,7 @@ def write_index(catalog, output, repo):
         "|---|---|---|",
     ]
     coverage = {}
-    for _, name, cell, slug in json.loads(catalog.read_text()):
+    for _, name, cell, slug, appearances in json.loads(catalog.read_text()):
         status, paths = references[cell]
         if cell == "First run: microphone, model downloading, Action Button":
             component = "FirstRun" if name.endswith("(1)") else "Notice"
@@ -105,7 +105,7 @@ def write_index(catalog, output, repo):
         if primary and not (repo / handoff).is_file():
             raise FileNotFoundError(handoff)
         coverage[cell] = (status, paths)
-        for appearance in ("light-default", "dark-default", "light-ax5"):
+        for appearance in appearances:
             filename = f"{slug}-{appearance}.png"
             if not (output / filename).is_file():
                 raise FileNotFoundError(filename)
@@ -114,10 +114,14 @@ def write_index(catalog, output, repo):
         ("capture-keyboard-controls-live-light-default.png", "Default text size"),
         ("capture-keyboard-controls-live-light-ax5.png", "Largest accessibility text size"),
     ]
-    present = [(filename, size) for filename, size in keyboard_proofs if (output / filename).is_file()]
-    if present:
+    if previews_only:
+        lines.extend(["", "The two running-app keyboard screenshots are recorded separately."])
+    else:
+        for filename, _ in keyboard_proofs:
+            if not (output / filename).is_file():
+                raise FileNotFoundError(filename)
         lines.extend(["", "## Capture controls in the running iPhone app", ""])
-        lines.extend(f"- [{size}]({filename})" for filename, size in present)
+        lines.extend(f"- [{size}]({filename})" for filename, size in keyboard_proofs)
     lines.extend(["", "## Coverage recorded in the handoff check", ""])
     for cell, (status, paths) in coverage.items():
         evidence = ", ".join(f"`{HANDOFF / path}`" for path in paths)
@@ -126,4 +130,9 @@ def write_index(catalog, output, repo):
 
 
 if __name__ == "__main__":
-    write_index(*map(Path, sys.argv[1:]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("catalog", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("repo", type=Path)
+    parser.add_argument("--previews-only", action="store_true")
+    write_index(**vars(parser.parse_args()))

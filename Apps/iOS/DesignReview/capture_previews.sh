@@ -69,11 +69,11 @@ python3 - "$scratch/catalog.json" > "$preview_rows" <<'PY'
 import json
 import sys
 
-for index, _, _, slug in json.load(open(sys.argv[1])):
-    print(f"{index}\t{slug}")
+for index, _, _, slug, appearances in json.load(open(sys.argv[1])):
+    print(f"{index}\t{slug}\t{','.join(appearances)}")
 PY
 
-for combination in light-default dark-default light-ax5; do
+for combination in light-default dark-default light-ax5 dark-ax5; do
     appearance=${combination%%-*}
     size=${combination#*-}
     simctl ui "$udid" appearance "$appearance"
@@ -82,7 +82,8 @@ for combination in light-default dark-default light-ax5; do
     else
         simctl ui "$udid" content_size large
     fi
-    while IFS=$'\t' read -r index slug; do
+    while IFS=$'\t' read -r index slug appearances; do
+        [[ ",$appearances," == *",$combination,"* ]] || continue
         image="$output/$slug-$combination.png"
         variant="$render_id-$combination"
         simctl launch --terminate-running-process "$udid" "$id" "$index" "$size" "$variant" >/dev/null
@@ -92,6 +93,9 @@ for combination in light-default dark-default light-ax5; do
             sleep 1
         done
         [[ -f $marker ]] || { echo "Preview did not appear: $slug ($combination)" >&2; exit 1; }
+        if [[ -s $marker ]]; then
+            printf '%s (%s): %s\n' "$slug" "$combination" "$(cat "$marker")"
+        fi
         if ! simctl io "$udid" screenshot "$image" >"$scratch/screenshot.log" 2>&1; then
             cat "$scratch/screenshot.log" >&2
             exit 1
