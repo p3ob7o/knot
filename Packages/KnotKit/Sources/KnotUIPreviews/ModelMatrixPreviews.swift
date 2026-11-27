@@ -90,11 +90,13 @@
             let context = fixture.context
             switch example {
             case .populated, .largest:
-                let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now
-                let earlier = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
-                let mixed = try await fixture.typed("Roof repair\nAsk about the estimate.", at: now)
-                _ = try await fixture.recordFile(kind: .voice, note: mixed, at: now.addingTimeInterval(2))
-                _ = try await fixture.typed("Buy stamps and envelopes", at: now.addingTimeInterval(-60))
+                let calendar = Calendar.current
+                let today = max(now.addingTimeInterval(-5), calendar.startOfDay(for: now).addingTimeInterval(5))
+                let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+                let earlier = calendar.date(byAdding: .day, value: -7, to: today) ?? today
+                let mixed = try await fixture.typed("Roof repair\nAsk about the estimate.", at: today)
+                _ = try await fixture.recordFile(kind: .voice, note: mixed, at: today.addingTimeInterval(2))
+                _ = try await fixture.typed("Buy stamps and envelopes", at: today.addingTimeInterval(-2))
                 let voice = try await fixture.recordFile(kind: .voice, note: nil, at: yesterday)
                 try await fixture.readyVoice(voice, text: "Book the van. Pick it up before nine.")
                 let drawing = try await fixture.recordFile(kind: .ink, note: nil, at: earlier)

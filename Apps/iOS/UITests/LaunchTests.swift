@@ -317,10 +317,11 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(variant.waitForExistence(timeout: limit))
         XCTAssertEqual(variant.value as? String, "Follow the region")
         variant.tap()
-        let followRegion = app.descendants(matching: .any).matching(identifier: "Follow the region").firstMatch
-        XCTAssertTrue(followRegion.waitForExistence(timeout: limit))
+        let unitedKingdom = app.descendants(matching: .any).matching(identifier: "UK").firstMatch
+        XCTAssertTrue(unitedKingdom.waitForExistence(timeout: limit))
         try app.auditAccessibility()
-        followRegion.tap()
+        unitedKingdom.tap()
+        XCTAssertEqual(variant.value as? String, "UK")
 
         about.tap()
         let aboutPage = app.navigationBars["About Knot"]
