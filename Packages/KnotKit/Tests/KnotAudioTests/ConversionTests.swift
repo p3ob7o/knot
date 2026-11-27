@@ -6,8 +6,12 @@ import Testing
 
 @testable import KnotAudio
 
-/// The conversion of a stopped recording to its stored copy, AAC mono in `.m4a`.
-@Suite struct ConversionTests {
+extension AudioBufferTests {
+    /// The conversion of a stopped recording to its stored copy, AAC mono in `.m4a`.
+    @Suite struct ConversionTests {}
+}
+
+extension AudioBufferTests.ConversionTests {
     /// The copy holds as many frames as the working file at its rate, in AAC, at the bit rate
     /// the encoder takes there; the working file stays, and nothing else is left.
     @Test(arguments: [16_000.0, 48_000.0])

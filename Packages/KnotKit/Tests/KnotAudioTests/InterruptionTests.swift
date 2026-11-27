@@ -7,10 +7,14 @@ import Testing
 
 @testable import KnotAudio
 
-/// What the session and the hardware do to a recording: an interruption, a reset of the media
-/// services, a route change and the engine's change of configuration, on the stand-in engine and
-/// session, which open nothing. What a device really does is checked at the owner's sitting.
-@Suite struct InterruptionTests {
+extension AudioBufferTests {
+    /// What the session and the hardware do to a recording: an interruption, a reset of the media
+    /// services, a route change and the engine's change of configuration, on the stand-in engine and
+    /// session, which open nothing. What a device really does is checked at the owner's sitting.
+    @Suite struct InterruptionTests {}
+}
+
+extension AudioBufferTests.InterruptionTests {
     /// An interruption, a call taking the session, ends the recording as `interrupted`, and
     /// everything written before it is kept, in the working file.
     ///
@@ -111,9 +115,9 @@ import Testing
     /// stopped, nothing watches the engine or the session any more. The wait is for the restart
     /// or, from an input that loses itself at the change, an ending: whichever comes.
     @Test func aChangeAtTheSameRateGoesOn() async throws {
-        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-        let buffer = try #require(HardwareInputTests.silence(format))
+        let buffer = try #require(AudioBufferTests.HardwareInputTests.silence(format))
         let deliveries = Mutex<[String]>([])
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
         engine.deliver(buffer)
@@ -135,7 +139,7 @@ import Testing
     /// never reaches once the reset has ended the recording: an input that ignored the reset
     /// ends on the interruption, at once, so the wait rests on the events' order.
     @Test func aResetOfTheMediaServicesLosesTheInput() async throws {
-        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let deliveries = Mutex<[String]>([])
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
@@ -153,7 +157,7 @@ import Testing
     /// ending, and the reset after that is never reached: an input that ignored the interruption
     /// ends on the reset, at once, so the wait rests on that order, not on a time.
     @Test func aRouteChangeAloneChangesNothing() async throws {
-        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let deliveries = Mutex<[String]>([])
         try opened.start(format: format) { delivery in deliveries.withLock { $0.append(Self.describe(delivery)) } }
@@ -176,7 +180,7 @@ import Testing
     /// first, with no time to wait out. The hook's own wait is checked by the test, as its own
     /// issue.
     @Test func aStopDuringTheRestartWaitsForIt() async throws {
-        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let stopping = StopTask()
         let hooks = HookWaits()
@@ -217,7 +221,7 @@ import Testing
     /// follows it, which a right input never reaches, for one that ignored the interruption; the
     /// hook's wait ends too on an ending, from an input that loses itself at the change.
     @Test func aChangeDuringTheStartIsCarriedOut() async throws {
-        let (opened, engine, hardware) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, hardware) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let hooks = HookWaits()
         let fired = Mutex(false)
@@ -233,7 +237,7 @@ import Testing
                 opened.changesDuringTheStart == 1 || !endings.withLock { $0 }.isEmpty
             }
         }
-        try await HardwareInputTests.startOffThePool(opened, format: format) { delivery in
+        try await AudioBufferTests.HardwareInputTests.startOffThePool(opened, format: format) { delivery in
             if case .ended(let why) = delivery { endings.withLock { $0.append(why.rawValue) } }
         }
         hardware.interrupt()
@@ -256,7 +260,7 @@ import Testing
     /// delivers instead: whichever comes.
     @Test(arguments: [false, true])
     func theConvertersTailIsDelivered(stoppedWhileConverting: Bool) async throws {
-        let (opened, engine, _) = try await HardwareInputTests.openStandIn()
+        let (opened, engine, _) = try await AudioBufferTests.HardwareInputTests.openStandIn()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let frames = Mutex(0)
         let ended = Flag()

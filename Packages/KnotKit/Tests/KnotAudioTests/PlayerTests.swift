@@ -7,9 +7,13 @@ import Testing
 
 @testable import KnotAudio
 
-/// The live player, rendering offline: nothing plays aloud on the build Mac, and a test moves
-/// the audio on itself.
-@Suite struct PlayerTests {
+extension AudioBufferTests {
+    /// The live player, rendering offline: nothing plays aloud on the build Mac, and a test moves
+    /// the audio on itself.
+    @Suite struct PlayerTests {}
+}
+
+extension AudioBufferTests.PlayerTests {
     /// The live player passes the `AudioPlayer` contract on a working file of two seconds, and
     /// refuses a file that is not audio with `audio_unreadable`.
     @Test(.tags(.contract)) func theLivePlayerPassesItsContract() async throws {
@@ -68,7 +72,7 @@ import Testing
     @Test func aPlayWhileRecordingIsRefused() async throws {
         let folder = try ScratchFolder()
         let activity = AudioActivity()
-        let (input, engine, _) = InterruptionTests.standInMicrophone(
+        let (input, engine, _) = AudioBufferTests.InterruptionTests.standInMicrophone(
             InputShape(sampleRate: 48_000, channels: 1), activity: activity)
         let live = recorder(folder.locations, input: input)
         let session = try await live.start(request())
@@ -106,7 +110,7 @@ import Testing
         _ = try await player.load(file)
         await player.play()
         _ = await player.renderOffline(8_000)
-        let (input, _, _) = InterruptionTests.standInMicrophone(
+        let (input, _, _) = AudioBufferTests.InterruptionTests.standInMicrophone(
             InputShape(sampleRate: 48_000, channels: 1), activity: activity)
         let session = try await recorder(folder.locations, input: input).start(request())
         guard case .paused(let at, let length) = player.currentState else {

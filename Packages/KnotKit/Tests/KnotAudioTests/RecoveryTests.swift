@@ -6,9 +6,13 @@ import Testing
 
 @testable import KnotAudio
 
-/// Recovery of the recordings that earlier launches left in `Recording/`, read by a recorder
-/// that did not record them, as the next launch's is.
-@Suite struct RecoveryTests {
+extension AudioBufferTests {
+    /// Recovery of the recordings that earlier launches left in `Recording/`, read by a recorder
+    /// that did not record them, as the next launch's is.
+    @Suite struct RecoveryTests {}
+}
+
+extension AudioBufferTests.RecoveryTests {
     /// The live recorder reads an orphan's ending from its manifest by the port's rule, case by
     /// case: a reason this build does not know reads as `stopped`, as ruled (pull request 128).
     @Test func anOrphansEndingIsTheManifests() {

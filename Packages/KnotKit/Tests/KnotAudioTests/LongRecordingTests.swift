@@ -6,8 +6,12 @@ import Testing
 
 @testable import KnotAudio
 
-/// A recording as long as v1 allows.
-@Suite struct LongRecordingTests {
+extension AudioBufferTests {
+    /// A recording as long as v1 allows.
+    @Suite struct LongRecordingTests {}
+}
+
+extension AudioBufferTests.LongRecordingTests {
     /// Thirty minutes of injected audio in, the same frames out: the recording ends by itself at
     /// its limit with every frame it was fed, each one the audio injected, and its converted copy
     /// holds as many. The audio is fed as fast as the recorder takes it, in buffers of 300 ms.

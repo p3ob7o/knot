@@ -8,9 +8,13 @@ import Testing
 @testable import KnotAudio
 
 #if os(macOS)
-    /// The recording state across two processes, the crash host's and the test's, as a widget
-    /// reads what the app writes; and the press that meets a state a crash left.
-    @Suite struct StateAcrossProcessesTests {
+    extension AudioBufferTests {
+        /// The recording state across two processes, the crash host's and the test's, as a widget
+        /// reads what the app writes; and the press that meets a state a crash left.
+        @Suite struct StateAcrossProcessesTests {}
+    }
+
+    extension AudioBufferTests.StateAcrossProcessesTests {
         /// A state one process writes, another reads whole, both ways: the crash host writes and
         /// the test reads, then the test writes and the crash host reads. `state-check` then runs
         /// the same check between two crash hosts, as it does in the iOS Simulator.

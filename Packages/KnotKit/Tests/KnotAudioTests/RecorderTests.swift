@@ -7,9 +7,13 @@ import Testing
 
 @testable import KnotAudio
 
-/// The live recorder on injected audio: what goes in comes out, at every rate, and a recording
-/// ends by itself the way the port says.
-@Suite struct RecorderTests {
+extension AudioBufferTests {
+    /// The live recorder on injected audio: what goes in comes out, at every rate, and a recording
+    /// ends by itself the way the port says.
+    @Suite struct RecorderTests {}
+}
+
+extension AudioBufferTests.RecorderTests {
     /// File-driven input produces the expected output: every frame injected is in the working
     /// file, unchanged, at the input's rate, whatever the buffers' size, and the stop reads the
     /// length from the file.

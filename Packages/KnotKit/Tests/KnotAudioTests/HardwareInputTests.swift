@@ -7,10 +7,14 @@ import Testing
 
 @testable import KnotAudio
 
-/// Under test the recorder refuses the hardware input, and no test here opens one: each test
-/// that reaches the microphone input passes it a stand-in for the hardware that records every
-/// use and opens nothing.
-@Suite struct HardwareInputTests {
+extension AudioBufferTests {
+    /// Under test the recorder refuses the hardware input, and no test here opens one: each test
+    /// that reaches the microphone input passes it a stand-in for the hardware that records every
+    /// use and opens nothing.
+    @Suite struct HardwareInputTests {}
+}
+
+extension AudioBufferTests.HardwareInputTests {
     /// This process is a test's, so the microphone may not open in it.
     @Test func thisTestProcessMayNotOpenAHardwareInput() {
         #expect(HardwareInputPolicy.refusalForThisProcess() != nil)
@@ -123,13 +127,7 @@ import Testing
     /// the mix must still be right on every frame the copy kept. On any other system, and for any
     /// other loss, a short copy fails the test, as a wrong mix of a whole copy does. After finding
     /// 25.
-    ///
-    /// The cases run one at a time. The system takes a buffer's memory from an allocator of its
-    /// own, `caulk::audio_buffer_resource`, which the thread sanitizer does not follow: memory
-    /// that one case let go and another case got back looked to it like two threads writing one
-    /// address, though no two live buffers ever shared it. One at a time, the cases are ordered
-    /// for the sanitizer. WP-12b.
-    @Test(.serialized, arguments: [16_000.0, 44_100.0, 48_000.0])
+    @Test(arguments: [16_000.0, 44_100.0, 48_000.0])
     func anInterleavedTapBufferIsMixedDown(rate: Double) throws {
         let stereo = try #require(
             AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: true))
@@ -544,7 +542,7 @@ final class HookWaits: Sendable {
     /// Blocks until `condition` holds, as `HardwareInputTests.waitUntil`, and keeps `what` if it
     /// never did.
     func wait(_ what: String, _ condition: () -> Bool) {
-        if !HardwareInputTests.waitUntil(condition) { unmet.withLock { $0.append(what) } }
+        if !AudioBufferTests.HardwareInputTests.waitUntil(condition) { unmet.withLock { $0.append(what) } }
     }
 
     /// Records, against the calling test, each wait of its hooks that ended unmet.

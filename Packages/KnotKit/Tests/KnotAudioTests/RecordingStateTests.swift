@@ -7,10 +7,14 @@ import Testing
 
 @testable import KnotAudio
 
-/// The recording state in the defaults, and what the recorder publishes there. Each test has a
-/// suite of its own, named for no machine and no account, and removes it when it ends, after a
-/// failure too. No test writes to `.standard` or to a group's suite.
-@Suite struct RecordingStateTests {
+extension AudioBufferTests {
+    /// The recording state in the defaults, and what the recorder publishes there. Each test has a
+    /// suite of its own, named for no machine and no account, and removes it when it ends, after a
+    /// failure too. No test writes to `.standard` or to a group's suite.
+    @Suite struct RecordingStateTests {}
+}
+
+extension AudioBufferTests.RecordingStateTests {
     @Test(.tags(.contract)) func theDefaultsStorePassesItsContract() async throws {
         let suite = try TestSuite()
         defer { suite.remove() }

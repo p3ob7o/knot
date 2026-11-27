@@ -7,8 +7,12 @@ import Testing
 
 @testable import KnotAudio
 
-/// A full disk, told by the volume's free space, because the audio file's error does not say.
-@Suite struct DiskTests {
+extension AudioBufferTests {
+    /// A full disk, told by the volume's free space, because the audio file's error does not say.
+    @Suite struct DiskTests {}
+}
+
+extension AudioBufferTests.DiskTests {
     /// A disk that fills during a recording: the write that finds no room fails with -40, which
     /// says nothing of space, and the volume then has none. The recording ends by itself as
     /// `disk_full`, and everything written before it is kept, read back whole by the next

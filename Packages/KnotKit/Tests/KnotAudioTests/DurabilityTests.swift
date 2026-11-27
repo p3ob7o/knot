@@ -6,11 +6,15 @@ import Testing
 
 @testable import KnotAudio
 
-/// What a power cut would keep, told by the order of the recorder's calls through the file
-/// layer: no test here cuts the power, and `AVAudioFile` writes outside the layer, so the order
-/// is the test. After review A of pull request 57. Each runs over a store's root written as
-/// given and written with `/private` in front, the same folder (finding 17).
-@Suite struct DurabilityTests {
+extension AudioBufferTests {
+    /// What a power cut would keep, told by the order of the recorder's calls through the file
+    /// layer: no test here cuts the power, and `AVAudioFile` writes outside the layer, so the order
+    /// is the test. After review A of pull request 57. Each runs over a store's root written as
+    /// given and written with `/private` in front, the same folder (finding 17).
+    @Suite struct DurabilityTests {}
+}
+
+extension AudioBufferTests.DurabilityTests {
     /// Every `.durable` follows a sync of the working file that began when the file already held
     /// those frames. The layer reads the file's length as each sync begins, and holds the sync
     /// until one more write has landed in the file, so that a recorder counting what it writes
