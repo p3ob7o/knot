@@ -323,6 +323,12 @@ final class KnotIOSLaunchTests: XCTestCase {
         variant.tap()
         let unitedKingdom = app.descendants(matching: .any).matching(identifier: "UK").firstMatch
         XCTAssertTrue(unitedKingdom.waitForExistence(timeout: limit))
+        try XCTContext.runActivity(named: "Audit English variant choices") { _ in try app.auditAccessibility() }
+        if !unitedKingdom.exists {
+            variant.tap()
+            XCTAssertTrue(
+                unitedKingdom.waitForExistence(timeout: limit), "The reopened English variant picker shows UK.")
+        }
         unitedKingdom.tap()
         XCTAssertTrue(
             waitFor(NSPredicate(format: "exists == YES AND value == %@", "UK"), on: variant),

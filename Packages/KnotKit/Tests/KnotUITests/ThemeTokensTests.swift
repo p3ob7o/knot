@@ -133,6 +133,28 @@ import Testing
         }
     }
 
+    #if os(iOS) || os(macOS)
+        @Test(arguments: ColorScheme.allCases, [ColorRole.background, .backgroundGrouped])
+        func secondaryInkMeetsTextContrast(in scheme: ColorScheme, on ground: ColorRole) {
+            var environment = EnvironmentValues()
+            environment.colorScheme = scheme
+            let palette = Theme.designed.colors
+            let ink = palette[.textSecondary].resolve(in: environment)
+            let paper = palette[ground].resolve(in: environment)
+            #expect(paper.opacity == 1)
+
+            // Composite in the view's sRGB space, then measure linear luminance.
+            let visibleInk = Color.Resolved(
+                red: ink.red * ink.opacity + paper.red * (1 - ink.opacity),
+                green: ink.green * ink.opacity + paper.green * (1 - ink.opacity),
+                blue: ink.blue * ink.opacity + paper.blue * (1 - ink.opacity))
+            let foreground = luminance(visibleInk)
+            let background = luminance(paper)
+            let ratio = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+            #expect(ratio >= 4.5, "Secondary ink on \(ground) in \(scheme) has a contrast ratio of \(ratio)")
+        }
+    #endif
+
     @Test(arguments: ColorScheme.allCases, ColorSchemeContrast.allCases)
     func theAccentAndAttentionInksFollowAppearanceAndContrast(in scheme: ColorScheme, contrast: ColorSchemeContrast) {
         var environment = EnvironmentValues()

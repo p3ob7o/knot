@@ -79,7 +79,7 @@ def handoff_references(repo):
     return files
 
 
-def write_index(catalog, output, repo, *, previews_only=False):
+def write_index(catalog, output, repo, *, allow_missing_keyboard_proofs=False):
     references = handoff_references(repo)
     lines = [
         "# WP-40a iPhone preview renders",
@@ -114,12 +114,12 @@ def write_index(catalog, output, repo, *, previews_only=False):
         ("capture-keyboard-controls-live-light-default.png", "Default text size"),
         ("capture-keyboard-controls-live-light-ax5.png", "Largest accessibility text size"),
     ]
-    if previews_only:
+    missing_proofs = [filename for filename, _ in keyboard_proofs if not (output / filename).is_file()]
+    if missing_proofs:
+        if not allow_missing_keyboard_proofs or len(missing_proofs) != len(keyboard_proofs):
+            raise FileNotFoundError(", ".join(missing_proofs))
         lines.extend(["", "The two running-app keyboard screenshots are recorded separately."])
     else:
-        for filename, _ in keyboard_proofs:
-            if not (output / filename).is_file():
-                raise FileNotFoundError(filename)
         lines.extend(["", "## Capture controls in the running iPhone app", ""])
         lines.extend(f"- [{size}]({filename})" for filename, size in keyboard_proofs)
     lines.extend(["", "## Coverage recorded in the handoff check", ""])
@@ -134,5 +134,5 @@ if __name__ == "__main__":
     parser.add_argument("catalog", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("repo", type=Path)
-    parser.add_argument("--previews-only", action="store_true")
+    parser.add_argument("--allow-missing-keyboard-proofs", action="store_true")
     write_index(**vars(parser.parse_args()))

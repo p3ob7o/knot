@@ -75,4 +75,4 @@ echo "Preview build log: $scratch/build.log"
 df -g / /System/Volumes/Data
 "$repo/scripts/build-slot.sh" run --simulators --label render-phone-previews -- \
     "$renderer/capture_previews.sh" "$repo" "$scratch" "$output"
-python3 "$renderer/index_previews.py" "$scratch/catalog.json" "$output" "$repo" --previews-only
+python3 "$renderer/index_previews.py" "$scratch/catalog.json" "$output" "$repo" --allow-missing-keyboard-proofs
