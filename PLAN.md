@@ -232,6 +232,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-12 | 12a | The recorder's tests wait by an order and not by a bound: two waits of ten seconds ran out together at a loaded gate under the strict pool | WP-12 PR 2 |
 | WP-12 | 3 | The recorder's kill points in the soak | WP-12 PR 2; WP-06 PR 2 |
 | WP-12 | 12b | The mix-down test's cases run one at a time: run in parallel, the thread sanitizer took memory that the system's audio buffers reuse for a data race, and the nightly run was red | WP-12 PR 3 |
+| WP-12 | 12c | The in-process audio-buffer tests run one at a time inside one serialized suite, so Thread Sanitizer sees no cross-test reuse of the system's audio buffers on the nightly run | WP-12b |
 | WP-13 | Proof step | Transcription of the fixtures, and of the owner's recordings once they are on the Mac, the Simulator probe, and a short note saying whether the draft `Transcriber` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-13 | 1 | The whole package | WP-05 |
 | WP-13 | 13a | The cancel test no longer rests on a wall-clock second: a test of the transcriber's that failed a gate under load, made right | WP-13 PR 1 |
