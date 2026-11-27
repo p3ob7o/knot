@@ -168,25 +168,26 @@ Everything the iPhone does, plus:
 | Trigger | What happens |
 |---|---|
 | Global hotkey, tapped | The floating capture panel appears with the cursor in it. Tapping again, or pressing Esc, hides it. |
-| Global hotkey, held | The panel appears and records for as long as the key is held. Releasing the key stops the recording. |
+| Global hotkey, held | The panel appears and recording starts at the hold threshold. Releasing the key normally stops the recording. |
 | Menu bar icon | A click opens the menu: New Note, Open Knot, Settings and Quit. The icon shows when Knot is recording. |
 | Main window | The stream, search and the open note. |
 | Siri, Shortcuts | The same actions as on iPhone. |
 | `knot` command and MCP server | See section 10. |
 
-The hotkey is chosen in Settings. The hotkey is a key with at least one modifier, or a function key. A press shorter than 250 ms is a tap. The microphone opens only for a hold:
+In Settings, choose a key with at least one modifier or a function key. Settings asks for another shortcut if another app registered that shortcut exclusively. If the other app registered it as an ordinary shortcut, Knot gets the shortcut and the other app stops receiving it while Knot holds the registration.
+
+A press shorter than 250 ms is a tap. A press of 250 ms or more is a hold, even if Knot handles the release before its hold timer runs.
 
 | Moment | What happens |
 |---|---|
-| Key down | Nothing shows. Knot gets the microphone ready without opening it. |
-| Released before 250 ms | A tap. The panel appears ready for typing within 100 ms, or hides if it was showing. The microphone never opened. |
-| Released a moment after 250 ms, before Knot has handled the mark | A tap as well. No press does nothing. |
-| Still held at 250 ms | The panel appears and the microphone opens. The listening state shows once it is live, and that is the moment to speak. |
-| Released after a hold | The recording stops. |
+| Key down | Nothing shows. Knot prepares audio with the microphone closed. |
+| Released before 250 ms | Knot releases the audio preparation. The panel appears ready for typing within 100 ms of release, or hides if it was showing. |
+| Held for 250 ms | The panel appears and Knot opens the microphone. **Listening** appears when the first audio buffer arrives, shortly after the microphone goes live. Speak when **Listening** appears. |
+| Released at or after 250 ms | The Carbon release stops the hold. If the timer has yet to run, Knot starts and stops the hold immediately. |
 
-Because the microphone opens at the 250 ms mark, the first fraction of a second of a hold is not recorded. SP-5 measures whether first words get clipped in practice. If they do, the alternative is to listen from key-down into a buffer that a tap discards, on built-in and wired microphones only.
+Esc, a second press of the hotkey and the panel's **Stop** button also stop a hold. Knot intercepts Esc only while recording. While recording from a shortcut with modifiers, Knot checks the required modifiers once per second and stops when any is up. This also catches a missed release if a required modifier comes up. An unmodified function key uses the release and the explicit stop controls.
 
-A recording started from Siri or Shortcuts on the Mac shows the panel with a stop control, and Esc also stops it. If a key release is ever missed, the recording goes on with the panel showing, and Esc or another press of the hotkey stops it. Holding the key while the panel is open records into it. After release the panel stays open while the text arrives. With no microphone connected, as on a Mac Studio without one, the panel says so and still accepts typing. If the key you choose is already taken by another app, Settings says so.
+A recording started from Siri or Shortcuts on the Mac shows the panel with a stop control, and Esc also stops it. Holding the key while the panel is open records into it. After release the panel stays open while the text arrives. With no microphone connected, as on a Mac Studio without one, the panel says so and still accepts typing.
 
 The panel floats above other windows, including full-screen apps, on the display you are working on. It does not take over from the app you are in, and it remembers where you put it. A tap gives the panel the keyboard. A hold shows it without taking the keyboard from the app you are in, and it hides by itself shortly after the text has arrived, unless you click or type in it. The panel and the main window also have a microphone control that starts and stops a recording with a click or a keyboard shortcut, for when holding a key is not possible. Knot lives in the menu bar and shows a Dock icon only while its main window is open.
 
@@ -321,12 +322,12 @@ This is the complete list.
 
 ## 14. Speed and durability targets
 
-These are first targets, set without measurements. The spikes and WP-42 calibrate them.
+The spikes and WP-42 calibrate these targets.
 
 | Moment | Target |
 |---|---|
 | Mac: key release of a tap to a panel that accepts typing | 100 ms |
-| Mac: the 250 ms mark of a hold to a live microphone | 150 ms |
+| Mac: the 250 ms mark of a hold to the first captured sample on built-in input | 150 ms |
 | iPhone: icon tap to accepting keystrokes, warm | 300 ms |
 | iPhone: icon tap to accepting keystrokes, cold | 1 s |
 | iPhone: Action Button to a live microphone | 1 s |
@@ -341,6 +342,8 @@ These are first targets, set without measurements. The spikes and WP-42 calibrat
 | Ink on disk after the end of a stroke | 500 ms |
 | A note of 200 segments, opened | 100 ms |
 | Lost on a sudden power cut | at most the last second of typing and the last two seconds of audio |
+
+Track first-buffer delivery and the visible **Listening** state separately from the first captured sample. One wired USB microphone took about 450 ms from the hold mark to the first sample in two runs. WP-42 measures wired USB input separately from built-in input. [SP-5](spikes/SP-5.md)
 
 Each target is measured over at least 20 runs and reported as a median and a 95th percentile, with the device's state written down: cold means after a restart, and warm means the app was open in the last minute. A target that starts before Knot's process exists, such as an icon tap or the Action Button, is timed from outside the app, by the test runner or from a screen recording at a sitting. The store of 10,000 notes holds 20,000 segments in the mix that a year of use would give: mostly short typed lines, a quarter recordings, a few drawings and a few notes of 200 segments. WP-42 also sets and measures first budgets for the waits a person sees: cleanup, conversion after a recording, text arriving in the Mac panel, and export.
 
@@ -386,7 +389,7 @@ Applying his changes to A6 and A27 took a reading of each, A38 and A39. He answe
 | A13 | On the Mac, Knot lives in the menu bar and shows a Dock icon only while its window is open. | 6 | Cheap | Confirmed |
 | A14 | A tap-started recording stopped within one second of its start is discarded as an accidental press, measured between the two presses. Hold-to-record is exempt. | 4.2 | Cheap | Confirmed |
 | A15 | Stream order, late captures, emptied notes and recovered drafts follow rules 9 to 12. | 3 | Costly | Confirmed |
-| A16 | On the Mac the microphone opens at the 250 ms mark of a hold, never on a tap. Listening from key-down is the alternative if first words get clipped. | 6 | Cheap | Confirmed |
+| A16 | On the Mac the microphone opens only for a hold, at the 250 ms mark. | 6 | Cheap | Confirmed |
 | A17 | A typed capture starts at its first keystroke, and holding the hotkey while typing starts a recording as the next segment. | 3 | Costly | Confirmed |
 | A18 | Sync is on by default when the device is signed in to iCloud. | 9 | Cheap | Confirmed |
 | A19 | The device that made a recording processes it, and Retry on another device takes it over. | 5 | Costly | Confirmed |
