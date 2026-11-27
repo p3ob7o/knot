@@ -3713,8 +3713,10 @@ rl_reader() {
     mkfifo "$rl/$name.fifo"
     cat "$rl/$name.fifo" >"$rl/$name.out" &
     reader=$!
-    with_pipe "$how" env "${rl_unset[@]}" $(rl_env "$name") "${rl_key[@]}" "$@" "$rl_release" M2 --commit "$rl_head" --build-number 7 --upload \
-        >"$rl/$name.fifo" 2>&1 &
+    # perl itself in the background, not with_pipe, a function whose subshell would be the pid the
+    # signal reaches: perl execs env, which execs the run, so $! is the run's own.
+    /usr/bin/perl -e "$KNOT_WITH_PIPE" "$how" env "${rl_unset[@]}" $(rl_env "$name") "${rl_key[@]}" "$@" "$rl_release" M2 --commit "$rl_head" \
+        --build-number 7 --upload >"$rl/$name.fifo" 2>&1 &
     run=$!
     while [[ ! -e $rl/$name.record.sleeping ]] && ((SECONDS < limit)); do sleep 0.1; done
     stand_in="$(cat "$rl/$name.record.pid" 2>/dev/null || true)"
