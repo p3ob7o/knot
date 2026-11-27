@@ -158,10 +158,19 @@
                 }
             case .englishVariant:
                 #if os(iOS)
-                    if dynamicTypeSize.isAccessibilitySize {
-                        englishPicker(row.title).pickerStyle(.navigationLink)
-                    } else {
-                        englishPicker(row.title).pickerStyle(.menu)
+                    LabeledContent {
+                        Group {
+                            if dynamicTypeSize.isAccessibilitySize {
+                                englishPicker(row.title).pickerStyle(.navigationLink)
+                            } else {
+                                englishPicker(row.title).pickerStyle(.menu)
+                            }
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel(Text(row.title))
+                        .accessibilityValue(Text(SettingsViewModel.label(of: model.settings.englishVariant)))
+                    } label: {
+                        Text(row.title).accessibilityHidden(true)
                     }
                 #else
                     englishPicker(row.title)

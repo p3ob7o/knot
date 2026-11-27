@@ -323,11 +323,11 @@ final class KnotIOSLaunchTests: XCTestCase {
         variant.tap()
         let unitedKingdom = app.descendants(matching: .any).matching(identifier: "UK").firstMatch
         XCTAssertTrue(unitedKingdom.waitForExistence(timeout: limit))
-        try app.auditAccessibility()
         unitedKingdom.tap()
         XCTAssertTrue(
             waitFor(NSPredicate(format: "exists == YES AND value == %@", "UK"), on: variant),
             "The English variant row shows UK after the setting is saved.")
+        try app.auditAccessibility()
 
         about.tap()
         let aboutPage = app.navigationBars["About Knot"]
@@ -397,9 +397,20 @@ final class KnotIOSLaunchTests: XCTestCase {
         let saved = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ AND value == %@", "Typed", first)
         ).firstMatch
+        let hasDraft = { field.exists && field.value as? String == first && !saved.exists }
+        let needsTap = hasDraft()
+        if needsTap {
+            tapCaptureControl(
+                app.navigationBars.buttons["Done"], named: "Done", in: app, keyboardVisible: true,
+                expecting: "the first saved typed segment before the next capture starts", while: hasDraft
+            ) {
+                saved.exists
+            }
+        }
+        let route = needsTap ? "the settled Done tap" : "Command-Return"
         XCTAssertTrue(
             saved.waitForExistence(timeout: limit),
-            "Ending the first capture must show its saved typed segment before the next capture starts.")
+            "Ending the first capture via \(route) must show its saved typed segment before the next capture starts.")
         let keyboard = app.keyboards.firstMatch
         if !keyboard.exists {
             tapCaptureControl(field, named: "Capture field", in: app, keyboardVisible: false, expecting: "the keyboard")
@@ -445,7 +456,8 @@ final class KnotIOSLaunchTests: XCTestCase {
     @MainActor
     private func tapCaptureControl(
         _ control: XCUIElement, named controlName: String, in app: XCUIApplication, keyboardVisible: Bool?,
-        expecting destinationName: String, reachedDestination: @escaping () -> Bool
+        expecting destinationName: String, while canTap: @escaping () -> Bool = { true },
+        reachedDestination: @escaping () -> Bool
     ) {
         let message = "Tapping \(controlName) shows \(destinationName)."
         let keyboard = app.keyboards.firstMatch
@@ -457,7 +469,9 @@ final class KnotIOSLaunchTests: XCTestCase {
             let settled = NSPredicate { _, _ in
                 if reachedDestination() { return true }
                 let visible = keyboard.exists
-                guard control.isHittable, control.isEnabled, keyboardVisible == nil || keyboardVisible == visible else {
+                guard canTap(), control.isHittable, control.isEnabled,
+                    keyboardVisible == nil || keyboardVisible == visible
+                else {
                     previousFrame = nil
                     previousKeyboard = nil
                     return false
@@ -471,7 +485,7 @@ final class KnotIOSLaunchTests: XCTestCase {
             }
             guard waitFor(settled) else { break }
             if reachedDestination() { return }
-            guard control.isHittable, control.isEnabled else { break }
+            guard canTap(), control.isHittable, control.isEnabled else { break }
             control.tap()
         }
         XCTAssertTrue(waitFor(NSPredicate { _, _ in reachedDestination() }), message)

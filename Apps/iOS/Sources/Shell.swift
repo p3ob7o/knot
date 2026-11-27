@@ -397,7 +397,11 @@ private struct RecordingNotice: View {
                 id: recording, kind: .voice, origin: origin, launchID: launch, placement: .newNote,
                 startedAt: start, endedAt: start.addingTimeInterval(42), body: .file(asset, duration: .seconds(42)))
         ).noteID
-        _ = try await environment.notes.setState(.voice(.ready), of: SegmentID(recording))
+        let segment = SegmentID(recording)
+        _ = try await environment.notes.replaceText(
+            TextReplacement(
+                segment: segment, text: "Synthetic speech follow-up recording.", origin: .edited, writer: .app))
+        _ = try await environment.notes.setState(.voice(.ready), of: segment)
         if let file = try await environment.assets.find(assetID, kind: .audio) {
             player.script(file.url, length: .seconds(42))
         }
