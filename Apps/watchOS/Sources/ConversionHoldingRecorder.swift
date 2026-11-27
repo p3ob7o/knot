@@ -28,6 +28,8 @@
 
         func prepare() async { await scripted.prepare() }
 
+        func releasePreparation() async { await scripted.releasePreparation() }
+
         func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
             let session = try await scripted.start(request)
             let (first, waiting) = state.withLock { state in

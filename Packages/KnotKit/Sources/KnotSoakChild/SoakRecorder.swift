@@ -28,6 +28,8 @@
 
         func prepare() async { await live.prepare() }
 
+        func releasePreparation() async { await live.releasePreparation() }
+
         func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
             try await live.start(request)
         }
