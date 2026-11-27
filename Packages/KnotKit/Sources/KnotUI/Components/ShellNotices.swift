@@ -28,8 +28,8 @@
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
                         .tint(theme.colors[.textPrimary])
-                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
                 }
                 Button {
                     answer(.upload)

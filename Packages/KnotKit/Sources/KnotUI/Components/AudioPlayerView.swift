@@ -1,6 +1,10 @@
 import KnotCore
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// The player of a voice segment: play or pause, where it stands, and its length.
 public struct AudioPlayerView: View {
     @Environment(\.knotTheme) private var theme
@@ -113,10 +117,9 @@ public struct AudioPlayerView: View {
                         seek(at: tap.location.x, width: geometry.size.width, total: total)
                     }
                 )
-                .simultaneousGesture(
-                    DragGesture().onEnded { drag in
-                        guard abs(drag.translation.width) > abs(drag.translation.height) else { return }
-                        seek(at: drag.location.x, width: geometry.size.width, total: total)
+                .gesture(
+                    HorizontalSeekPan { x in
+                        seek(at: x, width: geometry.size.width, total: total)
                     })
             }
             .frame(height: theme.sizes.hitTarget)
@@ -148,3 +151,30 @@ public struct AudioPlayerView: View {
         Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
     }
 }
+
+#if os(iOS)
+    /// A vertical gesture belongs to the note's scroll view from the start.
+    private struct HorizontalSeekPan: UIGestureRecognizerRepresentable {
+        let seek: (CGFloat) -> Void
+
+        func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+        func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+            let pan = UIPanGestureRecognizer()
+            pan.delegate = context.coordinator
+            return pan
+        }
+
+        func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+            if recognizer.state == .ended { seek(context.converter.localLocation.x) }
+        }
+
+        final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+            func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+                guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+                let motion = pan.velocity(in: pan.view)
+                return abs(motion.x) > abs(motion.y)
+            }
+        }
+    }
+#endif

@@ -25,22 +25,11 @@ public struct Banner<Actions: View>: View {
 
     public var body: some View {
         #if os(iOS)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) {
-                    HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
-                        .fixedSize(horizontal: true, vertical: false)
-                    HStack(spacing: theme.spacing.space2) { actions }
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                VStack(alignment: .leading, spacing: theme.spacing.space2) {
-                    HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: theme.spacing.space2) { actions }
-                            .fixedSize(horizontal: true, vertical: false)
-                        VStack(alignment: .leading, spacing: theme.spacing.space2) { actions }
-                    }
-                }
+            NoticeLayout(horizontalGap: theme.spacing.space3, verticalGap: theme.spacing.space2) {
+                HStack(alignment: .firstTextBaseline, spacing: theme.spacing.space3) { sentence }
+                NoticeLayout(horizontalGap: theme.spacing.space2, verticalGap: theme.spacing.space2) { actions }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, theme.spacing.space4)
             .padding(.vertical, theme.spacing.space3)
             .background(theme.colors[.fillTertiary], in: RoundedRectangle(cornerRadius: theme.radii.radiusLg))
@@ -82,6 +71,51 @@ public struct Banner<Actions: View>: View {
     }
 }
 
+#if os(iOS)
+    /// Measure the same views before choosing a row or column, so Dynamic Type can resize the
+    /// existing accessibility elements as the notice changes layout.
+    private struct NoticeLayout: Layout {
+        let horizontalGap: CGFloat
+        let verticalGap: CGFloat
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let layout = measure(width: proposal.width, subviews: subviews)
+            let sizes = layout.sizes
+            let gaps = CGFloat(max(0, sizes.count - 1))
+            if layout.inline {
+                return CGSize(
+                    width: sizes.reduce(0) { $0 + $1.width } + gaps * horizontalGap,
+                    height: sizes.map(\.height).max() ?? 0)
+            }
+            return CGSize(
+                width: sizes.map(\.width).max() ?? 0,
+                height: sizes.reduce(0) { $0 + $1.height } + gaps * verticalGap)
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            let layout = measure(width: proposal.width, subviews: subviews)
+            var offset: CGFloat = 0
+            for (view, size) in zip(subviews, layout.sizes) {
+                let origin =
+                    layout.inline
+                    ? CGPoint(x: bounds.minX + offset, y: bounds.midY - size.height / 2)
+                    : CGPoint(x: bounds.minX, y: bounds.minY + offset)
+                view.place(at: origin, anchor: .topLeading, proposal: ProposedViewSize(size))
+                offset += layout.inline ? size.width + horizontalGap : size.height + verticalGap
+            }
+        }
+
+        private func measure(width: CGFloat?, subviews: Subviews) -> (inline: Bool, sizes: [CGSize]) {
+            let ideal = subviews.map { $0.sizeThatFits(.unspecified) }
+            let gaps = CGFloat(max(0, ideal.count - 1))
+            let total = ideal.reduce(0) { $0 + $1.width } + gaps * horizontalGap
+            guard let width, width.isFinite, total > width else { return (true, ideal) }
+            let column = ProposedViewSize(width: width, height: nil)
+            return (false, subviews.map { $0.sizeThatFits(column) })
+        }
+    }
+#endif
+
 extension Banner where Actions == EmptyView {
     public init(_ message: String, symbol: String, role: ColorRole = .textPrimary) {
         self.init(message, symbol: symbol, role: role) { EmptyView() }
@@ -97,8 +131,8 @@ public struct NoticeActionStyle: ViewModifier {
     public func body(content: Content) -> some View {
         #if os(iOS)
             content
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .fixedSize(horizontal: true, vertical: false)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.small)
