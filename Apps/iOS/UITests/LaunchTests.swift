@@ -167,6 +167,9 @@ final class KnotIOSLaunchTests: XCTestCase {
 
         let stop = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Stop recording")).firstMatch
         XCTAssertTrue(stop.waitForExistence(timeout: limit))
+        let newNote = app.buttons["New note"]
+        XCTAssertTrue(newNote.exists)
+        XCTAssertFalse(newNote.isEnabled)
         app.buttons["shell.notes"].tap()
 
         XCTAssertTrue(notice.waitForExistence(timeout: limit))
