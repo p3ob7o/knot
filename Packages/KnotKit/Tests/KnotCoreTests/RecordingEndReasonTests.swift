@@ -3,8 +3,8 @@ import KnotCore
 import KnotTestSupport
 import Testing
 
-/// Why a recording ended, as it is kept (docs/plan/open-points.md, point 28): the open enum, its
-/// two mappings to the recorder's closed ending, and where the contract keeps it.
+/// Why a recording ended, as it is kept (docs/plan/open-points.md, "Why a recording ended"): the
+/// open enum, its two mappings to the recorder's closed ending, and where the contract keeps it.
 @Suite struct RecordingEndReasonTests {
     /// The text of every reason, which the store, the manifests and the synced record hold.
     @Test func eachReasonHasItsText() {

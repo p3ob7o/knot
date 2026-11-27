@@ -224,6 +224,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-11 | 11d | Two stale failed ends of a stored recording are shown to change nothing: the store refuses them, and a test holds each | WP-11c |
 | WP-11 | 11e | Four of the engine's tests wait for the ingest run to end, not for an empty inbox: one failed by chance on a loaded Mac | WP-11d |
 | WP-11 | 11f | A press right after a stop that meets this launch's own saved state still reading "recording" starts a new recording and leaves the stopped capture alone: a test holds it | WP-11e |
+| WP-11 | 11g | The engine keeps why a recording ended on its voice segment, on every path a recording takes to the store, and says when a recording went live: the store path, the `Inbox/` item and ingest, launch recovery, the two fields of the capture's state, and the forward in the composition's store gate | WP-11f; the contract pull request on why a recording ended |
 | WP-11 | 4 | Drawings through the engine. Held until the keep-gate ruling. | the ruling; WP-18 PR 1 |
 | WP-12 | Proof step | The format proof, and a short note saying whether the draft `Recorder` port fits the real API's streaming, cancellation and errors | WP-01 PR 1; WP-04 |
 | WP-12 | 1 | The format proof and a recorder that records and stops on every platform | WP-05 |
@@ -261,6 +262,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-22 | 22e | KnotIntents is wired last in the composition, with a test that the environment the intents reach is the composition's own | WP-22d |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 30a | The iPhone's structure from the direction's sheet, and what of the second PR needs no other package: Notes as the root with the capture surface as a sheet over it, the system's search, the note with editing in place, delete and move with undo, share and export, Settings, the first-run rows, the shell's two ports, and About's diagnostics and restore | the design direction; WP-21 PR 2; WP-22 PR 1 |
+| WP-30 | 30b | The iOS UI tests launch the app with UIKit's view animations off, so that the test runner no longer waits a minute at every interaction of a launch in which a keyboard animation never reported its end | WP-30a |
 | WP-30 | 2 | The rest of the iPhone app, after WP-30a: the Live Activity's adapter on its port's contract suite, the recording intents' entry, why a recording ended, Recently deleted, and the store's export as it is | WP-30a; WP-19 PR 2; WP-31 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
 | WP-31 | 2 | The Sketch control and the Home Screen and Lock Screen widgets. Held until the keep-gate ruling. | the ruling |

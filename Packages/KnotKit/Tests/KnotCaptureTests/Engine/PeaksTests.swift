@@ -98,21 +98,26 @@ import Testing
     /// miss is what a refusal is. So `end`, and a press that stops, return with the row stored, the
     /// working file gone and, for the press, one `saved` cue. The held call lands once the store
     /// lets it go, and the peaks are with the segment then. The test runs the deadline out by hand.
+    /// Each wait ends as soon as what it waits for can no longer come (row 11g): the end that
+    /// returns without the hold ends the first, and the end's own call is the engine's, on a task
+    /// the test cancels once the set is held. A set that races the deadline runs in a task of its
+    /// own, which that cancels not; one that does not race runs in the end's, and the held call
+    /// sees the cancellation at once.
     @Test(arguments: [false, true])
     func aHeldSetOfThePeaksNeverHoldsTheEnd(byPress: Bool) async throws {
         let r = Rig()
-        let gate = Gate()
-        gate.close()
+        let held = HeldCall()
+        defer { held.release() }
         var store = ChaosStore(store: r.notes) {}
-        store.holdPeaks = { await gate.pass() }
+        store.holdPeaks = { await held.hold() }
         let manual = ManualDeadline()
         let cues = RecordingCueEmitter()
-        let engine = BoundedEngine(
-            StandardCaptureEngine(
-                notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
-                deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
-                deadline: manual.deadline, ingest: r.ingest, recordingState: InMemoryRecordingStateStore(), cues: cues,
-                log: KnotLog(.capture, sink: r.logs)))
+        let raw = StandardCaptureEngine(
+            notes: store, assets: r.assets, recorder: r.recorder, queue: r.queue, clock: r.clock, ids: r.ids,
+            deviceID: r.deviceID, launchID: r.launchID, locations: r.locations, layer: r.layer,
+            deadline: manual.deadline, ingest: r.ingest, recordingState: InMemoryRecordingStateStore(), cues: cues,
+            log: KnotLog(.capture, sink: r.logs))
+        let engine = BoundedEngine(raw)
         let id: CaptureID
         if byPress {
             let states = engine.states()
@@ -128,19 +133,32 @@ import Testing
         try Self.writePeaks(r, id)
         r.clock.advance(by: 2)
         let clock = r.clock
-        let ending = Task { () throws -> CaptureState? in
-            if byPress { return try await engine.press(Press(.tap, at: clock.now())).stopped }
-            return try await engine.end(id)
+        let ending = EndCall { () async throws(KnotError) -> CaptureState? in
+            guard byPress else { return try await raw.end(id) }
+            return try await raw.press(
+                Press(.tap, at: clock.now()), recording: CaptureRequest(kind: .voice, surface: .app)
+            ).stopped
         }
-        #expect(await eventually("setPeaks to be held") { gate.isHolding })
-        await manual.expireNext()
-        let ended = try #require(try await ending.value)
+        defer { ending.cancel() }
+        try #require(
+            await eventually("setPeaks to be held, or the end to return") { held.isHolding || ending.returned })
+        try #require(held.isHolding, "The engine did not ask the store for the peaks.")
+        ending.cancel()
+        try #require(
+            await eventually("the set's deadline to wait") {
+                manual.waitingCount > 0 || ending.returned || held.wasCancelled
+            })
+        try #require(!held.wasCancelled, "The set did not race the deadline: it ran in the end's own task.")
+        manual.expire()
+        try #require(
+            await eventually("the end to return") { ending.returned || held.wasCancelled || manual.waitingCount > 0 })
+        let ended = try #require(ending.state, "The end did not return once the deadline ran out.")
         #expect(ended.outcome == .stored)
         #expect(try await r.notes.capture(id)?.outcome == .stored)
         #expect(!r.layer.exists(r.locations.recordingAudio(id, format: .caf)), "The working file went.")
         #expect(cues.cues == (byPress ? [.saved] : []))
         #expect(r.logs.lines.contains("recording_peaks_not_kept capture=\(id) code=store_not_open"))
-        gate.open()
+        held.release()
         #expect(
             await eventually("the held call to land") {
                 guard let kept = try? await Self.kept(r, id) else { return false }

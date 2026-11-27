@@ -27,6 +27,22 @@ public struct StoreDeadline: Sendable {
     public static let standard = StoreDeadline.after(standardLimit)
 }
 
+/// One deadline that several store calls share: its one timer starts as it is made, so that
+/// calls that race it together wait one deadline at most between them, as one call would (the
+/// review of pull request 130, F1). `end()` stops the timer once no call waits for it, and with
+/// it every race's own wait for it.
+final class SharedDeadline: Sendable {
+    private let timer: Task<Void, Never>
+
+    init(_ deadline: StoreDeadline) {
+        timer = Task { await deadline.wait() }
+    }
+
+    var deadline: StoreDeadline { StoreDeadline { [timer] in await timer.value } }
+
+    func end() { timer.cancel() }
+}
+
 /// What one store call came to, as far as the engine waits for it.
 enum StoreAnswer<Value: Sendable>: Sendable {
     /// The store answered in time.
