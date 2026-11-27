@@ -221,6 +221,7 @@
         @ViewBuilder private var newNote: some View {
             #if os(iOS)
                 let showsNewNote = model.offersNewNote || showsLiveControls
+                let labelSize = showsInsetControls ? theme.sizes.insetGlassLabel : theme.sizes.hitTarget
             #else
                 let showsNewNote = model.offersNewNote
             #endif
@@ -238,11 +239,14 @@
                         .labelStyle(.iconOnly)
                         .font(theme.type[.rowTitle])
                         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
+                        .frame(width: labelSize, height: labelSize)
                         .contentShape(.rect)
                     #endif
                 }
                 #if os(iOS)
+                    .buttonBorderShape(.circle)
+                    .buttonSizing(.flexible)
+                    .frame(width: theme.sizes.hitTarget, height: theme.sizes.hitTarget)
                     .accessibilityShowsLargeContentViewer {
                         Label {
                             Text("New note", bundle: .module)

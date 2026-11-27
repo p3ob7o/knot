@@ -55,6 +55,8 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(newNote.waitForExistence(timeout: limit))
         XCTAssertTrue(newNote.isHittable)
         XCTAssertTrue(record.isHittable)
+        XCTAssertEqual(newNote.frame.width, record.frame.width, accuracy: 1)
+        XCTAssertEqual(newNote.frame.height, record.frame.height, accuracy: 1)
         XCTAssertLessThanOrEqual(newNote.frame.maxY, keyboard.frame.minY)
         XCTAssertLessThanOrEqual(record.frame.maxY, keyboard.frame.minY)
         let controls = XCTAttachment(screenshot: app.screenshot())
