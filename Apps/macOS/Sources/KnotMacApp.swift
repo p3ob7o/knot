@@ -1,9 +1,6 @@
+import AppKit
 import SwiftUI
 
-/// The Mac app: a thin shell over KnotApp and KnotUI (docs/architecture.md §2). This skeleton
-/// has one main window, in which a typed line is saved and found in the stream after a
-/// relaunch. The hotkey, the panel, hold-to-record, the menu bar item and Settings come with
-/// WP-33's second pull request.
 @main
 struct KnotMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -11,29 +8,44 @@ struct KnotMacApp: App {
     var body: some Scene {
         Window(MainWindowOpener.title, id: MainWindowOpener.sceneID) {
             MainWindow(shell: delegate.shell)
-                .frame(minWidth: 640, minHeight: 400)
+                .frame(minWidth: 420, minHeight: 320)
+                .onAppear { NSApp.setActivationPolicy(.regular) }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notice in
+                    if let window = notice.object as? NSWindow, window.title == MainWindowOpener.title {
+                        delegate.mainWindowClosed()
+                    }
+                }
         }
         .defaultSize(width: 960, height: 640)
-        // The main window is there at every launch, whatever was closed before. Its state is
-        // not restored from an earlier run ("The scene's windows will not be restored"), and
-        // with nothing restored it presents itself, at launch and when the running app is
-        // opened again with no window. Both are SwiftUI's, from macOS 15. They do not cover a
-        // launch that finds saved state with no window in it, which AppKit counts as a restore:
-        // the app's delegate opens the window then (`AppDelegate`).
         .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(.presented)
+        .defaultLaunchBehavior(delegate.shell.isTestLaunch ? .presented : .suppressed)
         .commands {
-            // SwiftUI lists no item for the app's one `Window` scene in the Window menu, so the
-            // shell adds it: Window ▸ Knot opens the main window, or brings it to the front.
-            // The app's delegate opens the window through this item too (`MainWindowOpener`).
+            CommandGroup(replacing: .newItem) {
+                Button("New Note") {
+                    if !delegate.shell.panel.isKey, MainWindowOpener.window?.isKeyWindow == true {
+                        delegate.shell.newNote()
+                    } else {
+                        delegate.shell.panel.showTyping()
+                        delegate.shell.panel.newNote()
+                    }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("Done") { delegate.shell.done() }
+                    .keyboardShortcut(.return, modifiers: .command)
+            }
             CommandGroup(before: .windowList) {
                 OpenMainWindowButton()
             }
         }
+
+        Settings {
+            MacSettings(shell: delegate.shell)
+        }
     }
 }
 
-/// The Window menu's item for the main window.
+/// The AppKit menu bar action uses this command to open the SwiftUI scene even when
+/// no other SwiftUI window exists.
 struct OpenMainWindowButton: View {
     @Environment(\.openWindow) private var openWindow
 

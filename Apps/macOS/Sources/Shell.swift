@@ -1,31 +1,11 @@
+import AppIntents
 import AppKit
 import KnotApp
 import KnotCore
+import KnotIntents
 import KnotUI
 import Observation
-
-/// What the factory in KnotApp gives the shell: the environment, the context the view models
-/// take, and the launch sequence to start once the capture surface is on screen
-/// (docs/architecture.md §3 and §13). The shell computes no path and opens no store itself:
-/// where the store is, and which folder a development build uses, is `StoreLocations` and the
-/// composition's. A build with no usable place for its store answers every read and save with
-/// that place's own error, which the window shows by its code.
-struct Composition: Sendable {
-    let environment: AppEnvironment
-    let context: UIContext
-    let runLaunchSequence: @Sendable () async -> Void
-
-    /// The one call to the factory. The skeleton implements none of the shell's ports yet: the
-    /// cues and where an Open intent lands come with WP-33's second pull request, and the Live
-    /// Activity is the iPhone's and the iPad's.
-    @MainActor
-    static func make() -> Composition {
-        let app = EnvironmentFactory.app(shell: ShellPorts())
-        return Composition(
-            environment: app.environment, context: app.context,
-            runLaunchSequence: { _ = await app.runLaunchSequence() })
-    }
-}
+import SwiftUI
 
 /// What the shell builds once per launch over its composition: the capture surface's model, the
 /// stream's and search's, the player, and the model of the note open in the window. Views never
@@ -42,16 +22,41 @@ final class Shell {
         case note(NoteID)
     }
 
-    let composition: Composition
+    let composition: AppComposition
     let capture: NoteViewModel
     let stream: StreamViewModel
     let search: SearchViewModel
     let player: PlayerViewModel
+    let panel: CapturePanel
+    let recording: MacCaptureCoordinator
+    let surfaces: MacSurfaceRouter
+    let cues: MacCues
+    var searchRequest = 0
+    var showsRecentlyDeleted = false
+    private var cursor: StoreCursor?
+    private var checkingCursor = false
+    private var launch: Task<Void, Never>?
+    private var observers: [Task<Void, Never>] = []
+
+    var environment: AppEnvironment { composition.environment }
+    var detailModel: NoteViewModel { openNote ?? capture }
+    var isTestLaunch: Bool {
+        #if DEBUG
+            ProcessSigns.current.holds(.agent) || ProcessSigns.current.holds(.test)
+        #else
+            false
+        #endif
+    }
     private(set) var detail: Detail = .capture
     /// The model of the note in the detail column, while one is open.
     private(set) var openNote: NoteViewModel?
 
-    init(composition: Composition) {
+    init() {
+        let surfaces = MacSurfaceRouter()
+        let cues = MacCues()
+        self.surfaces = surfaces
+        self.cues = cues
+        let composition = EnvironmentFactory.app(shell: ShellPorts(cues: cues, surfaces: surfaces))
         self.composition = composition
         let environment = composition.environment
         let context = composition.context
@@ -60,27 +65,82 @@ final class Shell {
         stream = StreamViewModel(environment: environment, context: context)
         search = SearchViewModel(environment: environment, context: context)
         player = PlayerViewModel(player: environment.player)
+        let panelModel = NoteViewModel(
+            environment: environment, context: context, surface: .macPanel, announcer: VoiceOverAnnouncer())
+        panel = CapturePanel(model: panelModel)
+        let recording = MacCaptureCoordinator(panel: panel, environment: environment)
+        self.recording = recording
+        recording.mainModel = { [weak self] in self?.detailModel }
+        recording.mainDraft = { [weak self] in
+            guard let self else { return nil }
+            let detail = detailModel
+            return detail.fieldText.isEmpty ? nil : detail
+        }
+        cues.receive = { [weak recording] cue in recording?.cue(cue) }
+        KnotIntentEnvironment.register(environment, in: .shared)
+        AppDependencyManager.shared.add(dependency: recording)
     }
 
     /// Opens a note from the stream in the detail column.
     func open(_ id: NoteID) {
-        if detail == .note(id) { return }
+        if openNote?.mode == .note(id) { return }
+        detailModel.endCapture()
         openNote = NoteViewModel(
             environment: composition.environment, context: composition.context, surface: .macWindow, opening: id,
             announcer: VoiceOverAnnouncer())
         detail = .note(id)
     }
 
-    /// Goes back to the capture surface.
-    func showCapture() {
-        detail = .capture
-        openNote = nil
+    func start() {
+        guard launch == nil else { return }
+        observers = [
+            Task { [recording] in await recording.observeStates() },
+            Task { [recording] in await recording.observeOutcome() },
+            Task { [panel] in await panel.model.observeRecordings(announceStart: false) },
+            Task { [weak self, environment] in
+                for await _ in environment.notifier.storeChanges() {
+                    await self?.checkStore()
+                }
+            },
+            Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                    await self?.checkStore()
+                }
+            },
+        ]
+        launch = Task {
+            _ = await composition.runLaunchSequence()
+            if !isTestLaunch { await recording.loadShortcut() }
+            await checkStore()
+            if panel.needsHotkey, !isTestLaunch { panel.showTyping() }
+        }
     }
 
-    /// Starts the launch sequence. The composition runs it once per launch, so a window that
-    /// opens again changes nothing.
     func runLaunchSequence() async {
-        await composition.runLaunchSequence()
+        start()
+        await launch?.value
+    }
+
+    func checkStore() async {
+        guard !checkingCursor else { return }
+        checkingCursor = true
+        defer { checkingCursor = false }
+        guard let current = try? await environment.notes.cursor(), current != cursor else { return }
+        cursor = current
+        await stream.load()
+        if !search.query.isEmpty { search.setQuery(search.query) }
+        await capture.refresh()
+        await openNote?.refresh()
+        if panel.isVisible { await panel.model.refresh() }
+    }
+
+    func done() {
+        if panel.isKey { panel.done() } else { detailModel.endCapture() }
+    }
+
+    func newNote() {
+        detailModel.newNote()
     }
 
     #if DEBUG
@@ -91,6 +151,8 @@ final class Shell {
         static let enterLineArgument = "-KnotEnterLine"
 
         @ObservationIgnored private var enteredLaunchLine = false
+        @ObservationIgnored var ranPreviewScenario = false
+        var previewAction: String?
 
         /// Enters the line that `-KnotEnterLine <text>` gives into the capture surface's model,
         /// as a person's keystrokes would reach it, and ends the capture, once per launch.
@@ -100,25 +162,25 @@ final class Shell {
             else { return }
             enteredLaunchLine = true
             capture.fieldChanged(arguments[index + 1])
-            capture.endCapture()
+            done()
         }
     #endif
 
     /// Every model whose field can hold a typed capture now.
-    private var surfaces: [NoteViewModel] {
-        [capture] + (openNote.map { [$0] } ?? [])
+    private var visibleModels: [NoteViewModel] {
+        [capture, panel.model] + (openNote.map { [$0] } ?? [])
     }
 
     /// The person left the surface, or the app: each field's typed capture ends, and its model
     /// saves what the field holds before it ends it (docs/product-spec.md §4.1). An empty field
     /// leaves nothing in the stream.
     func leave() {
-        for model in surfaces { model.endCapture() }
+        for model in visibleModels { model.endCapture() }
     }
 
     /// As `leave()`, and returns once every model has run what it was sent.
     func flush() async {
-        let models = surfaces
+        let models = visibleModels
         for model in models { model.endCapture() }
         for model in models { await model.settle() }
     }
@@ -127,7 +189,7 @@ final class Shell {
     /// error it met and the surface assumes no store (docs/product-spec.md §4.4).
     var problemCode: ErrorCode? {
         if let code = stream.problem?.code { return code }
-        for model in surfaces {
+        for model in visibleModels {
             if let code = model.problem?.code { return code }
         }
         return nil
@@ -147,61 +209,97 @@ extension SurfaceProblem {
     }
 }
 
-/// The app's delegate: it holds the shell, and saves the text again when the app goes to the
-/// background and when it quits (docs/product-spec.md §4.1).
-///
-/// On the Mac a window can close while the app stays, so the three moments of §4.1 are:
-/// - **The surface hides**: the window closes or is miniaturised, or the app is hidden. The
-///   note view ends its capture when it leaves the screen, and the window and this delegate
-///   end it on miniaturise and on hide.
-/// - **The app goes to the background**: Knot stops being the active app, because another app
-///   came forward.
-/// - **The app quits**: the quit waits until every field's text is saved, for at most
-///   `quitLimit`, because a quit must never hang.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let shell = Shell(composition: .make())
-    /// How long a quit waits for the last save.
+    let shell = Shell()
+    private var menuBar: MacMenuBar?
     static let quitLimit: Duration = .seconds(3)
 
-    /// A window can close while the app stays (assumption A13): an app whose one scene is a
-    /// `Window` would otherwise quit when it closes. Opening the app again shows the window.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(shell.isTestLaunch ? .regular : .accessory)
+        let menuBar = MacMenuBar(
+            newNote: { [weak self] in
+                self?.shell.panel.showTyping()
+                self?.shell.panel.newNote()
+            },
+            open: { [weak self] in self?.showMainWindow() },
+            settings: { [weak self] in self?.showSettings() })
+        self.menuBar = menuBar
+        shell.recording.showRecordingIndicator = { [weak menuBar] live in menuBar?.setRecording(live) }
+        shell.surfaces.attach { [weak self] in self?.navigate($0) }
+        shell.panel.openSettings = { [weak self] in self?.showSettings() }
+        shell.start()
+        if shell.isTestLaunch {
+            Task { @MainActor in
+                await Task.yield()
+                MainWindowOpener.openIfNone()
+            }
+        }
     }
 
-    /// The main window is there at every launch. AppKit counts a launch that finds saved state
-    /// as a restore, not a default launch, even when that state holds no window
-    /// (`NSApplicationLaunchIsDefaultLaunchKey`, NSApplication.h), and then no scene presents
-    /// itself. Every development build shares one saved state through its bundle ID, so a
-    /// window that any build closed before it was killed would keep the next one windowless.
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // The scenes SwiftUI presents by itself are on screen after this turn of the run loop.
-        Task { @MainActor in
-            await Task.yield()
+    func showMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        if let window = MainWindowOpener.window {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else {
             MainWindowOpener.openIfNone()
         }
     }
 
-    /// The running app opened again, from the Dock, the Finder or `open`, with no window
-    /// showing: the main window comes back.
+    func mainWindowClosed() {
+        shell.leave()
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func showSettings() {
+        NSApp.activate()
+        let appMenu = NSApp.mainMenu?.items.first?.submenu
+        if let appMenu, let index = appMenu.items.firstIndex(where: { $0.keyEquivalent == "," }) {
+            appMenu.performActionForItem(at: index)
+        }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        guard !hasVisibleWindows else { return true }
-        MainWindowOpener.openIfNone()
+        showMainWindow()
         return false
     }
 
-    func applicationDidResignActive(_ notification: Notification) {
-        shell.leave()
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let scheme = LiveConfiguration.currentFlavour() == .milestone ? "knot" : "knot-dev"
+        for url in urls {
+            if let destination = MacSurfaceRouter.destination(for: url, scheme: scheme) { navigate(destination) }
+        }
     }
 
-    func applicationDidHide(_ notification: Notification) {
-        shell.leave()
+    private func navigate(_ destination: SurfaceDestination) {
+        shell.start()
+        switch destination {
+        case .capture: shell.panel.showTyping()
+        case .search:
+            shell.searchRequest += 1
+            showMainWindow()
+        case .note(let id):
+            shell.open(id)
+            showMainWindow()
+        case .sketch: break
+        }
     }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Task { await shell.checkStore() }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) { shell.leave() }
+    func applicationDidHide(_ notification: Notification) { shell.leave() }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let reply = QuitReply(sender)
         Task { @MainActor in
+            await self.shell.recording.finishForQuit()
             await self.shell.flush()
             reply.send()
         }
@@ -210,6 +308,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reply.send()
         }
         return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        shell.recording.shutDown()
     }
 }
 
@@ -225,12 +327,12 @@ enum MainWindowOpener {
     /// standard defaults domain, so it carries the `v1.` prefix (docs/architecture.md §7).
     static let sceneID = "v1.main"
 
-    static var isShowing: Bool {
-        NSApp.windows.contains { $0.isVisible && $0.title == title }
+    static var window: NSWindow? {
+        NSApp.windows.first { ($0.isVisible || $0.isMiniaturized) && $0.title == title && !($0 is NSPanel) }
     }
 
     static func openIfNone() {
-        guard !isShowing else { return }
+        guard window == nil else { return }
         for menu in [NSApp.windowsMenu].compactMap({ $0 }) + (NSApp.mainMenu?.items.compactMap(\.submenu) ?? []) {
             if let index = menu.items.firstIndex(where: { $0.title == title && $0.action != nil && $0.isEnabled }) {
                 menu.performActionForItem(at: index)
