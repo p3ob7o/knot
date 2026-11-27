@@ -3,14 +3,15 @@
 # with the owner's team, and runs the checks. Never merged (docs/plan/SP-3.md).
 #
 #   Spikes/SP-3/run.sh build     generate the project and build it, team-signed
+#   Spikes/SP-3/run.sh generate generate the SP3 and SP3Upload schemes without building
+#   Spikes/SP-3/run.sh build-upload  build SP3Upload Release without signing or launching
 #   Spikes/SP-3/run.sh signing   print what each piece carries, masked
 #   Spikes/SP-3/run.sh checks tool|app   run the checks of one phase, each with a time limit
 #   Spikes/SP-3/run.sh cleanup   remove the spike's files from the group container, by name
 #   Spikes/SP-3/run.sh quote <file>   print a log through the mask, the only way to quote one
 #
-# Needs KNOT_LOCAL_CONFIG linked by scripts/bootstrap.sh. Every line this script prints
-# goes through mask(), which writes the team ID as <team> and the home folder as ~, because
-# xcodebuild and codesign print both.
+# Development signing needs the local team configuration linked by scripts/bootstrap.sh.
+# mask() replaces the team ID, home folder and certificate holder in diagnostic output.
 
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -23,8 +24,10 @@ derived="$out/DerivedData"
 logs="$out/logs"
 mkdir -p "$logs"
 app="$derived/Build/Products/Debug/Knot Dev.app"
-team="$(xcodebuild -project "$here/SP3.xcodeproj" -target knot-dev -showBuildSettings 2>/dev/null |
-    awk '$1 == "DEVELOPMENT_TEAM" { print $3; exit }' || true)"
+read_team() {
+    xcodebuild -project "$here/SP3.xcodeproj" -target knot-dev -showBuildSettings 2>/dev/null |
+        awk '$1 == "DEVELOPMENT_TEAM" { print $3; exit }' || true
+}
 
 mask() {
     sed -E -e "s/${team:-NO-TEAM-KNOWN}/<team>/g" -e "s#$HOME#~#g" -e "s#/Users/[^/ \"]+#~#g" \
@@ -35,10 +38,29 @@ mask() {
 # reported as what it is.
 limit() { knot_with_timeout "$@"; }
 
-build() {
+generate() {
     (cd "$here" && xcodegen generate --quiet --spec project.yml)
-    team="$(xcodebuild -project "$here/SP3.xcodeproj" -target knot-dev -showBuildSettings 2>/dev/null |
-        awk '$1 == "DEVELOPMENT_TEAM" { print $3; exit }' || true)"
+}
+
+build_upload() {
+    generate
+    # Use separate products so the development app's helpers cannot survive an
+    # incremental build of the upload app. Clear the team even if one is configured.
+    "$root/scripts/build-slot.sh" run --label "SP-3 unsigned upload build" -- \
+        xcodebuild -project "$here/SP3.xcodeproj" -scheme SP3Upload -configuration Release \
+        -destination 'generic/platform=macOS' -derivedDataPath "$out/UploadDerivedData" \
+        -clonedSourcePackagesDirPath "$out/SourcePackages" COMPILER_INDEX_STORE_ENABLE=NO \
+        ENABLE_DEBUG_DYLIB=NO KNOT_SIGNING=local DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY=- \
+        CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO clean build >"$logs/build-upload.log" 2>&1 || {
+        grep -E 'error:|warning:|BUILD' "$logs/build-upload.log" | mask | tail -n 30
+        exit 1
+    }
+    grep -E 'BUILD' "$logs/build-upload.log" | tail -n 1
+}
+
+build() {
+    generate
+    team="$(read_team)"
     [[ -n $team ]] || { echo "no DEVELOPMENT_TEAM: link KNOT_LOCAL_CONFIG with scripts/bootstrap.sh"; exit 1; }
     # Two ways to sign, both with the team's development certificate:
     #   build             no provisioning profile anywhere, and no Xcode account. Xcode
@@ -127,10 +149,13 @@ cleanup() {
 
 case "${1:-}" in
     build) shift; build "$@" ;;
-    signing) signing ;;
-    cleanup) cleanup ;;
-    quote) mask <"${2:?a log file}" ;;
+    generate) generate ;;
+    build-upload) build_upload ;;
+    signing) team="$(read_team)"; signing ;;
+    cleanup) team="$(read_team)"; cleanup ;;
+    quote) team="$(read_team)"; mask <"${2:?a log file}" ;;
     checks)
+        team="$(read_team)"
         exec python3 -I "$here/checks.py" "$app" "$team" \
             "$root/.build/DerivedData/Build/Products/Debug/Knot.app/Contents/MacOS/knot-dev" \
             "${2:?tool or app}" "$logs/checks-${2}.json"

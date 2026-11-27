@@ -31,9 +31,9 @@ packages:
     url: https://github.com/groue/GRDB.swift.git
     exactVersion: 7.12.0
 
-targets:
-  # The spike app. Sandboxed, with the development app group and nothing else.
-  SP3App:
+targetTemplates:
+  # Both app targets use the same sandbox, store and bare tool.
+  SpikeApp:
     type: application
     platform: macOS
     attributes:
@@ -58,6 +58,19 @@ targets:
         codeSign: false
         copy:
           destination: executables
+
+targets:
+  SP3UploadApp:
+    templates: [SpikeApp]
+    sources: [../../Apps/macOS/Assets.xcassets]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  # The development check also embeds the helper and the two counter-examples.
+  SP3App:
+    templates: [SpikeApp]
+    dependencies:
       # T3: the helper bundle, which can carry a provisioning profile.
       - target: KnotDevCLI
         embed: true
@@ -170,3 +183,9 @@ schemes:
     build:
       targets:
         SP3App: all
+  SP3Upload:
+    build:
+      targets:
+        SP3UploadApp: all
+    archive:
+      config: Release
