@@ -170,7 +170,11 @@
                         .accessibilityLabel(Text(row.title))
                         .accessibilityValue(Text(SettingsViewModel.label(of: model.settings.englishVariant)))
                     } label: {
-                        Text(row.title).accessibilityHidden(true)
+                        // At accessibility sizes the navigation picker supplies its own visible title.
+                        Text(row.title)
+                            .accessibilityHidden(true)
+                            .opacity(dynamicTypeSize.isAccessibilitySize ? 0 : 1)
+                            .frame(height: dynamicTypeSize.isAccessibilitySize ? 0 : nil)
                     }
                 #else
                     englishPicker(row.title)
