@@ -124,4 +124,74 @@ struct EngineForwardingTests {
         let kept = try await notes.peaks(of: SegmentID(id))
         #expect(kept != nil, "The recording's peaks were not kept.")
     }
+
+    /// Row 11g. `GatedNoteStore` forwards `setRecordingEnding`: the real store answers `not_found`
+    /// for a segment it does not have, where the port's default answers `port_unavailable`. And a
+    /// recording made through the live engine that ends by itself, at its limit, keeps why on its
+    /// segment in the real store, and the state the engine publishes says it.
+    @Test("The live environment's store keeps why a recording ended")
+    func liveStoreKeepsWhyARecordingEnded() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var seams = LiveComposition.Seams.forTests
+        seams.recorder = ScriptedRecorder(
+            locations: folder.locations, layer: PosixFileLayer(), clock: SystemWallClock(),
+            script: .init(buffers: 3, endsBySelf: .limitReached))
+        let composition = folder.compose(seams: seams)
+        _ = try #require(await launch(composition))
+        let notes = composition.environment.notes
+        do {
+            try await notes.setRecordingEnding(.limitReached, of: SegmentID(uuid: UUID()))
+            Issue.record("setRecordingEnding answered for a segment the store does not have.")
+        } catch {
+            #expect(error.code == KnotError.notFound.code, "setRecordingEnding answered \(error.code).")
+        }
+
+        let engine = composition.environment.engine
+        let states = engine.states()
+        let pressed = await SuiteWait.value("a press") { () async -> Result<RecordingPressOutcome, KnotError> in
+            do throws(KnotError) {
+                return .success(
+                    try await engine.press(
+                        Press(.tap, at: Date()), recording: CaptureRequest(kind: .voice, surface: .app)))
+            } catch {
+                return .failure(error)
+            }
+        }
+        guard case .success(.started(let state)) = pressed else {
+            Issue.record("The press did not start a recording: \(String(describing: pressed)).")
+            return
+        }
+        let id = state.captureID
+        #expect(state.liveSince != nil, "The recording is live once the press returns.")
+        let ended = await SuiteWait.value("the recording to end by itself") { () async -> CaptureState? in
+            for await state in states where state.captureID == id && state.outcome != .open { return state }
+            return nil
+        }
+        guard let ended = ended ?? nil, ended.outcome == .stored else {
+            Issue.record("The recording was not stored: \(String(describing: ended)).")
+            return
+        }
+        #expect(ended.recordingEnding == .limitReached)
+        // On the store path the reason is set before the state is published, so it is read once.
+        // The seam's deadline is not the app's 100 ms: it is long enough that the recording takes
+        // `Inbox/` only when the store refused its row or its end. Then ingest stores it from its
+        // item and sets the reason after the state was published, so the test waits for it.
+        let held: RecordingEndReason?
+        if ended.path == .store {
+            held = try await notes.segment(SegmentID(id))?.segment.recordingEnding
+        } else {
+            held =
+                await SuiteWait.value("the segment to say why its recording ended") { () async -> RecordingEndReason? in
+                    while !Task.isCancelled {
+                        if let reason = try? await notes.segment(SegmentID(id))?.segment.recordingEnding {
+                            return reason
+                        }
+                        try? await Task.sleep(for: .milliseconds(5))
+                    }
+                    return nil
+                } ?? nil
+        }
+        #expect(held == .limitReached, "The segment does not say why its recording ended.")
+    }
 }
