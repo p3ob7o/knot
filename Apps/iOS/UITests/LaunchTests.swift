@@ -387,8 +387,13 @@ final class KnotIOSLaunchTests: XCTestCase {
         let field = captureField(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: limit))
         app.typeText(first)
-        app.navigationBars.buttons["Done"].tap()
-        XCTAssertTrue(segment(first, in: app).waitForExistence(timeout: limit))
+        app.typeKey(.return, modifierFlags: .command)
+        let saved = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@ AND value == %@", "Typed", first)
+        ).firstMatch
+        XCTAssertTrue(
+            saved.waitForExistence(timeout: limit),
+            "Ending the first capture must show its saved typed segment before the next capture starts.")
         field.tap()
         app.typeText(second)
         try assertStreamShows(second, in: app)
