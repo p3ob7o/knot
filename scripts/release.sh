@@ -105,8 +105,10 @@
 # upload has started, every way out without its outcome says to check App Store Connect before a
 # retry, and the script does not retry. The outcome, or that sentence, reaches the run's
 # release.log before the terminal: when the log says "uploaded", the upload succeeded, whatever
-# became of the lines printed after it. A reader of the output that goes away (PIPE) ends the run
-# as another signal does, with status 141.
+# became of the lines printed after it. A reader of the output that goes away ends the run as
+# another signal does, with status 141, when the caller left SIGPIPE at its default. A caller that
+# ignores it, as GitHub's runner does, sends no signal: the writes fail, the outcome is in
+# release.log all the same, and the status is the outcome's.
 { set +xva; } 2>/dev/null
 # A SHELLOPTS or BASHOPTS that a caller exported would hand this script's options to every bash
 # it starts: they stay its own.
@@ -179,7 +181,7 @@ knot_report() {
 }
 [[ -z $RL_FAIL_LOG ]] || export KNOT_FAIL_LOG=$RL_FAIL_LOG
 
-usage() { sed -n '2,109p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,111p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_fail() { knot_fail "release-usage" "$1" "Run scripts/release.sh --help." "safe" "nothing"; }
 
 # The committed CloudKit schema file, which appears with the production schema (docs/plan/WP-43.md,
@@ -445,7 +447,9 @@ trap finish EXIT
 trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
-# A reader of the output that goes away: the run ends as a signal ends it, with that status.
+# A reader of the output that goes away: the run ends as a signal ends it, with that status, when
+# SIGPIPE was at its default as the script started. A shell cannot trap a signal it inherited as
+# ignored: then the writes fail, and the run goes on to its outcome.
 trap 'on_signal 141' PIPE
 
 # Runs a command in the background and waits for it, so that a signal reaches the trap at once.

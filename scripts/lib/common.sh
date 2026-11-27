@@ -389,12 +389,14 @@ knot_swift_test_limited() {
 
 # grep over a text handed to it through a pipe, and its answer from every status of the pipe: 0,
 # a match; 1, none, and the whole text was handed over; 2, the search could not be made. A match
-# is a match even when grep stopped reading early.
+# is a match even when grep stopped reading early. Neither end says anything of its own: a writer
+# whose reader went away dies of SIGPIPE, 141, or, when SIGPIPE was ignored at its start, fails
+# with 1 and would print a write error; both are a text not handed over.
 #   knot_grep_text <text> <grep arguments…>
 knot_grep_text() {
     local text=$1 statuses
     shift
-    { printf '%s\n' "$text" | grep "$@" 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    { printf '%s\n' "$text" 2>/dev/null | grep "$@" 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
     ((statuses[1] == 0)) && return 0
     ((statuses[1] == 1 && statuses[0] == 0)) && return 1
     return 2
@@ -403,7 +405,7 @@ knot_grep_text() {
 #   knot_sort_text <text>
 knot_sort_text() {
     local statuses
-    { printf '%s\n' "$1" | sort -u 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
+    { printf '%s\n' "$1" 2>/dev/null | sort -u 2>/dev/null; statuses=("${PIPESTATUS[@]}"); } || true
     ((statuses[0] == 0 && statuses[1] == 0))
 }
 
