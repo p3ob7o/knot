@@ -262,6 +262,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-22 | 22e | KnotIntents is wired last in the composition, with a test that the environment the intents reach is the composition's own | WP-22d |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 30a | The iPhone's structure from the direction's sheet, and what of the second PR needs no other package: Notes as the root with the capture surface as a sheet over it, the system's search, the note with editing in place, delete and move with undo, share and export, Settings, the first-run rows, the shell's two ports, and About's diagnostics and restore | the design direction; WP-21 PR 2; WP-22 PR 1 |
+| WP-30 | 30b | The iOS UI tests launch the app with UIKit's view animations off, so that the test runner no longer waits a minute at every interaction of a launch in which a keyboard animation never reported its end | WP-30a |
 | WP-30 | 2 | The rest of the iPhone app, after WP-30a: the Live Activity's adapter on its port's contract suite, the recording intents' entry, why a recording ended, Recently deleted, and the store's export as it is | WP-30a; WP-19 PR 2; WP-31 PR 1 |
 | WP-31 | 1 | The controls, the Live Activity and the Action Button tip | SP-1; WP-19 PR 2 |
 | WP-31 | 2 | The Sketch control and the Home Screen and Lock Screen widgets. Held until the keep-gate ruling. | the ruling |
