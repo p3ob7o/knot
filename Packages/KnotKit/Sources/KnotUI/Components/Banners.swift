@@ -223,6 +223,7 @@ public struct NoticeActionStyle: ViewModifier {
                     .contentShape(.rect)
             }
             .buttonStyle(.bordered)
+            .tint(theme.colors[.textPrimary])
             .keyboardShortcut("z", modifiers: .command)
         }
 

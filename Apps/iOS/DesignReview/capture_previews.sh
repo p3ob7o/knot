@@ -51,6 +51,13 @@ trap 'exit 143' TERM
 reset_appearance
 # Keep a new simulator's keyboard tutorial out of the capture-state screenshots.
 keyboard_value=$(simctl spawn "$udid" defaults read "$keyboard_domain" "$keyboard_key" 2>/dev/null || true)
+# defaults reads a Boolean as 1 or 0 but accepts only Boolean words for -bool.
+case "$keyboard_value" in
+    1|true|yes) keyboard_value=true ;;
+    0|false|no) keyboard_value=false ;;
+    '') ;;
+    *) echo "The existing keyboard preference is not a Boolean." >&2; exit 1 ;;
+esac
 simctl spawn "$udid" defaults write "$keyboard_domain" "$keyboard_key" -bool true
 restore_keyboard=1
 simctl install "$udid" "$scratch/DerivedData/Build/Products/Debug-iphonesimulator/KnotDesignReview.app"
