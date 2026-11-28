@@ -1,8 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// What VoiceOver says about a recording. It announces when a recording starts and stops, and
-/// stays silent while it runs (docs/product-spec.md §13).
+/// What VoiceOver says without moving focus. It announces the start and stop of a recording and
+/// the outcome of a restore (docs/product-spec.md §13).
 public enum Announcement: String, Hashable, Sendable, CaseIterable {
     case recordingStarted
     case recordingStopped
@@ -10,6 +10,8 @@ public enum Announcement: String, Hashable, Sendable, CaseIterable {
     /// A tap-started recording stopped within a second: nothing was kept.
     case recordingDiscarded
     case recordingCouldNotStart
+    case itemRestored
+    case itemRestoreFailed
 
     public var text: String {
         switch self {
@@ -18,6 +20,8 @@ public enum Announcement: String, Hashable, Sendable, CaseIterable {
         case .recordingSaveFailed: localized("Knot couldn’t finish saving the recording.")
         case .recordingDiscarded: localized("Too short. Nothing was kept.")
         case .recordingCouldNotStart: localized("Couldn’t start.")
+        case .itemRestored: localized("Restored.")
+        case .itemRestoreFailed: localized("Knot couldn’t restore this item.")
         }
     }
 }
