@@ -443,6 +443,7 @@
             .textFieldStyle(.plain)
             .font(theme.type[.noteTitle])
             .focused($editing)
+            .accessibilityLabel(Text("Title", bundle: .module))
             .accessibilityAddTraits(.isHeader)
             .onAppear {
                 draft = title
