@@ -129,6 +129,8 @@ final class ManualRecorder: Recorder, Sendable {
 
     func prepare() async { await base.prepare() }
 
+    func releasePreparation() async { await base.releasePreparation() }
+
     func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         let session = ManualSession(try await base.start(request))
         sessions.withLock { $0[request.captureID] = session }

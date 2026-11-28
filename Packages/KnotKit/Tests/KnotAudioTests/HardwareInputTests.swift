@@ -20,6 +20,18 @@ extension AudioBufferTests.HardwareInputTests {
         #expect(HardwareInputPolicy.refusalForThisProcess() != nil)
     }
 
+    @Test func releasingIdleMicrophonePreparationTouchesNoHardware() async throws {
+        let folder = try ScratchFolder()
+        let hardware = StandInHardware()
+        let live = recorder(folder.locations, input: MicrophoneInput(hardware: hardware, policy: { nil }))
+        await live.releasePreparation()
+        await live.prepare()
+        await live.releasePreparation()
+        await live.releasePreparation()
+        #expect(hardware.uses.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: folder.locations.recording.path))
+    }
+
     /// Each sign of a test, an agent or a simulator refuses on its own; a process with none of
     /// them may open the input.
     @Test(arguments: [

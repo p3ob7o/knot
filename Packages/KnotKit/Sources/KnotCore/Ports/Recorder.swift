@@ -36,6 +36,10 @@ public protocol Recorder: Sendable {
     /// the Mac's key-down. Calling it often is harmless.
     func prepare() async
 
+    /// Releases unused preparation from `prepare()` without opening the microphone, as on
+    /// key-up after a Mac hotkey tap. Harmless when nothing is prepared or a recording is running.
+    func releasePreparation() async
+
     /// Writes the manifest and the working file, starts the input, and returns once the
     /// recording is live: the moment of the "live" cue. The manifest's first write records the
     /// capture, the launch, the origin, the placement, the shown note and `followsCaptureID`,
@@ -94,6 +98,11 @@ public protocol Recorder: Sendable {
     /// capture's row points to the stored asset (§6, rule 7). Removing what is not there is not
     /// an error.
     func removeWorkingFile(of capture: CaptureID) async throws(KnotError)
+}
+
+extension Recorder {
+    /// The default for recorders that retain no preparation.
+    public func releasePreparation() async {}
 }
 
 /// A recording converted to the stored format and verified.
