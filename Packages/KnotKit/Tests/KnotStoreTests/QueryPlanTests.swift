@@ -83,7 +83,12 @@ import Testing
         let notes = NoteRepository(database: database)
         let captures = Captures(clock: clock, ids: ids, device: database.deviceID)
         let receipt = try await notes.record(captures.typed("A synthetic line", from: 0, to: 1))
+        let segmentID = try #require(receipt.segmentIDs.first)
+        _ = try await notes.delete(.segment(segmentID))
         _ = try await notes.delete(.note(receipt.noteID))
+        let beforeRecentlyDeleted = statements.all.count
+        _ = try await notes.recentlyDeleted()
+        let recentlyDeletedQueries = Set(statements.all.dropFirst(beforeRecentlyDeleted).filter(Self.isQuery))
         clock.advance(by: 40 * 86_400)
         _ = try await notes.purge(before: clock.now())
 
@@ -101,6 +106,17 @@ import Testing
         for (sql, plan) in plans {
             let scans = Self.unindexedScans(in: plan)
             #expect(scans.isEmpty, "A query with no index:\n\(sql)\n\(plan.joined(separator: "\n"))")
+        }
+        for table in ["note", "segment"] {
+            let lookup = try #require(
+                plans.first { sql, _ in
+                    recentlyDeletedQueries.contains(sql) && sql.contains("FROM \(table) ")
+                        && sql.contains("deleted_at IS NOT NULL")
+                })
+            let index = "\(table)_deleted"
+            #expect(
+                lookup.plan.contains { $0.split(separator: " ").contains(Substring(index)) },
+                "Expected \(index) in the plan for \(lookup.sql): \(lookup.plan)")
         }
         print(
             "The plan of every query in the NoteStore contract:\n"
