@@ -14,6 +14,7 @@ import Synchronization
 /// call with the error it failed with, and the stream says what is wrong. A restore closes the
 /// store for the rest of the launch: each call then fails with `store_not_open` again, a capture
 /// takes `Inbox/`, and Knot must be opened again (row 22c).
+/// The Recently Deleted read waits for the store to open.
 public final class StoreGate: Sendable {
     /// The store's ports, as `KnotStoreLive.wire(_:store:)` put them in an environment.
     public struct Ports: Sendable {
@@ -242,6 +243,11 @@ struct GatedNoteStore: NoteStore {
     func delete(_ target: StoreTarget) async throws(KnotError) -> StoreCursor { try await notes().delete(target) }
 
     func restore(_ target: RestoreTarget) async throws(KnotError) -> StoreCursor { try await notes().restore(target) }
+
+    func recentlyDeleted() async throws(KnotError) -> [DeletedItem] {
+        if case .opening = gate.phase { _ = await gate.opened() }
+        return try await notes().recentlyDeleted()
+    }
 
     func removeRecording(of segment: SegmentID) async throws(KnotError) -> Asset {
         try await notes().removeRecording(of: segment)
