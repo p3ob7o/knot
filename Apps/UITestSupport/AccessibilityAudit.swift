@@ -125,6 +125,8 @@ enum AccessibilityAudit {
     /// lies inside the keyboard's frame, or it sits in the strip on top of the keyboard, within
     /// its width and in the keyboard's window, where the keyboard draws its prediction bar.
     /// WP-30's run found the bar's cells there, under elements of no particular kind.
+    /// QuickType's RecentPaste button sits in that strip outside the app's window snapshots,
+    /// so the audit can report it with an empty label and no window index.
     static func belongsToSystemKeyboard(_ element: Element) -> Bool {
         if element.ancestry.contains(.keyboard) { return true }
         guard let keyboard = element.systemKeyboardFrame else { return false }
@@ -132,7 +134,9 @@ enum AccessibilityAudit {
         let onTop =
             abs(element.frame.maxY - keyboard.minY) <= 0.5 && element.frame.minX >= keyboard.minX - 0.5
             && element.frame.maxX <= keyboard.maxX + 0.5 && element.frame.height <= 60
-        return onTop && element.windowIndex != nil && element.windowIndex == element.keyboardWindowIndex
+        guard onTop else { return false }
+        if let window = element.windowIndex { return window == element.keyboardWindowIndex }
+        return element.kind == .button && element.identifier == "RecentPaste" && element.label.isEmpty
     }
 
     static let systemKeyboard = StructuralExclusion(
@@ -709,6 +713,52 @@ final class AccessibilityAuditExclusionTests: XCTestCase {
         var noKeyboard = cell
         noKeyboard.systemKeyboardFrame = nil
         XCTAssertFalse(AccessibilityAudit.belongsToSystemKeyboard(noKeyboard))
+    }
+
+    private func recentPasteButton() -> AccessibilityAudit.Element {
+        AccessibilityAudit.Element(
+            kind: .button, identifier: "RecentPaste", label: "",
+            frame: CGRect(x: 30, y: 546, width: 342, height: 44),
+            systemKeyboardFrame: CGRect(x: 0, y: 590, width: 402, height: 226),
+            windowIndex: nil, keyboardWindowIndex: 2)
+    }
+
+    func testRecentPasteOutsideTheAppWindowsIsExcludedOnIOSOnly() {
+        var button = recentPasteButton()
+        button.inSystemKeyboard = AccessibilityAudit.belongsToSystemKeyboard(button)
+        XCTAssertTrue(button.inSystemKeyboard)
+        let excluded = AccessibilityAudit.isExcluded(.sufficientElementDescription, on: button)
+        #if os(iOS)
+            XCTAssertTrue(excluded)
+        #else
+            XCTAssertFalse(excluded)
+        #endif
+    }
+
+    func testOtherElementsOutsideTheKeyboardWindowStillFail() {
+        var otherIdentifier = recentPasteButton()
+        otherIdentifier.identifier = "app.button"
+        var noIdentifier = recentPasteButton()
+        noIdentifier.identifier = ""
+        var labelled = recentPasteButton()
+        labelled.label = "Paste"
+        var otherKind = recentPasteButton()
+        otherKind.kind = .other
+        var above = recentPasteButton()
+        above.frame.origin.y -= 1
+        var wide = recentPasteButton()
+        wide.frame.size.width = 403
+        var tall = recentPasteButton()
+        tall.frame = CGRect(x: 30, y: 529, width: 342, height: 61)
+        var appWindow = recentPasteButton()
+        appWindow.windowIndex = 0
+
+        for var element in [otherIdentifier, noIdentifier, labelled, otherKind, above, wide, tall, appWindow] {
+            element.inSystemKeyboard = AccessibilityAudit.belongsToSystemKeyboard(element)
+            XCTAssertFalse(element.inSystemKeyboard, element.description)
+            XCTAssertFalse(
+                AccessibilityAudit.isExcluded(.sufficientElementDescription, on: element), element.description)
+        }
     }
 
     func testAFailureNamesTheElement() {
