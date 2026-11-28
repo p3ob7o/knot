@@ -51,6 +51,7 @@
             var workingFiles: [CaptureID: (launch: LaunchID, audio: RecordedAudio)] = [:]
             var sessions: [CaptureID: (launch: LaunchID, session: ScriptedSession)] = [:]
             var prepared = 0
+            var releasedPreparations = 0
         }
 
         public let locations: StoreLocations
@@ -110,10 +111,13 @@
         }
 
         public var prepareCount: Int { state.withLock { $0.prepared } }
+        public var releasePreparationCount: Int { state.withLock { $0.releasedPreparations } }
 
         // MARK: The port
 
         public func prepare() async { state.withLock { $0.prepared += 1 } }
+
+        public func releasePreparation() async { state.withLock { $0.releasedPreparations += 1 } }
 
         public func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
             do {

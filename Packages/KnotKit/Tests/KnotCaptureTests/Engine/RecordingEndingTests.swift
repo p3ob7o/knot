@@ -896,6 +896,8 @@ final class SteeredRecorder: Recorder, Sendable {
 
     func prepare() async { await base.prepare() }
 
+    func releasePreparation() async { await base.releasePreparation() }
+
     func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         let session = SteeredSession(try await base.start(request), gate: eventsGate, quietEnd: quietEnd)
         sessions.withLock { $0[request.captureID] = session }

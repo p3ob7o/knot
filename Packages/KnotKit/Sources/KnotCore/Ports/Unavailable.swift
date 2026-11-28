@@ -89,6 +89,7 @@ public struct UnavailableRecorder: Recorder {
     public init() {}
 
     public func prepare() async {}
+    public func releasePreparation() async {}
     public func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         throw KnotError.portUnavailable.about(capture: request.captureID)
     }

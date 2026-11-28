@@ -63,6 +63,8 @@ public struct InjectedAudio: AudioInput {
 
     public func prepare() async {}
 
+    public func releasePreparation() async {}
+
     public func open() async throws(KnotError) -> any OpenAudioInput {
         if let openFailure { throw openFailure }
         return OpenInjectedAudio(self)

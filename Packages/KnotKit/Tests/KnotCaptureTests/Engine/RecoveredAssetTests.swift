@@ -34,6 +34,8 @@ import Testing
         var conversions: Int { count.withLock { $0 } }
 
         func prepare() async { await base.prepare() }
+
+        func releasePreparation() async { await base.releasePreparation() }
         func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
             try await base.start(request)
         }

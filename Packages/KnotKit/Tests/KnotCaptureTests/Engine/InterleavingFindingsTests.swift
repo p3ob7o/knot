@@ -121,6 +121,8 @@ final class DiskFillsAfterConversion: Recorder, Sendable {
     }
 
     func prepare() async { await base.prepare() }
+
+    func releasePreparation() async { await base.releasePreparation() }
     func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         try await base.start(request)
     }
