@@ -66,7 +66,8 @@ extension AppComposition {
 
 enum StoreExport {
     static func write(
-        into parent: URL, locations: StoreLocations, phase: StoreGate.Phase, at date: Date
+        into parent: URL, locations: StoreLocations, phase: StoreGate.Phase, at date: Date,
+        listStoreEntries: (URL) throws -> [String] = { try FileManager.default.contentsOfDirectory(atPath: $0.path) }
     ) throws(KnotError) -> StoreExportReport {
         let manager = FileManager.default
         let storePath = PathForm.real(locations.storeRoot)
@@ -98,11 +99,13 @@ enum StoreExport {
                 }
 
                 if hasStore {
-                    for name in try manager.contentsOfDirectory(atPath: locations.storeRoot.path) {
+                    for name in try listStoreEntries(locations.storeRoot) {
                         if usedDatabaseBackup && (name.hasPrefix(databaseName) || name.hasPrefix(".\(databaseName)")) {
                             continue
                         }
-                        try copyEntry(named: name, from: locations.storeRoot, into: folder, manager: manager)
+                        try copyEntry(
+                            named: name, from: locations.storeRoot, into: folder, manager: manager,
+                            ignoreDisappearingPartials: usedDatabaseBackup)
                     }
                 }
 
@@ -111,7 +114,9 @@ enum StoreExport {
                     let target =
                         PosixFileLayer().entryKind(localInbox) == nil
                         ? localInbox : folder.appending(path: "SharedInbox", directoryHint: .isDirectory)
-                    try copyDirectory(from: locations.inbox, to: target, manager: manager)
+                    try copyDirectory(
+                        from: locations.inbox, to: target, manager: manager,
+                        ignoreDisappearingPartials: usedDatabaseBackup)
                 }
                 return StoreExportReport(folder: folder, usedDatabaseBackup: usedDatabaseBackup)
             } catch {
@@ -157,32 +162,40 @@ enum StoreExport {
         throw KnotError.writeFailed.with(.init(posixError: code))
     }
 
-    private static func copyDirectory(from source: URL, to target: URL, manager: FileManager) throws {
+    private static func copyDirectory(
+        from source: URL, to target: URL, manager: FileManager, ignoreDisappearingPartials: Bool
+    ) throws {
         let names = try manager.contentsOfDirectory(atPath: source.path)
         try manager.createDirectory(at: target, withIntermediateDirectories: false)
         for name in names {
-            try copyEntry(named: name, from: source, into: target, manager: manager)
+            try copyEntry(
+                named: name, from: source, into: target, manager: manager,
+                ignoreDisappearingPartials: ignoreDisappearingPartials)
         }
     }
 
-    private static func copyEntry(named name: String, from parent: URL, into folder: URL, manager: FileManager) throws {
+    private static func copyEntry(
+        named name: String, from parent: URL, into folder: URL, manager: FileManager, ignoreDisappearingPartials: Bool
+    ) throws {
         let source = parent.appending(path: name, directoryHint: .notDirectory)
         let target = folder.appending(path: name, directoryHint: .notDirectory)
         let partialSuffix = DurableFile.partialSuffix
-        let isPartial =
-            name.hasPrefix(".")
+        // Raw export may have listed a database that is still being published under its partial name.
+        let canDisappear =
+            ignoreDisappearingPartials && name.hasPrefix(".")
             && ["", "-journal", "-wal", "-shm"].contains { name.hasSuffix(partialSuffix + $0) }
         guard let type = try entryType(source) else {
-            if isPartial { return }
+            if canDisappear { return }
             throw KnotError.notFound
         }
         if type == S_IFDIR {
-            try copyDirectory(from: source, to: target, manager: manager)
+            try copyDirectory(
+                from: source, to: target, manager: manager, ignoreDisappearingPartials: ignoreDisappearingPartials)
             return
         }
         do {
             try manager.copyItem(at: source, to: target)
-        } catch  where isPartial && isMissing(error) {
+        } catch  where canDisappear && isMissing(error) {
             // A writer can publish or remove a partial after the directory was listed.
             guard try entryType(source) == nil else { throw error }
         }

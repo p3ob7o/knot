@@ -273,6 +273,29 @@ struct StoreExportTests {
         }
     }
 
+    @Test("Raw export fails and cleans up if launch publishes a listed database partial")
+    func rawExportDuringDatabasePublication() throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let locations = folder.locations
+        try manager.createDirectory(at: locations.storeRoot, withIntermediateDirectories: true)
+        let partial = locations.storeRoot.appending(path: ".knot.sqlite.synthetic.partial")
+        let bytes = Data([1, 2, 3])
+        try bytes.write(to: partial)
+        let date = Date(timeIntervalSince1970: 1_234_567_890)
+        let before = try manager.contentsOfDirectory(atPath: folder.container.path).sorted()
+
+        #expect(throws: KnotError.notFound) {
+            try StoreExport.write(into: folder.container, locations: locations, phase: .opening, at: date) { root in
+                let listed = try manager.contentsOfDirectory(atPath: root.path)
+                try manager.moveItem(at: partial, to: locations.database)
+                return listed
+            }
+        }
+        #expect(try manager.contentsOfDirectory(atPath: folder.container.path).sorted() == before)
+        #expect(try Data(contentsOf: locations.database) == bytes)
+    }
+
     @Test("Exports made at the same UTC time get unique folders")
     func namingAndCollision() throws {
         let folder = LiveFolder()
