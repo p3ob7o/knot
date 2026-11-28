@@ -156,16 +156,25 @@ final class NotesExport {
 }
 
 struct AboutScreen: View {
-    let app: AppComposition
+    private enum ImportAction {
+        case exportStore
+        case restoreCopy
+
+        var contentType: UTType {
+            switch self {
+            case .exportStore: .folder
+            case .restoreCopy: .data
+            }
+        }
+    }
+
+    @State var actions: AboutActions
     @Environment(\.knotTheme) private var theme
-    @State private var choosingCopy = false
+    @State private var choosingItem = false
+    @State private var importAction = ImportAction.restoreCopy
     @State private var copy: URL?
     @State private var confirmingRestore = false
-    @State private var preparingDiagnostics = false
-    @State private var diagnostics: DiagnosticDocument?
     @State private var savingDiagnostics = false
-    @State private var restoring = false
-    @State private var message: String?
 
     var body: some View {
         List {
@@ -182,24 +191,21 @@ struct AboutScreen: View {
                         .foregroundStyle(theme.colors[.textPrimary])
                 }
             }
-            if let live = app.live, showsTestActions {
+            if actions.showsTestActions {
                 Section {
                     Button("Export diagnostics…", action: makeDiagnostics)
-                        .disabled(preparingDiagnostics)
-                    Button("Restore a kept copy…") { choosingCopy = true }
-                        .disabled(restoring || live.mustBeOpenedAgain)
+                        .disabled(actions.isBusy)
+                    Button("Export store…") { choose(.exportStore) }
+                        .disabled(!actions.canExportStore)
+                    Button("Restore a kept copy…") { choose(.restoreCopy) }
+                        .disabled(!actions.canRestore)
                 }
-                if preparingDiagnostics || restoring { ProgressView() }
-                if let message { Text(message) }
+                if actions.isBusy { ProgressView() }
+                if let message = actions.message { Text(message) }
             }
         }
         .navigationTitle("About Knot")
-        .fileImporter(isPresented: $choosingCopy, allowedContentTypes: [.data]) { result in
-            if case .success(let url) = result {
-                copy = url
-                confirmingRestore = true
-            }
-        }
+        .fileImporter(isPresented: $choosingItem, allowedContentTypes: [importAction.contentType], onCompletion: picked)
         .alert("Restore a kept copy?", isPresented: $confirmingRestore) {
             Button("Cancel", role: .cancel) { copy = nil }
             Button("Restore", role: .destructive, action: restore)
@@ -207,52 +213,125 @@ struct AboutScreen: View {
             Text("Knot keeps the current store aside. Open Knot again after the restore to use the copy.")
         }
         .fileExporter(
-            isPresented: $savingDiagnostics, document: diagnostics, contentType: .json,
+            isPresented: $savingDiagnostics, document: actions.diagnostics.map(DiagnosticDocument.init(data:)),
+            contentType: .json,
             defaultFilename: "Knot Diagnostics"
         ) { result in
-            diagnostics = nil
-            if case .failure = result { message = String(localized: "Couldn’t export diagnostics.") }
+            actions.finishDiagnostics(result)
         }
     }
 
-    private var showsTestActions: Bool {
-        #if DEBUG
-            true
-        #else
-            app.live?.configuration.milestoneLevel != nil
-        #endif
+    private func makeDiagnostics() {
+        Task {
+            await actions.exportDiagnostics()
+            if actions.diagnostics != nil { savingDiagnostics = true }
+        }
     }
 
-    private func makeDiagnostics() {
-        preparingDiagnostics = true
-        Task {
-            defer { preparingDiagnostics = false }
-            guard let data = await app.diagnosticsData() else { return }
-            diagnostics = DiagnosticDocument(data: data)
-            savingDiagnostics = true
+    private func choose(_ action: ImportAction) {
+        importAction = action
+        choosingItem = true
+    }
+
+    private func picked(_ result: Result<URL, any Error>) {
+        switch (importAction, result) {
+        case (.exportStore, .success(let folder)):
+            Task { await actions.exportStore(into: folder) }
+        case (.exportStore, .failure):
+            actions.reportStoreExportFailure()
+        case (.restoreCopy, .success(let url)):
+            copy = url
+            confirmingRestore = true
+        case (.restoreCopy, .failure):
+            break
         }
     }
 
     private func restore() {
-        guard let copy, let live = app.live else { return }
+        guard let copy else { return }
         self.copy = nil
-        restoring = true
-        Task {
-            let accessed = copy.startAccessingSecurityScopedResource()
-            defer {
-                if accessed { copy.stopAccessingSecurityScopedResource() }
-                restoring = false
-            }
-            do {
-                let report = try await live.restore(copy)
-                message = String(
-                    localized: "Restored the copy. \(report.missingAssets.count) files are missing. Open Knot again.")
-            } catch {
-                message =
-                    live.mustBeOpenedAgain
-                    ? String(localized: "Couldn’t restore the copy. Open Knot again.")
-                    : String(localized: "Couldn’t restore the copy.")
-            }
+        Task { await actions.restore(copy) }
+    }
+}
+
+@MainActor
+@Observable
+final class AboutActions {
+    private let live: LiveComposition?
+    private(set) var isBusy = false
+    private(set) var message: String?
+    private(set) var diagnostics: Data?
+
+    init(live: LiveComposition?) {
+        self.live = live
+    }
+
+    var showsTestActions: Bool {
+        #if DEBUG
+            live != nil
+        #else
+            live?.configuration.milestoneLevel != nil
+        #endif
+    }
+
+    var canExportStore: Bool { showsTestActions && !isBusy }
+    var canRestore: Bool { showsTestActions && !isBusy && live?.mustBeOpenedAgain == false }
+
+    func exportDiagnostics() async {
+        guard let live, showsTestActions, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        diagnostics = await live.diagnostics.exportData()
+    }
+
+    func finishDiagnostics(_ result: Result<URL, any Error>) {
+        diagnostics = nil
+        if case .failure = result {
+            message = String(localized: "Couldn’t export diagnostics.")
+        }
+    }
+
+    func reportStoreExportFailure() {
+        message = String(localized: "Couldn’t export the store. Check the folder and try again.")
+    }
+
+    func exportStore(into folder: URL) async {
+        guard let live, canExportStore else { return }
+        isBusy = true
+        message = nil
+        let accessed = folder.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { folder.stopAccessingSecurityScopedResource() }
+            isBusy = false
+        }
+        do {
+            let report = try await live.exportStore(into: folder)
+            message =
+                report.usedDatabaseBackup
+                ? String(localized: "A copy of the store was exported to the selected folder.")
+                : String(localized: "The store files were exported as-is to the selected folder.")
+        } catch {
+            reportStoreExportFailure()
+        }
+    }
+
+    func restore(_ copy: URL) async {
+        guard let live, canRestore else { return }
+        isBusy = true
+        let accessed = copy.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { copy.stopAccessingSecurityScopedResource() }
+            isBusy = false
+        }
+        do {
+            let report = try await live.restore(copy)
+            message = String(
+                localized: "Restored the copy. \(report.missingAssets.count) files are missing. Open Knot again.")
+        } catch {
+            message =
+                live.mustBeOpenedAgain
+                ? String(localized: "Couldn’t restore the copy. Open Knot again.")
+                : String(localized: "Couldn’t restore the copy.")
         }
     }
 }

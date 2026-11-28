@@ -34,7 +34,9 @@
                                 action: actionButtonSetup)
                         }
                         ForEach(model.rows.filter { !isDestination($0) }) { row in
-                            rowView(row).id(row)
+                            rowView(row)
+                                .disabled(!model.isAvailable && row != .about)
+                                .id(row)
                         }
                     } footer: {
                         if !model.isAvailable {
@@ -48,6 +50,7 @@
                     Section {
                         ForEach(model.rows.filter(isDestination)) { row in
                             rowView(row)
+                                .disabled(!model.isAvailable && row != .about)
                         }
                     } footer: {
                         if model.saveProblem != nil {
@@ -77,6 +80,7 @@
                     }
                     ForEach(model.rows) { row in
                         rowView(row)
+                            .disabled(!model.isAvailable && row != .about)
                     }
                     if let note = model.lockScreenNote {
                         Text(note)
@@ -88,7 +92,6 @@
             #if os(iOS)
                 .formStyle(.grouped)
             #endif
-            .disabled(!model.isAvailable)
             .task { await model.observeSync() }
         }
 
