@@ -58,6 +58,12 @@ struct MainWindow: View {
             .background(theme.colors[.background])
         }
         .environment(\.knotTheme, windowTheme)
+        .transaction { transaction in
+            if shell.isTestLaunch {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         .searchable(
             text: Binding(get: { shell.search.query }, set: shell.search.setQuery),
             isPresented: $searchPresented, placement: .toolbar, prompt: "Search"
