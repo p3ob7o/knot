@@ -44,7 +44,9 @@ import Testing
     func aFailedStopAnnouncesThatTheRecordingCouldNotBeSaved(throwsOnStop: Bool) async {
         let rig = StoreRig()
         rig.environment.engine = FailedStopEngine(id: rig.ids.make(), throwsOnStop: throwsOnStop)
-        let model = rig.capture()
+        let timer = ManualRecordingClock()
+        let model = NoteViewModel(
+            environment: rig.environment, context: rig.context(), announcer: rig.announcer, recordingClock: timer.clock)
         model.toggleRecording()
         await settled(model)
         model.toggleRecording()
@@ -58,11 +60,13 @@ import Testing
         let rig = await PreviewRig.make()
         defer { rig.remove() }
         let clock = FakeClock()
+        let timer = ManualRecordingClock()
         let engine = ObservedCaptureEngine(rig.environment.engine)
         var environment = rig.environment
         environment.engine = engine
         environment.clock = clock
-        let model = NoteViewModel(environment: environment, context: rig.context, announcer: rig.announcer)
+        let model = NoteViewModel(
+            environment: environment, context: rig.context, announcer: rig.announcer, recordingClock: timer.clock)
         let observing = Task { await model.observeRecordings() }
         defer { observing.cancel() }
         try #require(await eventually("the surface to subscribe to recording states") { engine.isObserving })
