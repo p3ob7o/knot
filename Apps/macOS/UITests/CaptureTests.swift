@@ -38,7 +38,11 @@ final class MacCaptureTests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(status("Move undone", in: app).waitForExistence(timeout: 30))
         XCTAssertFalse(app.buttons["Undo"].exists)
-        XCTAssertTrue(app.staticTexts["The moved synthetic segment"].exists)
+        let restoredText = "The moved synthetic segment"
+        let restoredSegment = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR value == %@", restoredText, restoredText))
+            .firstMatch
+        XCTAssertTrue(restoredSegment.waitForExistence(timeout: 30))
         try app.auditAccessibility()
     }
 

@@ -59,6 +59,7 @@
                             "The next synthetic capture", at: now.addingTimeInterval(2), placement: .window),
                         follow.noteID == first.noteID
                     else { return }
+                    await note.refresh()
                     previewAction = "Move undone"
                 }
             } else if debugDropTarget,

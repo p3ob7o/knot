@@ -26,7 +26,6 @@ struct MainWindow: View {
             )
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .scrollEdgeEffectHidden(true, for: .top)
             .background(theme.colors[.background])
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .safeAreaInset(edge: .bottom) {
@@ -38,7 +37,6 @@ struct MainWindow: View {
                     syncQuestion(pause)
                 }
                 NoteView(model: shell.detailModel, player: shell.player, shareSegment: shareSegment)
-                    .scrollEdgeEffectHidden(true, for: .top)
                     .background {
                         if !searchPresented, !shell.searchRequested {
                             MacCaptureFocusRequest(model: shell.detailModel)
@@ -177,6 +175,11 @@ struct MainWindow: View {
                         default: theme.colors[role]
                         }
                     return (role, color)
+                }))
+        result.type = TypeRamp(
+            Dictionary(
+                uniqueKeysWithValues: TypeRole.allCases.map { role in
+                    (role, role == .notice || role == .banner ? .headline : theme.type[role])
                 }))
         return result
     }
