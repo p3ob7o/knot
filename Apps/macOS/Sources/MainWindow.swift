@@ -24,6 +24,8 @@ struct MainWindow: View {
                 isRestoring: syncStatus == .fetching && !restoredStream, open: shell.open
             )
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: .textBackgroundColor))
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .safeAreaInset(edge: .bottom) {
                 if let code = shell.problemCode { ProblemCode(code: code) }
@@ -35,7 +37,7 @@ struct MainWindow: View {
                 }
                 NoteView(model: shell.detailModel, player: shell.player, shareSegment: shareSegment)
                     .background {
-                        if shell.searchRequest == 0 {
+                        if !searchPresented, !shell.searchRequested {
                             MacCaptureFocusRequest(model: shell.detailModel)
                         }
                     }
@@ -58,10 +60,11 @@ struct MainWindow: View {
             isPresented: $searchPresented, placement: .toolbar, prompt: "Search"
         )
         .searchFocused($searchFocused)
-        .onChange(of: shell.searchRequest, initial: true) { _, request in
-            if request > 0 {
+        .onChange(of: shell.searchRequested, initial: true) { _, requested in
+            if requested {
                 searchPresented = true
                 searchFocused = true
+                shell.searchRequested = false
             }
         }
         .toolbar {
@@ -93,8 +96,13 @@ struct MainWindow: View {
                         Divider()
                         Button("Recently deleted") { shell.showsRecentlyDeleted = true }
                     } label: {
-                        Label("Note actions", systemImage: "ellipsis.circle")
+                        Label {
+                            Text("More")
+                        } icon: {
+                            Image(systemName: "ellipsis.circle").accessibilityHidden(true)
+                        }
                     }
+                    .accessibilityLabel("More")
                     NoteDragHandle(record: record, timeZone: timeZone)
                         .frame(width: 28, height: 28)
                 }
@@ -133,14 +141,15 @@ struct MainWindow: View {
 
     private var windowTheme: Theme {
         var result = theme
-        // Small labels must keep their contrast on both the opaque note and the sidebar material.
+        // Keep small labels and notices readable in both columns.
         result.colors = ColorPalette(
             Dictionary(
                 uniqueKeysWithValues: ColorRole.allCases.map { role in
                     let color =
                         switch role {
-                        case .textSecondary, .labelSecondary, .pending, .quietMark: theme.colors[.textPrimary]
-                        case .surface, .fillTertiary: theme.colors[.backgroundSecondary]
+                        case .textPrimary, .textSecondary, .labelSecondary, .pending, .quietMark:
+                            Color(nsColor: .labelColor)
+                        case .surface: Color(nsColor: .controlBackgroundColor)
                         default: theme.colors[role]
                         }
                     return (role, color)

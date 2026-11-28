@@ -139,10 +139,7 @@ final class MacCaptureCoordinator {
             case .prepareMicrophone, .releaseMicrophone:
                 break
             case .tap, .startHoldRecording:
-                guard let presentation = effect.panelPresentation else { continue }
-                if effect == .tap {
-                    panel.toggleTyping(presentation)
-                } else {
+                effect.presentPanel(toggleTyping: panel.toggleTyping) { presentation in
                     start(held: true, presentation: presentation)
                     watchModifiers()
                 }

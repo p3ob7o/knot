@@ -12,6 +12,7 @@ import Testing
 
     struct HotkeyGestureTests {
         @Test("panel-tap-takes-the-keyboard")
+        @MainActor
         func tapTakesKeyboard() {
             var clock = FakeClock()
             var gesture = HotkeyGesture()
@@ -19,11 +20,20 @@ import Testing
             clock.advance(.milliseconds(249))
             let effects = gesture.release(at: clock.now)
             #expect(effects == [.releaseMicrophone, .tap])
-            #expect(effects.compactMap(\.panelPresentation).map(\.takesKeyboard) == [true])
+            var keyboardRequests: [Bool] = []
+            for effect in effects {
+                effect.presentPanel {
+                    keyboardRequests.append($0.takesKeyboard)
+                } startHold: { _ in
+                    Issue.record("A tap requested hold recording")
+                }
+            }
+            #expect(keyboardRequests == [true])
             #expect(gesture.state == .idle)
         }
 
         @Test("panel-hold-does-not-take-keyboard")
+        @MainActor
         func holdKeepsKeyboardInForegroundApp() {
             var clock = FakeClock()
             var gesture = HotkeyGesture()
@@ -32,7 +42,15 @@ import Testing
             clock.advance(.milliseconds(250))
             let effects = gesture.receive(.markReached(forKeyDownAt: down))
             #expect(effects == [.startHoldRecording])
-            #expect(effects.compactMap(\.panelPresentation).map(\.takesKeyboard) == [false])
+            var keyboardRequests: [Bool] = []
+            for effect in effects {
+                effect.presentPanel { _ in
+                    Issue.record("A hold requested the typing panel")
+                } startHold: {
+                    keyboardRequests.append($0.takesKeyboard)
+                }
+            }
+            #expect(keyboardRequests == [false])
             #expect(gesture.release(at: clock.now) == [.stopRecording])
         }
 

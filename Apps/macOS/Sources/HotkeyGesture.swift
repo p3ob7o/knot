@@ -45,11 +45,12 @@ struct PanelDismissal {
 }
 
 extension HotkeyEffect {
-    var panelPresentation: PanelPresentation? {
+    @MainActor
+    func presentPanel(toggleTyping: (PanelPresentation) -> Void, startHold: (PanelPresentation) -> Void) {
         switch self {
-        case .tap: .typing
-        case .startHoldRecording: .recording
-        default: nil
+        case .tap: toggleTyping(.typing)
+        case .startHoldRecording: startHold(.recording)
+        case .prepareMicrophone, .releaseMicrophone, .stopRecording: break
         }
     }
 }

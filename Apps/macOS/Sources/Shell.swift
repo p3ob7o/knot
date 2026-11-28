@@ -31,7 +31,7 @@ final class Shell {
     let recording: MacCaptureCoordinator
     let surfaces: MacSurfaceRouter
     let cues: MacCues
-    var searchRequest = 0
+    var searchRequested = false
     var showsRecentlyDeleted = false
     private var cursor: StoreCursor?
     private var checkingCursor = false
@@ -99,7 +99,7 @@ final class Shell {
         let outgoing = detailModel
         outgoing.endCapture()
         await outgoing.settle()
-        guard outgoing.fieldText.isEmpty else { return false }
+        guard captureFinished(outgoing) else { return false }
         openNote = NoteViewModel(
             environment: composition.environment, context: composition.context, surface: .macWindow, opening: id,
             announcer: VoiceOverAnnouncer())
@@ -194,13 +194,18 @@ final class Shell {
         for model in visibleModels { model.endCapture() }
     }
 
-    /// As `leave()`, and returns once every model has run what it was sent.
+    /// Ends every visible capture and reports whether the queued saves and ends succeeded.
     @discardableResult
     func flush() async -> Bool {
         let models = visibleModels
         for model in models { model.endCapture() }
         for model in models { await model.settle() }
-        return models.allSatisfy { $0.fieldText.isEmpty }
+        return models.allSatisfy { captureFinished($0) }
+    }
+
+    private func captureFinished(_ model: NoteViewModel) -> Bool {
+        if case .couldNotSave = model.problem { return false }
+        return model.typedCapture == nil && model.fieldText.isEmpty
     }
 
     func prepareRestore() async -> Bool {
@@ -303,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch destination {
         case .capture: shell.panel.showTyping()
         case .search:
-            shell.searchRequest += 1
+            shell.searchRequested = true
             showMainWindow()
         case .note(let id):
             shell.open(id)
