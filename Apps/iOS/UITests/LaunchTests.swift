@@ -235,6 +235,8 @@ final class KnotIOSLaunchTests: XCTestCase {
         let notes = app.navigationBars["Notes"]
         XCTAssertTrue(notes.waitForExistence(timeout: limit))
         XCTAssertTrue(note.waitForNonExistence(timeout: limit))
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: limit))
 
         let recentlyDeleted = app.navigationBars["Recently deleted"]
         let back = recentlyDeleted.buttons.firstMatch
@@ -259,6 +261,27 @@ final class KnotIOSLaunchTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No recently deleted notes"].waitForExistence(timeout: limit))
         back.tap()
         XCTAssertTrue(note.waitForExistence(timeout: limit))
+        XCTAssertTrue(undo.waitForNonExistence(timeout: limit))
+    }
+
+    @MainActor
+    func testAboutRemainsReachableWhenTheStoreCannotOpen() throws {
+        let app = KnotLauncher.launch(.live(temporaryStore: "invalid/store"))
+        showNotes(in: app, keyboardVisible: nil)
+        app.buttons["More"].tap()
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.staticTexts["Settings can’t be read right now."].waitForExistence(timeout: limit))
+        let about = app.buttons["About"]
+        XCTAssertTrue(about.exists)
+        XCTAssertTrue(about.isEnabled)
+        XCTAssertFalse(app.buttons["Recently deleted"].isEnabled)
+        XCTAssertFalse(app.buttons["Export all notes…"].isEnabled)
+        about.tap()
+        XCTAssertTrue(app.navigationBars["About Knot"].waitForExistence(timeout: limit))
+        let export = app.buttons["Export store…"]
+        XCTAssertTrue(export.exists)
+        XCTAssertTrue(export.isEnabled)
+        try app.auditAccessibility()
     }
 
     /// `ui-smoke-move-segment-and-undo-iphone`

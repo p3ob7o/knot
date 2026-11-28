@@ -236,6 +236,16 @@ final class Shell {
         if !search.query.isEmpty { search.setQuery(search.query) }
     }
 
+    func reconcileDeletedNote(previousItems: [DeletedItemRow]) async {
+        guard let deletedNote, case .deletedNote(let id) = deletedNote.undoOffer,
+            previousItems.contains(where: { $0.id == .note(id) }),
+            !recentlyDeleted.items.contains(where: { $0.id == .note(id) }),
+            let restored = try? await environment.notes.note(id), restored.note.deletedAt == nil,
+            self.deletedNote === deletedNote
+        else { return }
+        self.deletedNote = nil
+    }
+
     func undoNoteDeletion() {
         guard let deletedNote else { return }
         deletedNote.undo()
@@ -346,6 +356,9 @@ struct ShellView: View {
             await shell.connect(connection.destination)
         }
         .task { await shell.observeSync() }
+        .onChange(of: shell.recentlyDeleted.items) { previousItems, _ in
+            Task { await shell.reconcileDeletedNote(previousItems: previousItems) }
+        }
         .task { await shell.capture.observeRecordings(announceStart: false) }
         .sensoryFeedback(trigger: Shell.cues.pulse) { _, pulse in Shell.cues.feedback(for: pulse) }
     }
@@ -458,7 +471,7 @@ struct SettingsScreen: View {
             .sheet(item: $setupRow) { row in SetupInstructions(row: row) }
             .navigationDestination(item: $detail) { row in
                 switch row {
-                case .about: AboutScreen(app: app)
+                case .about: AboutScreen(actions: AboutActions(live: app.live))
                 case .exportAll: ExportScreen(model: NotesExport(environment: app.environment))
                 default: EmptyView()
                 }
