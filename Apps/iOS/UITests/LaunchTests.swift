@@ -221,6 +221,46 @@ final class KnotIOSLaunchTests: XCTestCase {
         try app.auditAccessibility()
     }
 
+    @MainActor
+    func testRecentlyDeletedOpensFromNotesAndSettingsAndRestoresANote() throws {
+        let line = "A synthetic note to restore"
+        let app = KnotLauncher.launch(.preview)
+        XCTAssertTrue(captureField(in: app).waitForExistence(timeout: limit))
+        app.typeText(line)
+        try assertStreamShows(line, in: app)
+        let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", line)).firstMatch
+        note.tap()
+        app.buttons["Note actions"].tap()
+        app.buttons["Delete note"].tap()
+        let notes = app.navigationBars["Notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: limit))
+        XCTAssertTrue(note.waitForNonExistence(timeout: limit))
+
+        let recentlyDeleted = app.navigationBars["Recently deleted"]
+        let back = recentlyDeleted.buttons.firstMatch
+        let restore = app.buttons["Restore \(line)"]
+        app.buttons["More"].tap()
+        app.buttons["Recently deleted"].tap()
+        XCTAssertTrue(recentlyDeleted.waitForExistence(timeout: limit))
+        XCTAssertTrue(restore.waitForExistence(timeout: limit))
+        try app.auditAccessibility()
+        back.tap()
+        XCTAssertTrue(notes.waitForExistence(timeout: limit))
+
+        app.buttons["More"].tap()
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: limit))
+        let settingsRow = app.buttons["Recently deleted"]
+        XCTAssertTrue(waitFor(NSPredicate(format: "exists == YES AND enabled == YES"), on: settingsRow))
+        settingsRow.tap()
+        XCTAssertTrue(recentlyDeleted.waitForExistence(timeout: limit))
+        XCTAssertTrue(restore.waitForExistence(timeout: limit))
+        restore.tap()
+        XCTAssertTrue(app.staticTexts["No recently deleted notes"].waitForExistence(timeout: limit))
+        back.tap()
+        XCTAssertTrue(note.waitForExistence(timeout: limit))
+    }
+
     /// `ui-smoke-move-segment-and-undo-iphone`
     @MainActor
     func testMovesASegmentAndUndoesTheMove() throws {

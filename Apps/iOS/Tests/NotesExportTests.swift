@@ -22,3 +22,23 @@ import Testing
     #expect(!model.failed)
     #expect(model.report?.notes == 1)
 }
+
+@Test(arguments: [true, false])
+@MainActor func storeExportReportsHowTheDatabaseWasCopied(usedDatabaseBackup: Bool) async {
+    let folder = URL.temporaryDirectory.appending(path: "Synthetic export destination")
+    let message = await StoreExportAction.export(to: folder) { destination in
+        #expect(destination == folder)
+        return usedDatabaseBackup
+    }
+    let expected =
+        usedDatabaseBackup
+        ? "A copy of the store was exported to the selected folder."
+        : "The store files were exported as-is to the selected folder."
+    #expect(message == expected)
+}
+
+@Test @MainActor func storeExportReportsFailure() async {
+    let folder = URL.temporaryDirectory.appending(path: "Synthetic export destination")
+    let message = await StoreExportAction.export(to: folder) { _ in throw KnotError.storeNotOpen }
+    #expect(message == "Couldn’t export the store. Check the folder and try again.")
+}

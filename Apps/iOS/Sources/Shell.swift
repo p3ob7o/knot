@@ -12,9 +12,8 @@ import UIKit
     import KnotFakes
 #endif
 
-/// What the shell builds once per launch over its environment: the capture surface's model,
-/// the stream's and search's, and the player. Views never touch storage: every model here
-/// talks to the environment's ports (docs/architecture.md §6, rule 5).
+/// The shell builds models for capture, the stream, search, Recently Deleted and playback
+/// once per launch. The models talk to the environment's ports (docs/architecture.md §6, rule 5).
 @MainActor
 @Observable
 final class Shell {
@@ -25,6 +24,7 @@ final class Shell {
     let capture: NoteViewModel
     let stream: StreamViewModel
     let search: SearchViewModel
+    let recentlyDeleted: RecentlyDeletedViewModel
     let player: PlayerViewModel
     #if DEBUG
         private let previewSettings = InMemorySettingsStore()
@@ -74,6 +74,7 @@ final class Shell {
                 }
             })
         search = SearchViewModel(environment: environment, context: context)
+        recentlyDeleted = RecentlyDeletedViewModel(environment: environment)
         #if DEBUG
             previewTrackPlayer =
                 app.live == nil && ProcessInfo.processInfo.environment["KNOT_PREVIEW_SCROLL_RECORDING"] == "1"
@@ -306,8 +307,9 @@ struct ShellView: View {
                         model: shell.noteModel(id), player: shell.player,
                         onDelete: shell.noteDeleted)
                 case .recentlyDeleted:
-                    ContentUnavailableView(
-                        SettingsRow.recentlyDeleted.title, systemImage: "trash")
+                    RecentlyDeletedView(model: shell.recentlyDeleted)
+                        .navigationTitle(SettingsRow.recentlyDeleted.title)
+                        .navigationBarTitleDisplayMode(.inline)
                 }
             }
         }
