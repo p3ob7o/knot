@@ -145,6 +145,10 @@ public final class LiveRecorder: Recorder {
         await input.prepare()
     }
 
+    public func releasePreparation() async {
+        await input.releasePreparation()
+    }
+
     public func start(_ request: RecordingRequest) async throws(KnotError) -> any RecordingSession {
         // In a task of its own: a start runs to live or to an error whatever its caller does.
         let begun = await Task.detached(priority: Task.currentPriority) { [self] in await begin(request) }.value
