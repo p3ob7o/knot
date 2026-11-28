@@ -255,6 +255,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-21 | 21b | The iOS accessibility audit excludes the out-of-process QuickType `RecentPaste` button that sits flush above the system keyboard | WP-21 PR 2 |
+| WP-21 | 21c | `RecordingTests` uses an injected `ManualRecordingClock` whenever it asserts `recordingOutcome`, removing wall-clock expiry races under the strict cooperative pool | WP-21b |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 22a | The ordering test keeps one live composition per store: a test of the composition's that failed under the strict cooperative pool, made right | WP-22 PR 1 |
 | WP-22 | 22b | The composition's wiring, split out of the second PR: the processing queue given this device, the purge as a launch step, `Lifecycle` with its adapters, and background time on iOS around the store's opening | WP-22 PR 1; WP-15 PR 1 |
