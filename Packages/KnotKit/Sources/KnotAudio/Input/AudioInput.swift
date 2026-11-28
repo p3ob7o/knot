@@ -11,11 +11,21 @@ public protocol AudioInput: Sendable {
     /// often is harmless.
     func prepare() async
 
+    /// Releases resources still held by `prepare()`. An `open()` that takes prepared
+    /// resources must transfer ownership so releasing preparation cannot affect that recording.
+    /// Safe to call when nothing is prepared. This call opens no hardware.
+    func releasePreparation() async
+
     /// Opens the input for one recording without delivering anything yet: the permission, the
     /// audio session and the format it will deliver. Nothing implies a recording yet.
     ///
     /// Errors: microphone permission refused, no input device, audio session busy.
     func open() async throws(KnotError) -> any OpenAudioInput
+}
+
+extension AudioInput {
+    /// The default for inputs that retain no preparation.
+    public func releasePreparation() async {}
 }
 
 /// An input opened for one recording.

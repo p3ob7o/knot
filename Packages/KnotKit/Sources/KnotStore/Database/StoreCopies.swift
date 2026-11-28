@@ -110,7 +110,7 @@ public enum StoreCopies {
     /// dropped; without it, a copy there is replaced. The partial file of a copy is never
     /// another's to remove: the app removes what a dead writer left when it opens the store.
     static func makeCopy(
-        of reader: any DatabaseReader, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        of reader: any DatabaseReader, to destination: URL, files: some CopyFiles, publishing: StoreFiles? = nil,
         hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         try reader.read { db in
@@ -122,7 +122,7 @@ public enum StoreCopies {
     /// Writes a checked copy of the database as `db` sees it, in its transaction, to
     /// `destination`, as `makeCopy(of:to:files:publishing:hooks:killPoint:)` does.
     static func makeCopy(
-        of db: Database, to destination: URL, files: StoreFiles, publishing: StoreFiles? = nil,
+        of db: Database, to destination: URL, files: some CopyFiles, publishing: StoreFiles? = nil,
         hooks: StoreHooks, killPoint: StoreKillPoint? = nil
     ) throws {
         let folder = destination.deletingLastPathComponent()
@@ -558,7 +558,76 @@ struct RestoreJournal: Codable, Hashable, Sendable {
     }
 }
 
+// Kept copies use the store's roots. An export publishes into a caller-owned folder.
+protocol CopyFiles {
+    func makeFolder(_ url: URL) throws(KnotError)
+    func move(_ source: URL, to destination: URL) throws(KnotError)
+}
+
+extension StoreFiles: CopyFiles {}
+
+private struct ExportCopyFiles: CopyFiles {
+    let layer: any FileLayer
+
+    func makeFolder(_ url: URL) throws(KnotError) {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
+            }
+        } catch {
+            let mapped = StoreErrors.knotError(error)
+            guard mapped.code == KnotError.notFound.code else { throw mapped }
+            try DurableFile(layer: layer, root: url).makeFolder(url)
+        }
+    }
+
+    func requireVacant(_ target: URL) throws(KnotError) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            do {
+                _ = try FileManager.default.attributesOfItem(atPath: target.path + suffix)
+            } catch {
+                let mapped = StoreErrors.knotError(error)
+                if mapped.code == KnotError.notFound.code { continue }
+                throw mapped
+            }
+            throw KnotError.writeFailed.with(.init(posixError: EEXIST))
+        }
+    }
+
+    func move(_ source: URL, to destination: URL) throws(KnotError) {
+        try layer.syncFile(source)
+        try requireVacant(destination)
+        try ExclusiveRenameLayer(base: layer).rename(source, to: destination)
+        try layer.syncFolder(destination.deletingLastPathComponent())
+    }
+}
+
 extension StoreDatabase {
+    /// Writes a checked SQLite backup with no WAL to a fresh path outside the live store's roots.
+    /// The caller keeps other SQLite users away from the destination and its sidecar paths.
+    /// Call from a blocking I/O thread.
+    public func writeCopy(to destination: URL) throws(KnotError) {
+        guard destination.isFileURL else { throw KnotError.writeFailed.with(.init(posixError: EINVAL)) }
+        let path = PathForm.real(destination)
+        let parent = PathForm.real(destination.deletingLastPathComponent())
+        for root in [locations.storeRoot, locations.sharedRoot].map(PathForm.real)
+        where path.starts(with: root) || parent.starts(with: root) {
+            throw KnotError.writeFailed.with(.init(posixError: EINVAL))
+        }
+        do {
+            let folder = URL(fileURLWithPath: "/" + parent.joined(separator: "/"), isDirectory: true)
+            let target = folder.appending(path: destination.lastPathComponent, directoryHint: .notDirectory)
+            // An existing external folder may be accessible through a sandbox grant limited
+            // to that folder. Sync the file and its containing folder without opening ancestors.
+            let exportFiles = ExportCopyFiles(layer: fileLayer)
+            try exportFiles.requireVacant(target)
+            try StoreCopies.makeCopy(of: pool, to: target, files: exportFiles, hooks: hooks)
+        } catch {
+            throw StoreErrors.knotError(error)
+        }
+    }
+
     /// Makes today's copy, once a day, and keeps the newest seven (docs/architecture.md §7).
     /// Returns the copy, made now or earlier today, once it and its folder are on the drive: a
     /// copy whose folder's sync failed is found in place by the retry, which syncs it before it

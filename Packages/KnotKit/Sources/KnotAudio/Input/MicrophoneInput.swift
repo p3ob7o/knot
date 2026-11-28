@@ -43,6 +43,8 @@ public struct MicrophoneInput: AudioInput {
 
     public func prepare() async {}
 
+    public func releasePreparation() async {}
+
     public func open() async throws(KnotError) -> any OpenAudioInput {
         // First, before anything reaches the hardware or asks for a permission.
         if policy() != nil { throw KnotError.noInputDevice }

@@ -255,6 +255,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-21 | 21a | What the apps' skeletons and the gate found in the skeleton after it merged: the audit's exclusion of the system keyboard, a stream row whose text is never clipped, tests that rest on no clock, and a Mac launch that ignores saved window state | WP-21 PR 1 |
 | WP-21 | 2 | The structure of the direction's sheets, what rests on the contracts of WP-02 PR 3, and a named preview for every designed cell of the state matrix | the design direction; WP-02 PR 3 |
 | WP-21 | 21b | The iOS accessibility audit excludes the out-of-process QuickType `RecentPaste` button that sits flush above the system keyboard | WP-21 PR 2 |
+| WP-21 | 21c | `RecordingTests` uses an injected `ManualRecordingClock` whenever it asserts `recordingOutcome`, removing wall-clock expiry races under the strict cooperative pool | WP-21b |
 | WP-22 | 1 | The composition | WP-05; WP-10 PR 1 |
 | WP-22 | 22a | The ordering test keeps one live composition per store: a test of the composition's that failed under the strict cooperative pool, made right | WP-22 PR 1 |
 | WP-22 | 22b | The composition's wiring, split out of the second PR: the processing queue given this device, the purge as a launch step, `Lifecycle` with its adapters, and background time on iOS around the store's opening | WP-22 PR 1; WP-15 PR 1 |
@@ -262,6 +263,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-22 | 22c | The composition's restore of a kept copy: the store stays closed for the rest of the launch, and Knot must be opened again | WP-22 PR 2 |
 | WP-22 | 22d | The Mac app's milestone build embeds its tool: the tool's file has a name of its own, and the app copies it by its built name | WP-22c |
 | WP-22 | 22e | KnotIntents is wired last in the composition, with a test that the environment the intents reach is the composition's own | WP-22d |
+| WP-22 | 22f | Raw store export in the composition: a checked WAL-free SQLite backup when open, or a verbatim copy of the store and journals when unopened, including a separate app-group `Inbox/` | WP-22e |
 | WP-30 | 1 | A skeleton that does not depend on the design direction: a line typed on the iPhone or the iPad is found in the stream after relaunch | WP-21 PR 1 |
 | WP-30 | 30a | The iPhone's structure from the direction's sheet, and what of the second PR needs no other package: Notes as the root with the capture surface as a sheet over it, the system's search, the note with editing in place, delete and move with undo, share and export, Settings, the first-run rows, the shell's two ports, and About's diagnostics and restore | the design direction; WP-21 PR 2; WP-22 PR 1 |
 | WP-30 | 30b | The iOS UI tests launch the app with UIKit's view animations off, so that the test runner no longer waits a minute at every interaction of a launch in which a keyboard animation never reported its end | WP-30a |

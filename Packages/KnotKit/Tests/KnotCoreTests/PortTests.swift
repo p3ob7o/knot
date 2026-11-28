@@ -1,7 +1,22 @@
 import Foundation
 import KnotCore
+import KnotFakes
 import KnotTestSupport
 import Testing
+
+@Suite struct RecorderPreparationTests {
+    @Test func theScriptedRecorderCountsPreparationAndReleaseSeparately() async {
+        let locations = StoreLocations.testing(root: URL(fileURLWithPath: "/work", isDirectory: true))
+        let scripted = ScriptedRecorder(locations: locations, layer: PowerCutFileLayer(), clock: FakeClock())
+        let recorder: any Recorder = scripted
+
+        #expect(scripted.prepareCount == 0 && scripted.releasePreparationCount == 0)
+        await recorder.prepare()
+        #expect(scripted.prepareCount == 1 && scripted.releasePreparationCount == 0)
+        await recorder.releasePreparation()
+        #expect(scripted.prepareCount == 1 && scripted.releasePreparationCount == 1)
+    }
+}
 
 @Suite struct UnavailableEnvironmentTests {
     /// Every port of `.unavailable` says it is not there yet, and none throws anything else.
