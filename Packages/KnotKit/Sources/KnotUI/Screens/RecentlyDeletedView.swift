@@ -3,6 +3,7 @@
 
     public struct RecentlyDeletedView: View {
         @Environment(\.knotTheme) private var theme
+        @Environment(\.scenePhase) private var scenePhase
         let model: RecentlyDeletedViewModel
 
         public init(model: RecentlyDeletedViewModel) {
@@ -53,7 +54,6 @@
             #if os(iOS)
                 .listStyle(.plain)
             #endif
-            .task { await model.refresh() }
             .task { await model.observeStore() }
         }
 
@@ -88,14 +88,7 @@
                         Text(
                             "Deleted \(row.deletedAt, format: .dateTime.year().month().day().hour().minute())",
                             bundle: .module)
-                        switch row.daysRemaining {
-                        case 0:
-                            Text("May be purged soon", bundle: .module)
-                        case 1:
-                            Text("1 day left", bundle: .module)
-                        default:
-                            Text("\(row.daysRemaining) days left", bundle: .module)
-                        }
+                        countdown(for: row)
                     }
                     .font(theme.type[.metaLine])
                     .foregroundStyle(theme.colors[.textSecondary])
@@ -119,6 +112,21 @@
                 .accessibilityLabel(Text("Restore \(row.title)", bundle: .module))
                 .disabled(model.restoring != nil)
             }
+        }
+
+        private func countdown(for row: DeletedItemRow) -> some View {
+            TimelineView(.everyMinute) { _ in
+                let days = row.daysRemaining(at: model.now)
+                switch days {
+                case 0:
+                    Text("May be purged soon", bundle: .module)
+                case 1:
+                    Text("1 day left", bundle: .module)
+                default:
+                    Text("\(days) days left", bundle: .module)
+                }
+            }
+            .id(scenePhase)
         }
     }
 #endif

@@ -14,14 +14,10 @@ public struct DeletedItemRow: Hashable, Sendable, Identifiable {
     public let kind: Kind
     public let parentNoteTitle: String?
     public let deletedAt: Date
-    public let daysRemaining: Int
 
-    init(_ item: DeletedItem, now: Date) {
+    init(_ item: DeletedItem) {
         id = item.restoreTarget
         deletedAt = item.deletedAt
-        // The purge uses elapsed 24-hour days. Round up while any part of a day remains.
-        let elapsedDays = max(0, now.timeIntervalSince(deletedAt) / 86_400)
-        daysRemaining = Int(max(0, (Double(Limits.keptForDays) - elapsedDays).rounded(.up)))
 
         switch item {
         case .note(let record, _):
@@ -48,6 +44,12 @@ public struct DeletedItemRow: Hashable, Sendable, Identifiable {
                 CaptureText.isEmpty(segment.text)
                 ? segment.kind.holding(duration: segment.duration) : StreamRowModel.excerpt(segment.text)
         }
+    }
+
+    public func daysRemaining(at now: Date) -> Int {
+        // The purge uses elapsed 24-hour days. Round up while any part of a day remains.
+        let elapsedDays = max(0, now.timeIntervalSince(deletedAt) / 86_400)
+        return Int(max(0, (Double(Limits.keptForDays) - elapsedDays).rounded(.up)))
     }
 }
 
@@ -81,6 +83,8 @@ public enum RestoreNotice: Hashable, Sendable {
         self.announcer = announcer
     }
 
+    var now: Date { environment.clock.now() }
+
     public func refresh() async {
         guard !Task.isCancelled else { return }
         readGeneration += 1
@@ -91,8 +95,7 @@ public enum RestoreNotice: Hashable, Sendable {
         do {
             let deleted = try await environment.notes.recentlyDeleted()
             guard generation == readGeneration, !Task.isCancelled else { return }
-            let now = environment.clock.now()
-            items = deleted.map { DeletedItemRow($0, now: now) }
+            items = deleted.map(DeletedItemRow.init)
             problem = nil
         } catch {
             guard generation == readGeneration, !Task.isCancelled else { return }
