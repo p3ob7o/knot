@@ -34,16 +34,25 @@ struct MainWindow: View {
                     syncQuestion(pause)
                 }
                 NoteView(model: shell.detailModel, player: shell.player, shareSegment: shareSegment)
+                    .background {
+                        if shell.searchRequest == 0 {
+                            MacCaptureFocusRequest(model: shell.detailModel)
+                        }
+                    }
                     .id(shell.detail)
                     .frame(maxWidth: theme.sizes.readableWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 #if DEBUG
-                    if let action = shell.previewAction { Text(action).accessibilityIdentifier("test.action") }
+                    if let action = shell.previewAction {
+                        Text(action).accessibilityLabel(Text(verbatim: action)).accessibilityIdentifier("test.action")
+                    }
                     if shell.debugDropTarget { DebugNoteDropTarget() }
                     if shell.debugFocusProbe { DebugCaptureFocus() }
                 #endif
             }
+            .background(theme.colors[.background])
         }
+        .environment(\.knotTheme, windowTheme)
         .searchable(
             text: Binding(get: { shell.search.query }, set: shell.search.setQuery),
             isPresented: $searchPresented, placement: .toolbar, prompt: "Search"
@@ -122,6 +131,23 @@ struct MainWindow: View {
         }
     }
 
+    private var windowTheme: Theme {
+        var result = theme
+        // Small labels must keep their contrast on both the opaque note and the sidebar material.
+        result.colors = ColorPalette(
+            Dictionary(
+                uniqueKeysWithValues: ColorRole.allCases.map { role in
+                    let color =
+                        switch role {
+                        case .textSecondary, .labelSecondary, .pending, .quietMark: theme.colors[.textPrimary]
+                        case .surface, .fillTertiary: theme.colors[.backgroundSecondary]
+                        default: theme.colors[role]
+                        }
+                    return (role, color)
+                }))
+        return result
+    }
+
     private func shareSegment(_ id: SegmentID) {
         let note = shell.detailModel
         Task {
@@ -198,7 +224,7 @@ struct ProblemCode: View {
                 .accessibilityIdentifier("test.capture-focus")
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didUpdateNotification)) { notice in
                     if let window = notice.object as? NSWindow, window === MainWindowOpener.window {
-                        focused = window.firstResponder is NSTextView
+                        focused = MacCaptureFocusRequest.captureHasFocus(in: window)
                     }
                 }
         }

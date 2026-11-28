@@ -36,8 +36,7 @@ final class MacCaptureTests: XCTestCase {
         app.launchArguments = args + ["undo-move"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.staticTexts["test.action"].waitForExistence(timeout: 30))
-        XCTAssertEqual(app.staticTexts["test.action"].label, "Move undone")
+        XCTAssertTrue(status("Move undone", in: app).waitForExistence(timeout: 30))
         XCTAssertFalse(app.buttons["Undo"].exists)
         XCTAssertTrue(app.staticTexts["The moved synthetic segment"].exists)
         try app.auditAccessibility()
@@ -49,8 +48,7 @@ final class MacCaptureTests: XCTestCase {
         app.launchArguments.append("done")
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.staticTexts["test.action"].waitForExistence(timeout: 30))
-        XCTAssertEqual(app.staticTexts["test.action"].label, "Capture finished")
+        XCTAssertTrue(status("Capture finished", in: app).waitForExistence(timeout: 30))
         XCTAssertTrue(
             app.descendants(matching: .any).matching(
                 NSPredicate(format: "label CONTAINS %@", "A synthetic line completed by Done")
@@ -65,8 +63,17 @@ final class MacCaptureTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let focus = app.staticTexts.matching(identifier: "test.capture-focus")
-            .matching(NSPredicate(format: "label == %@", "Capture field focused")).firstMatch
+            .matching(
+                NSPredicate(format: "label == %@ OR value == %@", "Capture field focused", "Capture field focused")
+            )
+            .firstMatch
         XCTAssertTrue(focus.waitForExistence(timeout: 30))
         try app.auditAccessibility()
+    }
+    @MainActor
+    private func status(_ message: String, in app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(identifier: "test.action")
+            .matching(NSPredicate(format: "label == %@ OR value == %@", message, message))
+            .firstMatch
     }
 }

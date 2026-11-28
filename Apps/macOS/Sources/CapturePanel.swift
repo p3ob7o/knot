@@ -25,6 +25,7 @@ final class CapturePanelWindow: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        isMovableByWindowBackground = true
         animationBehavior = .none
         setAccessibilityLabel("Knot capture")
     }
@@ -69,6 +70,17 @@ final class CapturePanel: NSObject, NSWindowDelegate {
     private let window = CapturePanelWindow()
     private var dismissal = PanelDismissal()
     private var screen: NSScreen?
+    private var draggedCenters: [UInt32: NSPoint] = [:]
+    private var layoutOrigin: NSPoint?
+    private(set) var liveSince: ContinuousClock.Instant?
+
+    func setRecordingLive(_ live: Bool) {
+        if live {
+            if liveSince == nil { liveSince = .now }
+        } else {
+            liveSince = nil
+        }
+    }
     private var globalMouse: Any?
     private var localMouse: Any?
     private var hideTask: Task<Void, Never>?
@@ -94,27 +106,27 @@ final class CapturePanel: NSObject, NSWindowDelegate {
         window.onInteraction = { [weak self] in self?.interact() }
         window.onEscape = { [weak self] in
             guard let self else { return }
-            if model.recording.isRecording { stopOrStart?() } else { close() }
+            if liveSince != nil || model.recording.isRecording { stopOrStart?() } else { close() }
         }
         window.onDone = { [weak self] in self?.done() }
         window.onNewNote = { [weak self] in self?.newNote() }
         window.contentView = NSHostingView(rootView: CapturePanelPage(panel: self))
     }
 
-    func toggleTyping() {
-        if isVisible, model.recording == .idle { close() } else { showTyping() }
+    func toggleTyping(_ presentation: PanelPresentation) {
+        if isVisible, model.recording == .idle { close() } else { showTyping(presentation) }
     }
 
-    func showTyping() {
+    func showTyping(_ presentation: PanelPresentation = .typing) {
         if !isVisible { model.followWindowOnPresentation() }
         if model.recording == .idle {
             finished = nil
             externalProblem = nil
         }
-        show(.typing)
+        show(presentation)
     }
 
-    func showRecording(held: Bool, continuing: Bool?) {
+    func showRecording(held: Bool, continuing: Bool?, presentation: PanelPresentation = .recording) {
         self.held = held
         continuesNote = continuing
         finished = nil
@@ -123,7 +135,7 @@ final class CapturePanel: NSObject, NSWindowDelegate {
             hideTask?.cancel()
             return
         }
-        show(.recording)
+        show(presentation)
     }
 
     func decidedDestination(_ continues: Bool) {
@@ -151,11 +163,12 @@ final class CapturePanel: NSObject, NSWindowDelegate {
     /// Waits for a terminal text state. Durable audio can outlive this panel and its tasks.
     func updateAutoHide() {
         guard finished?.outcome == .stored, let finalSegment else { return }
-        switch finalSegment.state {
-        case .voice(.ready), .voice(.failed):
+        if !CaptureText.isEmpty(finalSegment.text) {
             scheduleAutoHide()
-        default:
-            break
+        } else if case .voice(.ready) = finalSegment.state {
+            scheduleAutoHide()
+        } else if case .voice(.failed) = finalSegment.state {
+            scheduleAutoHide()
         }
     }
 
@@ -226,8 +239,18 @@ final class CapturePanel: NSObject, NSWindowDelegate {
             guard let self else { return }
             await model.settle()
             guard !Task.isCancelled else { return }
+            if case .couldNotSave = model.problem {
+                closeTask = nil
+                return
+            }
+            // Process the reset before hiding so the next hold sees append-window placement.
+            model.followWindowOnPresentation()
+            await model.settle()
+            guard !Task.isCancelled, model.recording == .idle else {
+                if !Task.isCancelled { closeTask = nil }
+                return
+            }
             closeTask = nil
-            if case .couldNotSave = model.problem { return }
             stopMonitoringClicks()
             window.orderOut(nil)
             window.acceptsKeyboard = false
@@ -238,13 +261,29 @@ final class CapturePanel: NSObject, NSWindowDelegate {
     }
 
     func resize(_ height: CGFloat) {
-        guard let frame = screen?.visibleFrame else { return }
+        guard let screen else { return }
+        let frame = screen.visibleFrame
         let size = NSSize(width: 640, height: min(maxHeight, height))
-        let centerY = frame.minY + frame.height * (2.0 / 3)
-        window.setFrame(
-            NSRect(
-                x: frame.midX - size.width / 2, y: centerY - size.height / 2, width: size.width, height: size.height),
-            display: true)
+        let remembered = displayID(screen).flatMap { draggedCenters[$0] }
+        let center = remembered ?? NSPoint(x: frame.midX, y: frame.minY + frame.height * (2.0 / 3))
+        let origin = NSPoint(
+            x: max(frame.minX, min(frame.maxX - size.width, center.x - size.width / 2)),
+            y: max(frame.minY, min(frame.maxY - size.height, center.y - size.height / 2)))
+        layoutOrigin = origin
+        window.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard window.isVisible, window.frame.origin != layoutOrigin, let display = window.screen else { return }
+        screen = display
+        maxHeight = display.visibleFrame.height / 2
+        if let id = displayID(display) {
+            draggedCenters[id] = NSPoint(x: window.frame.midX, y: window.frame.midY)
+        }
+    }
+
+    private func displayID(_ screen: NSScreen) -> UInt32? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -283,7 +322,9 @@ private struct CapturePanelPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if phase == .idle, panel.finished == nil, let date = model.record?.note.lastCaptureEndedAt {
+            if phase == .idle, panel.liveSince == nil, panel.finished == nil,
+                let date = model.record?.note.lastCaptureEndedAt
+            {
                 Text("Adding to the note from \(date.formatted(date: .omitted, time: .shortened))")
                     .font(.subheadline).foregroundStyle(theme.colors[.textSecondary])
             }
@@ -294,7 +335,7 @@ private struct CapturePanelPage: View {
                     }
                 }
             }
-            if panel.needsHotkey, phase == .idle, panel.finished == nil {
+            if panel.needsHotkey, phase == .idle, panel.liveSince == nil, panel.finished == nil {
                 Banner("Tap your hotkey to type. Hold it to record.", symbol: "keyboard") {
                     Button("Choose Hotkey…") { panel.openSettings?() }
                 }
@@ -311,15 +352,23 @@ private struct CapturePanelPage: View {
                     .font(.subheadline).foregroundStyle(theme.colors[.textSecondary])
                 Spacer()
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    if let elapsed = model.recordingElapsed {
+                    if let elapsed = elapsed {
                         Text(ClockText.of(elapsed)).monospacedDigit().accessibilityHidden(true)
                     }
                 }
                 if model.recordingOutcome == .saved { Text("Saved") }
-                RecordButton(phase: phase, elapsed: model.recordingElapsed, outcome: model.recordingOutcome) {
-                    panel.stopOrStart?()
+                if panel.liveSince != nil, !phase.isRecording {
+                    Button("Stop recording", systemImage: "stop.fill") { panel.stopOrStart?() }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.glassProminent)
+                        .tint(theme.colors[.recording])
+                        .frame(width: 28, height: 28)
+                } else {
+                    RecordButton(phase: phase, elapsed: elapsed, outcome: model.recordingOutcome) {
+                        panel.stopOrStart?()
+                    }
+                    .frame(width: 28, height: 28)
                 }
-                .frame(width: 28, height: 28)
             }
         }
         .padding(20)
@@ -336,7 +385,7 @@ private struct CapturePanelPage: View {
     }
 
     @ViewBuilder private var page: some View {
-        if phase.isRecording || phase == .stopping {
+        if panel.liveSince != nil || phase.isRecording || phase == .stopping {
             let final = model.liveTranscript.final
             let volatile = model.liveTranscript.volatile
             if let continues = panel.continuesNote {
@@ -379,8 +428,15 @@ private struct CapturePanelPage: View {
 
     private var maxLines: Int { max(1, Int((panel.maxHeight - 145) / 26)) }
 
+    private var elapsed: Duration? {
+        if let start = panel.liveSince { return ContinuousClock.now - start }
+        return model.recordingElapsed
+    }
+
     private var hints: String {
-        if phase.isRecording { return panel.held ? "Release the hotkey to stop" : "Listening" }
+        if panel.liveSince != nil {
+            return panel.held ? "Listening · Release the hotkey to stop" : "Listening"
+        }
         if phase == .stopping { return "Saving recording…" }
         return "⌘↩ Done, ⌘N New note, esc Close"
     }

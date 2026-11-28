@@ -43,3 +43,34 @@ struct PanelDismissal {
 
     mutating func interacted() { canAutoHide = false }
 }
+
+extension HotkeyEffect {
+    var panelPresentation: PanelPresentation? {
+        switch self {
+        case .tap: .typing
+        case .startHoldRecording: .recording
+        default: nil
+        }
+    }
+}
+
+/// Applies preparation effects in Carbon event order even when the recorder suspends.
+@MainActor
+struct HotkeyPreparation {
+    let recorder: any Recorder
+    private(set) var pending: Task<Void, Never>?
+
+    mutating func apply(_ effect: HotkeyEffect) {
+        guard effect == .prepareMicrophone || effect == .releaseMicrophone else { return }
+        let previous = pending
+        let recorder = recorder
+        pending = Task {
+            await previous?.value
+            if effect == .prepareMicrophone {
+                await recorder.prepare()
+            } else {
+                await recorder.releasePreparation()
+            }
+        }
+    }
+}

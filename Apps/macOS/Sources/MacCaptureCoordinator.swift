@@ -9,13 +9,15 @@ final class MacCaptureCoordinator {
     let panel: CapturePanel
     private let environment: AppEnvironment
     private let hotkeys = CarbonHotkeys()
-    private let releasePreparation: @Sendable () async -> Void
-    private var preparation: Task<Void, Never>?
+    private var preparation: HotkeyPreparation
+    private let onboardingDefaults: UserDefaults?
+    private static let onboardingKey = "v1.mac.hotkey-onboarding-complete"
     private var gesture = HotkeyGesture()
     private var mark: DispatchSourceTimer?
     private var polling: DispatchSourceTimer?
     private var startTask: Task<Void, Never>?
-    private var stopAfterStart = false
+    private var stopTask: Task<Void, Never>?
+    private var holdReleasedWhileStarting = false
     private var recordingModel: NoteViewModel?
     private var activeID: CaptureID?
     private var savingHotkey = false
@@ -29,11 +31,12 @@ final class MacCaptureCoordinator {
 
     init(
         panel: CapturePanel, environment: AppEnvironment,
-        releasePreparation: @escaping @Sendable () async -> Void = {}
+        onboardingDefaults: UserDefaults?
     ) {
         self.panel = panel
         self.environment = environment
-        self.releasePreparation = releasePreparation
+        preparation = HotkeyPreparation(recorder: environment.recorder)
+        self.onboardingDefaults = onboardingDefaults
         hotkeys.onShortcut = { [weak self] down, time in self?.receive(down, at: time) }
         hotkeys.onEscape = { [weak self] in self?.stop() }
         panel.stopOrStart = { [weak self] in self?.toggleRecording() }
@@ -42,12 +45,13 @@ final class MacCaptureCoordinator {
     func loadShortcut() async {
         guard let settings = try? await environment.settings.load() else { return }
         guard let hotkey = settings.hotkey else {
-            panel.needsHotkey = true
+            panel.needsHotkey = onboardingDefaults?.bool(forKey: Self.onboardingKey) != true
             return
         }
         do {
             hotkeys.use(try hotkeys.reserve(hotkey))
             shortcut = hotkey
+            onboardingDefaults?.set(true, forKey: Self.onboardingKey)
         } catch {
             shortcutProblem = Self.message(error)
             panel.needsHotkey = true
@@ -79,7 +83,8 @@ final class MacCaptureCoordinator {
             }
             if candidate != shortcut { hotkeys.use(replacement) }
             shortcut = candidate
-            panel.needsHotkey = candidate == nil
+            onboardingDefaults?.set(true, forKey: Self.onboardingKey)
+            panel.needsHotkey = false
             return true
         } catch {
             shortcutProblem = Self.message(error)
@@ -96,6 +101,7 @@ final class MacCaptureCoordinator {
     private func receive(_ down: Bool, at time: ContinuousClock.Instant) {
         guard !savingHotkey else { return }
         if down {
+            guard startTask == nil else { return }
             if gesture.state == .idle, isLive || startTask != nil {
                 stop()
                 return
@@ -117,7 +123,7 @@ final class MacCaptureCoordinator {
             }
         } else {
             cancelMark()
-            apply(gesture.release(at: time))
+            apply(gesture.release(at: time), fromCarbonRelease: true)
         }
     }
 
@@ -126,30 +132,22 @@ final class MacCaptureCoordinator {
         mark = nil
     }
 
-    private func apply(_ effects: [HotkeyEffect]) {
+    private func apply(_ effects: [HotkeyEffect], fromCarbonRelease: Bool = false) {
         for effect in effects {
+            preparation.apply(effect)
             switch effect {
-            case .prepareMicrophone:
-                let recorder = environment.recorder
-                let previous = preparation
-                preparation = Task {
-                    await previous?.value
-                    await recorder.prepare()
+            case .prepareMicrophone, .releaseMicrophone:
+                break
+            case .tap, .startHoldRecording:
+                guard let presentation = effect.panelPresentation else { continue }
+                if effect == .tap {
+                    panel.toggleTyping(presentation)
+                } else {
+                    start(held: true, presentation: presentation)
+                    watchModifiers()
                 }
-            case .releaseMicrophone:
-                let previous = preparation
-                let releasePreparation = releasePreparation
-                preparation = Task {
-                    await previous?.value
-                    await releasePreparation()
-                }
-            case .tap:
-                panel.toggleTyping()
-            case .startHoldRecording:
-                start(held: true)
-                watchModifiers()
             case .stopRecording:
-                stopRecording()
+                stopRecording(fromCarbonRelease: fromCarbonRelease)
             }
         }
     }
@@ -159,7 +157,7 @@ final class MacCaptureCoordinator {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
         timer.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self, startTask == nil else { return }
             let modifiers = Hotkey.Modifiers(eventFlags: NSEvent.modifierFlags)
             apply(gesture.checkModifiers(required: required, held: modifiers))
         }
@@ -175,13 +173,13 @@ final class MacCaptureCoordinator {
         }
     }
 
-    func start(held: Bool) {
-        guard startTask == nil, !isLive, panel.model.recording == .idle else { return }
+    func start(held: Bool, presentation: PanelPresentation = .recording) {
+        guard startTask == nil, stopTask == nil, !isLive, panel.model.recording == .idle else { return }
         let model = panel.model.fieldText.isEmpty ? (mainDraft?() ?? panel.model) : panel.model
         recordingModel = model
-        stopAfterStart = false
+        holdReleasedWhileStarting = false
         let prior = model.noteID
-        panel.showRecording(held: held, continuing: prior != nil)
+        panel.showRecording(held: held, continuing: prior != nil, presentation: presentation)
         model.press(held ? .holdStart : .tap)
         startTask = Task { [weak self] in
             await model.settle()
@@ -191,7 +189,7 @@ final class MacCaptureCoordinator {
                 if let note = model.noteID {
                     panel.decidedDestination(note == prior || (model.record?.liveSegments.count ?? 0) > 1)
                 }
-                if stopAfterStart { stopRecording() }
+                if holdReleasedWhileStarting { stopRecording() }
             } else {
                 _ = gesture.receive(.escape)
                 cancelPolling()
@@ -202,6 +200,7 @@ final class MacCaptureCoordinator {
     }
 
     func stop() {
+        guard startTask == nil else { return }
         cancelMark()
         let effects = gesture.receive(.escape)
         apply(effects)
@@ -210,15 +209,46 @@ final class MacCaptureCoordinator {
         }
     }
 
-    private func stopRecording() {
-        cancelPolling()
+    private func stopRecording(fromCarbonRelease: Bool = false) {
         if startTask != nil {
-            stopAfterStart = true
+            if fromCarbonRelease, panel.held {
+                holdReleasedWhileStarting = true
+                cancelPolling()
+            }
             return
         }
+        guard stopTask == nil else { return }
         let model = recordingModel ?? panel.model
         guard model.recording.isRecording else { return }
+        cancelPolling()
         model.press(model.isHeldRecording ? .holdRelease : .tap)
+        stopTask = Task { [weak self] in
+            await model.settle()
+            self?.stopTask = nil
+        }
+    }
+
+    func startFromIntent() async throws {
+        guard startTask == nil, stopTask == nil, !isLive, panel.model.recording == .idle else { return }
+        start(held: false)
+        let model = recordingModel ?? panel.model
+        let previous = model.lastRecording
+        await startTask?.value
+        if !model.recording.isRecording, model.lastRecording == previous {
+            throw RecordingIntentError(
+                message: model.problem?.message ?? String(localized: "Knot couldn’t start recording."))
+        }
+    }
+
+    func stopFromIntent() async throws {
+        guard startTask == nil, stopTask == nil else { return }
+        let model = recordingModel ?? panel.model
+        stop()
+        guard let operation = stopTask else { return }
+        await operation.value
+        if model.recording.isRecording || model.recordingOutcome == .saveFailed {
+            throw RecordingIntentError(message: String(localized: "Knot couldn’t stop and save the recording."))
+        }
     }
 
     private func cancelPolling() {
@@ -250,6 +280,7 @@ final class MacCaptureCoordinator {
     private func setLive(_ live: Bool) {
         guard live != isLive else { return }
         isLive = live
+        panel.setRecordingLive(live)
         if live {
             hotkeys.armEscape()
         } else {
@@ -291,8 +322,9 @@ final class MacCaptureCoordinator {
 
     func stopAndSettle() async {
         let model = recordingModel ?? panel.model
-        stop()
         await startTask?.value
+        stop()
+        await stopTask?.value
         await model.settle()
     }
 
@@ -301,4 +333,9 @@ final class MacCaptureCoordinator {
         cancelMark()
         cancelPolling()
     }
+}
+
+private struct RecordingIntentError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }

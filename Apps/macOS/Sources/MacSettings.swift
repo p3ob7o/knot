@@ -26,8 +26,16 @@ struct MacSettings: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsForm(model, open: { destination = $0 })
-                .formStyle(.grouped)
+            Form {
+                if !model.isAvailable { Text("Settings can’t be read right now.") }
+                if model.saveProblem != nil { Text("That change couldn’t be saved.") }
+                ForEach(model.rows.filter { $0 != .commandLineAccess || commandLineAvailable }) { row in
+                    setting(row)
+                }
+            }
+            .formStyle(.grouped)
+            .disabled(!model.isAvailable)
+            .task { await model.observeSync() }
             Divider()
             Form {
                 if !model.isAvailable {
@@ -81,6 +89,49 @@ struct MacSettings: View {
                 EmptyView()
             }
         }
+    }
+
+    private var commandLineAvailable: Bool { shell.environment.gates.isOpen(.commandLine) }
+
+    @ViewBuilder
+    private func setting(_ row: SettingsRow) -> some View {
+        switch row {
+        case .appendWindow:
+            Stepper(
+                value: binding(model.settings.appendWindow.minutes, model.setAppendWindow),
+                in: 0...AppendWindow.maximumMinutes
+            ) {
+                LabeledContent(row.title, value: model.appendWindowText)
+            }
+        case .cleanup:
+            Toggle(row.title, isOn: binding(model.settings.cleanupEnabled, model.setCleanupEnabled))
+            if let note = model.cleanupNote { Text(note).font(.caption) }
+        case .englishVariant:
+            Picker(row.title, selection: binding(model.settings.englishVariant, model.setEnglishVariant)) {
+                ForEach(SettingsViewModel.englishVariants, id: \.self) { variant in
+                    Text(SettingsViewModel.label(of: variant)).tag(variant)
+                }
+            }
+        case .sync:
+            Toggle(row.title, isOn: binding(model.settings.syncEnabled ?? false, model.setSyncEnabled))
+            SettingsSyncStatusView(model.syncState)
+        case .hotkey:
+            Button {
+                destination = row
+            } label: {
+                LabeledContent(row.title, value: model.hotkeyText)
+            }
+        case .launchAtLogin:
+            Toggle(row.title, isOn: binding(model.settings.launchAtLogin, model.setLaunchAtLogin))
+        case .commandLineAccess:
+            Toggle(row.title, isOn: binding(model.settings.commandLineAccess, model.setCommandLineAccess))
+        case .exportAll, .recentlyDeleted, .about:
+            Button(row.title) { destination = row }
+        }
+    }
+
+    private func binding<Value>(_ value: Value, _ set: @escaping @MainActor (Value) async -> Void) -> Binding<Value> {
+        Binding(get: { value }, set: { newValue in Task { await set(newValue) } })
     }
 
     private func reload() { Task { await model.load() } }
@@ -164,20 +215,27 @@ private struct CommandLineInstructions: View {
     var body: some View {
         if let tool {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Add the command to a directory on your PATH.")
+                Text("Paste this into zsh or Bash to install the command and add it to your PATH.")
                 commandLine(shim(tool.path), label: "Copy shell command")
-                Text("Use this executable path with the mcp argument. Sandboxed clients can’t start the tool.")
-                commandLine(tool.path, label: "Copy executable path")
+                Text("Run this from your project folder to register Knot with Claude Code.")
+                commandLine(
+                    "claude mcp add --scope local --transport stdio \(command) -- \(quoted(tool.path)) mcp",
+                    label: "Copy MCP command")
             }
             .font(.callout)
         }
     }
 
+    private var command: String { LiveConfiguration.currentFlavour() == .milestone ? "knot" : "knot-dev" }
+
     private func shim(_ path: String) -> String {
-        let command = LiveConfiguration.currentFlavour() == .milestone ? "knot" : "knot-dev"
         return "mkdir -p \"$HOME/.local/bin\" && printf '%s\\n' '#!/bin/sh' "
             + quoted("exec \(quoted(path)) \"$@\"")
             + " > \"$HOME/.local/bin/\(command)\" && chmod +x \"$HOME/.local/bin/\(command)\""
+            + " && { if [ -n \"$ZSH_VERSION\" ]; then knot_profile=\"${ZDOTDIR:-$HOME}/.zshrc\"; else knot_profile=\"$HOME/.bash_profile\"; fi; "
+            + "knot_path_line='export PATH=\"$HOME/.local/bin:$PATH\"'; "
+            + "{ grep -qxF \"$knot_path_line\" \"$knot_profile\" 2>/dev/null || printf '\\n%s\\n' \"$knot_path_line\" >> \"$knot_profile\"; }; }"
+            + " && export PATH=\"$HOME/.local/bin:$PATH\""
     }
 
     private func quoted(_ text: String) -> String {

@@ -87,7 +87,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: KnotKit
-        products: [KnotCore]
+        products: [KnotCore, KnotFakes]
 
   Knot-macOS-HostedUITests:
     type: bundle.ui-testing

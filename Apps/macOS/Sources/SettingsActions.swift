@@ -3,32 +3,31 @@ import KnotApp
 import KnotCore
 import KnotExport
 import KnotUI
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct MacNotesExport: View {
-    let environment: AppEnvironment
     @Environment(\.dismiss) private var dismiss
     @Environment(\.timeZone) private var timeZone
-    @State private var state: ExportResultRows.State = .idle
+    @State private var model: MacNotesExportModel
+
+    init(environment: AppEnvironment) {
+        _model = State(initialValue: MacNotesExportModel(environment: environment))
+    }
 
     var body: some View {
         VStack(alignment: .leading) {
             Text("Export all notes").font(.headline)
-            List { ExportResultRows(state) }
+            List { ExportResultRows(model.state) }
             HStack {
-                Button("Choose a folder…", action: chooseFolder).disabled(exporting)
+                Button("Choose a folder…", action: chooseFolder).disabled(model.exporting)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .frame(width: 460, height: 280)
         .padding(24)
-    }
-
-    private var exporting: Bool {
-        if case .exporting = state { return true }
-        return false
     }
 
     private func chooseFolder() {
@@ -39,11 +38,27 @@ struct MacNotesExport: View {
         panel.prompt = "Export"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            Task { await export(to: url) }
+            Task { await model.export(to: url, timeZone: timeZone) }
         }
     }
 
-    private func export(to parent: URL) async {
+}
+
+@MainActor
+@Observable
+private final class MacNotesExportModel {
+    let environment: AppEnvironment
+    private(set) var state: ExportResultRows.State = .idle
+
+    init(environment: AppEnvironment) { self.environment = environment }
+
+    var exporting: Bool {
+        if case .exporting = state { return true }
+        return false
+    }
+
+    func export(to parent: URL, timeZone: TimeZone) async {
+        guard !exporting else { return }
         state = .exporting
         let hasScope = parent.startAccessingSecurityScopedResource()
         defer { if hasScope { parent.stopAccessingSecurityScopedResource() } }
@@ -84,7 +99,7 @@ struct MacNotesExport: View {
 
 struct MacAbout: View {
     let app: AppComposition
-    let prepareRestore: () async -> Void
+    let prepareRestore: () async -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var message: String?
     @State private var busy = false
@@ -106,6 +121,7 @@ struct MacAbout: View {
                 if let live = app.live, showsTestActions {
                     Section {
                         Button("Export diagnostics…", action: exportDiagnostics)
+                        Button("Export store…", action: exportStore)
                         Button("Restore a kept copy…", action: chooseCopy).disabled(live.mustBeOpenedAgain)
                     }
                     .disabled(busy)
@@ -153,6 +169,38 @@ struct MacAbout: View {
         }
     }
 
+    private func exportStore() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        panel.begin { response in
+            guard response == .OK, let folder = panel.url else { return }
+            busy = true
+            message = nil
+            Task {
+                let accessed = folder.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed { folder.stopAccessingSecurityScopedResource() }
+                    busy = false
+                }
+                do {
+                    guard let report = try await app.exportStore(into: folder) else {
+                        message = String(localized: "The store is unavailable for export.")
+                        return
+                    }
+                    message =
+                        report.usedDatabaseBackup
+                        ? String(localized: "A copy of the store was exported to the selected folder.")
+                        : String(localized: "The store files were exported as-is to the selected folder.")
+                } catch {
+                    message = String(localized: "Couldn’t export the store. Check the folder and try again.")
+                }
+            }
+        }
+    }
+
     private func chooseCopy() {
         let panel = NSOpenPanel()
         panel.begin { response in
@@ -168,7 +216,11 @@ struct MacAbout: View {
         restoreCopy = nil
         busy = true
         Task {
-            await prepareRestore()
+            guard await prepareRestore() else {
+                message = String(localized: "Knot couldn’t save the open text. The store was not restored.")
+                busy = false
+                return
+            }
             let accessed = copy.startAccessingSecurityScopedResource()
             defer {
                 if accessed { copy.stopAccessingSecurityScopedResource() }

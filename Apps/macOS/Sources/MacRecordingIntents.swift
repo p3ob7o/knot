@@ -7,7 +7,7 @@ struct MacStartRecording: AudioRecordingIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        recording.start(held: false)
+        try await recording.startFromIntent()
         return .result()
     }
 }
@@ -19,7 +19,7 @@ struct MacStopRecording: AudioRecordingIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        recording.stop()
+        try await recording.stopFromIntent()
         return .result()
     }
 }

@@ -25,7 +25,12 @@
                 capture.fieldChanged("A synthetic line completed by Done")
                 done()
                 await capture.settle()
-                if capture.typedCapture == nil, capture.fieldText.isEmpty, capture.problem == nil {
+                if capture.typedCapture == nil, capture.fieldText.isEmpty, capture.problem == nil,
+                    let id = capture.noteID, let note = try? await environment.notes.note(id),
+                    note.liveSegments.contains(where: {
+                        $0.text == "A synthetic line completed by Done" && $0.endedAt != nil
+                    })
+                {
                     previewAction = "Capture finished"
                 }
             } else if scenario == "late-capture" {
@@ -38,22 +43,28 @@
                     let second = try? await seedLine(
                         "The moved synthetic segment", at: now.addingTimeInterval(1), placement: .named(first.noteID))
                 else { return }
-                open(first.noteID)
-                guard let note = openNote else { return }
+                guard await openNoteAfterSaving(first.noteID), let note = openNote else { return }
                 await note.refresh()
-                if let id = second.segmentIDs.first {
-                    note.moveToOwnNote(id)
-                    await note.settle()
-                }
+                guard let id = second.segmentIDs.first else { return }
+                note.moveToOwnNote(id)
+                await note.settle()
                 if scenario == "undo-move" {
+                    guard let moved = try? await environment.notes.segment(id), moved.noteID != first.noteID else {
+                        return
+                    }
                     note.undo()
                     await note.settle()
+                    guard let restored = try? await environment.notes.segment(id), restored.noteID == first.noteID,
+                        let follow = try? await seedLine(
+                            "The next synthetic capture", at: now.addingTimeInterval(2), placement: .window),
+                        follow.noteID == first.noteID
+                    else { return }
                     previewAction = "Move undone"
                 }
             } else if debugDropTarget,
                 let receipt = try? await seedLine("A synthetic note to drag", at: now, placement: .newNote)
             {
-                open(receipt.noteID)
+                await openNoteAfterSaving(receipt.noteID)
             }
         }
 

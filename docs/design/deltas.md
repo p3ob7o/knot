@@ -196,3 +196,5 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-27 | WP-33 PR 2 | Shortcut collisions, the command-line instructions and microphone permission in Mac Settings | A sheet keeps the shortcut recorder open with its error. The form shows copyable commands and buttons for microphone permission and System Settings. |
 | 2026-11-27 | WP-33 PR 2 | Dragging and sharing a note from the Mac window | The toolbar has a named drag handle and the system share control. |
 | 2026-11-27 | WP-33 PR 2 | Recently deleted and About in the Mac window | System sheets use the same unavailable view and test-build actions as the iPhone, with Mac save and open panels. |
+| 2026-11-28 | WP-33 PR 2 | Store export feedback in About | A system folder picker selects the destination, and an inline status distinguishes a database backup from files copied as-is. |
+| 2026-11-28 | WP-33 PR 2 | Window audit contrast for the Mac's small labels and notices | The note and notices use opaque system backgrounds, and small window labels use the theme's primary ink. |

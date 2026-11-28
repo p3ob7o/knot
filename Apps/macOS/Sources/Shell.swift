@@ -68,7 +68,9 @@ final class Shell {
         let panelModel = NoteViewModel(
             environment: environment, context: context, surface: .macPanel, announcer: VoiceOverAnnouncer())
         panel = CapturePanel(model: panelModel)
-        let recording = MacCaptureCoordinator(panel: panel, environment: environment)
+        let recording = MacCaptureCoordinator(
+            panel: panel, environment: environment,
+            onboardingDefaults: composition.live.flatMap { UserDefaults(suiteName: $0.configuration.settingsSuite) })
         self.recording = recording
         recording.mainModel = { [weak self] in self?.detailModel }
         recording.mainDraft = { [weak self] in
@@ -82,13 +84,27 @@ final class Shell {
     }
 
     /// Opens a note from the stream in the detail column.
+    private var changingNote = false
+
     func open(_ id: NoteID) {
-        if openNote?.mode == .note(id) { return }
-        detailModel.endCapture()
+        Task { await openNoteAfterSaving(id) }
+    }
+
+    @discardableResult
+    func openNoteAfterSaving(_ id: NoteID) async -> Bool {
+        if openNote?.mode == .note(id) { return true }
+        guard !changingNote else { return false }
+        changingNote = true
+        defer { changingNote = false }
+        let outgoing = detailModel
+        outgoing.endCapture()
+        await outgoing.settle()
+        guard outgoing.fieldText.isEmpty else { return false }
         openNote = NoteViewModel(
             environment: composition.environment, context: composition.context, surface: .macWindow, opening: id,
             announcer: VoiceOverAnnouncer())
         detail = .note(id)
+        return true
     }
 
     func start() {
@@ -179,15 +195,17 @@ final class Shell {
     }
 
     /// As `leave()`, and returns once every model has run what it was sent.
-    func flush() async {
+    @discardableResult
+    func flush() async -> Bool {
         let models = visibleModels
         for model in models { model.endCapture() }
         for model in models { await model.settle() }
+        return models.allSatisfy { $0.fieldText.isEmpty }
     }
 
-    func prepareRestore() async {
+    func prepareRestore() async -> Bool {
         await recording.stopAndSettle()
-        await flush()
+        return await flush()
     }
 
     /// What is wrong, by its code, so that a build with no usable place for its store says which
