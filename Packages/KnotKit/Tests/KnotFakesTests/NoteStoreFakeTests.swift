@@ -31,6 +31,28 @@ func check(_ name: String, on make: NoteStoreFactory) async throws {
         try await NoteStoreContract.run(inMemoryStore())
     }
 
+    @Test(.tags(.contract), arguments: NoteStoreContract.recentlyDeletedChecks)
+    func recentlyDeleted(_ check: NoteStoreContract.Check) async throws {
+        try await check.run(inMemoryStore())
+    }
+
+    @Test(.tags(.contract)) func recentlyDeletedDefaultsToPortUnavailable() async {
+        let store: any NoteStore = UnavailableNoteStore()
+        do {
+            _ = try await store.recentlyDeleted()
+            Issue.record("A store without the query should answer port_unavailable.")
+        } catch {
+            #expect(error.code == KnotError.portUnavailable.code)
+        }
+    }
+
+    @Test(.tags(.contract)) func recentlyDeletedOnTheConcreteActor() async throws {
+        let clock = FakeClock()
+        let ids = SeededIDGenerator(seed: 42, clock: clock)
+        let store = InMemoryNoteStore(clock: clock, ids: ids, deviceID: ids.make())
+        #expect(try await store.recentlyDeleted().isEmpty)
+    }
+
     @Test("repeated-capture-id-returns-first-result", .tags(.named, .contract))
     func repeatedCaptureIdReturnsFirstResult() async throws {
         try await check("repeat", on: inMemoryStore())

@@ -181,6 +181,15 @@ public protocol NoteStore: Sendable {
     /// `position`, or from the start. A limit below one is a page of one, as for `changes`.
     func stream(after position: StreamPosition?, limit: Int) async throws(KnotError) -> StreamPage
 
+    /// The soft-deleted notes and segments that still exist, in `DeletedItem.precedes` order.
+    /// Each item has its own deletion timestamp. A separately deleted segment is included
+    /// even when its note is deleted. Restoring that segment leaves the note deleted. A note
+    /// hidden because it has no live segments is included only if it was itself deleted.
+    /// The purge ends recoverability.
+    ///
+    /// The default implementation answers `port_unavailable`.
+    func recentlyDeleted() async throws(KnotError) -> [DeletedItem]
+
     /// The shown notes whose title or live segments hold every word of `query`, each as a
     /// whole word or the start of one, in the order of the stream. Query syntax is text.
     func search(_ query: String, limit: Int) async throws(KnotError) -> [NoteID]
@@ -352,6 +361,11 @@ public protocol NoteStore: Sendable {
 }
 
 extension NoteStore {
+    /// The default of an operation added after the second pull request.
+    public func recentlyDeleted() async throws(KnotError) -> [DeletedItem] {
+        throw KnotError.portUnavailable
+    }
+
     /// The default of an operation added after the second pull request: not there yet.
     public func applyRecognition(_ recognition: InkRecognition, to segment: SegmentID) async throws(KnotError)
         -> SegmentRead
@@ -655,6 +669,39 @@ public struct NoteRecord: Hashable, Sendable {
 
     /// True when the stream shows the note (rule 11).
     public var isShown: Bool { StreamRule.isShown(note, segments: segments) }
+}
+
+/// A soft-deleted note or segment that can be restored.
+public enum DeletedItem: Hashable, Sendable {
+    /// The note as read by `NoteStore.note(_:)`, including all its segments.
+    case note(NoteRecord, deletedAt: Date)
+    /// A segment with its own deletion timestamp and its note's current title, if any.
+    case segment(Segment, noteTitle: String?, deletedAt: Date)
+
+    public var deletedAt: Date {
+        switch self {
+        case .note(_, let date), .segment(_, _, let date): date
+        }
+    }
+
+    public var restoreTarget: RestoreTarget {
+        switch self {
+        case .note(let record, _): .note(record.note.id)
+        case .segment(let segment, _, _): .segment(segment.id)
+        }
+    }
+
+    /// Newest deletion first. At the same time, notes come before segments, and IDs sort
+    /// ascending within each kind.
+    public static func precedes(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.deletedAt != rhs.deletedAt { return lhs.deletedAt > rhs.deletedAt }
+        switch (lhs, rhs) {
+        case (.note(let left, _), .note(let right, _)): return left.note.id < right.note.id
+        case (.segment(let left, _, _), .segment(let right, _, _)): return left.id < right.id
+        case (.note, .segment): return true
+        case (.segment, .note): return false
+        }
+    }
 }
 
 /// A segment with its revision, stamped, as every read and write returns it. Its other
