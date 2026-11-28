@@ -558,17 +558,54 @@ struct RestoreJournal: Codable, Hashable, Sendable {
     }
 }
 
-// The kept copies use the store's roots. An export uses a durable file rooted at its destination.
+// Kept copies use the store's roots. An export publishes into a caller-owned folder.
 protocol CopyFiles {
     func makeFolder(_ url: URL) throws(KnotError)
     func move(_ source: URL, to destination: URL) throws(KnotError)
 }
 
 extension StoreFiles: CopyFiles {}
-extension DurableFile: CopyFiles {}
+
+private struct ExportCopyFiles: CopyFiles {
+    let layer: any FileLayer
+
+    func makeFolder(_ url: URL) throws(KnotError) {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw KnotError.writeFailed.with(.init(posixError: ENOTDIR))
+            }
+        } catch {
+            let mapped = StoreErrors.knotError(error)
+            guard mapped.code == KnotError.notFound.code else { throw mapped }
+            try DurableFile(layer: layer, root: url).makeFolder(url)
+        }
+    }
+
+    func requireVacant(_ target: URL) throws(KnotError) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            do {
+                _ = try FileManager.default.attributesOfItem(atPath: target.path + suffix)
+            } catch {
+                let mapped = StoreErrors.knotError(error)
+                if mapped.code == KnotError.notFound.code { continue }
+                throw mapped
+            }
+            throw KnotError.writeFailed.with(.init(posixError: EEXIST))
+        }
+    }
+
+    func move(_ source: URL, to destination: URL) throws(KnotError) {
+        try layer.syncFile(source)
+        try requireVacant(destination)
+        try ExclusiveRenameLayer(base: layer).rename(source, to: destination)
+        try layer.syncFolder(destination.deletingLastPathComponent())
+    }
+}
 
 extension StoreDatabase {
-    /// Writes a checked SQLite backup with no WAL, outside the live store's roots.
+    /// Writes a checked SQLite backup with no WAL to a fresh path outside the live store's roots.
+    /// The caller keeps other SQLite users away from the destination and its sidecar paths.
     /// Call from a blocking I/O thread.
     public func writeCopy(to destination: URL) throws(KnotError) {
         guard destination.isFileURL else { throw KnotError.writeFailed.with(.init(posixError: EINVAL)) }
@@ -581,7 +618,10 @@ extension StoreDatabase {
         do {
             let folder = URL(fileURLWithPath: "/" + parent.joined(separator: "/"), isDirectory: true)
             let target = folder.appending(path: destination.lastPathComponent, directoryHint: .notDirectory)
-            let exportFiles = DurableFile(layer: fileLayer, root: folder)
+            // An existing external folder may be accessible through a sandbox grant limited
+            // to that folder. Sync the file and its containing folder without opening ancestors.
+            let exportFiles = ExportCopyFiles(layer: fileLayer)
+            try exportFiles.requireVacant(target)
             try StoreCopies.makeCopy(of: pool, to: target, files: exportFiles, hooks: hooks)
         } catch {
             throw StoreErrors.knotError(error)

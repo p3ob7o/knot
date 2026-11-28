@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import KnotCore
 import KnotStore
@@ -68,11 +69,8 @@ enum StoreExport {
         into parent: URL, locations: StoreLocations, phase: StoreGate.Phase, at date: Date
     ) throws(KnotError) -> StoreExportReport {
         let manager = FileManager.default
-        let hasStore = manager.fileExists(atPath: locations.storeRoot.path)
         let storePath = PathForm.real(locations.storeRoot)
         let sharedPath = PathForm.real(locations.sharedRoot)
-        let hasSharedInbox = sharedPath != storePath && manager.fileExists(atPath: locations.inbox.path)
-        guard hasStore || hasSharedInbox else { throw KnotError.notFound }
 
         // A destination inside either source would alter the store and could copy itself.
         let parentPath = PathForm.real(parent)
@@ -81,6 +79,10 @@ enum StoreExport {
         }
 
         do {
+            let hasStore = try directoryExists(locations.storeRoot)
+            let hasSharedInbox = try sharedPath != storePath && directoryExists(locations.inbox)
+            guard hasStore || hasSharedInbox else { throw KnotError.notFound }
+
             let name = LiveComposition.suggestedStoreExportFolderName(at: date)
             let folder = try createFolder(named: name, in: parent, manager: manager)
             do {
@@ -96,22 +98,11 @@ enum StoreExport {
                 }
 
                 if hasStore {
-                    let databaseFiles = Set(["", "-wal", "-shm", "-journal"].map { databaseName + $0 })
                     for name in try manager.contentsOfDirectory(atPath: locations.storeRoot.path) {
-                        if usedDatabaseBackup && (databaseFiles.contains(name) || name.hasPrefix(".\(databaseName)")) {
+                        if usedDatabaseBackup && (name.hasPrefix(databaseName) || name.hasPrefix(".\(databaseName)")) {
                             continue
                         }
-                        let source = locations.storeRoot.appending(path: name, directoryHint: .checkFileSystem)
-                        let target = folder.appending(path: name, directoryHint: .notDirectory)
-                        do {
-                            try manager.copyItem(at: source, to: target)
-                        } catch let error as CocoaError
-                            where usedDatabaseBackup && name.hasPrefix(".") && name.hasSuffix(DurableFile.partialSuffix)
-                            && isMissing(error)
-                        {
-                            // A writer may publish a partial file between the listing and the copy.
-                            continue
-                        }
+                        try copyEntry(named: name, from: locations.storeRoot, into: folder, manager: manager)
                     }
                 }
 
@@ -120,7 +111,7 @@ enum StoreExport {
                     let target =
                         PosixFileLayer().entryKind(localInbox) == nil
                         ? localInbox : folder.appending(path: "SharedInbox", directoryHint: .isDirectory)
-                    try manager.copyItem(at: locations.inbox, to: target)
+                    try copyDirectory(from: locations.inbox, to: target, manager: manager)
                 }
                 return StoreExportReport(folder: folder, usedDatabaseBackup: usedDatabaseBackup)
             } catch {
@@ -150,7 +141,62 @@ enum StoreExport {
         throw KnotError.writeFailed.with(.init(posixError: EEXIST))
     }
 
-    private static func isMissing(_ error: CocoaError) -> Bool {
-        error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+    private static func directoryExists(_ directory: URL) throws(KnotError) -> Bool {
+        guard let type = try entryType(directory) else { return false }
+        guard type == S_IFDIR else { throw KnotError.writeFailed.with(.init(posixError: ENOTDIR)) }
+        return true
+    }
+
+    /// Reads the type of the entry itself, including dangling symlinks.
+    private static func entryType(_ url: URL) throws(KnotError) -> mode_t? {
+        var status = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in lstat(path!, &status) }
+        if result == 0 { return status.st_mode & S_IFMT }
+        let code = errno
+        if code == ENOENT { return nil }
+        throw KnotError.writeFailed.with(.init(posixError: code))
+    }
+
+    private static func copyDirectory(from source: URL, to target: URL, manager: FileManager) throws {
+        let names = try manager.contentsOfDirectory(atPath: source.path)
+        try manager.createDirectory(at: target, withIntermediateDirectories: false)
+        for name in names {
+            try copyEntry(named: name, from: source, into: target, manager: manager)
+        }
+    }
+
+    private static func copyEntry(named name: String, from parent: URL, into folder: URL, manager: FileManager) throws {
+        let source = parent.appending(path: name, directoryHint: .notDirectory)
+        let target = folder.appending(path: name, directoryHint: .notDirectory)
+        let partialSuffix = DurableFile.partialSuffix
+        let isPartial =
+            name.hasPrefix(".")
+            && ["", "-journal", "-wal", "-shm"].contains { name.hasSuffix(partialSuffix + $0) }
+        guard let type = try entryType(source) else {
+            if isPartial { return }
+            throw KnotError.notFound
+        }
+        if type == S_IFDIR {
+            try copyDirectory(from: source, to: target, manager: manager)
+            return
+        }
+        do {
+            try manager.copyItem(at: source, to: target)
+        } catch  where isPartial && isMissing(error) {
+            // A writer can publish or remove a partial after the directory was listed.
+            guard try entryType(source) == nil else { throw error }
+        }
+    }
+
+    private static func isMissing(_ error: any Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain { return nsError.code == Int(ENOENT) }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+            underlying.domain == NSPOSIXErrorDomain
+        {
+            return underlying.code == Int(ENOENT)
+        }
+        return nsError.domain == NSCocoaErrorDomain
+            && (nsError.code == NSFileNoSuchFileError || nsError.code == NSFileReadNoSuchFileError)
     }
 }

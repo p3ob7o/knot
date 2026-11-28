@@ -32,13 +32,16 @@ struct StoreExportTests {
                 id: voice, kind: .voice, origin: CaptureOrigin(source: .device(composition.deviceID), surface: .app),
                 launchID: ids.make(), placement: .window, startedAt: now, endedAt: now,
                 body: .file(asset, duration: .seconds(1)), revision: 1))
-        try Data([0]).write(to: folder.locations.storeRoot.appending(path: ".knot.sqlite.test.partial"))
+        for name in [".knot.sqlite.test.partial", "knot.sqlite-mjtest"] {
+            try Data([0]).write(to: folder.locations.storeRoot.appending(path: name))
+        }
 
         let report = try await composition.exportStore(into: folder.container)
         #expect(report.usedDatabaseBackup)
         let names = try manager.contentsOfDirectory(atPath: report.folder.path)
         #expect(names.contains("knot.sqlite"))
-        #expect(!names.contains { $0.hasPrefix("knot.sqlite-") || $0.hasPrefix(".knot.sqlite") })
+        #expect(!names.contains { $0 != "knot.sqlite" && $0.hasPrefix("knot.sqlite") })
+        #expect(!names.contains { $0.hasPrefix(".knot.sqlite") })
 
         // Give the export the usual store layout so StoreDatabase can open it.
         let reopenedRoot = folder.container.appending(path: "reopened", directoryHint: .isDirectory)
@@ -129,8 +132,11 @@ struct StoreExportTests {
         let composition = LiveComposition(configuration: configuration, seams: .forTests)
         let locations = try #require(composition.locations)
         let bytes = Data("Synthetic group capture".utf8)
-        try manager.createDirectory(at: locations.inbox, withIntermediateDirectories: true)
-        try bytes.write(to: locations.inbox.appending(path: "pending.txt"))
+        let nested = locations.inbox.appending(path: "nested", directoryHint: .isDirectory)
+        try manager.createDirectory(at: nested, withIntermediateDirectories: true)
+        try bytes.write(to: nested.appending(path: "pending.txt"))
+        try manager.createSymbolicLink(
+            atPath: locations.inbox.appending(path: "directory-link").path, withDestinationPath: "nested")
         let localInbox = locations.storeRoot.appending(path: "Inbox", directoryHint: .isDirectory)
         if hasLocalInbox {
             try manager.createDirectory(at: localInbox, withIntermediateDirectories: true)
@@ -140,10 +146,118 @@ struct StoreExportTests {
         let report = try await composition.exportStore(into: folder.container)
         #expect(!report.usedDatabaseBackup)
         #expect(throws: KnotError.storeNotOpen) { try composition.gate.ports() }
-        let groupExport = hasLocalInbox ? "SharedInbox/pending.txt" : "Inbox/pending.txt"
-        #expect(try Data(contentsOf: report.folder.appending(path: groupExport)) == bytes)
+        let groupExport = report.folder.appending(path: hasLocalInbox ? "SharedInbox" : "Inbox")
+        #expect(try Data(contentsOf: groupExport.appending(path: "nested/pending.txt")) == bytes)
+        #expect(
+            try manager.destinationOfSymbolicLink(atPath: groupExport.appending(path: "directory-link").path)
+                == "nested")
         if hasLocalInbox {
             #expect(try Data(contentsOf: report.folder.appending(path: "Inbox/local.txt")) == Data([1]))
+        }
+    }
+
+    @Test("Export after restore copies the database without opening it")
+    func closedForRestore() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let (composition, copy) = try await RestoreTests.storeWithCopy(
+            folder, before: "A synthetic line before the restore", after: "A synthetic line after the copy")
+        _ = try await composition.restore(copy)
+        #expect(composition.mustBeOpenedAgain)
+        let before = try Data(contentsOf: folder.locations.database)
+        let report = try await composition.exportStore(into: folder.container)
+        #expect(!report.usedDatabaseBackup)
+        #expect(try Data(contentsOf: report.folder.appending(path: "knot.sqlite")) == before)
+        #expect(try Data(contentsOf: folder.locations.database) == before)
+        #expect(composition.mustBeOpenedAgain)
+    }
+
+    @Test("A failure after copying entries removes the export and releases background time")
+    func failureCleanup() async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let background = ExportBackgroundTime()
+        var seams = LiveComposition.Seams.forTests
+        seams.backgroundTime = background
+        var configuration = folder.configuration(platform: .iOS)
+        configuration.appGroup = .present(container: folder.container.appending(path: "group"))
+        let composition = LiveComposition(configuration: configuration, seams: seams)
+        let locations = try #require(composition.locations)
+        for directory in [locations.storeRoot.appending(path: "Inbox"), locations.inbox] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        // Both Inbox and SharedInbox already belong to the local store, so the group Inbox
+        // will collide with the exported file after the local store has been copied.
+        try Data([1]).write(to: locations.storeRoot.appending(path: "SharedInbox"))
+        let before = try manager.contentsOfDirectory(atPath: folder.container.path).sorted()
+        await #expect(throws: KnotError.writeFailed) {
+            try await composition.exportStore(into: folder.container)
+        }
+        #expect(try manager.contentsOfDirectory(atPath: folder.container.path).sorted() == before)
+        #expect(await background.events == ["knot.export_store", "released"])
+    }
+
+    @Test("A store or stale SQLite sidecar at the backup path is refused", arguments: ["", "-wal", "-shm", "-journal"])
+    func occupiedBackupPath(suffix: String) throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let locations = folder.locations
+        try manager.createDirectory(at: locations.storeRoot, withIntermediateDirectories: true)
+        let database = try StoreDatabase.open(locations: locations, role: .app)
+        defer { try? database.close() }
+        let destination = folder.container.appending(path: "export.sqlite")
+        let occupied = folder.container.appending(path: "export.sqlite" + suffix)
+        let original = Data([1, 2, 3])
+        try original.write(to: occupied)
+
+        #expect(throws: KnotError.writeFailed.with(.init(posixError: EEXIST))) {
+            try database.writeCopy(to: destination)
+        }
+        #expect(try Data(contentsOf: occupied) == original)
+        let names = try manager.contentsOfDirectory(atPath: folder.container.path)
+        #expect(names.filter { $0.contains("export.sqlite") } == [occupied.lastPathComponent])
+    }
+
+    @Test("A backup never replaces a destination taken after it starts")
+    func occupiedDuringBackup() throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        let locations = folder.locations
+        try manager.createDirectory(at: locations.storeRoot, withIntermediateDirectories: true)
+        let destination = folder.container.appending(path: "export.sqlite")
+        let original = Data([4, 5, 6])
+        let hooks = StoreHooks(copyWritten: { _ in try? original.write(to: destination) })
+        let database = try StoreDatabase.open(locations: locations, role: .app, hooks: hooks)
+        defer { try? database.close() }
+
+        #expect(throws: KnotError.writeFailed.with(.init(posixError: EEXIST))) {
+            try database.writeCopy(to: destination)
+        }
+        #expect(try Data(contentsOf: destination) == original)
+        let names = try manager.contentsOfDirectory(atPath: folder.container.path)
+        #expect(names.filter { $0.contains("export.sqlite") } == [destination.lastPathComponent])
+    }
+
+    @Test("An invalid source path fails even when the other source exists", arguments: [false, true])
+    func invalidSourcePath(invalidSharedPath: Bool) async throws {
+        let folder = LiveFolder()
+        defer { folder.remove() }
+        var configuration = folder.configuration(platform: .iOS)
+        configuration.appContainer = folder.container.appending(path: "app")
+        configuration.appGroup = .present(container: folder.container.appending(path: "group"))
+        let composition = LiveComposition(configuration: configuration, seams: .forTests)
+        let locations = try #require(composition.locations)
+        if invalidSharedPath {
+            try manager.createDirectory(at: locations.storeRoot, withIntermediateDirectories: true)
+            try Data([1]).write(to: locations.sharedRoot)
+        } else {
+            try manager.createDirectory(at: locations.inbox, withIntermediateDirectories: true)
+            try manager.removeItem(at: configuration.appContainer)
+            try Data([1]).write(to: configuration.appContainer)
+        }
+
+        await #expect(throws: KnotError.writeFailed.with(.init(posixError: ENOTDIR))) {
+            try await composition.exportStore(into: folder.container)
         }
     }
 
@@ -178,5 +292,18 @@ struct StoreExportTests {
         #expect(second.folder.lastPathComponent == name + "-2")
         #expect(try Data(contentsOf: first.folder.appending(path: "synthetic.txt")) == Data([1]))
         #expect(try Data(contentsOf: second.folder.appending(path: "synthetic.txt")) == Data([2]))
+    }
+}
+
+private actor ExportBackgroundTime: BackgroundTimeHold, BackgroundTimeRelease {
+    private(set) var events: [String] = []
+
+    func hold(_ name: String) async -> any BackgroundTimeRelease {
+        events.append(name)
+        return self
+    }
+
+    func release() async {
+        events.append("released")
     }
 }
