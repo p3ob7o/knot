@@ -214,6 +214,7 @@ Each brief says what its package starts after, with one row for each PR. This ta
 | WP-10 | 1 | The store that M1 and M2 run on: everything but the second-process rules and the sync columns | WP-05 |
 | WP-10 | 10a | The store's tests leave no file outside their own folders | WP-10 PR 1 |
 | WP-10 | 10b | The seeded store of the M1 milestone build, committed at its tag | WP-10a |
+| WP-10 | 10c | `NoteStore.recentlyDeleted()` in SQLite, listing soft-deleted notes and segments in deterministic order without advancing the cursor, backed by the existing deletion indexes | WP-10b; the contract pull request that adds `NoteStore.recentlyDeleted()` |
 | WP-10 | 2 | The second-process rules, the sync columns, the interface for sync and device identity | SP-3; SP-4; WP-02 PR 3 |
 | WP-11 | 1 | Typed and voice captures through the engine, and the engine's line discipline | WP-05 |
 | WP-11 | 11a | The engine's tests made steady: tests that failed now and then on loaded runs wait for what they read, and one outcome of the random interleavings is a stated limit | WP-11 PR 1 |
