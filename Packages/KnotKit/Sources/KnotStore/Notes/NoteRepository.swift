@@ -306,6 +306,10 @@ public final class NoteRepository: NoteStore {
         try await read { tx in try tx.streamPage(after: position, limit: limit) }
     }
 
+    public func recentlyDeleted() async throws(KnotError) -> [DeletedItem] {
+        try await read { tx in try tx.recentlyDeleted() }
+    }
+
     public func search(_ query: String, limit: Int) async throws(KnotError) -> [NoteID] {
         try await read { tx in try tx.search(query, limit: limit) }
     }

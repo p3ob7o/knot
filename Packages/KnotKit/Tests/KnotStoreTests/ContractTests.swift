@@ -29,6 +29,14 @@ private func check(_ name: String) async throws {
         folders.expectEveryStoreConsistent()
     }
 
+    @Test(.tags(.contract), arguments: NoteStoreContract.recentlyDeletedChecks)
+    func recentlyDeleted(_ check: NoteStoreContract.Check) async throws {
+        let folders = TemporaryFolders()
+        defer { folders.removeAll() }
+        try await check.run(realStore(folders))
+        folders.expectEveryStoreConsistent()
+    }
+
     @Test("checkpoint-from-inbox-older-than-stored-text-real", .tags(.named, .contract))
     func checkpointFromInboxOlderThanStoredTextReal() async throws { try await check("checkpoint") }
 
@@ -163,6 +171,7 @@ private func check(_ name: String) async throws {
         let ids = SeededIDGenerator(seed: 99, clock: clock)
         let database = try openStore(in: folders.make(), clock: clock, ids: ids)
         let store: NoteRepository = NoteRepository(database: database)
+        #expect(try await store.recentlyDeleted().isEmpty)
         let id: CaptureID = ids.make()
         let reason = KnotError.inboxItemUnreadable.code
         let receipt = try await store.recordKeptItem(

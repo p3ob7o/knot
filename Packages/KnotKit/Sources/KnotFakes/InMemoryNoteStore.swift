@@ -432,6 +432,18 @@
             return StreamPage(notes: page, next: next)
         }
 
+        public func recentlyDeleted() async throws(KnotError) -> [DeletedItem] {
+            let notes: [DeletedItem] = state.notes.values.compactMap { note in
+                guard let deletedAt = note.deletedAt, let record = record(note.id, in: state) else { return nil }
+                return .note(record, deletedAt: deletedAt)
+            }
+            let segments: [DeletedItem] = state.segments.values.compactMap { segment in
+                guard let deletedAt = segment.deletedAt else { return nil }
+                return .segment(segment, noteTitle: state.notes[segment.noteID]?.title, deletedAt: deletedAt)
+            }
+            return (notes + segments).sorted(by: DeletedItem.precedes)
+        }
+
         public func search(_ query: String, limit: Int) throws(KnotError) -> [NoteID] {
             let wanted = TitleRule.words(of: query)
             guard !wanted.isEmpty else { return [] }
