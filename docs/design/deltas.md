@@ -191,3 +191,10 @@ An implementer who meets a state or a detail that the handoff does not design us
 | 2026-11-26 | WP-40a | Capture controls while editing an existing segment or title | Hide New note and Record until that edit ends. |
 | 2026-11-27 | WP-40a | A recording file that is not on this device | An open note shows one footnote. Needs you takes priority. Otherwise the footnote shows Downloading recording… or Recording missing. |
 | 2026-11-26 | WP-40a | Which glyph represents work on another device when its type is unknown | Overlapping rectangles represent another device until the source identifies the device type. |
+| 2026-11-27 | WP-33 PR 2 | Recording destination in Panel B | A secondary caption says whether the capture continues a note or starts one. |
+| 2026-11-27 | WP-33 PR 2 | The panel before typing, after release, and for a recording started by its control | The KnotUI capture placeholder and record control, an inline Listening or Saved status, and the final transcript when ready. |
+| 2026-11-27 | WP-33 PR 2 | Shortcut collisions, the command-line instructions and microphone permission in Mac Settings | A sheet keeps the shortcut recorder open with its error. The form shows copyable commands and buttons for microphone permission and System Settings. |
+| 2026-11-27 | WP-33 PR 2 | Dragging and sharing a note from the Mac window | The toolbar has a named drag handle and the system share control. |
+| 2026-11-27 | WP-33 PR 2 | Recently deleted and About in the Mac window | System sheets use the same unavailable view and test-build actions as the iPhone, with Mac save and open panels. |
+| 2026-11-28 | WP-33 PR 2 | Store export feedback in About | A system folder picker selects the destination, and an inline status distinguishes a database backup from files copied as-is. |
+| 2026-11-28 | WP-33 PR 2 | Window audit contrast for the Mac's small labels and notices | The note and notices use opaque system backgrounds, and small window labels use the theme's primary ink. |

@@ -17,9 +17,12 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Apps/macOS/Knot-macOS-$(KNOT_SIGNING).entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
+        KNOT_URL_SCHEME_dev: knot-dev
+        KNOT_URL_SCHEME_milestone: knot
+        KNOT_URL_SCHEME: $(KNOT_URL_SCHEME_$(KNOT_FLAVOUR))
     dependencies:
       - package: KnotKit
-        products: [KnotApp, KnotCore, KnotIntents, KnotUI]
+        products: [KnotApp, KnotCore, KnotExport, KnotIntents, KnotUI]
       # Built before the app, and embedded by the script below rather than by a copy phase.
       # A copy phase names the tool by the product name its target has without the build's
       # command-line settings, so with KNOT_FLAVOUR=milestone on the command line it looked
@@ -62,6 +65,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).uitests
+        LM_SKIP_METADATA_EXTRACTION: YES
         TEST_TARGET_NAME: Knot-macOS
         # Signed ad hoc, the UI test runner cannot load its test bundle under the hardened
         # runtime: library validation refuses a bundle whose ad hoc signature differs, and
@@ -69,3 +73,52 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
     dependencies:
       - target: Knot-macOS
+
+  Knot-macOS-Tests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - UnitTests
+      - Sources/CarbonHotkeys.swift
+      - Sources/HotkeyGesture.swift
+      - Sources/MacCaptureCoordinator.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).tests
+        LM_SKIP_METADATA_EXTRACTION: YES
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: KnotKit
+        products: [KnotCore, KnotFakes, KnotUI]
+
+  Knot-macOS-HostedUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - HostedUITests
+      - ../UITestSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).hosted-uitests
+        LM_SKIP_METADATA_EXTRACTION: YES
+        TEST_TARGET_NAME: Knot-macOS
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: Knot-macOS
+
+schemes:
+  Knot-macOS-Hosted:
+    build:
+      targets:
+        Knot-macOS: all
+    test:
+      targets:
+        - Knot-macOS-HostedUITests
+
+  Knot-macOS-Rules:
+    build:
+      targets:
+        Knot-macOS-Tests: [test]
+    test:
+      targets:
+        - Knot-macOS-Tests
