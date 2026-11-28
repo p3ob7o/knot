@@ -4,9 +4,27 @@ import KnotUI
 import Observation
 
 @MainActor
+protocol MacCapturePanel: AnyObject {
+    var model: NoteViewModel { get }
+    var held: Bool { get }
+    var finished: CaptureState? { get }
+    var isVisible: Bool { get }
+    var needsHotkey: Bool { get set }
+    var externalProblem: SurfaceProblem? { get set }
+    var stopOrStart: (() -> Void)? { get set }
+
+    func toggleTyping(_ presentation: PanelPresentation)
+    func showRecording(held: Bool, continuing: Bool?, presentation: PanelPresentation)
+    func decidedDestination(_ continues: Bool)
+    func setRecordingLive(_ live: Bool)
+    func ended(_ state: CaptureState)
+    func updateOutcome(_ record: NoteRecord, for capture: CaptureID)
+}
+
+@MainActor
 @Observable
 final class MacCaptureCoordinator {
-    let panel: CapturePanel
+    private let panel: any MacCapturePanel
     private let environment: AppEnvironment
     private let hotkeys = CarbonHotkeys()
     private var preparation: HotkeyPreparation
@@ -30,7 +48,7 @@ final class MacCaptureCoordinator {
     var showRecordingIndicator: ((Bool) -> Void)?
 
     init(
-        panel: CapturePanel, environment: AppEnvironment,
+        panel: any MacCapturePanel, environment: AppEnvironment,
         onboardingDefaults: UserDefaults?
     ) {
         self.panel = panel
@@ -132,17 +150,17 @@ final class MacCaptureCoordinator {
         mark = nil
     }
 
-    private func apply(_ effects: [HotkeyEffect], fromCarbonRelease: Bool = false) {
+    func apply(_ effects: [HotkeyEffect], fromCarbonRelease: Bool = false) {
         for effect in effects {
             preparation.apply(effect)
             switch effect {
             case .prepareMicrophone, .releaseMicrophone:
                 break
-            case .tap, .startHoldRecording:
-                effect.presentPanel(toggleTyping: panel.toggleTyping) { presentation in
-                    start(held: true, presentation: presentation)
-                    watchModifiers()
-                }
+            case .tap:
+                panel.toggleTyping(.typing)
+            case .startHoldRecording:
+                start(held: true, presentation: .recording)
+                watchModifiers()
             case .stopRecording:
                 stopRecording(fromCarbonRelease: fromCarbonRelease)
             }
@@ -267,7 +285,7 @@ final class MacCaptureCoordinator {
                 Task { [weak self] in
                     await model.settle()
                     guard let self, case .couldNotStartRecording = model.problem else { return }
-                    panel.showRecording(held: false, continuing: nil)
+                    panel.showRecording(held: false, continuing: nil, presentation: .recording)
                     panel.externalProblem = model.problem
                 }
             }

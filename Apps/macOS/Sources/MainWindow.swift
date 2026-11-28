@@ -11,6 +11,7 @@ struct MainWindow: View {
     @Environment(\.timeZone) private var timeZone
     @FocusState private var searchFocused: Bool
     @State private var searchPresented = false
+    @State private var noteActionsPresented = false
     @State private var sharedFile: ShareFile?
     @State private var shareFailed = false
     @State private var syncStatus: SyncStatus = .off
@@ -25,7 +26,7 @@ struct MainWindow: View {
             )
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(theme.colors[.background])
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .safeAreaInset(edge: .bottom) {
                 if let code = shell.problemCode { ProblemCode(code: code) }
@@ -82,27 +83,12 @@ struct MainWindow: View {
                     ShareLink(item: NoteMarkdown.plainText(record)) {
                         Label("Share note", systemImage: "square.and.arrow.up")
                     }
-                    Menu {
-                        Button("Copy note") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(NoteMarkdown.plainText(record), forType: .string)
-                        }
-                        ShareLink(
-                            item: MarkdownShare(record: record, timeZone: timeZone), preview: SharePreview("Note")
-                        ) {
-                            Text("Share Markdown…")
-                        }
-                        Button("Delete note", role: .destructive, action: shell.detailModel.deleteNote)
-                        Divider()
-                        Button("Recently deleted") { shell.showsRecentlyDeleted = true }
-                    } label: {
-                        Label {
-                            Text("More")
-                        } icon: {
-                            Image(systemName: "ellipsis.circle").accessibilityHidden(true)
-                        }
+                    Button("More", systemImage: "ellipsis.circle") {
+                        noteActionsPresented.toggle()
                     }
-                    .accessibilityLabel("More")
+                    .popover(isPresented: $noteActionsPresented) {
+                        noteActions(for: record)
+                    }
                     NoteDragHandle(record: record, timeZone: timeZone)
                         .frame(width: 28, height: 28)
                 }
@@ -112,6 +98,7 @@ struct MainWindow: View {
                 }
             }
         }
+        .onChange(of: shell.detail) { noteActionsPresented = false }
         .sheet(isPresented: $shell.showsRecentlyDeleted) { RecentlyDeleted() }
         .sheet(item: $sharedFile) { file in
             VStack(spacing: 16) {
@@ -139,6 +126,35 @@ struct MainWindow: View {
         }
     }
 
+    private func noteActions(for record: NoteRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Copy note") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(NoteMarkdown.plainText(record), forType: .string)
+                noteActionsPresented = false
+            }
+            ShareLink(
+                item: MarkdownShare(record: record, timeZone: timeZone), preview: SharePreview("Note")
+            ) {
+                Text("Share Markdown…")
+            }
+            Button("Delete note", role: .destructive) {
+                noteActionsPresented = false
+                shell.detailModel.deleteNote()
+            }
+            Button("Recently deleted") {
+                noteActionsPresented = false
+                shell.showsRecentlyDeleted = true
+            }
+            Divider()
+            Button("Close") { noteActionsPresented = false }
+                .keyboardShortcut(.cancelAction)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(width: 180)
+        .padding(12)
+    }
+
     private var windowTheme: Theme {
         var result = theme
         // Keep small labels and notices readable in both columns.
@@ -148,8 +164,8 @@ struct MainWindow: View {
                     let color =
                         switch role {
                         case .textPrimary, .textSecondary, .labelSecondary, .pending, .quietMark:
-                            Color(nsColor: .labelColor)
-                        case .surface: Color(nsColor: .controlBackgroundColor)
+                            theme.colors[.accent]
+                        case .surface: theme.colors[.background]
                         default: theme.colors[role]
                         }
                     return (role, color)

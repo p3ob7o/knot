@@ -79,7 +79,9 @@ targets:
     platform: macOS
     sources:
       - UnitTests
+      - Sources/CarbonHotkeys.swift
       - Sources/HotkeyGesture.swift
+      - Sources/MacCaptureCoordinator.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(KNOT_BUNDLE_ID).tests
@@ -87,7 +89,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - package: KnotKit
-        products: [KnotCore, KnotFakes]
+        products: [KnotCore, KnotFakes, KnotUI]
 
   Knot-macOS-HostedUITests:
     type: bundle.ui-testing

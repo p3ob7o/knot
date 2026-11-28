@@ -1,5 +1,6 @@
 import Foundation
 import KnotCore
+import KnotUI
 import Testing
 
 #if DEBUG || KNOT_FAKES
@@ -10,31 +11,61 @@ import Testing
         mutating func advance(_ duration: Duration) { now += duration }
     }
 
+    @MainActor
+    private final class RecordingPanel: MacCapturePanel {
+        let model: NoteViewModel
+        let finished: CaptureState? = nil
+        let isVisible = false
+        var held = false
+        var needsHotkey = false
+        var externalProblem: SurfaceProblem?
+        var stopOrStart: (() -> Void)?
+        private(set) var typing: [PanelPresentation] = []
+        private(set) var recording: [PanelPresentation] = []
+
+        init(environment: AppEnvironment) {
+            model = NoteViewModel(
+                environment: environment,
+                context: UIContext(thisDevice: environment.ids.make(), sync: .notInThisBuild),
+                surface: .macPanel, announcer: RecordingAnnouncer())
+        }
+
+        func toggleTyping(_ presentation: PanelPresentation) {
+            typing.append(presentation)
+        }
+
+        func showRecording(held: Bool, continuing: Bool?, presentation: PanelPresentation) {
+            self.held = held
+            recording.append(presentation)
+        }
+
+        func decidedDestination(_ continues: Bool) {}
+        func setRecordingLive(_ live: Bool) {}
+        func ended(_ state: CaptureState) {}
+        func updateOutcome(_ record: NoteRecord, for capture: CaptureID) {}
+    }
+
     struct HotkeyGestureTests {
         @Test("panel-tap-takes-the-keyboard")
         @MainActor
-        func tapTakesKeyboard() {
+        func tapTakesKeyboard() async {
             var clock = FakeClock()
             var gesture = HotkeyGesture()
             #expect(gesture.receive(.keyDown(at: clock.now)) == [.prepareMicrophone])
             clock.advance(.milliseconds(249))
             let effects = gesture.release(at: clock.now)
             #expect(effects == [.releaseMicrophone, .tap])
-            var keyboardRequests: [Bool] = []
-            for effect in effects {
-                effect.presentPanel {
-                    keyboardRequests.append($0.takesKeyboard)
-                } startHold: { _ in
-                    Issue.record("A tap requested hold recording")
-                }
+            await withCoordinator { coordinator, panel in
+                coordinator.apply(effects)
+                #expect(panel.typing.map(\.takesKeyboard) == [true])
+                #expect(panel.recording.isEmpty)
             }
-            #expect(keyboardRequests == [true])
             #expect(gesture.state == .idle)
         }
 
         @Test("panel-hold-does-not-take-keyboard")
         @MainActor
-        func holdKeepsKeyboardInForegroundApp() {
+        func holdKeepsKeyboardInForegroundApp() async {
             var clock = FakeClock()
             var gesture = HotkeyGesture()
             let down = clock.now
@@ -42,16 +73,24 @@ import Testing
             clock.advance(.milliseconds(250))
             let effects = gesture.receive(.markReached(forKeyDownAt: down))
             #expect(effects == [.startHoldRecording])
-            var keyboardRequests: [Bool] = []
-            for effect in effects {
-                effect.presentPanel { _ in
-                    Issue.record("A hold requested the typing panel")
-                } startHold: {
-                    keyboardRequests.append($0.takesKeyboard)
-                }
+            await withCoordinator { coordinator, panel in
+                coordinator.apply(effects)
+                #expect(panel.typing.isEmpty)
+                #expect(panel.recording.map(\.takesKeyboard) == [false])
             }
-            #expect(keyboardRequests == [false])
             #expect(gesture.release(at: clock.now) == [.stopRecording])
+        }
+
+        @MainActor
+        private func withCoordinator(_ check: (MacCaptureCoordinator, RecordingPanel) -> Void) async {
+            let root = FileManager.default.temporaryDirectory.appending(path: "KnotMacRules-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let environment = AppEnvironment.makePreview(root: root)
+            let panel = RecordingPanel(environment: environment)
+            let coordinator = MacCaptureCoordinator(panel: panel, environment: environment, onboardingDefaults: nil)
+            check(coordinator, panel)
+            await coordinator.stopAndSettle()
+            coordinator.shutDown()
         }
 
         @Test

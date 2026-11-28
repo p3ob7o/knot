@@ -44,17 +44,6 @@ struct PanelDismissal {
     mutating func interacted() { canAutoHide = false }
 }
 
-extension HotkeyEffect {
-    @MainActor
-    func presentPanel(toggleTyping: (PanelPresentation) -> Void, startHold: (PanelPresentation) -> Void) {
-        switch self {
-        case .tap: toggleTyping(.typing)
-        case .startHoldRecording: startHold(.recording)
-        case .prepareMicrophone, .releaseMicrophone, .stopRecording: break
-        }
-    }
-}
-
 /// Applies preparation effects in Carbon event order even when the recorder suspends.
 @MainActor
 struct HotkeyPreparation {

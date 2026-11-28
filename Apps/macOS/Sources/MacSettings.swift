@@ -233,9 +233,9 @@ private struct CommandLineInstructions: View {
             + quoted("exec \(quoted(path)) \"$@\"")
             + " > \"$HOME/.local/bin/\(command)\" && chmod +x \"$HOME/.local/bin/\(command)\""
             + " && { if [ -n \"${ZSH_VERSION:-}\" ]; then knot_profile=\"${ZDOTDIR:-$HOME}/.zshrc\"; "
-            + "elif [ -f \"$HOME/.bash_profile\" ]; then knot_profile=\"$HOME/.bash_profile\"; "
-            + "elif [ -f \"$HOME/.bash_login\" ]; then knot_profile=\"$HOME/.bash_login\"; "
-            + "elif [ -f \"$HOME/.profile\" ]; then knot_profile=\"$HOME/.profile\"; "
+            + "elif [ -f \"$HOME/.bash_profile\" ] && [ -r \"$HOME/.bash_profile\" ]; then knot_profile=\"$HOME/.bash_profile\"; "
+            + "elif [ -f \"$HOME/.bash_login\" ] && [ -r \"$HOME/.bash_login\" ]; then knot_profile=\"$HOME/.bash_login\"; "
+            + "elif [ -f \"$HOME/.profile\" ] && [ -r \"$HOME/.profile\" ]; then knot_profile=\"$HOME/.profile\"; "
             + "else knot_profile=\"$HOME/.bash_profile\"; fi; "
             + "knot_path_line='export PATH=\"$HOME/.local/bin:$PATH\"'; "
             + "{ grep -qxF \"$knot_path_line\" \"$knot_profile\" 2>/dev/null || printf '\\n%s\\n' \"$knot_path_line\" >> \"$knot_profile\"; }; }"

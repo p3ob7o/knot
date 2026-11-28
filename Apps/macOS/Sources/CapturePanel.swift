@@ -65,7 +65,7 @@ final class CapturePanelWindow: NSPanel {
 
 @MainActor
 @Observable
-final class CapturePanel: NSObject, NSWindowDelegate {
+final class CapturePanel: NSObject, NSWindowDelegate, MacCapturePanel {
     let model: NoteViewModel
     private let window = CapturePanelWindow()
     private var dismissal = PanelDismissal()
