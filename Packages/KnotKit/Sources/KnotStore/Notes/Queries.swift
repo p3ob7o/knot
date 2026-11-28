@@ -89,6 +89,30 @@ extension StoreTransaction {
         return StreamPage(notes: page, next: next)
     }
 
+    // MARK: Recently deleted
+
+    func recentlyDeleted() throws -> [DeletedItem] {
+        let noteIDs = try String.fetchAll(db, sql: "SELECT id FROM note WHERE deleted_at IS NOT NULL")
+        var items: [DeletedItem] = try noteIDs.compactMap { id in
+            guard let record = try record(Stored.id(id)), let deletedAt = record.note.deletedAt else { return nil }
+            return .note(record, deletedAt: deletedAt)
+        }
+        let segments = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT \(SegmentRows.columns), note.title AS note_title
+                FROM segment JOIN note ON note.id = segment.note_id
+                WHERE segment.deleted_at IS NOT NULL
+                """)
+        for row in segments {
+            let segment = try SegmentRows.decode(row)
+            if let deletedAt = segment.deletedAt {
+                items.append(.segment(segment, noteTitle: row["note_title"], deletedAt: deletedAt))
+            }
+        }
+        return items.sorted(by: DeletedItem.precedes)
+    }
+
     // MARK: Search
 
     /// The shown notes whose title or live segments hold every word of `query`, each as a whole

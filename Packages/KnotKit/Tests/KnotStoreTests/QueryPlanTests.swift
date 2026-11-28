@@ -32,7 +32,7 @@ import Testing
     ]
 
     /// The partial indexes whose scan reads only the rows a query wants.
-    static let boundedIndexes = ["capture_open", "note_stream"]
+    static let boundedIndexes = ["capture_open", "note_stream", "note_deleted", "segment_deleted"]
 
     /// The plan lines of one statement that scan whole what grows with the notes. Every scan is
     /// one unless it is shown to read only what it wants.
@@ -42,8 +42,7 @@ import Testing
             let scanned = String(line.dropFirst("SCAN ".count))
             if smallScans.contains(scanned) { return false }
             // A scan through an index reads the whole index, unless the index is partial and
-            // holds only what the query wants: the open captures, or the shown notes in the
-            // stream's order, which a page reads to its limit and no further.
+            // holds only what the query wants, such as open captures or soft-deleted items.
             for index in boundedIndexes where line.hasSuffix("USING INDEX \(index)") { return false }
             // A full-text table is searched through its index when the plan names a constraint.
             if let index = line.range(of: "VIRTUAL TABLE INDEX ") {
@@ -76,6 +75,7 @@ import Testing
             }
         }
         try await NoteStoreContract.run(factory)
+        for check in NoteStoreContract.recentlyDeletedChecks { try await check.run(factory) }
         // And the purge with work to do, which the suite reaches only in part.
         let clock = FakeClock(Captures.base)
         let ids = SeededIDGenerator(seed: 61, clock: clock)
